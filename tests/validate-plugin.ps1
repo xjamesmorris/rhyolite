@@ -1742,28 +1742,56 @@ try {
             $launchPathIsClean = $false
         }
 
-        Assert-True -Condition (
-            $launcherAgent -eq 'rhyolite:repo-review' -and
-            [IO.Path]::GetFullPath($launcherPluginRoot) -eq
-                [IO.Path]::GetFullPath($pluginRoot) -and
-            $launcherPrompt -eq $expectedLauncherPrompt -and
-            $launcherArguments -contains '--experimental' -and
-            $launcherArguments -contains '--no-custom-instructions' -and
-            @(
+        $launcherChecks = [ordered]@{
+            Agent = $launcherAgent -eq 'rhyolite:repo-review'
+            PluginArgument = (
+                [IO.Path]::GetFullPath($launcherPluginRoot) -eq
+                    [IO.Path]::GetFullPath($pluginRoot)
+            )
+            Prompt = $launcherPrompt -eq $expectedLauncherPrompt
+            Experimental = $launcherArguments -contains '--experimental'
+            NoCustomInstructions = (
+                $launcherArguments -contains '--no-custom-instructions'
+            )
+            NoAllowAll = @(
                 $launcherArguments |
                     Where-Object { $_ -like '--allow-all*' }
-            ).Count -eq 0 -and
-            $launchPathIsClean -and
-            [IO.Path]::GetFullPath(
-                [string] $launcherPayload.Environment.Launch
-            ) -eq [IO.Path]::GetFullPath($launcherWorkingDirectory) -and
-            [IO.Path]::GetFullPath(
-                [string] $launcherPayload.Environment.Plugin
-            ) -eq [IO.Path]::GetFullPath($pluginRoot) -and
-            [string] $launcherPayload.Environment.Version -eq $version -and
-            [string] $launcherPayload.Environment.Immediate -eq
-                'RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
-        ) -Message 'PowerShell launcher startup arguments or clean workspace are invalid.'
+            ).Count -eq 0
+            CleanWorkingDirectory = $launchPathIsClean
+            EnvironmentLaunch = (
+                [IO.Path]::GetFullPath(
+                    [string] $launcherPayload.Environment.Launch
+                ) -eq [IO.Path]::GetFullPath($launcherWorkingDirectory)
+            )
+            EnvironmentPlugin = (
+                [IO.Path]::GetFullPath(
+                    [string] $launcherPayload.Environment.Plugin
+                ) -eq [IO.Path]::GetFullPath($pluginRoot)
+            )
+            EnvironmentVersion = (
+                [string] $launcherPayload.Environment.Version -eq $version
+            )
+            EnvironmentImmediate = (
+                [string] $launcherPayload.Environment.Immediate -eq
+                    'RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
+            )
+        }
+        Assert-True -Condition (
+            @($launcherChecks.Values | Where-Object { -not $_ }).Count -eq 0
+        ) -Message (
+            'PowerShell launcher startup arguments or clean workspace are ' +
+            'invalid. ' +
+            (
+                [ordered]@{
+                    Checks = $launcherChecks
+                    Root = $root
+                    WorkingDirectory = $launcherWorkingDirectory
+                    PluginArgument = $launcherPluginRoot
+                    Arguments = $launcherArguments
+                    Environment = $launcherPayload.Environment
+                } | ConvertTo-Json -Depth 8 -Compress
+            )
+        )
 
         $launcherSessionDirectory = [string] `
             $launcherPayload.Environment.Session
