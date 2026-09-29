@@ -300,6 +300,33 @@ function Normalize-LineEndingsWithTrailingNewline {
     return (($Text -replace "`r`n?", "`n").TrimEnd("`n") + "`n")
 }
 
+function ConvertTo-BashPath {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $BashPath
+    )
+
+    if (-not $IsWindows) {
+        return $Path -replace '\\', '/'
+    }
+
+    $convertedLines = @(
+        & $BashPath -c 'cygpath -u "$1"' -- $Path 2>&1
+    )
+    $conversionExitCode = $LASTEXITCODE
+    if ($conversionExitCode -ne 0) {
+        throw (
+            "Could not convert Windows path for Git Bash: $Path`n" +
+            ($convertedLines -join "`n")
+        )
+    }
+
+    return (($convertedLines -join "`n").Trim())
+}
+
 function Get-FirstLineDifference {
     param(
         [AllowEmptyString()]
@@ -1487,7 +1514,9 @@ $bashApplication = Get-Command bash -CommandType Application `
     Select-Object -First 1
 $bashShellPath = if ($bashApplication) { $bashApplication.Source } else { '' }
 if (-not [string]::IsNullOrWhiteSpace($bashShellPath)) {
-    $bashWelcomeHelperInvocationPath = $bashWelcomeHelperPath -replace '\\', '/'
+    $bashWelcomeHelperInvocationPath = ConvertTo-BashPath `
+        -Path $bashWelcomeHelperPath `
+        -BashPath $bashShellPath
     $bashPanelText = Normalize-LineEndings -Text (
         @(
             & $bashShellPath $bashWelcomeHelperInvocationPath --panel
@@ -3864,15 +3893,35 @@ exit 0
     ) -Message 'PowerShell scope 3 -PlanOnly ApprovalHash must remain valid and change with scope/provenance inputs.'
 
     if (-not [string]::IsNullOrWhiteSpace($bashShellPath)) {
-        $bashRunnerInvocationPath = $bashRunnerPath -replace '\\', '/'
+        $bashRunnerInvocationPath = ConvertTo-BashPath `
+            -Path $bashRunnerPath `
+            -BashPath $bashShellPath
+        $bashScopeOneWorkspace = ConvertTo-BashPath `
+            -Path $scopeOneWorkspace `
+            -BashPath $bashShellPath
+        $bashScopeOneOutput = ConvertTo-BashPath `
+            -Path $scopeOneOutput `
+            -BashPath $bashShellPath
+        $bashScopeTwoWorkspace = ConvertTo-BashPath `
+            -Path $scopeTwoWorkspace `
+            -BashPath $bashShellPath
+        $bashScopeTwoOutput = ConvertTo-BashPath `
+            -Path $scopeTwoOutput `
+            -BashPath $bashShellPath
+        $bashScopeThreeWorkspace = ConvertTo-BashPath `
+            -Path $scopeThreeWorkspace `
+            -BashPath $bashShellPath
+        $bashScopeThreeOutput = ConvertTo-BashPath `
+            -Path $scopeThreeOutput `
+            -BashPath $bashShellPath
         $bashScopeOnePlanText = Normalize-LineEndings -Text (
             @(
                 & $bashShellPath `
                     $bashRunnerInvocationPath `
                     --repo 'https://github.com/octocat/Hello-World' `
                     --scope 1 `
-                    --workspace-root ($scopeOneWorkspace -replace '\\', '/') `
-                    --output-root ($scopeOneOutput -replace '\\', '/') `
+                    --workspace-root $bashScopeOneWorkspace `
+                    --output-root $bashScopeOneOutput `
                     --non-interactive `
                     --plan-only 2>&1
             ) -join "`n"
@@ -3900,8 +3949,8 @@ exit 0
                     $bashRunnerInvocationPath `
                     --repo 'https://github.com/octocat/Hello-World' `
                     --scope 2 `
-                    --workspace-root ($scopeTwoWorkspace -replace '\\', '/') `
-                    --output-root ($scopeTwoOutput -replace '\\', '/') `
+                    --workspace-root $bashScopeTwoWorkspace `
+                    --output-root $bashScopeTwoOutput `
                     --non-interactive `
                     --plan-only 2>&1
             ) -join "`n"
@@ -3930,8 +3979,8 @@ exit 0
                     --repo 'https://github.com/octocat/Hello-World' `
                     --scope 3 `
                     --provenance-lookback-months 12 `
-                    --workspace-root ($scopeThreeWorkspace -replace '\\', '/') `
-                    --output-root ($scopeThreeOutput -replace '\\', '/') `
+                    --workspace-root $bashScopeThreeWorkspace `
+                    --output-root $bashScopeThreeOutput `
                     --non-interactive `
                     --plan-only 2>&1
             ) -join "`n"
