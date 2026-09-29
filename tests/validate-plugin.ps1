@@ -5864,14 +5864,41 @@ exit 0
                     [StringComparison]::Ordinal
                 )
             ) -Message 'PowerShell mock run did not print the effective plan before the start line.'
+            $requestRenderingChecks = [ordered]@{
+                TrustedMetadataHeader = $requestText.Contains(
+                    'TRUSTED WRAPPER-SUPPLIED GIT METADATA'
+                )
+                CommitSubject = $requestText.Contains(
+                    'Initial & exact commit'
+                )
+                ProvenanceLookback = $requestText.Contains(
+                    'Provenance lookback months: 12'
+                )
+                MetadataPlaceholderRemoved = -not $requestText.Contains(
+                    '{{REPOSITORY_METADATA}}'
+                )
+                LookbackPlaceholderRemoved = -not $requestText.Contains(
+                    '{{PROVENANCE_LOOKBACK_MONTHS}}'
+                )
+                StartDatePlaceholderRemoved = -not $requestText.Contains(
+                    '{{PROVENANCE_START_DATE}}'
+                )
+            }
             Assert-True -Condition (
-                $requestText.Contains('TRUSTED WRAPPER-SUPPLIED GIT METADATA') -and
-                $requestText.Contains('Initial & exact commit') -and
-                $requestText.Contains('Provenance lookback months: 12') -and
-                -not $requestText.Contains('{{REPOSITORY_METADATA}}') -and
-                -not $requestText.Contains('{{PROVENANCE_LOOKBACK_MONTHS}}') -and
-                -not $requestText.Contains('{{PROVENANCE_START_DATE}}')
-            ) -Message 'PowerShell request rendering lost trusted metadata or provenance placeholders.'
+                @(
+                    $requestRenderingChecks.Values |
+                        Where-Object { -not $_ }
+                ).Count -eq 0
+            ) -Message (
+                'PowerShell request rendering lost trusted metadata or ' +
+                'provenance placeholders. ' +
+                (
+                    [ordered]@{
+                        Checks = $requestRenderingChecks
+                        Request = $requestText
+                    } | ConvertTo-Json -Depth 5 -Compress
+                )
+            )
             Assert-True -Condition (
                 $handoffText.Contains("Source kind:`n`n    RemoteUrl") -and
                 $handoffText.Contains(
