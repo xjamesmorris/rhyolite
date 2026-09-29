@@ -4769,17 +4769,26 @@ exit 99
         ) `
         -AllowFailure
     $listValidationNormalized = Normalize-LineEndings $listValidation.Output
+    $listValidationPlain = [regex]::Replace(
+        $listValidationNormalized,
+        '\x1B\[[0-?]*[ -/]*[@-~]',
+        ''
+    )
+    $listValidationPlain = [regex]::Replace(
+        $listValidationPlain,
+        '\s+',
+        ' '
+    ).Trim()
     $repositoryListChecks = [ordered]@{
         Failed = $listValidation.ExitCode -ne 0
-        ExplainsUnsupportedEntry = $listValidationNormalized.Contains(
+        ExplainsUnsupportedEntry = $listValidationPlain.Contains(
             'Repository list contains an unsupported local path or non-URL entry:'
         )
-        IncludesEntry = $listValidationNormalized.Contains('local-repository')
+        IncludesEntry = $listValidationPlain.Contains('local-repository')
         ExplainsPublicHttpsOnly = (
-            $listValidationNormalized.Contains(
-                'Supply only anonymously readable public HTTPS Git'
-            ) -and
-            $listValidationNormalized.Contains('repository URLs.')
+            $listValidationPlain.Contains('Supply only anonymously') -and
+            $listValidationPlain.Contains('readable public HTTPS Git') -and
+            $listValidationPlain.Contains('repository URLs.')
         )
         NoToolInvocation = -not (Test-Path -LiteralPath $localGuardLog)
     }
