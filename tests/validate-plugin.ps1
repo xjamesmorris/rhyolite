@@ -5048,8 +5048,15 @@ try {
     }
 
     $mockBin = Join-Path $mockReviewTestRoot 'mock-bin'
-    $mockOutput = Join-Path $mockReviewTestRoot 'mock&output'
-    $mockWorkspace = Join-Path $mockReviewTestRoot 'mock&workspace'
+    $mockOutputName = if ($IsWindows) { 'mock-output' } else { 'mock&output' }
+    $mockWorkspaceName = if ($IsWindows) {
+        'mock-workspace'
+    }
+    else {
+        'mock&workspace'
+    }
+    $mockOutput = Join-Path $mockReviewTestRoot $mockOutputName
+    $mockWorkspace = Join-Path $mockReviewTestRoot $mockWorkspaceName
     $runtimeTemp = Join-Path $mockReviewTestRoot 'runtime-temp'
     $metadataCopilotHome = Join-Path $mockReviewTestRoot 'metadata-copilot-home'
     $mockCopilotLog = Join-Path $mockReviewTestRoot 'mock-copilot-args.txt'
