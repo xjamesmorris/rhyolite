@@ -5107,16 +5107,13 @@ function Resolve-PublicRepositoryEndpoint {
     if ($IsWindows) {
         $mockRunnerText = $mockRunnerText.Replace(
             "'--format=%(refname)%09%(objectname)'",
-            "'--format=%%(refname)%%09%%(objectname)'"
+            "'--format=mock-refs'"
         ).Replace(
             (
                 "'--pretty=format:%H%x09%ad%x09%<(128,trunc)%an" +
                 "%x09%<(256,trunc)%s'"
             ),
-            (
-                "'--pretty=format:%%H%%x09%%ad%%x09%%<(128,trunc)%%an" +
-                "%%x09%%<(256,trunc)%%s'"
-            )
+            "'--pretty=format:mock-history'"
         )
     }
     Write-Utf8File -Path $mockRunner -Content (
