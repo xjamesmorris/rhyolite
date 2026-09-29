@@ -3244,12 +3244,15 @@ if ($parseErrors.Count -eq 0) {
 }
 
 try {
-    $omittedScopeValidation = & $runner `
-        -Repository 'https://github.com/octocat/Hello-World' `
-        -OutputRoot $validationOutputRoot `
-        -NonInteractive `
-        -ValidateOnly *>&1 |
-        Out-String
+    $omittedScopeValidation = Normalize-LineEndings -Text (
+        @(
+            & $runner `
+                -Repository 'https://github.com/octocat/Hello-World' `
+                -OutputRoot $validationOutputRoot `
+                -NonInteractive `
+                -ValidateOnly *>&1
+        ) -join "`n"
+    )
     Assert-True -Condition (
         $omittedScopeValidation.Contains(
             'Scope:                 1 - Core repository review'
@@ -3272,14 +3275,17 @@ catch {
 }
 
 try {
-    $scopeThreeValidation = & $runner `
-        -Repository 'https://github.com/octocat/Hello-World' `
-        -Commit '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' `
-        -Scope 3 `
-        -OutputRoot $validationOutputRoot `
-        -NonInteractive `
-        -ValidateOnly *>&1 |
-        Out-String
+    $scopeThreeValidation = Normalize-LineEndings -Text (
+        @(
+            & $runner `
+                -Repository 'https://github.com/octocat/Hello-World' `
+                -Commit '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' `
+                -Scope 3 `
+                -OutputRoot $validationOutputRoot `
+                -NonInteractive `
+                -ValidateOnly *>&1
+        ) -join "`n"
+    )
     Assert-True -Condition (
         $scopeThreeValidation.Contains('Session timeout:       240 minutes') -and
         $scopeThreeValidation.Contains('Provenance lookback:   6 months')
@@ -3299,14 +3305,17 @@ try {
     }
 
     foreach ($lookback in @(1, 60)) {
-        $customValidation = & $runner `
-            -Repository 'https://github.com/octocat/Hello-World' `
-            -Scope 3 `
-            -ProvenanceLookbackMonths $lookback `
-            -OutputRoot $validationOutputRoot `
-            -NonInteractive `
-            -ValidateOnly *>&1 |
-            Out-String
+        $customValidation = Normalize-LineEndings -Text (
+            @(
+                & $runner `
+                    -Repository 'https://github.com/octocat/Hello-World' `
+                    -Scope 3 `
+                    -ProvenanceLookbackMonths $lookback `
+                    -OutputRoot $validationOutputRoot `
+                    -NonInteractive `
+                    -ValidateOnly *>&1
+            ) -join "`n"
+        )
         Assert-True -Condition (
             $customValidation.Contains("Provenance lookback:   $lookback months")
         ) -Message (
