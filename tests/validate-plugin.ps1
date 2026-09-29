@@ -4769,20 +4769,43 @@ exit 99
         ) `
         -AllowFailure
     $listValidationNormalized = Normalize-LineEndings $listValidation.Output
-    Assert-True -Condition (
-        $listValidation.ExitCode -ne 0 -and
-        $listValidationNormalized.Contains(
+    $repositoryListChecks = [ordered]@{
+        Failed = $listValidation.ExitCode -ne 0
+        ExplainsUnsupportedEntry = $listValidationNormalized.Contains(
             'Repository list contains an unsupported local path or non-URL entry:'
-        ) -and
-        $listValidationNormalized.Contains('local-repository') -and
-        $listValidationNormalized.Contains(
-            'Supply only anonymously readable public HTTPS Git'
-        ) -and
-        $listValidationNormalized.Contains(
-            'repository URLs.'
-        ) -and
-        -not (Test-Path -LiteralPath $localGuardLog)
-    ) -Message 'PowerShell repository-list local path rejection was not fail-closed.'
+        )
+        IncludesEntry = $listValidationNormalized.Contains('local-repository')
+        ExplainsPublicHttpsOnly = (
+            $listValidationNormalized.Contains(
+                'Supply only anonymously readable public HTTPS Git'
+            ) -and
+            $listValidationNormalized.Contains('repository URLs.')
+        )
+        NoToolInvocation = -not (Test-Path -LiteralPath $localGuardLog)
+    }
+    Assert-True -Condition (
+        @(
+            $repositoryListChecks.Values |
+                Where-Object { -not $_ }
+        ).Count -eq 0
+    ) -Message (
+        'PowerShell repository-list local path rejection was not fail-closed. ' +
+        (
+            [ordered]@{
+                Checks = $repositoryListChecks
+                ExitCode = $listValidation.ExitCode
+                Output = $listValidationNormalized
+                GuardLog = if (
+                    Test-Path -LiteralPath $localGuardLog -PathType Leaf
+                ) {
+                    Get-Content -LiteralPath $localGuardLog -Raw
+                }
+                else {
+                    ''
+                }
+            } | ConvertTo-Json -Depth 6 -Compress
+        )
+    )
     Assert-True -Condition (
         -not (Test-Path -LiteralPath (Join-Path $sourceTestRoot 'list-output')) -and
         -not (Test-Path -LiteralPath (Join-Path $sourceTestRoot 'list-workspace'))
