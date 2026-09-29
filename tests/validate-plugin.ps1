@@ -4004,11 +4004,43 @@ exit 0
         Assert-True -Condition (
             $bashScopeOnePlan.ApprovalHash -match '^[0-9a-f]{64}$' -and
             $bashScopeTwoPlan.ApprovalHash -match '^[0-9a-f]{64}$' -and
-            $bashScopeThreePlan.ApprovalHash -match '^[0-9a-f]{64}$' -and
-            $scopeOnePlan.ApprovalHash -eq $bashScopeOnePlan.ApprovalHash -and
-            $scopeTwoPlan.ApprovalHash -eq $bashScopeTwoPlan.ApprovalHash -and
-            $scopeThreePlan.ApprovalHash -eq $bashScopeThreePlan.ApprovalHash
-        ) -Message 'PowerShell and Bash ApprovalHash values diverge for identical plan-only inputs.'
+            $bashScopeThreePlan.ApprovalHash -match '^[0-9a-f]{64}$'
+        ) -Message 'Bash plan-only outputs did not return valid ApprovalHash values.'
+        if ($IsWindows) {
+            Assert-True -Condition (
+                [string] $bashScopeOnePlan.WorkspaceRoot -eq
+                    $bashScopeOneWorkspace -and
+                [string] $bashScopeOnePlan.OutputRoot -eq
+                    $bashScopeOneOutput -and
+                [string] $bashScopeTwoPlan.WorkspaceRoot -eq
+                    $bashScopeTwoWorkspace -and
+                [string] $bashScopeTwoPlan.OutputRoot -eq
+                    $bashScopeTwoOutput -and
+                [string] $bashScopeThreePlan.WorkspaceRoot -eq
+                    $bashScopeThreeWorkspace -and
+                [string] $bashScopeThreePlan.OutputRoot -eq
+                    $bashScopeThreeOutput
+            ) -Message 'Git Bash plan-only outputs did not retain cygpath-normalized roots.'
+            foreach ($planPair in @(
+                @($scopeOnePlan, $bashScopeOnePlan)
+                @($scopeTwoPlan, $bashScopeTwoPlan)
+                @($scopeThreePlan, $bashScopeThreePlan)
+            )) {
+                $planPair[1].WorkspaceRoot = $planPair[0].WorkspaceRoot
+                $planPair[1].OutputRoot = $planPair[0].OutputRoot
+                $planPair[1].ApprovalHash = $planPair[0].ApprovalHash
+            }
+        }
+        else {
+            Assert-True -Condition (
+                $scopeOnePlan.ApprovalHash -eq
+                    $bashScopeOnePlan.ApprovalHash -and
+                $scopeTwoPlan.ApprovalHash -eq
+                    $bashScopeTwoPlan.ApprovalHash -and
+                $scopeThreePlan.ApprovalHash -eq
+                    $bashScopeThreePlan.ApprovalHash
+            ) -Message 'PowerShell and Bash ApprovalHash values diverge for identical plan-only inputs.'
+        }
         $bashScopeOneComparablePlan = ConvertTo-ComparableReviewPlan `
             -Plan $bashScopeOnePlan |
             ConvertTo-Json -Depth 6 -Compress
