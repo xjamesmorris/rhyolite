@@ -50,7 +50,6 @@ configure_repository_links() {
     local plugin_root="$1"
     local metadata_path="${plugin_root}/branding/welcome-metadata.json"
     local home_url docs_url support_url issues_url pulls_url
-    local unresolved_pattern='<PUBLIC_[A-Z0-9_:-]+>'
     local value
 
     [ -f "${metadata_path}" ] || return 0
@@ -80,9 +79,9 @@ configure_repository_links() {
         "${support_url}" \
         "${issues_url}" \
         "${pulls_url}"; do
-        if [[ -z "${value}" || "${value}" =~ ${unresolved_pattern} ]]; then
-            return 0
-        fi
+        case "${value}" in
+            ''|*'<PUBLIC_'*'>'*) return 0 ;;
+        esac
     done
     RHYOLITE_SUPPORT_TEXT="${issues_url}"
     RHYOLITE_CONTRIBUTE_TEXT="${pulls_url}"

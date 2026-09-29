@@ -103,7 +103,6 @@ read_metadata_string() {
 
 load_repository_support_links() {
     local home_url docs_url support_url issues_url pulls_url value
-    local unresolved_pattern='<PUBLIC_[A-Z0-9_:-]+>'
 
     home_url="$(read_metadata_string 'homeUrl')"
     docs_url="$(read_metadata_string 'docsUrl')"
@@ -116,9 +115,9 @@ load_repository_support_links() {
         "${support_url}" \
         "${issues_url}" \
         "${pulls_url}"; do
-        if [[ -z "${value}" || "${value}" =~ ${unresolved_pattern} ]]; then
-            return
-        fi
+        case "${value}" in
+            ''|*'<PUBLIC_'*'>'*) return ;;
+        esac
     done
     RHYOLITE_SUPPORT_TEXT="${issues_url}"
     RHYOLITE_CONTRIBUTE_TEXT="${pulls_url}"

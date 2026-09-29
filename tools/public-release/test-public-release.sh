@@ -899,12 +899,14 @@ printf '\nHANDOFF.md export-ignore\ntools/public-release/private-deny-patterns.j
 commit_all "${ARCHIVE_SOURCE}" 'archive-regression'
 [[ -z "$(git -C "${ARCHIVE_SOURCE}" status --porcelain --untracked-files=all)" ]] || fail 'Archive regression source must be clean before export.'
 : > "${VALIDATION_LOG}"
-expect_failure "${REPORTS_ROOT}/archive-export.stdout.txt" \
+expect_success "${REPORTS_ROOT}/archive-export.stdout.txt" \
     env PATH="${VALIDATION_FULL_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" \
     "${REAL_BASH}" "${ARCHIVE_SOURCE}/tools/public-release/public-export.sh" \
     --source-ref HEAD \
     --destination "${ARCHIVE_DEST}" \
     --audit-report "${REPORTS_ROOT}/archive-export.audit.txt"
+require_grep 'preflight: passed' "${REPORTS_ROOT}/archive-export.audit.txt"
+require_grep 'finding_count: 0' "${REPORTS_ROOT}/archive-export.audit.txt"
 require_grep '  tools/public-release/public-release.mjs' "${REPORTS_ROOT}/archive-export.audit.txt"
 reject_grep '  HANDOFF.md' "${REPORTS_ROOT}/archive-export.audit.txt"
 reject_grep '  tools/public-release/private-deny-patterns.json' "${REPORTS_ROOT}/archive-export.audit.txt"

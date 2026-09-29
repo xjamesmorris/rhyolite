@@ -143,7 +143,6 @@ read_json_string_array() {
 
 public_repository_urls_resolved() {
     local value
-    local unresolved_pattern='<PUBLIC_[A-Z0-9_:-]+>'
 
     for value in \
         "${home_url}" \
@@ -151,9 +150,9 @@ public_repository_urls_resolved() {
         "${support_url}" \
         "${issues_url}" \
         "${pulls_url}"; do
-        if [[ -z "${value}" || "${value}" =~ ${unresolved_pattern} ]]; then
-            return 1
-        fi
+        case "${value}" in
+            ''|*'<PUBLIC_'*'>'*) return 1 ;;
+        esac
     done
     return 0
 }
