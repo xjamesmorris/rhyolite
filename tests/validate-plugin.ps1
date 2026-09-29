@@ -5099,8 +5099,28 @@ function Resolve-PublicRepositoryEndpoint {
     return "${RepositoryHost}:${Port}:93.184.216.34"
 }
 '@
+    $mockRunnerText = $resolverRegex.Replace(
+        $runnerText,
+        $mockResolver,
+        1
+    )
+    if ($IsWindows) {
+        $mockRunnerText = $mockRunnerText.Replace(
+            "'--format=%(refname)%09%(objectname)'",
+            "'--format=%%(refname)%%09%%(objectname)'"
+        ).Replace(
+            (
+                "'--pretty=format:%H%x09%ad%x09%<(128,trunc)%an" +
+                "%x09%<(256,trunc)%s'"
+            ),
+            (
+                "'--pretty=format:%%H%%x09%%ad%%x09%%<(128,trunc)%%an" +
+                "%%x09%%<(256,trunc)%%s'"
+            )
+        )
+    }
     Write-Utf8File -Path $mockRunner -Content (
-        $resolverRegex.Replace($runnerText, $mockResolver, 1)
+        $mockRunnerText
     )
 
     Write-Utf8File -Path (Join-Path $metadataCopilotHome 'config.json') `
