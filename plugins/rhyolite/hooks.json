@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "bash \"$COPILOT_PLUGIN_ROOT/scripts/show-welcome-panel.sh\" --progress",
+        "powershell": "& (Join-Path $env:COPILOT_PLUGIN_ROOT 'scripts/Show-WelcomePanel.ps1') -Mode Progress",
+        "timeoutSec": 5
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "bash \"$COPILOT_PLUGIN_ROOT/scripts/show-welcome-panel.sh\" --prompt-plaque",
+        "powershell": "& (Join-Path $env:COPILOT_PLUGIN_ROOT 'scripts/Show-WelcomePanel.ps1') -Mode PromptPlaque",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

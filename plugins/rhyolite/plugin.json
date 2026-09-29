@@ -1,0 +1,26 @@
+{
+  "name": "rhyolite",
+  "description": "Rhyolite provides guided, evidence-based, read-only reviews of untrusted public HTTPS Git repositories, with optional provenance review for agentically generated code.",
+  "version": "0.4.0",
+  "author": {
+    "name": "Rhyolite maintainers"
+  },
+  "keywords": [
+    "rhyolite",
+    "repository-review",
+    "security",
+    "prior-art",
+    "provenance"
+  ],
+  "category": "security",
+  "tags": [
+    "read-only",
+    "public-repositories",
+    "research"
+  ],
+  "agents": "agents/",
+  "commands": "commands/",
+  "skills": "skills/",
+  "hooks": "hooks.json",
+  "extensions": "extensions/"
+}

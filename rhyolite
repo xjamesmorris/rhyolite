@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+fail() {
+    local detail="$1"
+    local safe_detail
+    safe_detail="$(
+        printf '%s' "${detail}" |
+            LC_ALL=C tr -d '\000-\037\177' |
+            sed -E \
+                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g'
+    )"
+    printf '%s\n' \
+        'RHYOLITE ERROR' \
+        'Summary: The repository-root launcher could not delegate to the packaged Rhyolite launcher.' \
+        'Stage: root launcher delegation' \
+        'Source: NOT APPLICABLE' \
+        "Details: ${safe_detail}" \
+        'Consequence: Copilot and guided review setup did not start.' \
+        'Remediation: Restore plugins/rhyolite/bin/rhyolite from this checkout and ensure it is executable.' \
+        'Artifacts: NONE' \
+        'Support: SUPPORT.md and local documentation' \
+        'Contribute: CONTRIBUTING.md' >&2
+    exit 2
+}
+
+resolve_physical_path() {
+    local path="$1"
+    local directory
+    local target
+    local hops=0
+
+    case "${path}" in
+        /*) ;;
+        *) path="${PWD%/}/${path}" ;;
+    esac
+
+    while [ -L "${path}" ]; do
+        hops=$((hops + 1))
+        [ "${hops}" -le 40 ] ||
+            fail "Too many symlink levels while resolving ${path}."
+        directory="$(cd -P "$(dirname "${path}")" && pwd)"
+        target="$(readlink "${path}")" ||
+            fail "Could not read symlink ${path}."
+        case "${target}" in
+            /*) path="${target}" ;;
+            *) path="${directory}/${target}" ;;
+        esac
+    done
+
+    directory="$(cd -P "$(dirname "${path}")" && pwd)"
+    printf '%s/%s\n' "${directory}" "$(basename "${path}")"
+}
+
+script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
+script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
+packaged_launcher="${script_dir}/plugins/rhyolite/bin/rhyolite"
+
+[ -f "${packaged_launcher}" ] ||
+    fail "Packaged launcher was not found at ${packaged_launcher}."
+[ -x "${packaged_launcher}" ] ||
+    fail "Packaged launcher is not executable: ${packaged_launcher}."
+
+exec "${packaged_launcher}" "$@"

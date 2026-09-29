@@ -1,0 +1,6 @@
+.DS_Store
+Thumbs.db
+*.log
+repo-review-results/
+repo-review-workspaces/
+.test-output/

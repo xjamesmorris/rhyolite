@@ -1,0 +1,36 @@
+{
+  "name": "rhyolite-tools",
+  "owner": {
+    "name": "Rhyolite maintainers"
+  },
+  "metadata": {
+    "description": "Rhyolite tools for evidence-based, read-only reviews of public HTTPS Git sources",
+    "version": "0.4.0"
+  },
+  "plugins": [
+    {
+      "name": "rhyolite",
+      "description": "Rhyolite reviews public HTTPS Git repositories for security, design, quality, public context, and evidence-based provenance signals for agentically generated code without modifying or executing them.",
+      "version": "0.4.0",
+      "source": "plugins/rhyolite",
+      "author": {
+        "name": "Rhyolite maintainers"
+      },
+      "keywords": [
+        "rhyolite",
+        "repository-review",
+        "security",
+        "prior-art",
+        "provenance",
+        "llm"
+      ],
+      "category": "security",
+      "tags": [
+        "read-only",
+        "public-repositories",
+        "research",
+        "provenance"
+      ]
+    }
+  ]
+}

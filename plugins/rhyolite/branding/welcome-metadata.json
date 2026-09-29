@@ -1,0 +1,21 @@
+{
+  "displayName": "Rhyolite",
+  "tagline": "Guided, read-only reviews of public HTTPS Git repositories.",
+  "homeUrl": "https://github.com/xjamesmorris/rhyolite",
+  "docsUrl": "https://github.com/xjamesmorris/rhyolite#readme",
+  "supportUrl": "https://github.com/xjamesmorris/rhyolite/blob/main/SUPPORT.md",
+  "issuesUrl": "https://github.com/xjamesmorris/rhyolite/issues",
+  "pullsUrl": "https://github.com/xjamesmorris/rhyolite/pulls",
+  "localDocsPath": "README.md",
+  "localSupportPath": "SUPPORT.md",
+  "localContributingPath": "CONTRIBUTING.md",
+  "startCommand": "/rhyolite:start",
+  "shortStartCommand": "/repo-review",
+  "startAgentId": "rhyolite:repo-review",
+  "bannerAssetPath": "branding/banner.txt",
+  "setupHelpPhrases": [
+    "help",
+    "status",
+    "explain scopes"
+  ]
+}

@@ -1,0 +1,43 @@
+name: Usage question
+description: Ask a usage or troubleshooting question about the repository-review plugin.
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the question. Please include enough context for someone else to reproduce or explain the behavior.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      description: What version are you using?
+      placeholder: 0.4.0
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and where are you blocked?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Share the command, workflow step, or sanitized output that would help answer the question. For guided setup questions, include the `CURRENT SETUP STATUS` block or `status` output if it helps show the current source/output/scope/provenance selections.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste sanitized logs only. Do not include secrets or non-public repository details.
+      render: shell

@@ -1,0 +1,3 @@
+* text=auto eol=lf
+HANDOFF.md export-ignore
+tools/public-release/private-deny-patterns.json export-ignore

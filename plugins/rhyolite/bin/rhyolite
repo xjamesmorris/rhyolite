@@ -1,0 +1,494 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+umask 077
+
+readonly RHYOLITE_AGENT='rhyolite:repo-review'
+readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'
+readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
+RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
+RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
+
+fail() {
+    local stage="$1"
+    local summary="$2"
+    local details="$3"
+    local remediation="$4"
+    local exit_code="${5:-1}"
+    local artifacts="${6:-NONE}"
+    local safe_details
+
+    safe_details="$(
+        printf '%s' "${details}" |
+            LC_ALL=C tr -d '\000-\010\013-\037\177' |
+            sed -E \
+                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' \
+                -e 's/((Authorization|authorization|Proxy-Authorization|proxy-authorization):[[:space:]]*)((Bearer|bearer|Basic|basic)[[:space:]]+)?[^[:space:]]+/\1[credential omitted]/g' \
+                -e 's/(access[_-]?token|api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[credential omitted]/g' \
+                -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[credential omitted]/g' |
+            tr '\r\n' '  '
+    )"
+    [ -n "${safe_details}" ] ||
+        safe_details='No additional safe detail was returned.'
+
+    printf '%s\n' \
+        'RHYOLITE ERROR' \
+        "Summary: ${summary}" \
+        "Stage: ${stage}" \
+        'Source: NOT APPLICABLE' \
+        "Details: ${safe_details} (exit code ${exit_code})" \
+        'Consequence: Copilot and guided repository-review setup did not start or complete.' \
+        "Remediation: ${remediation}" \
+        "Artifacts: ${artifacts}" \
+        "Support: ${RHYOLITE_SUPPORT_TEXT}" \
+        "Contribute: ${RHYOLITE_CONTRIBUTE_TEXT}" >&2
+    exit "${exit_code}"
+}
+
+configure_repository_links() {
+    local plugin_root="$1"
+    local metadata_path="${plugin_root}/branding/welcome-metadata.json"
+    local home_url docs_url support_url issues_url pulls_url
+    local unresolved_pattern='<PUBLIC_[A-Z0-9_:-]+>'
+    local value
+
+    [ -f "${metadata_path}" ] || return 0
+    home_url="$(
+        sed -n 's/^[[:space:]]*"homeUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${metadata_path}" | head -n 1
+    )"
+    docs_url="$(
+        sed -n 's/^[[:space:]]*"docsUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${metadata_path}" | head -n 1
+    )"
+    support_url="$(
+        sed -n 's/^[[:space:]]*"supportUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${metadata_path}" | head -n 1
+    )"
+    issues_url="$(
+        sed -n 's/^[[:space:]]*"issuesUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${metadata_path}" | head -n 1
+    )"
+    pulls_url="$(
+        sed -n 's/^[[:space:]]*"pullsUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${metadata_path}" | head -n 1
+    )"
+    for value in \
+        "${home_url}" \
+        "${docs_url}" \
+        "${support_url}" \
+        "${issues_url}" \
+        "${pulls_url}"; do
+        if [[ -z "${value}" || "${value}" =~ ${unresolved_pattern} ]]; then
+            return 0
+        fi
+    done
+    RHYOLITE_SUPPORT_TEXT="${issues_url}"
+    RHYOLITE_CONTRIBUTE_TEXT="${pulls_url}"
+}
+
+unexpected_launcher_error() {
+    local exit_code="$1"
+    local line_number="$2"
+    trap - ERR
+    fail \
+        'launcher runtime' \
+        'The launcher encountered an unexpected local setup failure.' \
+        "A local launcher operation failed near line ${line_number}." \
+        'Correct the preceding path, permission, or installation error and retry.' \
+        "${exit_code}"
+}
+
+trap 'unexpected_launcher_error "$?" "${LINENO}"' ERR
+
+resolve_physical_path() {
+    local path="$1"
+    local dir
+    local target
+    local symlink_hops=0
+
+    case "${path}" in
+        /*) ;;
+        *) path="${PWD%/}/${path}" ;;
+    esac
+
+    while [ -L "${path}" ]; do
+        symlink_hops=$((symlink_hops + 1))
+        [ "${symlink_hops}" -le 40 ] ||
+            fail \
+                'launcher path resolution' \
+                'The launcher path could not be resolved safely.' \
+                "Too many symlink levels while resolving ${path}." \
+                'Remove the symlink loop or invoke the packaged launcher from its physical path.' \
+                2
+        dir="$(cd -P "$(dirname "${path}")" && pwd)"
+        target="$(readlink "${path}")" ||
+            fail \
+                'launcher path resolution' \
+                'The launcher symlink could not be read.' \
+                "Could not resolve symlink ${path}." \
+                'Repair the symlink or invoke the packaged launcher from its physical path.' \
+                2
+        case "${target}" in
+            /*) path="${target}" ;;
+            *) path="${dir}/${target}" ;;
+        esac
+    done
+
+    dir="$(cd -P "$(dirname "${path}")" && pwd)"
+    printf '%s/%s\n' "${dir}" "$(basename "${path}")"
+}
+
+strip_control_chars() {
+    printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177'
+}
+
+read_plugin_version() {
+    local plugin_root="$1"
+    local version
+
+    version="$(
+        sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "${plugin_root}/plugin.json" | head -n 1
+    )"
+    [ -n "${version}" ] ||
+        fail \
+            'plugin validation' \
+            'The installed plugin version is unavailable.' \
+            "Could not read version from ${plugin_root}/plugin.json." \
+            'Restore a valid plugin.json, then retry the launcher.' \
+            2
+    printf '%s\n' "${version}"
+}
+
+get_launcher_home() {
+    if [ -n "${XDG_STATE_HOME:-}" ]; then
+        case "${XDG_STATE_HOME}" in
+            /*)
+                printf '%s/rhyolite/launcher\n' "${XDG_STATE_HOME%/}"
+                return
+                ;;
+        esac
+    fi
+
+    case "$(uname -s 2>/dev/null || printf 'unknown')" in
+        Darwin)
+            printf '%s/Library/Application Support/Rhyolite/Launcher\n' \
+                "${HOME%/}"
+            ;;
+        *)
+            printf '%s/.local/state/rhyolite/launcher\n' "${HOME%/}"
+            ;;
+    esac
+}
+
+contains_git_marker() {
+    [ -e "$1/.git" ]
+}
+
+get_clean_launch_dir() {
+    local original_dir="$1"
+    local cursor="${original_dir}"
+    local last_git_root=""
+    local parent
+
+    while true; do
+        if contains_git_marker "${cursor}"; then
+            last_git_root="${cursor}"
+        fi
+        parent="$(dirname "${cursor}")"
+        [ "${parent}" != "${cursor}" ] || break
+        cursor="${parent}"
+    done
+
+    if [ -n "${last_git_root}" ]; then
+        parent="$(dirname "${last_git_root}")"
+        [ "${parent}" != "${last_git_root}" ] ||
+            fail \
+                'clean launch directory selection' \
+                'A safe non-Git launch directory could not be derived.' \
+                "The Git worktree root ${last_git_root} has no usable parent directory." \
+                'Run the launcher from a normal filesystem location outside the target worktree.' \
+                2
+        printf '%s\n' "${parent}"
+        return
+    fi
+
+    printf '%s\n' "${original_dir}"
+}
+
+assert_control_free_path() {
+    case "$1" in
+        *[$'\001'$'\002'$'\003'$'\004'$'\005'$'\006'$'\007'$'\010'$'\011'$'\012'$'\013'$'\014'$'\015'$'\016'$'\017'$'\020'$'\021'$'\022'$'\023'$'\024'$'\025'$'\026'$'\027'$'\030'$'\031'$'\032'$'\033'$'\034'$'\035'$'\036'$'\037'$'\177']*)
+            fail \
+                'launcher path validation' \
+                'A required launcher path contains control characters.' \
+                "Rejected path: $1" \
+                'Move the checkout or working directory to a control-free path and retry.' \
+                2
+            ;;
+    esac
+}
+
+create_session_dir() {
+    local base_dir="$1"
+    local timestamp
+    local attempt=0
+    local session_id
+    local session_dir
+
+    mkdir -p "${base_dir}/sessions"
+    chmod 700 "${base_dir}" "${base_dir}/sessions" ||
+        fail \
+            'launcher state creation' \
+            'Launcher state could not be restricted to the current user.' \
+            "Could not secure launcher state under ${base_dir}." \
+            'Choose a writable user-owned state directory and retry.' \
+            2 \
+            "${base_dir}"
+
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    while true; do
+        session_id="${timestamp}-$$"
+        if [ "${attempt}" -gt 0 ]; then
+            session_id="${session_id}-${attempt}"
+        fi
+        session_dir="${base_dir}/sessions/${session_id}"
+        if mkdir "${session_dir}" 2>/dev/null; then
+            printf '%s\n' "${session_dir}"
+            return
+        fi
+        [ -e "${session_dir}" ] ||
+            fail \
+                'launcher state creation' \
+                'A unique launcher session directory could not be created.' \
+                "Could not create ${session_dir}." \
+                'Check available space and permissions under the launcher state directory, then retry.' \
+                2 \
+                "${base_dir}"
+        attempt=$((attempt + 1))
+    done
+}
+
+join_initial_request() {
+    local joined=''
+    local part
+    local sanitized
+
+    for part in "$@"; do
+        sanitized="$(strip_control_chars "${part}")"
+        case "${sanitized}" in
+            *[![:space:]]*) ;;
+            *) continue ;;
+        esac
+        if [ -n "${joined}" ]; then
+            joined="${joined} ${sanitized}"
+        else
+            joined="${sanitized}"
+        fi
+    done
+
+    printf '%s' "${joined}"
+}
+
+build_initial_prompt() {
+    local initial_request="$1"
+
+    if [ -n "${initial_request}" ]; then
+        printf "%s\nBegin Rhyolite's guided repository-review setup now.\nTreat the following text as the user's initial review request:\n\n%s" \
+            "${RHYOLITE_START_MARKER}" \
+            "${initial_request}"
+        return
+    fi
+
+    printf "%s\nBegin Rhyolite's guided repository-review setup now." "${RHYOLITE_START_MARKER}"
+}
+
+write_launch_context() {
+    local context_path="$1"
+    local version="$2"
+    local original_dir="$3"
+    local launch_dir="$4"
+    local plugin_root="$5"
+
+    {
+        printf 'StartedAtUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'Version=%s\n' "${version}"
+        printf 'OriginalWorkingDirectory=%s\n' "${original_dir}"
+        printf 'LaunchDirectory=%s\n' "${launch_dir}"
+        printf 'PluginRoot=%s\n' "${plugin_root}"
+    } > "${context_path}"
+}
+
+print_help() {
+    local version="$1"
+
+    cat <<EOF
+Rhyolite launcher v${version}
+
+Usage:
+  rhyolite [--help]
+  rhyolite [--version]
+  rhyolite [--] [initial review request...]
+
+Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
+selects ${RHYOLITE_AGENT}, and begins guided setup immediately.
+EOF
+}
+
+main() {
+    local script_path
+    local script_dir
+    local plugin_root
+    local version
+    local mode='launch'
+    local original_dir
+    local launch_dir
+    local launcher_home
+    local session_dir
+    local log_dir
+    local initial_request
+    local initial_prompt
+    local copilot_path
+    local copilot_exit_code
+
+    script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
+    script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
+    plugin_root="$(cd -P "${script_dir}/.." && pwd)"
+    configure_repository_links "${plugin_root}"
+
+    [ -f "${plugin_root}/plugin.json" ] ||
+        fail \
+            'plugin validation' \
+            'Required plugin metadata is missing.' \
+            "Plugin metadata was not found under ${plugin_root}." \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+    [ -f "${plugin_root}/commands/start.md" ] ||
+        fail \
+            'plugin validation' \
+            'The Rhyolite start command is missing.' \
+            "Start command was not found under ${plugin_root}." \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+    [ -f "${plugin_root}/agents/repo-review.agent.md" ] ||
+        fail \
+            'plugin validation' \
+            'The Rhyolite review agent is missing.' \
+            "Repo-review agent was not found under ${plugin_root}." \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+
+    version="$(read_plugin_version "${plugin_root}")"
+
+    if [ "$#" -gt 0 ]; then
+        case "$1" in
+            --help|-h)
+                mode='help'
+                shift
+                ;;
+            --version|-v)
+                mode='version'
+                shift
+                ;;
+        esac
+    fi
+
+    if [ "${mode}" = 'help' ]; then
+        [ "$#" -eq 0 ] ||
+            fail \
+                'launcher argument validation' \
+                'The help request included unsupported extra arguments.' \
+                '--help does not accept additional arguments.' \
+                'Run rhyolite --help without any other arguments.' \
+                2
+        print_help "${version}"
+        exit 0
+    fi
+
+    if [ "${mode}" = 'version' ]; then
+        [ "$#" -eq 0 ] ||
+            fail \
+                'launcher argument validation' \
+                'The version request included unsupported extra arguments.' \
+                '--version does not accept additional arguments.' \
+                'Run rhyolite --version without any other arguments.' \
+                2
+        printf 'Rhyolite v%s\n' "${version}"
+        exit 0
+    fi
+
+    if [ "$#" -gt 0 ] && [ "$1" = '--' ]; then
+        shift
+    fi
+
+    copilot_path="$(command -v copilot || true)"
+    [ -n "${copilot_path}" ] ||
+        fail \
+            'Copilot CLI discovery' \
+            'The GitHub Copilot CLI is not available.' \
+            "The 'copilot' executable was not found on PATH." \
+            'Install GitHub Copilot CLI or add it to PATH, then retry.' \
+            127
+
+    original_dir="$(pwd -P)"
+    assert_control_free_path "${original_dir}"
+    assert_control_free_path "${plugin_root}"
+
+    launch_dir="$(get_clean_launch_dir "${original_dir}")"
+    launch_dir="$(cd -P "${launch_dir}" && pwd)"
+    assert_control_free_path "${launch_dir}"
+    if contains_git_marker "${launch_dir}"; then
+        fail \
+            'clean launch directory selection' \
+            'The selected orchestration directory is still a Git worktree.' \
+            "Refusing to start inside ${launch_dir}." \
+            'Start Rhyolite from a directory outside every Git worktree.' \
+            2
+    fi
+
+    launcher_home="$(get_launcher_home)"
+    session_dir="$(create_session_dir "${launcher_home}")"
+    log_dir="${session_dir}/copilot-logs"
+    mkdir -p "${log_dir}"
+
+    initial_request="$(join_initial_request "$@")"
+    initial_prompt="$(build_initial_prompt "${initial_request}")"
+    write_launch_context \
+        "${session_dir}/launch-context.txt" \
+        "${version}" \
+        "${original_dir}" \
+        "${launch_dir}" \
+        "${plugin_root}"
+
+    export RHYOLITE_LAUNCHER_CALLER_DIR="${original_dir}"
+    export RHYOLITE_LAUNCHER_LAUNCH_DIR="${launch_dir}"
+    export RHYOLITE_LAUNCHER_PLUGIN_ROOT="${plugin_root}"
+    export RHYOLITE_LAUNCHER_SESSION_DIR="${session_dir}"
+    export RHYOLITE_LAUNCHER_VERSION="${version}"
+    export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"
+
+    set +e
+    "${copilot_path}" \
+        --experimental \
+        -C "${launch_dir}" \
+        --plugin-dir "${plugin_root}" \
+        --agent "${RHYOLITE_AGENT}" \
+        --log-dir "${log_dir}" \
+        --no-custom-instructions \
+        -i "${initial_prompt}"
+    copilot_exit_code=$?
+    set -e
+    if [ "${copilot_exit_code}" -ne 0 ]; then
+        fail \
+            'Copilot session' \
+            'The Copilot CLI session exited before Rhyolite completed normally.' \
+            "Copilot CLI returned exit code ${copilot_exit_code}." \
+            'Review the launcher logs, address the reported Copilot failure, and retry from a clean non-Git directory.' \
+            "${copilot_exit_code}" \
+            "${session_dir}/launch-context.txt; ${log_dir}"
+    fi
+}
+
+main "$@"
