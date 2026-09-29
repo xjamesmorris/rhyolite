@@ -3865,16 +3865,28 @@ exit 0
 
     if (-not [string]::IsNullOrWhiteSpace($bashShellPath)) {
         $bashRunnerInvocationPath = $bashRunnerPath -replace '\\', '/'
-        $bashScopeOnePlanText = & $bashShellPath `
-            $bashRunnerInvocationPath `
-            --repo 'https://github.com/octocat/Hello-World' `
-            --scope 1 `
-            --workspace-root ($scopeOneWorkspace -replace '\\', '/') `
-            --output-root ($scopeOneOutput -replace '\\', '/') `
-            --non-interactive `
-            --plan-only 2>&1 |
-            Out-String
-        $bashScopeOnePlan = $bashScopeOnePlanText | ConvertFrom-Json
+        $bashScopeOnePlanText = Normalize-LineEndings -Text (
+            @(
+                & $bashShellPath `
+                    $bashRunnerInvocationPath `
+                    --repo 'https://github.com/octocat/Hello-World' `
+                    --scope 1 `
+                    --workspace-root ($scopeOneWorkspace -replace '\\', '/') `
+                    --output-root ($scopeOneOutput -replace '\\', '/') `
+                    --non-interactive `
+                    --plan-only 2>&1
+            ) -join "`n"
+        )
+        try {
+            $bashScopeOnePlan = $bashScopeOnePlanText |
+                ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw (
+                'Bash scope 1 --plan-only output was not JSON: ' +
+                ($bashScopeOnePlanText | ConvertTo-Json -Compress)
+            )
+        }
         Assert-PropertySet -Object $bashScopeOnePlan `
             -Expected $expectedPlanProperties `
             -Message 'Bash scope 1 --plan-only schema is incomplete.'
@@ -3882,16 +3894,28 @@ exit 0
             -Expected $expectedPriorArtProperties `
             -Message 'Bash scope 1 --plan-only prior-art schema is incomplete.'
 
-        $bashScopeTwoPlanText = & $bashShellPath `
-            $bashRunnerInvocationPath `
-            --repo 'https://github.com/octocat/Hello-World' `
-            --scope 2 `
-            --workspace-root ($scopeTwoWorkspace -replace '\\', '/') `
-            --output-root ($scopeTwoOutput -replace '\\', '/') `
-            --non-interactive `
-            --plan-only 2>&1 |
-            Out-String
-        $bashScopeTwoPlan = $bashScopeTwoPlanText | ConvertFrom-Json
+        $bashScopeTwoPlanText = Normalize-LineEndings -Text (
+            @(
+                & $bashShellPath `
+                    $bashRunnerInvocationPath `
+                    --repo 'https://github.com/octocat/Hello-World' `
+                    --scope 2 `
+                    --workspace-root ($scopeTwoWorkspace -replace '\\', '/') `
+                    --output-root ($scopeTwoOutput -replace '\\', '/') `
+                    --non-interactive `
+                    --plan-only 2>&1
+            ) -join "`n"
+        )
+        try {
+            $bashScopeTwoPlan = $bashScopeTwoPlanText |
+                ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw (
+                'Bash scope 2 --plan-only output was not JSON: ' +
+                ($bashScopeTwoPlanText | ConvertTo-Json -Compress)
+            )
+        }
         Assert-PropertySet -Object $bashScopeTwoPlan `
             -Expected $expectedPlanProperties `
             -Message 'Bash scope 2 --plan-only schema is incomplete.'
@@ -3899,17 +3923,29 @@ exit 0
             -Expected $expectedPriorArtProperties `
             -Message 'Bash scope 2 --plan-only prior-art schema is incomplete.'
 
-        $bashScopeThreePlanText = & $bashShellPath `
-            $bashRunnerInvocationPath `
-            --repo 'https://github.com/octocat/Hello-World' `
-            --scope 3 `
-            --provenance-lookback-months 12 `
-            --workspace-root ($scopeThreeWorkspace -replace '\\', '/') `
-            --output-root ($scopeThreeOutput -replace '\\', '/') `
-            --non-interactive `
-            --plan-only 2>&1 |
-            Out-String
-        $bashScopeThreePlan = $bashScopeThreePlanText | ConvertFrom-Json
+        $bashScopeThreePlanText = Normalize-LineEndings -Text (
+            @(
+                & $bashShellPath `
+                    $bashRunnerInvocationPath `
+                    --repo 'https://github.com/octocat/Hello-World' `
+                    --scope 3 `
+                    --provenance-lookback-months 12 `
+                    --workspace-root ($scopeThreeWorkspace -replace '\\', '/') `
+                    --output-root ($scopeThreeOutput -replace '\\', '/') `
+                    --non-interactive `
+                    --plan-only 2>&1
+            ) -join "`n"
+        )
+        try {
+            $bashScopeThreePlan = $bashScopeThreePlanText |
+                ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw (
+                'Bash scope 3 --plan-only output was not JSON: ' +
+                ($bashScopeThreePlanText | ConvertTo-Json -Compress)
+            )
+        }
         Assert-PropertySet -Object $bashScopeThreePlan `
             -Expected $expectedPlanProperties `
             -Message 'Bash scope 3 --plan-only schema is incomplete.'
