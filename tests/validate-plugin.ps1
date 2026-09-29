@@ -300,6 +300,44 @@ function Normalize-LineEndingsWithTrailingNewline {
     return (($Text -replace "`r`n?", "`n").TrimEnd("`n") + "`n")
 }
 
+function Get-FirstLineDifference {
+    param(
+        [AllowEmptyString()]
+        [string] $Expected,
+
+        [AllowEmptyString()]
+        [string] $Actual
+    )
+
+    $expectedLines = @(Normalize-LineEndings -Text $Expected -split "`n")
+    $actualLines = @(Normalize-LineEndings -Text $Actual -split "`n")
+    $lineCount = [Math]::Max($expectedLines.Count, $actualLines.Count)
+    for ($index = 0; $index -lt $lineCount; $index++) {
+        $expectedLine = if ($index -lt $expectedLines.Count) {
+            $expectedLines[$index]
+        }
+        else {
+            '<missing>'
+        }
+        $actualLine = if ($index -lt $actualLines.Count) {
+            $actualLines[$index]
+        }
+        else {
+            '<missing>'
+        }
+        if ($expectedLine -cne $actualLine) {
+            return (
+                "First difference at line $($index + 1): expected=" +
+                ($expectedLine | ConvertTo-Json -Compress) +
+                ' actual=' +
+                ($actualLine | ConvertTo-Json -Compress)
+            )
+        }
+    }
+
+    return 'No differing line was found after normalization.'
+}
+
 function Get-MarkedTextBlock {
     param(
         [Parameter(Mandatory)]
@@ -1472,7 +1510,12 @@ if (-not [string]::IsNullOrWhiteSpace($bashShellPath)) {
     )
     Assert-True -Condition (
         $bashPanelText -eq $expectedWelcomePanel
-    ) -Message 'Bash welcome panel is not the expected metadata-driven banner.'
+    ) -Message (
+        'Bash welcome panel is not the expected metadata-driven banner. ' +
+        (Get-FirstLineDifference `
+            -Expected $expectedWelcomePanel `
+            -Actual $bashPanelText)
+    )
     $bashPanelLines = (
         Normalize-LineEndings -Text $bashPanelText
     ) -split "`n"
