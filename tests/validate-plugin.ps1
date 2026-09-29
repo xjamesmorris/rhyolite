@@ -309,8 +309,12 @@ function Get-FirstLineDifference {
         [string] $Actual
     )
 
-    $expectedLines = @(Normalize-LineEndings -Text $Expected -split "`n")
-    $actualLines = @(Normalize-LineEndings -Text $Actual -split "`n")
+    $expectedLines = @(
+        (Normalize-LineEndings -Text $Expected) -split "`n"
+    )
+    $actualLines = @(
+        (Normalize-LineEndings -Text $Actual) -split "`n"
+    )
     $lineCount = [Math]::Max($expectedLines.Count, $actualLines.Count)
     for ($index = 0; $index -lt $lineCount; $index++) {
         $expectedLine = if ($index -lt $expectedLines.Count) {
@@ -1476,9 +1480,10 @@ $bashApplication = Get-Command bash -CommandType Application `
 $bashShellPath = if ($bashApplication) { $bashApplication.Source } else { '' }
 if (-not [string]::IsNullOrWhiteSpace($bashShellPath)) {
     $bashWelcomeHelperInvocationPath = $bashWelcomeHelperPath -replace '\\', '/'
-    $bashPanelText = Normalize-LineEndings (
-        & $bashShellPath $bashWelcomeHelperInvocationPath --panel |
-            Out-String
+    $bashPanelText = Normalize-LineEndings -Text (
+        @(
+            & $bashShellPath $bashWelcomeHelperInvocationPath --panel
+        ) -join "`n"
     )
     $bashProgressLines = @(
         & env -u NO_COLOR -u COPILOT_NO_COLOR `
