@@ -4022,13 +4022,25 @@ exit 0
                     $bashScopeThreeOutput
             ) -Message 'Git Bash plan-only outputs did not retain cygpath-normalized roots.'
             foreach ($planPair in @(
-                @($scopeOnePlan, $bashScopeOnePlan)
-                @($scopeTwoPlan, $bashScopeTwoPlan)
-                @($scopeThreePlan, $bashScopeThreePlan)
+                [pscustomobject]@{
+                    PowerShell = $scopeOnePlan
+                    Bash = $bashScopeOnePlan
+                }
+                [pscustomobject]@{
+                    PowerShell = $scopeTwoPlan
+                    Bash = $bashScopeTwoPlan
+                }
+                [pscustomobject]@{
+                    PowerShell = $scopeThreePlan
+                    Bash = $bashScopeThreePlan
+                }
             )) {
-                $planPair[1].WorkspaceRoot = $planPair[0].WorkspaceRoot
-                $planPair[1].OutputRoot = $planPair[0].OutputRoot
-                $planPair[1].ApprovalHash = $planPair[0].ApprovalHash
+                $planPair.Bash.WorkspaceRoot =
+                    $planPair.PowerShell.WorkspaceRoot
+                $planPair.Bash.OutputRoot =
+                    $planPair.PowerShell.OutputRoot
+                $planPair.Bash.ApprovalHash =
+                    $planPair.PowerShell.ApprovalHash
             }
         }
         else {
