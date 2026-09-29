@@ -138,6 +138,39 @@ function Set-RepositorySupportLinks {
     }
 }
 
+function Invoke-ArgumentPreservingProcess {
+    param(
+        [Parameter(Mandatory)]
+        [string] $FilePath,
+
+        [Parameter(Mandatory)]
+        [string[]] $Arguments,
+
+        [Parameter(Mandatory)]
+        [string] $WorkingDirectory
+    )
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    foreach ($argument in $Arguments) {
+        [void] $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw "Could not start process: $FilePath"
+    }
+    try {
+        $process.WaitForExit()
+        return $process.ExitCode
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 trap {
     Fail `
         -Stage 'launcher runtime' `
@@ -502,10 +535,21 @@ if (@($CommandArguments).Count -gt 0 -and @($CommandArguments)[0] -eq '--') {
     }
 }
 
-$copilotCommand = Get-Command copilot `
-    -CommandType Application `
-    -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+$copilotCommand = if ($IsWindows) {
+    Get-Command copilot `
+        -CommandType ExternalScript `
+        -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+}
+else {
+    $null
+}
+if ($null -eq $copilotCommand) {
+    $copilotCommand = Get-Command copilot `
+        -CommandType Application `
+        -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+}
 if ($null -eq $copilotCommand) {
     $copilotCommand = Get-Command copilot `
         -CommandType ExternalScript `
@@ -604,10 +648,11 @@ try {
             '-NonInteractive'
             '-File'
             $copilotCommand.Source
-            '--%'
         ) + $copilotArguments
-        & $currentPowerShellPath @copilotLauncherArguments
-        $copilotExitCode = $LASTEXITCODE
+        $copilotExitCode = Invoke-ArgumentPreservingProcess `
+            -FilePath $currentPowerShellPath `
+            -Arguments $copilotLauncherArguments `
+            -WorkingDirectory $launchDirectory
     }
     else {
         & $copilotExecutablePath @copilotArguments
