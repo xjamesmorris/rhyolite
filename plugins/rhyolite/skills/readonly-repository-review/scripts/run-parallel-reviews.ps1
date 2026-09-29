@@ -1178,20 +1178,33 @@ function Resolve-PublicRepositoryEndpoint {
         [int] $Port
     )
 
-    try {
-        $lookup = [Net.Dns]::GetHostAddressesAsync($RepositoryHost)
-        if (-not $lookup.Wait(5000)) {
-            throw 'DNS lookup timed out.'
+    $addresses = @()
+    $lastLookupError = ''
+    $resolved = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $lookup = [Net.Dns]::GetHostAddressesAsync($RepositoryHost)
+            if (-not $lookup.Wait(5000)) {
+                throw 'DNS lookup timed out.'
+            }
+            $addresses = @(
+                $lookup.GetAwaiter().GetResult() |
+                    Sort-Object { $_.ToString() } -Unique
+            )
+            $resolved = $true
+            break
         }
-        $addresses = @(
-            $lookup.GetAwaiter().GetResult() |
-                Sort-Object { $_.ToString() } -Unique
-        )
+        catch {
+            $lastLookupError = $_.Exception.Message
+            if ($attempt -lt 3) {
+                Start-Sleep -Milliseconds (200 * $attempt)
+            }
+        }
     }
-    catch {
+    if (-not $resolved) {
         throw (
             "Could not resolve public repository host ${RepositoryHost}: " +
-            $_.Exception.Message
+            $lastLookupError
         )
     }
     if ($addresses.Count -eq 0) {

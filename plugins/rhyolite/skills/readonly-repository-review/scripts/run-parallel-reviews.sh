@@ -1566,13 +1566,21 @@ resolve_public_endpoint() {
 import ipaddress
 import socket
 import sys
+import time
 
 host = sys.argv[1]
 port = int(sys.argv[2])
-try:
-    records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-except OSError as error:
-    raise SystemExit(f"Could not resolve public repository host {host}: {error}")
+last_error = None
+for attempt in range(3):
+    try:
+        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        break
+    except OSError as error:
+        last_error = error
+        if attempt < 2:
+            time.sleep(0.2 * (attempt + 1))
+else:
+    raise SystemExit(f"Could not resolve public repository host {host}: {last_error}")
 
 addresses = sorted({
     ipaddress.ip_address(record[4][0].split("%", 1)[0])

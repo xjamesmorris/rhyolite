@@ -1580,6 +1580,7 @@ welcome_plaque_force_color_zero="${fixture_dir}/welcome-plaque-force-color-zero.
 welcome_plaque_term_dumb="${fixture_dir}/welcome-plaque-term-dumb.jsonl"
 welcome_plaque_unrelated="${fixture_dir}/welcome-plaque-unrelated.txt"
 welcome_panel_output="${fixture_dir}/welcome-panel.txt"
+welcome_panel_c_locale_output="${fixture_dir}/welcome-panel-c-locale.txt"
 welcome_panel_stderr="${fixture_dir}/welcome-panel.stderr"
 env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
     bash "${WELCOME_HELPER_BASH}" --progress >"${welcome_progress_output}" \
@@ -1623,8 +1624,12 @@ printf '{"prompt":"ordinary user prompt"}\n' |
     fail 'Unrelated prompts trigger the Rhyolite plaque.'
 bash "${WELCOME_HELPER_BASH}" --panel >"${welcome_panel_output}" \
     2>"${welcome_panel_stderr}"
+LC_ALL=C bash "${WELCOME_HELPER_BASH}" --panel \
+    >"${welcome_panel_c_locale_output}" 2>>"${welcome_panel_stderr}"
 [[ ! -s "${welcome_panel_stderr}" ]] ||
     fail 'Bash welcome panel helper wrote unexpected stderr.'
+cmp -s "${welcome_panel_output}" "${welcome_panel_c_locale_output}" ||
+    fail 'Bash welcome panel width changes under a byte-counting locale.'
 tui_runtime_result="$(
     node "${TUI_RUNTIME_VALIDATOR}" \
         --plugin-manifest "${PLUGIN_MANIFEST}" \

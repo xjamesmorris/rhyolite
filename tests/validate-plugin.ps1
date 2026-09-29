@@ -531,14 +531,18 @@ function Invoke-PowerShellFileCapture {
         [switch] $AllowFailure
     )
 
-    $output = & $PowerShellPath `
-        -NoLogo `
-        -NoProfile `
-        -NonInteractive `
-        -File $FilePath `
-        @Arguments 2>&1 |
-        Out-String
+    $outputLines = @(
+        & $PowerShellPath `
+            -NoLogo `
+            -NoProfile `
+            -NonInteractive `
+            -File $FilePath `
+            @Arguments 2>&1
+    )
     $exitCode = $LASTEXITCODE
+    $output = @(
+        $outputLines | ForEach-Object { $_.ToString() }
+    ) -join "`n"
     if ($exitCode -ne 0 -and -not $AllowFailure) {
         throw (
             "PowerShell child process failed with exit code ${exitCode}: " +
@@ -565,14 +569,18 @@ function Invoke-PowerShellCommandCapture {
         [switch] $AllowFailure
     )
 
-    $output = & $PowerShellPath `
-        -NoLogo `
-        -NoProfile `
-        -NonInteractive `
-        -Command $Command `
-        @Arguments 2>&1 |
-        Out-String
+    $outputLines = @(
+        & $PowerShellPath `
+            -NoLogo `
+            -NoProfile `
+            -NonInteractive `
+            -Command $Command `
+            @Arguments 2>&1
+    )
     $exitCode = $LASTEXITCODE
+    $output = @(
+        $outputLines | ForEach-Object { $_.ToString() }
+    ) -join "`n"
     if ($exitCode -ne 0 -and -not $AllowFailure) {
         throw (
             "PowerShell child command failed with exit code ${exitCode}:`n" +
@@ -4856,6 +4864,40 @@ try {
         $metadataCopilotHome
     ) -Force | Out-Null
 
+    $mockPluginRoot = Join-Path $mockReviewTestRoot 'rhyolite'
+    Copy-Item -LiteralPath $pluginRoot `
+        -Destination $mockPluginRoot `
+        -Recurse `
+        -Force
+    $mockRunner = Join-Path $mockPluginRoot (
+        'skills\readonly-repository-review\scripts\run-parallel-reviews.ps1'
+    )
+    $resolverPattern = (
+        '(?ms)^function Resolve-PublicRepositoryEndpoint \{.*?^\}' +
+        '\r?\n(?=\r?\nfunction ConvertTo-PublicHttpsRepository)'
+    )
+    $resolverRegex = [regex]::new($resolverPattern)
+    Assert-True -Condition (
+        $resolverRegex.Matches($runnerText).Count -eq 1
+    ) -Message 'PowerShell mock review could not isolate the DNS resolver.'
+    $mockResolver = @'
+function Resolve-PublicRepositoryEndpoint {
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryHost,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 65535)]
+        [int] $Port
+    )
+
+    return "${RepositoryHost}:${Port}:93.184.216.34"
+}
+'@
+    Write-Utf8File -Path $mockRunner -Content (
+        $resolverRegex.Replace($runnerText, $mockResolver, 1)
+    )
+
     Write-Utf8File -Path (Join-Path $metadataCopilotHome 'config.json') `
         -Content (
             @{
@@ -5385,7 +5427,7 @@ exit 0
         $acceptedMockPlan = (
             Invoke-PowerShellFileCapture `
                 -PowerShellPath $currentPowerShellPath `
-                -FilePath $runner `
+                -FilePath $mockRunner `
                 -Arguments @(
                     '-Repository'
                     'https://github.com/octocat/Hello-World'
@@ -5409,7 +5451,7 @@ exit 0
         $mockRunText = (
             Invoke-PowerShellFileCapture `
                 -PowerShellPath $currentPowerShellPath `
-                -FilePath $runner `
+                -FilePath $mockRunner `
                 -Arguments @(
                     '-Repository'
                     'https://github.com/octocat/Hello-World'
@@ -5791,7 +5833,7 @@ exit 0
             $casePlan = (
                 Invoke-PowerShellFileCapture `
                     -PowerShellPath $currentPowerShellPath `
-                    -FilePath $runner `
+                    -FilePath $mockRunner `
                     -Arguments @(
                         '-Repository'
                         'https://github.com/octocat/Hello-World'
@@ -5812,7 +5854,7 @@ exit 0
             $env:MOCK_COPILOT_FAIL_MESSAGE = $failureFixture.Message
             $caseCapture = Invoke-PowerShellFileCapture `
                 -PowerShellPath $currentPowerShellPath `
-                -FilePath $runner `
+                -FilePath $mockRunner `
                 -Arguments @(
                     '-Repository'
                     'https://github.com/octocat/Hello-World'
@@ -5841,7 +5883,11 @@ exit 0
                 $caseText.Contains(
                     ($failureFixture.Message -split "`n")[0]
                 )
-            ) -Message "PowerShell $($failureFixture.Name) terminal summary lost stage or detail."
+            ) -Message (
+                "PowerShell $($failureFixture.Name) terminal summary lost " +
+                "stage or detail. exit=$($caseCapture.ExitCode) output=" +
+                ($caseText | ConvertTo-Json -Compress)
+            )
             if ($failureFixture.Name -eq 'worker') {
                 Assert-True -Condition (
                     $caseText.Contains('[credential omitted]') -and

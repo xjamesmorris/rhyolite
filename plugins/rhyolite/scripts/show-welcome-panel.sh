@@ -41,13 +41,22 @@ launcher_started_immediately() {
         'RHYOLITE_LAUNCHER_IMMEDIATE_START_V1' ]]
 }
 
+terminal_cell_length() {
+    local value="$1"
+
+    value="${value//█/x}"
+    value="${value//▄/x}"
+    value="${value//▀/x}"
+    printf '%s' "${#value}"
+}
+
 banner_display_width() {
     local line
     local line_length=0
     local max_width=0
 
     while IFS= read -r line; do
-        line_length=${#line}
+        line_length="$(terminal_cell_length "${line}")"
         if ((line_length > max_width)); then
             max_width=${line_length}
         fi
