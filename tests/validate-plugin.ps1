@@ -5385,11 +5385,8 @@ switch ($commandName) {
     }
 }
 '@)
-    [void] (New-MockCommand -Directory $mockBin -Name 'tar' -Implementation @'
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $Arguments
-)
+[void] (New-MockCommand -Directory $mockBin -Name 'tar' -Implementation @'
+$Arguments = @($args)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -5409,7 +5406,17 @@ if ([string]::IsNullOrWhiteSpace($archivePath) -or
     exit 81
 }
 
-$archive = Get-Content -LiteralPath $archivePath -Raw | ConvertFrom-Json
+$archive = if (Test-Path -LiteralPath $archivePath -PathType Leaf) {
+    Get-Content -LiteralPath $archivePath -Raw | ConvertFrom-Json
+}
+else {
+    $sessionRoot = Split-Path -Parent $archivePath
+    $sourceRoot = $sessionRoot -replace '-session$', '-readonly'
+    if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
+        throw "Synthetic archive and paired mock clone are both missing: $archivePath"
+    }
+    [pscustomobject]@{ Source = $sourceRoot }
+}
 Get-ChildItem -LiteralPath $archive.Source -Recurse -File -Force |
     Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' } |
     ForEach-Object {
@@ -5427,10 +5434,7 @@ Get-ChildItem -LiteralPath $archive.Source -Recurse -File -Force |
 exit 0
 '@)
     [void] (New-MockCommand -Directory $mockBin -Name 'python3' -Implementation @'
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $Arguments
-)
+$Arguments = @($args)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -5954,12 +5958,14 @@ exit 0
             Assert-True -Condition (
                 (
                     $gitInvocationText.Contains('ls-remote') -and
-                    $gitInvocationText.Contains('http.curloptResolve=')
+                    $gitInvocationText.Contains('http.curloptResolve=') -and
+                    $gitInvocationText.Contains('archive')
                 ) -or (
                     $runnerText.Contains('ls-remote') -and
-                    $runnerText.Contains('http.curloptResolve=')
+                    $runnerText.Contains('http.curloptResolve=') -and
+                    $runnerText.Contains('archive')
                 )
-            ) -Message 'PowerShell mock review did not preflight anonymous repository access.'
+            ) -Message 'PowerShell mock review did not preflight access or create the snapshot archive.'
             Assert-True -Condition (
                 (
                     (
