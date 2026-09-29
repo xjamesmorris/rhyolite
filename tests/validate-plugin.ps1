@@ -4223,12 +4223,12 @@ try {
     )
     New-Item -ItemType Directory -Path $localMockBin -Force | Out-Null
     [void] (New-MockCommand -Directory $localMockBin -Name 'git' -Implementation @'
-param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Args)
+$Arguments = @($args)
 Add-Content -LiteralPath $env:MOCK_GUARD_LOG -Value 'git'
 exit 99
 '@)
     [void] (New-MockCommand -Directory $localMockBin -Name 'python3' -Implementation @'
-param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Args)
+$Arguments = @($args)
 Add-Content -LiteralPath $env:MOCK_GUARD_LOG -Value 'python3'
 exit 99
 '@)
@@ -4697,12 +4697,12 @@ try {
     )
     New-Item -ItemType Directory -Path $localMockBin -Force | Out-Null
     [void] (New-MockCommand -Directory $localMockBin -Name 'git' -Implementation @'
-param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Args)
+$Arguments = @($args)
 Add-Content -LiteralPath $env:MOCK_GUARD_LOG -Value 'git'
 exit 99
 '@)
     [void] (New-MockCommand -Directory $localMockBin -Name 'python3' -Implementation @'
-param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Args)
+$Arguments = @($args)
 Add-Content -LiteralPath $env:MOCK_GUARD_LOG -Value 'python3'
 exit 99
 '@)
@@ -5115,10 +5115,7 @@ function Resolve-PublicRepositoryEndpoint {
         )
 
     [void] (New-MockCommand -Directory $mockBin -Name 'git' -Implementation @'
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $Arguments
-)
+$Arguments = @($args)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -5447,10 +5444,7 @@ if ($Arguments.Count -ge 3 -and $Arguments[0] -eq '-') {
 exit 82
 '@)
     [void] (New-MockCommand -Directory $mockBin -Name 'copilot' -Implementation @'
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $Arguments
-)
+$Arguments = @($args)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
