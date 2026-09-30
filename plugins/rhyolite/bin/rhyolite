@@ -6,6 +6,10 @@ umask 077
 readonly RHYOLITE_AGENT='rhyolite:repo-review'
 readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'
 readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
+readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'
+readonly RHYOLITE_DEFAULT_MODEL='gpt-5.6-sol'
+readonly RHYOLITE_ALTERNATE_MODEL='claude-fable-5'
+readonly RHYOLITE_REASONING_EFFORT='max'
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 
@@ -291,17 +295,137 @@ join_initial_request() {
     printf '%s' "${joined}"
 }
 
+extract_repository_urls_from_request() {
+    local request="$1"
+    local token
+
+    for token in ${request}; do
+        case "${token}" in
+            https://*|HTTPS://*)
+                token="${token%,}"
+                token="${token%;}"
+                token="${token%.}"
+                token="${token%)}"
+                token="${token%]}"
+                printf '%s\n' "${token}"
+                ;;
+        esac
+    done
+}
+
+split_repository_input() {
+    printf '%s\n' "$1" |
+        tr ',' '\n' |
+        while IFS= read -r value; do
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            [[ -n "${value}" ]] && printf '%s\n' "${value}"
+        done
+}
+
+prompt_for_fleet_mode() {
+    local remembered_mode="$1"
+    local answer
+
+    while true; do
+        printf '\nRhyolite execution mode\n' >&2
+        if [[ -n "${remembered_mode}" ]]; then
+            printf '  1. Keep remembered mode (%s)\n' \
+                "${remembered_mode}" >&2
+            printf '  2. Native Copilot fleet mode\n' >&2
+            printf '  3. Standard Copilot mode\n' >&2
+            printf 'Select mode [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_mode}"; return ;;
+                2) printf '%s\n' native; return ;;
+                3) printf '%s\n' standard; return ;;
+            esac
+        else
+            printf '  1. Standard Copilot mode\n' >&2
+            printf '  2. Native Copilot fleet mode\n' >&2
+            printf 'Select mode [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' standard; return ;;
+                2) printf '%s\n' native; return ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+}
+
+prompt_for_model() {
+    local remembered_model="$1"
+    local answer custom_model
+
+    while true; do
+        printf '\nReview model\n' >&2
+        if [[ -n "${remembered_model}" ]]; then
+            printf '  1. Keep remembered model (%s)\n' \
+                "${remembered_model}" >&2
+            printf '  2. GPT-5.6 Sol (%s)\n' \
+                "${RHYOLITE_DEFAULT_MODEL}" >&2
+            printf '  3. Claude Fable 5 (%s)\n' \
+                "${RHYOLITE_ALTERNATE_MODEL}" >&2
+            printf '  4. Enter another frontier model ID\n' >&2
+            printf 'Select model [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_model}"; return ;;
+                2) printf '%s\n' "${RHYOLITE_DEFAULT_MODEL}"; return ;;
+                3) printf '%s\n' "${RHYOLITE_ALTERNATE_MODEL}"; return ;;
+                4) ;;
+                *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
+            esac
+        else
+            printf '  1. GPT-5.6 Sol (%s)\n' \
+                "${RHYOLITE_DEFAULT_MODEL}" >&2
+            printf '  2. Claude Fable 5 (%s)\n' \
+                "${RHYOLITE_ALTERNATE_MODEL}" >&2
+            printf '  3. Enter another frontier model ID\n' >&2
+            printf 'Select model [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${RHYOLITE_DEFAULT_MODEL}"; return ;;
+                2) printf '%s\n' "${RHYOLITE_ALTERNATE_MODEL}"; return ;;
+                3) ;;
+                *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
+            esac
+        fi
+
+        printf 'Frontier model ID: ' >&2
+        IFS= read -r custom_model
+        if rhyolite_valid_model_id "${custom_model}"; then
+            printf '%s\n' "${custom_model}"
+            return
+        fi
+        printf 'Model IDs may contain only letters, numbers, dots, underscores, and hyphens.\n' >&2
+    done
+}
+
 build_initial_prompt() {
     local initial_request="$1"
+    local fleet_mode="$2"
+    local model="$3"
+    shift 3
+    local repository
 
+    printf '%s\n%s\n' \
+        "${RHYOLITE_START_MARKER}" \
+        "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
+    for repository in "$@"; do
+        printf 'Source=%s\n' "${repository}"
+    done
+    printf 'FleetMode=%s\n' "${fleet_mode}"
+    printf 'Model=%s\n' "${model}"
+    printf 'RememberPreferences=true\n'
+    printf 'END_%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
+    printf "Begin Rhyolite's guided repository-review setup now."
     if [ -n "${initial_request}" ]; then
-        printf "%s\nBegin Rhyolite's guided repository-review setup now.\nTreat the following text as the user's initial review request:\n\n%s" \
-            "${RHYOLITE_START_MARKER}" \
+        printf "\nTreat the following text as the user's initial review request:\n\n%s" \
             "${initial_request}"
-        return
     fi
-
-    printf "%s\nBegin Rhyolite's guided repository-review setup now." "${RHYOLITE_START_MARKER}"
 }
 
 write_launch_context() {
@@ -310,6 +434,8 @@ write_launch_context() {
     local original_dir="$3"
     local launch_dir="$4"
     local plugin_root="$5"
+    local fleet_mode="$6"
+    local model="$7"
 
     {
         printf 'StartedAtUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -317,6 +443,9 @@ write_launch_context() {
         printf 'OriginalWorkingDirectory=%s\n' "${original_dir}"
         printf 'LaunchDirectory=%s\n' "${launch_dir}"
         printf 'PluginRoot=%s\n' "${plugin_root}"
+        printf 'FleetMode=%s\n' "${fleet_mode}"
+        printf 'Model=%s\n' "${model}"
+        printf 'RememberPreferences=true\n'
     } > "${context_path}"
 }
 
@@ -329,10 +458,12 @@ Rhyolite launcher v${version}
 Usage:
   rhyolite [--help]
   rhyolite [--version]
-  rhyolite [--] [initial review request...]
+  rhyolite [--repo URL ...] [--fleet-mode native|standard]
+           [--model MODEL] [--] [initial review request...]
 
 Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
-selects ${RHYOLITE_AGENT}, and begins guided setup immediately.
+collects launcher settings, selects ${RHYOLITE_AGENT}, and begins guided setup
+immediately. Approved fleet/model settings are remembered per repository.
 EOF
 }
 
@@ -349,8 +480,25 @@ main() {
     local log_dir
     local initial_request
     local initial_prompt
+    local fleet_mode=''
+    local model=''
+    local remembered_fleet_mode=''
+    local remembered_model=''
+    local remembered_consistent=1
+    local preference_status
+    local repository_input
+    local repository
+    local existing_repository
+    local duplicate
+    local invalid_repository=''
+    local is_interactive=0
     local copilot_path
     local copilot_exit_code
+    local preferences_helper
+    local -a request_parts=()
+    local -a repository_inputs=()
+    local -a repositories=()
+    local -a copilot_arguments=()
 
     script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
     script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
@@ -378,6 +526,17 @@ main() {
             "Repo-review agent was not found under ${plugin_root}." \
             'Restore the complete Rhyolite plugin installation and retry.' \
             2
+
+    preferences_helper="${plugin_root}/scripts/launcher-preferences.sh"
+    [ -f "${preferences_helper}" ] ||
+        fail \
+            'launcher preference validation' \
+            'The launcher preference helper is missing.' \
+            "Preference helper was not found at ${preferences_helper}." \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+    # shellcheck source=../scripts/launcher-preferences.sh
+    source "${preferences_helper}"
 
     version="$(read_plugin_version "${plugin_root}")"
 
@@ -418,9 +577,64 @@ main() {
         exit 0
     fi
 
-    if [ "$#" -gt 0 ] && [ "$1" = '--' ]; then
-        shift
-    fi
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --repo)
+                [ "$#" -ge 2 ] && [ -n "$2" ] ||
+                    fail \
+                        'launcher argument validation' \
+                        'A repository URL argument is missing.' \
+                        '--repo requires a public HTTPS Git repository URL.' \
+                        'Pass --repo URL or omit it to use interactive launcher setup.' \
+                        2
+                repository_inputs+=("$2")
+                shift 2
+                ;;
+            --fleet-mode)
+                [ "$#" -ge 2 ] ||
+                    fail \
+                        'launcher argument validation' \
+                        'A fleet mode argument is missing.' \
+                        '--fleet-mode requires native or standard.' \
+                        'Pass --fleet-mode native or --fleet-mode standard.' \
+                        2
+                case "$2" in
+                    native|standard) fleet_mode="$2" ;;
+                    *)
+                        fail \
+                            'launcher argument validation' \
+                            'The requested fleet mode is invalid.' \
+                            "Unsupported fleet mode: $2" \
+                            'Pass --fleet-mode native or --fleet-mode standard.' \
+                            2
+                        ;;
+                esac
+                shift 2
+                ;;
+            --model)
+                [ "$#" -ge 2 ] && rhyolite_valid_model_id "$2" ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested model identifier is invalid.' \
+                        '--model requires a safe Copilot model identifier.' \
+                        'Use letters, numbers, dots, underscores, and hyphens only.' \
+                        2
+                model="$2"
+                shift 2
+                ;;
+            --)
+                shift
+                while [ "$#" -gt 0 ]; do
+                    request_parts+=("$1")
+                    shift
+                done
+                ;;
+            *)
+                request_parts+=("$1")
+                shift
+                ;;
+        esac
+    done
 
     copilot_path="$(command -v copilot || true)"
     [ -n "${copilot_path}" ] ||
@@ -452,14 +666,109 @@ main() {
     log_dir="${session_dir}/copilot-logs"
     mkdir -p "${log_dir}"
 
-    initial_request="$(join_initial_request "$@")"
-    initial_prompt="$(build_initial_prompt "${initial_request}")"
+    initial_request="$(join_initial_request "${request_parts[@]}")"
+    if [[ ${#repository_inputs[@]} -eq 0 && -n "${initial_request}" ]]; then
+        while IFS= read -r repository; do
+            [[ -n "${repository}" ]] && repository_inputs+=("${repository}")
+        done < <(extract_repository_urls_from_request "${initial_request}")
+    fi
+    if [[ -t 0 && -t 1 ]]; then
+        is_interactive=1
+    fi
+    while [[ ${#repository_inputs[@]} -eq 0 ]]; do
+        if ((is_interactive == 0)); then
+            fail \
+                'launcher guided setup' \
+                'A public repository URL is required before automatic startup.' \
+                'No --repo value or public HTTPS URL was found in the initial request.' \
+                'Pass --repo URL, include the URL in the initial request, or run interactively.' \
+                2
+        fi
+        printf 'Public repository URL(s), comma-separated: '
+        IFS= read -r repository_input
+        while IFS= read -r repository; do
+            [[ -n "${repository}" ]] && repository_inputs+=("${repository}")
+        done < <(split_repository_input "${repository_input}")
+    done
+
+    for repository in "${repository_inputs[@]}"; do
+        if ! rhyolite_canonicalize_repository "${repository}"; then
+            invalid_repository="${repository}"
+            break
+        fi
+        repository="${RHYOLITE_CANONICAL_REPOSITORY}"
+        duplicate=0
+        for existing_repository in "${repositories[@]}"; do
+            if [[ "${existing_repository}" == "${repository}" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        ((duplicate == 0)) && repositories+=("${repository}")
+    done
+    [[ -z "${invalid_repository}" && ${#repositories[@]} -gt 0 ]] ||
+        fail \
+            'launcher source validation' \
+            'The launcher rejected an unsafe repository source.' \
+            "Only anonymous public HTTPS Git repository URLs are supported: ${invalid_repository:-NONE}" \
+            'Correct the repository URL and retry.' \
+            2
+
+    for repository in "${repositories[@]}"; do
+        if rhyolite_read_preference "${repository}" "${launcher_home}"; then
+            if [[ -z "${remembered_fleet_mode}" ]]; then
+                remembered_fleet_mode="${RHYOLITE_PREFERENCE_FLEET_MODE}"
+                remembered_model="${RHYOLITE_PREFERENCE_MODEL}"
+            elif [[ "${remembered_fleet_mode}" != "${RHYOLITE_PREFERENCE_FLEET_MODE}" ||
+                "${remembered_model}" != "${RHYOLITE_PREFERENCE_MODEL}" ]]; then
+                remembered_consistent=0
+            fi
+        else
+            preference_status="${RHYOLITE_PREFERENCE_STATUS}"
+            if [[ "${preference_status}" == invalid ]]; then
+                printf 'Rhyolite launcher ignored an invalid saved preference for %s.\n' \
+                    "${repository}" >&2
+            fi
+            remembered_consistent=0
+        fi
+    done
+    if ((remembered_consistent == 0)); then
+        remembered_fleet_mode=''
+        remembered_model=''
+    fi
+
+    if [[ -z "${fleet_mode}" ]]; then
+        if ((is_interactive)); then
+            fleet_mode="$(
+                prompt_for_fleet_mode "${remembered_fleet_mode}"
+            )"
+        else
+            fleet_mode="${remembered_fleet_mode:-standard}"
+        fi
+    fi
+    if [[ -z "${model}" ]]; then
+        if ((is_interactive)); then
+            model="$(prompt_for_model "${remembered_model}")"
+        else
+            model="${remembered_model:-${RHYOLITE_DEFAULT_MODEL}}"
+        fi
+    fi
+
+    initial_prompt="$(
+        build_initial_prompt \
+            "${initial_request}" \
+            "${fleet_mode}" \
+            "${model}" \
+            "${repositories[@]}"
+    )"
     write_launch_context \
         "${session_dir}/launch-context.txt" \
         "${version}" \
         "${original_dir}" \
         "${launch_dir}" \
-        "${plugin_root}"
+        "${plugin_root}" \
+        "${fleet_mode}" \
+        "${model}"
 
     export RHYOLITE_LAUNCHER_CALLER_DIR="${original_dir}"
     export RHYOLITE_LAUNCHER_LAUNCH_DIR="${launch_dir}"
@@ -467,16 +776,25 @@ main() {
     export RHYOLITE_LAUNCHER_SESSION_DIR="${session_dir}"
     export RHYOLITE_LAUNCHER_VERSION="${version}"
     export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"
+    export RHYOLITE_LAUNCHER_FLEET_MODE="${fleet_mode}"
+    export RHYOLITE_LAUNCHER_MODEL="${model}"
 
-    set +e
-    "${copilot_path}" \
-        --experimental \
-        -C "${launch_dir}" \
-        --plugin-dir "${plugin_root}" \
-        --agent "${RHYOLITE_AGENT}" \
-        --log-dir "${log_dir}" \
-        --no-custom-instructions \
+    copilot_arguments=(
+        --experimental
+        -C "${launch_dir}"
+        --plugin-dir "${plugin_root}"
+        --agent "${RHYOLITE_AGENT}"
+        --model "${model}"
+        --reasoning-effort "${RHYOLITE_REASONING_EFFORT}"
+        --log-dir "${log_dir}"
+        --no-custom-instructions
         -i "${initial_prompt}"
+    )
+    if [[ "${fleet_mode}" == native ]]; then
+        copilot_arguments=(--fleet "${copilot_arguments[@]}")
+    fi
+    set +e
+    "${copilot_path}" "${copilot_arguments[@]}"
     copilot_exit_code=$?
     set -e
     if [ "${copilot_exit_code}" -ne 0 ]; then

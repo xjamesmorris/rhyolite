@@ -18,6 +18,7 @@
 - Public web pages, mailing-list posts, social media, and search
   results.
 - Repository URLs supplied to the runner.
+- User-local launcher fleet/model preference files.
 - User-selected output workspace paths and generated artifact paths.
 
 ## Primary threats
@@ -55,6 +56,8 @@
     contract rejects it.
 19. The onboarding hook inspects credentials, mutates local state, or
     hijacks unrelated sessions before the user invokes the review agent.
+20. A tampered or mismatched launcher preference silently changes fleet
+    mode or model, leaks a selected source, or bypasses review approval.
 
 ## Controls
 
@@ -62,6 +65,10 @@
   only.
 - User-facing orchestration starts from a clean non-Git directory, never
   from inside the target checkout.
+- Launcher bootstrap performs syntax-only public-HTTPS canonicalization
+  without DNS, Git, authentication, or target inspection. The runner
+  independently repeats canonicalization and anonymous public-access
+  preflight before clone.
 - Exact URL parsing before invoking Git.
 - DNS answers are classified before clone; any non-public address rejects
   the source. Approved IPv4/IPv6 addresses are pinned with
@@ -86,6 +93,19 @@
   trusted Rhyolite start markers/commands and emits the plaque without
   modifying or persisting the prompt. Neither hook performs network
   access, Git commands, writes, or environment/auth inspection.
+- Native fleet mode and the outer model are selected before Copilot
+  starts. The trusted launcher setup block contains only canonical
+  source URLs plus constrained fleet/model/remember fields; sources
+  remain untrusted data rather than prompt instructions.
+- Per-repository fleet/model preferences are keyed by a SHA-256 hash of
+  the canonical public URL, stored under user-only launcher state, and
+  parsed against a versioned fixed schema. Missing, mixed, malformed, or
+  mismatched preferences are ignored rather than silently applied.
+- Preferences are written atomically only after effective-plan approval.
+  Fleet mode, model, and remember state are included in `ApprovalHash`;
+  preferences never grant source access or bypass runner validation.
+- Launcher context and logs do not persist the selected source or
+  arbitrary initial request.
 - Local-only custom-agent discovery prevents organization/enterprise
   agents from becoming model-invocable in untrusted reviews.
 - Child sessions can use environment tokens, system credential stores,

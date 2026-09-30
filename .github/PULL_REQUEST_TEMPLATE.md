@@ -5,7 +5,8 @@ Describe the change and why it is needed.
 ## Validation
 
 - [ ] `bash ./tests/validate-plugin.sh`
-- [ ] `pwsh ./tests/validate-plugin.ps1`
+- [ ] `bash ./tests/test-install.sh`
+- [ ] `bash ./tools/public-release/test-public-release.sh`
 - [ ] Not run (explain why below)
 
 ## Public release checklist
@@ -16,8 +17,9 @@ Describe the change and why it is needed.
       mutation was introduced.
 - [ ] Scope 3 is still described as evidence-based provenance review for
       agentically generated code.
-- [ ] Bash and PowerShell behavior remain aligned, or any intentional
-      difference is documented.
+- [ ] Fedora Linux 44 remains the sole supported validation platform.
+- [ ] Maximum reasoning effort remains the default and high remains the
+      hard minimum.
 
 ## Additional context
 

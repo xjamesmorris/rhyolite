@@ -9,30 +9,30 @@ compile or package build step. From the repository root:
 # Load the development checkout and verify plugin discovery.
 copilot --plugin-dir ./plugins/rhyolite plugin list
 
-# Full Linux validation (the Linux CI job).
+# Full Fedora Linux 44 validation.
 bash ./tests/validate-plugin.sh
-
-# Full PowerShell validation (the Windows CI job; requires PowerShell 7).
-pwsh ./tests/validate-plugin.ps1
-
-# Standalone marketplace installation test; this is the smallest isolated test.
-pwsh ./tests/test-install.ps1
-
-# Add an actual namespaced-agent invocation to the installation test.
-pwsh ./tests/test-install.ps1 -RunAgentSmoke
 ```
 
-The two validation scripts are monolithic and do not support selecting an
-individual assertion. For a single changed Bash file, use `bash -n <file>`
-as the narrowest syntax check; the full Bash validator also requires
-Node.js. Run both full validators when both shells are available. The
-Bash review runner itself additionally requires Python 3, and anonymous
-clone enforcement requires Git 2.41 or newer.
+The Linux validation script is monolithic and does not support selecting
+an individual assertion. For a single changed Bash file, use
+`bash -n <file>` as the narrowest syntax check; the full validator also
+requires Node.js. The Bash review runner additionally requires Python 3,
+and anonymous clone enforcement requires Git 2.41 or newer.
 
-There is no separate lint command. The validators cover JSON metadata,
-prompt contracts, safety flags, Bash and PowerShell syntax, mocked runner
+There is no separate lint command. The Linux validator covers JSON
+metadata, prompt contracts, safety flags, Bash syntax, mocked runner
 behavior, state/artifact output, and UTF-8-without-BOM/LF-only text
 formatting.
+
+## Platform plan of record
+
+`docs/PLAN-OF-RECORD.md` is authoritative: Fedora Linux 44 is the sole
+development and validation platform, and Rhyolite is Linux-only and
+Bash-first. Other Linux distributions, Windows, PowerShell, macOS, and
+Bash/PowerShell parity are out of scope at this stage. Existing
+PowerShell files are unsupported legacy artifacts pending removal; do
+not update or preserve them unless the user explicitly restores that
+scope.
 
 ## Architecture
 
@@ -44,28 +44,33 @@ formatting.
   `userPromptSubmitted` review-start plaque.
 - `branding/banner.txt` and `branding/welcome-metadata.json` centralize
   replaceable onboarding branding and public home/docs/support/issues/
-  pulls URLs. `scripts/show-welcome-panel.sh` and
-  `scripts/Show-WelcomePanel.ps1` render the direct/manual full welcome
-  panel, load status, and command-triggered plaque, using published
-  repository links when metadata is resolved and local documentation as
-  a fail-closed fallback.
-- `bin/rhyolite` and `bin/rhyolite.ps1` are the recommended reliable
-  entrypoints. They resolve the packaged plugin root, select a clean
-  non-Git `-C` directory, preselect `rhyolite:repo-review`, and submit a
-  trusted `-i` start marker without enabling allow-all mode. They also
+  pulls URLs. `scripts/show-welcome-panel.sh` renders the supported
+  direct/manual full welcome panel, load status, and command-triggered
+  plaque, using published repository links when metadata is resolved and
+  local documentation as a fail-closed fallback.
+- `bin/rhyolite` is the supported reliable entrypoint. It resolves the
+  packaged plugin root, selects a clean
+  non-Git `-C` directory, syntactically canonicalize selected public
+  sources, collect native fleet/model settings, preselect
+  `rhyolite:repo-review`, and submit a trusted `-i` setup block without
+  enabling allow-all mode. They also
   export a narrow trusted immediate-start marker so the display-only
   `sessionStart` helper suppresses the redundant ordinary load line when
   launcher startup already begins setup. The Unix launcher supports
   macOS Bash 3.2, BSD utilities, symlinked paths, and paths containing
   spaces, creates user-only launcher state, and does not persist the
-  initial review request; `/rhyolite:start` remains the in-session
-  compatibility path.
+  initial review request or source in launch context. The trusted runner
+  saves approved fleet/model preferences per canonical repository under
+  that user-only state; `/rhyolite:start` remains the in-session
+  compatibility path. PowerShell launcher/helper files are legacy
+  cleanup targets and do not define supported behavior.
 - `repo-review.agent.md` is the user-facing command orchestrator. A
   display-only command hook renders the large colored plaque after a
   review-start command; the agent reserves its embedded prompt-native
   panel for exact `help`, and continues into setup in the same first
   turn, follows exact `help` with a live
-  `CURRENT SETUP STATUS` block, asks only for public HTTPS source URLs,
+  `CURRENT SETUP STATUS` block, consumes trusted launcher
+  source/fleet/model selections or asks for them through guided setup,
   then asks for output/scope through numbered `ask_user` pickers,
   surfaces exact `help`/`status`/`explain scopes` setup intents, and
   delegates every review to a bundled runner. Finite choice lists rely
@@ -99,15 +104,15 @@ formatting.
   emit `RHYOLITE PROGRESS` milestones and heartbeats, and completion
   includes a brief executive summary.
 - `skills/readonly-repository-review/SKILL.md` defines the review and
-  safety contract. `review-prompt.txt` is a template rendered by both
-  platform runners; its placeholders form an interface shared by the
-  template, runners, and validators.
+  safety contract. `review-prompt.txt` is rendered by the Bash runner;
+  its placeholders form an interface shared by the template, runner,
+  and Linux validator.
 - `skills/research-source-assessment/SKILL.md` is private to the model.
   For scopes 2/3 it maps fresh subject-specific community, research, and
   commercial sources, deepens provenance coverage for scope 3, and
   requires persisted source-landscape, inaccessible-resource, and
   retrieval-priority report sections.
-- `run-parallel-reviews.{sh,ps1}` is the trusted boundary. It validates
+- `run-parallel-reviews.sh` is the supported trusted boundary. It validates
   public HTTPS sources, rejects local paths before any `.git`
   inspection or network access, performs a fail-closed anonymous-access
   preflight for every selected source through pinned public DNS with
@@ -123,23 +128,21 @@ formatting.
   worker, timeout, incomplete-report, and cleanup failures.
 - Analytical command and worker agents, plus direct runners, use a
   current frontier reasoning model at maximum available effort and
-  context and must not automatically downgrade. As of August 2026,
-  examples include Sol 5.6 and Fable 5. Lower-capability models are
-  allowed only for fully specified mechanical work and never for
-  evidence judgments. The repository-only picker and TUI runtime
-  validators are the mechanical exceptions.
+  context and must not automatically downgrade. As of September 30, 2026,
+  examples include Sol 5.6 and Fable 5. Maximum effort is the default
+  and high is the hard minimum for analytical, general-purpose,
+  formatting, orchestration, and mechanical work. Never use none,
+  minimal, low, or medium reasoning effort.
 - Substantive findings, source/activity assessments, provenance
   observations, remediation priorities, and overall conclusions carry
   High/Medium/Low confidence with an evidence basis. Completeness,
   clarity, and correctness take priority over speed.
-- `review-output.sh` and `ReviewOutput.psm1` extract the canonical
-  report, sanitize it, and produce plain-text, inert Markdown, escaped
-  HTML, state, and handoff artifacts. Per-repository artifacts roll up
-  into a run manifest, state, handoff, and HTML index.
-- `.github/workflows/validate.yml` runs the platform-native validators
-  on Ubuntu and Windows. Both validators invoke the shared TUI runtime
-  artifact contract in addition to picker checks and launcher smoke
-  coverage.
+- `review-output.sh` extracts the canonical report, sanitizes it, and
+  produces plain-text, inert Markdown, escaped HTML, state, and handoff
+  artifacts. Per-repository artifacts roll up into a run manifest,
+  state, handoff, and HTML index.
+- Release validation is local only on Fedora Linux 44. Do not add or
+  require hosted CI workflows for the current release.
 
 ## Repository-specific conventions
 
@@ -180,7 +183,9 @@ formatting.
 - The effective-plan confirmation flow must use the exact choices
   `Run review`, `Edit setup`, and `Explain scope`, while still accepting
   exact `Change scope` as a shortcut into editing `Scope`.
-- Plan-only output now includes `ApprovalHash`. Preserve it, pass it
+- Plan-only output now includes `ApprovalHash`. It also includes
+  `FleetMode`, `Model`, and `RememberPreferences`. Preserve the approved
+  settings, pass the hash
   unchanged to the actual runner with
   `--expected-plan-hash`/`-ExpectedPlanHash`, and never execute without
   a valid hash. `EFFECTIVE REVIEW PLAN` must also surface
@@ -197,14 +202,12 @@ formatting.
 - The direct runners are a lower-level interface than the agent: their
   interactive prompt order may differ, but they must still resolve and
   enforce the same effective plan and approval hash before execution.
-- Preserve behavior across the Bash/PowerShell pairs:
-  `run-parallel-reviews`, `show-welcome-panel`, and
-  `review-output`/`ReviewOutput`. A
-  behavioral or policy change normally requires both implementations and
-  both validators to change together.
+- Treat Bash behavior as authoritative. Do not require or implement
+  Bash/PowerShell parity; existing PowerShell counterparts are legacy
+  files scheduled for removal under the platform POR.
 - Treat prompt placeholders as a strict interface. Adding or changing one
-  requires coordinated updates to `review-prompt.txt`, both template
-  renderers, and validation. The canonical report must retain the
+  requires coordinated updates to `review-prompt.txt`, the Bash template
+  renderer, and Linux validation. The canonical report must retain the
   80-or-more-character `=` delimiters and exact `REPOSITORY REVIEW
   REPORT` heading expected by the output extractors.
 - Preserve canonical, symlink-aware separation between clone, snapshot,

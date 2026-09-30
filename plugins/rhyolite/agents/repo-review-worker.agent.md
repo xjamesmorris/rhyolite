@@ -18,11 +18,12 @@ prompt.
 
 Prioritize completeness, clarity, and correctness. Use a current frontier
 reasoning model at the maximum available reasoning effort and context for this
-analysis and its security, research, and provenance specialists (as of August
-2026, examples include Sol 5.6 and Fable 5). Do not automatically fall back to
+analysis and its security, research, and provenance specialists (as of
+September 30, 2026, examples include Sol 5.6 and Fable 5). Do not automatically fall back to
 a less capable model; stop and report capability unavailability instead.
-Lower-capability models are permitted only for fully specified mechanical work
-and must not make evidence judgments.
+Maximum reasoning effort is the default and high is the hard minimum. Never
+use none, minimal, low, or medium effort, including for general-purpose or
+mechanical work.
 
 Review only the anonymously cloned public HTTPS repository, exact commit, scope,
 research modes, and provenance window specified by the prompt. Use the security

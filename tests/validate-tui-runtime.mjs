@@ -7,9 +7,14 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const PLAQUE_COPY_LINES = [
+const MANUAL_PLAQUE_COPY_LINES = [
     'Rhyolite guides evidence-based, read-only reviews of public HTTPS Git repositories.',
     'Use /rhyolite:start to begin a review.',
+    'Use /rhyolite:help for commands or /rhyolite:status for current progress.',
+];
+const LAUNCHER_PLAQUE_COPY_LINES = [
+    'Rhyolite is running in automatic guided mode.',
+    'Startup is continuing automatically; wait for the first setup prompt before responding.',
     'Use /rhyolite:help for commands or /rhyolite:status for current progress.',
 ];
 const PLAQUE_GRADIENT = [
@@ -49,6 +54,7 @@ function usage() {
         '    --plaque-no-color-json <path> \\',
         '    --start-command <path> \\',
         '    --repo-review-command <path> \\',
+        '    [--plaque-mode <manual|launcher>] \\',
         '    [--extension <path>] \\',
         '    [--max-columns <n>]',
         '',
@@ -288,13 +294,13 @@ function buildExpectedVersionLine(bannerText, pluginVersion) {
     return `${' '.repeat(padding)}${versionText}`;
 }
 
-function buildExpectedPlainPlaque(bannerText, pluginVersion) {
+function buildExpectedPlainPlaque(bannerText, pluginVersion, copyLines) {
     const banner = stripTrailingNewlines(bannerText);
     return [
         ...banner.split('\n'),
         buildExpectedVersionLine(bannerText, pluginVersion),
         '',
-        ...PLAQUE_COPY_LINES,
+        ...copyLines,
     ].join('\n');
 }
 
@@ -304,7 +310,7 @@ function validatePlaquePayload(
     expectedPlainPlaque,
     maxColumns,
     findings,
-    { requireColor },
+    { bannerLineCount, requireColor },
 ) {
     expectExactKeys(payload, label, findings);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -322,7 +328,6 @@ function validatePlaquePayload(
     const strippedMessage = stripAnsi(normalizedMessage);
     const expectedLines = expectedPlainPlaque.split('\n');
     const actualLines = strippedMessage.split('\n');
-    const bannerLineCount = expectedLines.length - PLAQUE_COPY_LINES.length - 2;
     const versionLineIndex = bannerLineCount;
     const blankLineIndex = versionLineIndex + 1;
     const expectedVersionLine = expectedLines[versionLineIndex] ?? '';
@@ -550,6 +555,7 @@ function validateExtension(extensionText, findings) {
 function parseArgs(rawArgs) {
     const options = {
         maxColumns: DEFAULT_MAX_COLUMNS,
+        plaqueMode: 'manual',
     };
 
     for (let index = 0; index < rawArgs.length; index += 1) {
@@ -586,6 +592,18 @@ function parseArgs(rawArgs) {
             else {
                 options[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
             }
+            break;
+        }
+        case '--plaque-mode': {
+            const value = rawArgs[index + 1];
+            if (!value || value.startsWith('--')) {
+                throw new CliError(`Missing value after ${arg}`);
+            }
+            if (!['manual', 'launcher'].includes(value)) {
+                throw new CliError('--plaque-mode must be manual or launcher');
+            }
+            options.plaqueMode = value;
+            index += 1;
             break;
         }
         default:
@@ -644,16 +662,20 @@ function validateArtifacts(options) {
         validateProgressPayload(progressPayload, pluginVersion, findings);
     }
 
+    const plaqueCopyLines = options.plaqueMode === 'launcher'
+        ? LAUNCHER_PLAQUE_COPY_LINES
+        : MANUAL_PLAQUE_COPY_LINES;
+    const bannerLineCount = stripTrailingNewlines(bannerText).split('\n').length;
     const expectedPlainPlaque = typeof pluginVersion === 'string' && pluginVersion.length > 0
-        ? buildExpectedPlainPlaque(bannerText, pluginVersion)
-        : buildExpectedPlainPlaque(bannerText, '<missing-version>');
+        ? buildExpectedPlainPlaque(bannerText, pluginVersion, plaqueCopyLines)
+        : buildExpectedPlainPlaque(bannerText, '<missing-version>', plaqueCopyLines);
     validatePlaquePayload(
         plaquePayload,
         'Colored plaque payload',
         expectedPlainPlaque,
         options.maxColumns,
         findings,
-        { requireColor: true },
+        { bannerLineCount, requireColor: true },
     );
     validatePlaquePayload(
         plaqueNoColorPayload,
@@ -661,7 +683,7 @@ function validateArtifacts(options) {
         expectedPlainPlaque,
         options.maxColumns,
         findings,
-        { requireColor: false },
+        { bannerLineCount, requireColor: false },
     );
 
     validateCommandFiles(startCommandText, repoReviewCommandText, findings);
@@ -713,7 +735,16 @@ function runSelfCheck() {
             '██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██',
             '██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████',
         ].join('\n');
-        const plainPlaque = buildExpectedPlainPlaque(banner, version);
+        const plainPlaque = buildExpectedPlainPlaque(
+            banner,
+            version,
+            MANUAL_PLAQUE_COPY_LINES,
+        );
+        const plainLauncherPlaque = buildExpectedPlainPlaque(
+            banner,
+            version,
+            LAUNCHER_PLAQUE_COPY_LINES,
+        );
         const progress = JSON.stringify({
             type: 'progress',
             message: `Rhyolite v${version} loaded — type /rhyolite:start to start.`,
@@ -725,6 +756,17 @@ function runSelfCheck() {
         const noColorPlaque = JSON.stringify({
             type: 'progress',
             message: plainPlaque,
+        });
+        const coloredLauncherPlaque = JSON.stringify({
+            type: 'progress',
+            message: colorizePlaqueLines(
+                plainLauncherPlaque,
+                banner.split('\n').length,
+            ),
+        });
+        const noColorLauncherPlaque = JSON.stringify({
+            type: 'progress',
+            message: plainLauncherPlaque,
         });
         const startCommand = [
             '---',
@@ -788,6 +830,12 @@ function runSelfCheck() {
             launcherProgress: path.join(scratchRoot, 'fixtures', 'launcher-progress.txt'),
             plaque: path.join(scratchRoot, 'fixtures', 'plaque.jsonl'),
             plaqueNoColor: path.join(scratchRoot, 'fixtures', 'plaque-no-color.jsonl'),
+            launcherPlaque: path.join(scratchRoot, 'fixtures', 'launcher-plaque.jsonl'),
+            launcherPlaqueNoColor: path.join(
+                scratchRoot,
+                'fixtures',
+                'launcher-plaque-no-color.jsonl',
+            ),
             startCommand: path.join(scratchRoot, 'fixtures', 'start.md'),
             repoReviewCommand: path.join(scratchRoot, 'fixtures', 'repo-review.md'),
             extension: path.join(scratchRoot, 'fixtures', 'extension.mjs'),
@@ -802,6 +850,11 @@ function runSelfCheck() {
         writeFixture(fixturePaths.launcherProgress, '');
         writeFixture(fixturePaths.plaque, `${coloredPlaque}\n`);
         writeFixture(fixturePaths.plaqueNoColor, `${noColorPlaque}\n`);
+        writeFixture(fixturePaths.launcherPlaque, `${coloredLauncherPlaque}\n`);
+        writeFixture(
+            fixturePaths.launcherPlaqueNoColor,
+            `${noColorLauncherPlaque}\n`,
+        );
         writeFixture(fixturePaths.startCommand, `${startCommand}\n`);
         writeFixture(fixturePaths.repoReviewCommand, `${repoReviewCommand}\n`);
         writeFixture(fixturePaths.extension, `${extension}\n`);
@@ -828,6 +881,34 @@ function runSelfCheck() {
                 fixturePaths.repoReviewCommand,
                 '--extension',
                 fixturePaths.extension,
+            ],
+            { stdio: 'pipe' },
+        );
+
+        execFileSync(
+            process.execPath,
+            [
+                scriptPath,
+                '--plugin-manifest',
+                fixturePaths.pluginManifest,
+                '--banner',
+                fixturePaths.banner,
+                '--progress-json',
+                fixturePaths.progress,
+                '--launcher-progress-output',
+                fixturePaths.launcherProgress,
+                '--plaque-json',
+                fixturePaths.launcherPlaque,
+                '--plaque-no-color-json',
+                fixturePaths.launcherPlaqueNoColor,
+                '--start-command',
+                fixturePaths.startCommand,
+                '--repo-review-command',
+                fixturePaths.repoReviewCommand,
+                '--extension',
+                fixturePaths.extension,
+                '--plaque-mode',
+                'launcher',
             ],
             { stdio: 'pipe' },
         );
@@ -885,13 +966,14 @@ function runSelfCheck() {
 }
 
 function main() {
-    const options = parseArgs(process.argv.slice(2));
+    const rawArgs = process.argv.slice(2);
+    const options = parseArgs(rawArgs);
     if (options.help) {
         console.log(usage());
         return;
     }
     if (options.selfCheck) {
-        if (Object.keys(options).length > 2) {
+        if (rawArgs.length !== 1) {
             throw new CliError('--self-check cannot be combined with validation arguments');
         }
         process.exitCode = runSelfCheck();

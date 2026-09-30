@@ -73,11 +73,6 @@ const REQUIRED_FILE_RULES = [
         label: 'marketplace manifest',
         patterns: [/^\.github\/plugin\/marketplace\.json$/],
     },
-    {
-        id: 'required-workflow',
-        label: 'workflow',
-        patterns: [/^\.github\/workflows\/[^/]+\.(?:yml|yaml)$/i],
-    },
     { id: 'required-version', label: 'VERSION', patterns: [/^VERSION$/] },
     { id: 'required-changelog', label: 'CHANGELOG', patterns: [/^CHANGELOG(?:\.[^/]+)?$/i] },
 ];
@@ -182,7 +177,7 @@ const CODEOWNERS_GATE_MESSAGE =
 const LICENSE_GATE_MESSAGE =
     'Public release requires a regular LICENSE* file with substantive non-whitespace content.';
 const VALIDATION_SKIP_MESSAGE =
-    'Validation was skipped by option; public release requires both bash tests/validate-plugin.sh and pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1.';
+    'Validation was skipped by option; public release requires bash tests/validate-plugin.sh on Fedora Linux 44.';
 const VALIDATION_NOT_RUN_MESSAGE =
     'Validation did not run because export extraction failed.';
 const VALIDATOR_DEFINITIONS = [
@@ -193,15 +188,6 @@ const VALIDATOR_DEFINITIONS = [
         scriptRelativePath: 'tests/validate-plugin.sh',
         buildArgs(scriptPath) {
             return [scriptPath];
-        },
-    },
-    {
-        id: 'pwsh',
-        command: 'pwsh',
-        commandLine: 'pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1',
-        scriptRelativePath: 'tests/validate-plugin.ps1',
-        buildArgs(scriptPath) {
-            return ['-NoLogo', '-NoProfile', '-File', scriptPath];
         },
     },
 ];
@@ -220,8 +206,7 @@ function usage(command) {
             'Usage:',
             '  public-export --source-ref <ref> --destination <directory> [options]',
             '',
-            'Runs both bash tests/validate-plugin.sh and',
-            'pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 by default.',
+            'Runs bash tests/validate-plugin.sh by default.',
             '',
             'Options:',
             '  --source-ref <ref>         Exact source ref or commit to export.',
@@ -235,8 +220,7 @@ function usage(command) {
             'Usage:',
             '  public-preflight --destination <directory> [options]',
             '',
-            'Runs both bash tests/validate-plugin.sh and',
-            'pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 by default.',
+            'Runs bash tests/validate-plugin.sh by default.',
             '',
             'Options:',
             '  --destination <directory>  Existing exported tree to scan.',
@@ -250,15 +234,13 @@ function usage(command) {
         '  public-export --source-ref <ref> --destination <directory> [options]',
         '  public-preflight --destination <directory> [options]',
         '',
-        'Use the Bash or PowerShell wrappers in tools/public-release/.',
+        'Use the Bash wrappers in tools/public-release/.',
     ].join('\n');
 }
 
 function parseArgs(command, rawArgs) {
     const options = {
         skipValidation: false,
-        shell: 'bash',
-        powershellCommand: null,
     };
 
     const nextValue = (arg, index, inlineValue) => {
@@ -313,21 +295,6 @@ function parseArgs(command, rawArgs) {
             case '--audit-report': {
                 const parsed = nextValue(name, index, inlineValue);
                 options.auditReport = parsed.value;
-                index = parsed.nextIndex;
-                break;
-            }
-            case '--shell': {
-                const parsed = nextValue(name, index, inlineValue);
-                if (!['bash', 'powershell'].includes(parsed.value)) {
-                    throw new CliError(`Unsupported shell: ${parsed.value}.`);
-                }
-                options.shell = parsed.value;
-                index = parsed.nextIndex;
-                break;
-            }
-            case '--powershell-command': {
-                const parsed = nextValue(name, index, inlineValue);
-                options.powershellCommand = parsed.value;
                 index = parsed.nextIndex;
                 break;
             }

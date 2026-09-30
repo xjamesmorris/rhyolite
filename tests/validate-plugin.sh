@@ -8,11 +8,8 @@ PLUGIN_ROOT="${ROOT}/plugins/rhyolite"
 SKILL_ROOT="${PLUGIN_ROOT}/skills/readonly-repository-review"
 SOURCE_ASSESSMENT_SKILL="${PLUGIN_ROOT}/skills/research-source-assessment/SKILL.md"
 RUNNER="${SKILL_ROOT}/scripts/run-parallel-reviews.sh"
-POWERSHELL_RUNNER="${SKILL_ROOT}/scripts/run-parallel-reviews.ps1"
 DISCOVERY="${SKILL_ROOT}/scripts/discover-repositories.sh"
-POWERSHELL_DISCOVERY="${SKILL_ROOT}/scripts/discover-repositories.ps1"
 OUTPUT_HELPER="${SKILL_ROOT}/scripts/review-output.sh"
-POWERSHELL_OUTPUT_MODULE="${SKILL_ROOT}/scripts/ReviewOutput.psm1"
 PROMPT="${SKILL_ROOT}/review-prompt.txt"
 SKILL="${SKILL_ROOT}/SKILL.md"
 AGENT="${PLUGIN_ROOT}/agents/repo-review.agent.md"
@@ -22,7 +19,6 @@ TUI_RUNTIME_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-tui-runtime-validat
 TUI_RUNTIME_VALIDATOR="${ROOT}/tests/validate-tui-runtime.mjs"
 RHYOLITE_EXTENSION="${PLUGIN_ROOT}/extensions/repo-review/extension.mjs"
 RHYOLITE_LAUNCHER="${PLUGIN_ROOT}/bin/rhyolite"
-RHYOLITE_LAUNCHER_PWSH="${PLUGIN_ROOT}/bin/rhyolite.ps1"
 COMMAND_ROOT="${PLUGIN_ROOT}/commands"
 COMMAND_START="${COMMAND_ROOT}/start.md"
 COMMAND_REPO_REVIEW="${COMMAND_ROOT}/repo-review.md"
@@ -34,7 +30,7 @@ HOOKS_CONFIG="${PLUGIN_ROOT}/hooks.json"
 WELCOME_METADATA="${PLUGIN_ROOT}/branding/welcome-metadata.json"
 WELCOME_BANNER="${PLUGIN_ROOT}/branding/banner.txt"
 WELCOME_HELPER_BASH="${PLUGIN_ROOT}/scripts/show-welcome-panel.sh"
-WELCOME_HELPER_PWSH="${PLUGIN_ROOT}/scripts/Show-WelcomePanel.ps1"
+LAUNCHER_PREFERENCES_BASH="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 MARKETPLACE="${ROOT}/.github/plugin/marketplace.json"
 VERSION_FILE="${ROOT}/VERSION"
 README="${ROOT}/README.md"
@@ -46,7 +42,7 @@ SUPPORT="${ROOT}/SUPPORT.md"
 CHANGELOG="${ROOT}/CHANGELOG.md"
 THREAT_MODEL="${ROOT}/docs/THREAT-MODEL.md"
 PUBLISHING_DOC="${ROOT}/docs/PUBLISHING.md"
-VALIDATE_WORKFLOW="${ROOT}/.github/workflows/validate.yml"
+PLATFORM_POR="${ROOT}/docs/PLAN-OF-RECORD.md"
 PR_TEMPLATE="${ROOT}/.github/PULL_REQUEST_TEMPLATE.md"
 COPILOT_INSTRUCTIONS="${ROOT}/.github/copilot-instructions.md"
 ISSUE_TEMPLATE_CONFIG="${ROOT}/.github/ISSUE_TEMPLATE/config.yml"
@@ -56,12 +52,10 @@ ISSUE_TEMPLATE_QUESTION="${ROOT}/.github/ISSUE_TEMPLATE/question.yml"
 PUBLIC_RELEASE_ROOT="${ROOT}/tools/public-release"
 PUBLIC_RELEASE_README="${PUBLIC_RELEASE_ROOT}/README.md"
 PUBLIC_RELEASE_MODULE="${PUBLIC_RELEASE_ROOT}/public-release.mjs"
-PUBLIC_RELEASE_EXPORT_PWSH="${PUBLIC_RELEASE_ROOT}/public-export.ps1"
 PUBLIC_RELEASE_EXPORT_BASH="${PUBLIC_RELEASE_ROOT}/public-export.sh"
-PUBLIC_RELEASE_PREFLIGHT_PWSH="${PUBLIC_RELEASE_ROOT}/public-preflight.ps1"
 PUBLIC_RELEASE_PREFLIGHT_BASH="${PUBLIC_RELEASE_ROOT}/public-preflight.sh"
 PUBLIC_RELEASE_TEST="${PUBLIC_RELEASE_ROOT}/test-public-release.sh"
-INSTALL_TEST="${ROOT}/tests/test-install.ps1"
+INSTALL_TEST="${ROOT}/tests/test-install.sh"
 
 fail() {
     printf 'ERROR: %s\n' "$1" >&2
@@ -140,7 +134,7 @@ required_files=(
     "${WELCOME_METADATA}"
     "${WELCOME_BANNER}"
     "${WELCOME_HELPER_BASH}"
-    "${WELCOME_HELPER_PWSH}"
+    "${LAUNCHER_PREFERENCES_BASH}"
     "${RHYOLITE_EXTENSION}"
     "${MARKETPLACE}"
     "${AGENT}"
@@ -149,7 +143,6 @@ required_files=(
     "${TUI_RUNTIME_VALIDATOR_AGENT}"
     "${TUI_RUNTIME_VALIDATOR}"
     "${RHYOLITE_LAUNCHER}"
-    "${RHYOLITE_LAUNCHER_PWSH}"
     "${COMMAND_START}"
     "${COMMAND_REPO_REVIEW}"
     "${COMMAND_STATUS}"
@@ -159,12 +152,9 @@ required_files=(
     "${SOURCE_ASSESSMENT_SKILL}"
     "${PROMPT}"
     "${RUNNER}"
-    "${POWERSHELL_RUNNER}"
     "${DISCOVERY}"
-    "${POWERSHELL_DISCOVERY}"
     "${OUTPUT_HELPER}"
-    "${POWERSHELL_OUTPUT_MODULE}"
-    "${VALIDATE_WORKFLOW}"
+    "${PLATFORM_POR}"
     "${PR_TEMPLATE}"
     "${COPILOT_INSTRUCTIONS}"
     "${ISSUE_TEMPLATE_BUG}"
@@ -182,9 +172,7 @@ required_files=(
     "${PUBLISHING_DOC}"
     "${PUBLIC_RELEASE_README}"
     "${PUBLIC_RELEASE_MODULE}"
-    "${PUBLIC_RELEASE_EXPORT_PWSH}"
     "${PUBLIC_RELEASE_EXPORT_BASH}"
-    "${PUBLIC_RELEASE_PREFLIGHT_PWSH}"
     "${PUBLIC_RELEASE_PREFLIGHT_BASH}"
     "${PUBLIC_RELEASE_TEST}"
     "${INSTALL_TEST}"
@@ -192,6 +180,14 @@ required_files=(
 for path in "${required_files[@]}"; do
     [[ -f "${path}" ]] || fail "Required file is missing: ${path}"
 done
+
+if find "${ROOT}" -type f \( -name '*.ps1' -o -name '*.psm1' \) \
+    -print -quit | grep -q .; then
+    fail 'Alternate-shell artifacts remain in the Linux-only release tree.'
+fi
+[[ ! -e "${ROOT}/.github/workflows" ]] ||
+    [[ -z "$(find "${ROOT}/.github/workflows" -type f -print -quit)" ]] ||
+    fail 'Hosted CI workflows remain in the local-only validation release.'
 
 for path in \
     "${ROOT}/.github/acl" \
@@ -249,7 +245,6 @@ node - \
     "${WELCOME_METADATA}" \
     "${WELCOME_BANNER}" \
     "${WELCOME_HELPER_BASH}" \
-    "${WELCOME_HELPER_PWSH}" \
     "${MARKETPLACE}" \
     "${VERSION_FILE}" <<'JS'
 const fs = require("fs");
@@ -260,7 +255,6 @@ const [
   metadataPath,
   bannerPath,
   bashHelperPath,
-  pwshHelperPath,
   marketplacePath,
   versionPath,
 ] = process.argv.slice(2);
@@ -269,7 +263,6 @@ const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
 const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
 const banner = fs.readFileSync(bannerPath, "utf8");
 const bashHelper = fs.readFileSync(bashHelperPath, "utf8");
-const pwshHelper = fs.readFileSync(pwshHelperPath, "utf8");
 const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
 const version = fs.readFileSync(versionPath, "utf8").trim();
 
@@ -333,8 +326,7 @@ expect(JSON.stringify(metadata.setupHelpPhrases) ===
   "Welcome metadata setupHelpPhrases are invalid");
 const versionLiteral = new RegExp(`\\b${version.replace(/\./g, "\\.")}\\b`);
 expect(!versionLiteral.test(JSON.stringify(metadata)) &&
-  !versionLiteral.test(bashHelper) &&
-  !versionLiteral.test(pwshHelper),
+  !versionLiteral.test(bashHelper),
   "Welcome metadata or helper hard-codes the current plugin version");
 expect(hooks.version === 1, "Hook config schema version is invalid");
 expect(hooks.hooks && typeof hooks.hooks === "object" && !Array.isArray(hooks.hooks),
@@ -355,10 +347,9 @@ expect(typeof sessionStart.bash === "string" &&
   sessionStart.bash.includes("COPILOT_PLUGIN_ROOT") &&
   /(?:--progress|--mode progress)\b/.test(sessionStart.bash),
   "Bash sessionStart hook does not use the welcome progress helper");
-expect(typeof sessionStart.powershell === "string" &&
-  sessionStart.powershell.includes("$env:COPILOT_PLUGIN_ROOT") &&
-  /-Mode\s+Progress\b/.test(sessionStart.powershell),
-  "PowerShell sessionStart hook does not use the welcome progress helper");
+expect(Object.keys(sessionStart).sort().join(",") ===
+  "bash,timeoutSec,type",
+  "sessionStart hook contains unsupported platform fields");
 expect(typeof sessionStart.timeoutSec === "number" &&
   sessionStart.timeoutSec > 0 &&
   sessionStart.timeoutSec <= 5,
@@ -372,10 +363,9 @@ expect(typeof promptSubmitted.bash === "string" &&
   promptSubmitted.bash.includes("COPILOT_PLUGIN_ROOT") &&
   promptSubmitted.bash.includes("--prompt-plaque"),
   "Bash userPromptSubmitted hook does not use the plaque helper");
-expect(typeof promptSubmitted.powershell === "string" &&
-  promptSubmitted.powershell.includes("$env:COPILOT_PLUGIN_ROOT") &&
-  /-Mode\s+PromptPlaque\b/.test(promptSubmitted.powershell),
-  "PowerShell userPromptSubmitted hook does not use the plaque helper");
+expect(Object.keys(promptSubmitted).sort().join(",") ===
+  "bash,timeoutSec,type",
+  "userPromptSubmitted hook contains unsupported platform fields");
 expect(typeof promptSubmitted.timeoutSec === "number" &&
   promptSubmitted.timeoutSec > 0 &&
   promptSubmitted.timeoutSec <= 5,
@@ -432,10 +422,6 @@ grep -Fq \
     "version=\"\$(read_json_string \"\${PLUGIN_MANIFEST_PATH}\" 'version')\"" \
     "${WELCOME_HELPER_BASH}" ||
     fail 'Bash welcome helper does not read version from plugin.json.'
-grep -Fq "Join-Path \$pluginRoot 'plugin.json'" "${WELCOME_HELPER_PWSH}" ||
-    fail 'PowerShell welcome helper does not load plugin.json.'
-grep -Fq '$pluginManifest.version' "${WELCOME_HELPER_PWSH}" ||
-    fail 'PowerShell welcome helper does not read version from plugin.json.'
 for forbidden_welcome_pattern in \
     'curl[[:space:]]' \
     'wget[[:space:]]' \
@@ -458,11 +444,10 @@ for forbidden_welcome_pattern in \
     'https?://'; do
     ! grep -Eqi -- "${forbidden_welcome_pattern}" \
         "${HOOKS_CONFIG}" \
-        "${WELCOME_HELPER_BASH}" \
-        "${WELCOME_HELPER_PWSH}" ||
+        "${WELCOME_HELPER_BASH}" ||
         fail "Welcome hook/helper file contains forbidden inspection behavior: ${forbidden_welcome_pattern}"
 done
-for plaque_helper in "${WELCOME_HELPER_BASH}" "${WELCOME_HELPER_PWSH}"; do
+for plaque_helper in "${WELCOME_HELPER_BASH}"; do
     grep -Fq \
         'Rhyolite guides evidence-based, read-only reviews of public HTTPS Git repositories.' \
         "${plaque_helper}" ||
@@ -473,6 +458,13 @@ for plaque_helper in "${WELCOME_HELPER_BASH}" "${WELCOME_HELPER_PWSH}"; do
         'Use /rhyolite:help for commands or /rhyolite:status for current progress.' \
         "${plaque_helper}" ||
         fail "Plaque help/status guidance is missing: ${plaque_helper}"
+    grep -Fq 'Rhyolite is running in automatic guided mode.' \
+        "${plaque_helper}" ||
+        fail "Launcher automatic-mode guidance is missing: ${plaque_helper}"
+    grep -Fq \
+        'Startup is continuing automatically; wait for the first setup prompt before responding.' \
+        "${plaque_helper}" ||
+        fail "Launcher wait guidance is missing: ${plaque_helper}"
     ! grep -Eq 'SIGNAL NODE|LINK ESTABLISHED|PUBLIC-SOURCE REPOSITORY INTELLIGENCE|░▒▓' \
         "${plaque_helper}" ||
         fail "Plaque helper contains themed labels or faux telemetry: ${plaque_helper}"
@@ -520,8 +512,10 @@ for quality_file in \
         fail "Quality priority is missing: ${quality_file}"
     grep -Fqi 'less capable model' <<< "${normalized_quality}" ||
         fail "No-downgrade model policy is missing: ${quality_file}"
-    grep -Fqi 'mechanical' <<< "${normalized_quality}" ||
-        fail "Mechanical-only lower-model exception is missing: ${quality_file}"
+    grep -Fqi 'high is the hard minimum' <<< "${normalized_quality}" ||
+        fail "High reasoning-effort floor is missing: ${quality_file}"
+    grep -Fqi 'none, minimal, low, or medium' <<< "${normalized_quality}" ||
+        fail "Forbidden lower reasoning efforts are missing: ${quality_file}"
     grep -Fqi 'current frontier reasoning model' <<< "${normalized_quality}" ||
         fail "General frontier-model recommendation is missing: ${quality_file}"
     grep -Fqi 'maximum available reasoning effort and context' \
@@ -531,27 +525,30 @@ for quality_file in \
         grep -Fq 'Fable 5' <<< "${normalized_quality}" ||
         fail "Dated model examples are missing: ${quality_file}"
 done
-grep -Fq 'as of August 2026' "${README}" &&
+grep -Fq 'as of September 30, 2026' "${README}" &&
     grep -Fq 'Sol 5.6 and Fable 5' "${README}" ||
     fail 'README does not provide the dated model examples.'
 grep -Fq 'MODEL="gpt-5.6-sol"' "${RUNNER}" ||
     fail 'Bash runner does not default to GPT-5.6 Sol.'
-grep -Fq "[string] \$Model = 'gpt-5.6-sol'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not default to GPT-5.6 Sol.'
+grep -Fq 'REASONING_EFFORT="max"' "${RUNNER}" &&
+    grep -Fq -- '--reasoning-effort "${REASONING_EFFORT}"' "${RUNNER}" ||
+    fail 'Bash runner does not enforce maximum reasoning effort.'
+grep -Fq "readonly RHYOLITE_REASONING_EFFORT='max'" \
+    "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--reasoning-effort "${RHYOLITE_REASONING_EFFORT}"' \
+        "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher does not enforce maximum reasoning effort.'
 grep -Fq '"${MODEL} review started; scope ${SCOPE}"' "${RUNNER}" ||
     fail 'Bash progress does not display the selected model.'
-grep -Fq '"$using:Model review started; scope $using:Scope"' \
-    "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell progress does not display the selected model.'
 grep -Fq 'name: rhyolite-ui-validator' "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent has the wrong name.'
 grep -Fq 'tools: []' "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent must remain tool-free.'
-grep -Fq 'model: gemini-3.6-flash' "${UI_VALIDATOR_AGENT}" &&
+grep -Fq 'model: gpt-5.6-sol' "${UI_VALIDATOR_AGENT}" &&
     grep -Fq 'user-invocable: true' "${UI_VALIDATOR_AGENT}" ||
     fail 'Development UI validator agent metadata is invalid.'
-grep -Fq 'fully specified mechanical validation' "${UI_VALIDATOR_AGENT}" ||
-    fail 'UI validator is not constrained to the lower-model exception.'
+grep -Fq 'High is the hard minimum' "${UI_VALIDATOR_AGENT}" ||
+    fail 'UI validator does not enforce the reasoning-effort floor.'
 grep -Fq 'UI_VALIDATION: PASS' "${UI_VALIDATOR_AGENT}" &&
     grep -Fq 'UI_VALIDATION: FAIL' "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent does not define a bounded verdict contract.'
@@ -572,6 +569,9 @@ grep -Fq 'name: rhyolite-tui-runtime-validator' \
 grep -Fq 'tools: ["read", "search", "execute"]' \
     "${TUI_RUNTIME_VALIDATOR_AGENT}" ||
     fail 'TUI runtime validator agent has the wrong bounded tool set.'
+grep -Fq 'model: gpt-5.6-sol' "${TUI_RUNTIME_VALIDATOR_AGENT}" &&
+    grep -Fq 'High is the hard minimum' "${TUI_RUNTIME_VALIDATOR_AGENT}" ||
+    fail 'TUI runtime validator does not enforce the frontier/high-effort policy.'
 grep -Fq 'TUI_RUNTIME_VALIDATION: PASS' \
     "${TUI_RUNTIME_VALIDATOR_AGENT}" &&
     grep -Fq 'TUI_RUNTIME_VALIDATION: FAIL' \
@@ -625,6 +625,12 @@ grep -Fq 'CURRENT SETUP STATUS' "${AGENT}" ||
     fail 'Agent help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing Source.'
+grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${AGENT}" ||
+    fail 'Agent help/status block is missing fleet mode.'
+grep -Fq 'Model: <selected value or NOT SELECTED>' "${AGENT}" ||
+    fail 'Agent help/status block is missing model.'
+grep -Fq 'Remember settings: <YES, NO, or NOT SELECTED>' "${AGENT}" ||
+    fail 'Agent help/status block is missing remembered settings.'
 grep -Fq 'Output: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing Output.'
 grep -Fq 'Scope: <selected value or NOT SELECTED>' "${AGENT}" ||
@@ -655,10 +661,10 @@ grep -Fq '`<SKILL_DIR>`' "${AGENT}" ||
 grep -Fq "bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --plan-only --non-interactive ..." \
     "${AGENT}" ||
     fail 'Agent does not resolve plan-only runs from <SKILL_DIR>.'
-grep -Fq 'platform-appropriate runner from `<SKILL_DIR>/scripts/`' \
+grep -Fq 'same Bash runner from' \
     "${AGENT}" ||
     fail 'Agent does not resolve actual runs from <SKILL_DIR>.'
-grep -Fq 'Invoke the platform-appropriate plan-only mode with non-interactive' \
+grep -Fq 'Invoke the Bash plan-only mode with non-interactive' \
     "${AGENT}" ||
     fail 'Agent does not invoke authoritative plan-only mode.'
 grep -Fq "Parse the runner's authoritative JSON only." "${AGENT}" ||
@@ -707,9 +713,18 @@ grep -Fq '`Edit setup` -> `Scope`.' "${AGENT}" ||
 grep -Fq 'If the user selects `Edit setup`, use `ask_user` for exactly one focused' \
     "${AGENT}" ||
     fail 'Agent does not describe Edit setup.'
-grep -Fq 'exact explicit choices `Source`, `Output`, or' "${AGENT}" &&
-    grep -Fq '`Scope`, in that order.' "${AGENT}" ||
+grep -Fq 'exact explicit choices `Source`, `Model`, `Output`,' "${AGENT}" &&
+    grep -Fq 'or `Scope`, in that order.' "${AGENT}" ||
     fail 'Agent Edit setup options are incomplete.'
+grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
+    grep -Fq '`Continue in standard mode`' "${AGENT}" &&
+    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
+        "${AGENT}" &&
+    grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${AGENT}" &&
+    grep -Fq '`Claude Fable 5 - claude-fable-5`' "${AGENT}" &&
+    grep -Fq '`Remember settings for these repositories (Recommended)`' \
+        "${AGENT}" ||
+    fail 'Agent fleet/model preference setup contract is incomplete.'
 grep -Fq 'If the user edits `Scope` to `1` or `2`, immediately clear any stored' \
     "${AGENT}" ||
     fail 'Agent does not clear provenance when editing scope away from 3.'
@@ -722,10 +737,8 @@ grep -Fq 'If the user gives an invalid follow-up choice, repeat the' \
 grep -Fq 'source or output value is invalid, explain the specific problem and' \
     "${AGENT}" ||
     fail 'Agent does not re-ask invalid source/output edits correctly.'
-grep -Fq -- '- Linux/macOS: `--expected-plan-hash <ApprovalHash>`' "${AGENT}" ||
-    fail 'Agent does not pass the expected plan hash flag on Linux/macOS.'
-grep -Fq -- '- Windows: `-ExpectedPlanHash <ApprovalHash>`' "${AGENT}" ||
-    fail 'Agent does not pass the expected plan hash flag on Windows.'
+grep -Fq '`--expected-plan-hash <ApprovalHash>`' "${AGENT}" ||
+    fail 'Agent does not pass the expected plan hash flag.'
 grep -Fq 'plan-hash mismatch, preserve the current answers' "${AGENT}" ||
     fail 'Agent does not describe plan-hash mismatch recovery.'
 grep -Fq 'approved effective plan changed' "${AGENT}" ||
@@ -762,42 +775,11 @@ grep -Fq 'PriorArtWindow.StartDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.StartDate.'
 grep -Fq 'PriorArtWindow.EndDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.EndDate.'
+grep -Fq 'FleetMode=' "${RUNNER}" &&
+    grep -Fq 'RememberPreferences=' "${RUNNER}" ||
+    fail 'Bash approval hash material does not include fleet/preferences.'
 grep -Fq -- '--expected-plan-hash SHA256' "${RUNNER}" ||
     fail 'Bash runner usage does not document --expected-plan-hash.'
-grep -Fq '[string] $ExpectedPlanHash = ' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not accept ExpectedPlanHash.'
-grep -Fq "'Approval hash:'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text does not show the approval hash.'
-grep -Fq "& \$addField 'Generated at (UTC):'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text does not use the UTC generated-at label.'
-grep -Fq "& \$addField 'Review date (local calendar):'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text does not use the local-calendar review-date label.'
-grep -Fq "& \$addField 'Prior-art window (local calendar):' 'disabled'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text no longer displays disabled prior-art for scope 1.'
-grep -Fq "& \$addField 'Prior-art lookback:'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text no longer prints prior-art lookback.'
-grep -Fq "& \$addField 'Prior-art window (local calendar):'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text does not use the local-calendar prior-art label.'
-grep -Fq "& \$addField 'Provenance window (local calendar):'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell review-plan text does not use the local-calendar provenance label.'
-grep -Fq 'ReviewDate=$(ConvertTo-ApprovalHashValue -Value $ReviewDate)' \
-    "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell approval hash material does not include ReviewDate.'
-grep -Fq 'PriorArtWindow.Enabled=' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell approval hash material does not include PriorArtWindow.Enabled.'
-grep -Fq 'PriorArtWindow.StartDate=' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell approval hash material does not include PriorArtWindow.StartDate.'
-grep -Fq 'PriorArtWindow.EndDate=' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell approval hash material does not include PriorArtWindow.EndDate.'
-grep -Fq 'approved plan changed; regenerate and reconfirm' \
-    "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not explain approval-hash mismatch.'
-grep -Fq 'Expected approval hash:' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not report the expected approval hash.'
-grep -Fq 'Resolved approval hash:' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not report the resolved approval hash.'
-grep -Fq 'ApprovalHash' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not emit ApprovalHash.'
 grep -Fq 'ApprovalHash' "${RUNNER}" ||
     fail 'Bash runner does not emit ApprovalHash.'
 grep -Fq 'Review plan cancelled.' "${RUNNER}" ||
@@ -903,7 +885,8 @@ grep -Fq 'allowed-tools: ["agent"]' "${COMMAND_STATUS}" &&
         "${COMMAND_STATUS}" ||
     fail '/rhyolite:status is not restricted to task/subagent introspection.'
 for status_field in \
-    'Command:' 'Stage:' 'Elapsed:' 'Output:' 'Tasks:' 'Subagents:'; do
+    'Command:' 'Stage:' 'Elapsed:' 'Fleet mode:' 'Model:' \
+    'Remember settings:' 'Output:' 'Tasks:' 'Subagents:'; do
     grep -Fq "${status_field}" "${COMMAND_STATUS}" ||
         fail "/rhyolite:status is missing ${status_field}"
 done
@@ -916,15 +899,13 @@ for command_name in start repo-review status version help; do
     grep -Fq "/rhyolite:${command_name}" "${COMMAND_HELP}" ||
         fail "/rhyolite:help is missing /rhyolite:${command_name}."
 done
-grep -Fq 'installedStartCommand' "${INSTALL_TEST}" &&
-    grep -Fq 'rootLauncherPath' "${INSTALL_TEST}" &&
+grep -Fq "copilot plugin marketplace add \"\${ROOT}\"" "${INSTALL_TEST}" &&
+    grep -Fq "copilot plugin install 'rhyolite@rhyolite-tools'" \
+        "${INSTALL_TEST}" &&
     grep -Fq 'RHYOLITE_START_COMMAND_V1' "${INSTALL_TEST}" &&
-    grep -Fq '/rhyolite:start' "${INSTALL_TEST}" &&
-    grep -Fq 'bin\rhyolite.ps1' "${INSTALL_TEST}" &&
-    grep -Fq "Join-Path \$installedPluginRoot 'rhyolite'" "${INSTALL_TEST}" &&
-    grep -Fq 'rhyolite-tui-runtime-validator.agent.md' "${INSTALL_TEST}" &&
-    grep -Fq 'Unknown slash command' "${INSTALL_TEST}" ||
-    fail 'Installation test does not cover commands, launchers, and validator exclusion.'
+    grep -Fq 'bin/rhyolite' "${INSTALL_TEST}" &&
+    grep -Fq 'unsupported alternate-shell artifact' "${INSTALL_TEST}" ||
+    fail 'Linux installation test does not cover marketplace install and packaging.'
 ! grep -Fq '/rhyolite:banner' "${COMMAND_HELP}" ||
     fail '/rhyolite:help still advertises the removed banner command.'
 grep -Fq '/repo-review' "${COMMAND_HELP}" ||
@@ -940,8 +921,7 @@ grep -Fq 'three to five concise bullets' "${AGENT}" &&
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' 'artifacts' \
     'finalizing' 'completed' 'still running; elapsed'; do
-    grep -Fq "${progress_stage}" "${RUNNER}" &&
-        grep -Fq "${progress_stage}" "${POWERSHELL_RUNNER}" ||
+    grep -Fq "${progress_stage}" "${RUNNER}" ||
         fail "Runner progress contract is missing: ${progress_stage}"
 done
 grep -Fq 'RHYOLITE PROGRESS' "${AGENT}" &&
@@ -1008,6 +988,12 @@ grep -Fq 'CURRENT SETUP STATUS' "${SKILL}" ||
     fail 'Skill help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing Source.'
+grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${SKILL}" ||
+    fail 'Skill help/status block is missing fleet mode.'
+grep -Fq 'Model: <selected value or NOT SELECTED>' "${SKILL}" ||
+    fail 'Skill help/status block is missing model.'
+grep -Fq 'Remember settings: <YES, NO, or NOT SELECTED>' "${SKILL}" ||
+    fail 'Skill help/status block is missing remembered settings.'
 grep -Fq 'Output: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing Output.'
 grep -Fq 'Scope: <selected value or NOT SELECTED>' "${SKILL}" ||
@@ -1041,7 +1027,7 @@ grep -Fq 'to use `COPILOT_PLUGIN_ROOT` because the hook runtime supplies it' \
 ! grep -Eq 'COPILOT_PLUGIN_ROOT.*(discover-repositories|run-parallel-reviews)' \
     "${AGENT}" "${SKILL}" ||
     fail 'Agent or skill still uses COPILOT_PLUGIN_ROOT for discovery or review commands.'
-grep -Fq 'platform-specific plan-only mode with non-interactive' "${SKILL}" ||
+grep -Fq 'Bash plan-only mode with' "${SKILL}" ||
     fail 'Skill does not require authoritative plan-only mode.'
 grep -Fq "Parse the runner's authoritative JSON only." "${SKILL}" ||
     fail 'Skill does not treat plan-only JSON as authoritative.'
@@ -1072,19 +1058,26 @@ grep -Fq '`Explain scope`' "${SKILL}" ||
 grep -Fq 'Accept exact `Change scope` as the shortcut `Edit setup` ->' \
     "${SKILL}" ||
     fail 'Skill does not describe the Change scope shortcut.'
-grep -Fq 'exact explicit choices `Source`,' "${SKILL}" &&
+grep -Fq 'exact explicit choices `Source`, `Model`,' "${SKILL}" &&
     grep -Fq '`Output`, or `Scope`, in that order.' "${SKILL}" ||
     fail 'Skill Edit setup options are incomplete.'
+grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
+    grep -Fq '`Continue in standard mode`' "${SKILL}" &&
+    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
+        "${SKILL}" &&
+    grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${SKILL}" &&
+    grep -Fq '`Claude Fable 5 - claude-fable-5`' "${SKILL}" &&
+    grep -Fq '`Remember settings for these repositories (Recommended)`' \
+        "${SKILL}" ||
+    fail 'Skill fleet/model preference setup contract is incomplete.'
 grep -Fq 'clear provenance immediately when the' "${SKILL}" &&
     grep -Fq 'resulting scope is not `3`' "${SKILL}" ||
     fail 'Skill does not clear provenance when editing scope away from 3.'
 grep -Fq 'ask `Provenance lookback months [6]`' "${SKILL}" &&
     grep -Fq 'only when the resulting scope is `3`' "${SKILL}" ||
     fail 'Skill does not restrict provenance prompts to scope 3.'
-grep -Fq -- '- Linux/macOS: `--expected-plan-hash <ApprovalHash>`' "${SKILL}" ||
-    fail 'Skill does not pass the expected plan hash flag on Linux/macOS.'
-grep -Fq -- '- Windows: `-ExpectedPlanHash <ApprovalHash>`' "${SKILL}" ||
-    fail 'Skill does not pass the expected plan hash flag on Windows.'
+grep -Fq '`--expected-plan-hash <ApprovalHash>`' "${SKILL}" ||
+    fail 'Skill does not pass the expected plan hash flag.'
 grep -Fq 'plan-hash mismatch, preserve answers' "${SKILL}" ||
     fail 'Skill does not describe plan-hash mismatch recovery.'
 grep -Fq 'approved effective plan changed' "${SKILL}" ||
@@ -1125,13 +1118,13 @@ grep -Fq 'one plain line' "${README}" &&
     fail 'README does not describe load status and command plaque.'
 grep -Fq './rhyolite' "${README}" &&
     grep -Fq './plugins/rhyolite/bin/rhyolite' "${README}" &&
-    grep -Fq 'pwsh .\plugins\rhyolite\bin\rhyolite.ps1' "${README}" &&
-    grep -Fq 'Bash 3.2' "${README}" &&
-    grep -Fq 'Library/Application Support/Rhyolite/Launcher' "${README}" &&
+    grep -Fq 'Fedora Linux 44' "${README}" &&
+    grep -Fq 'Runtime support is Linux-only' "${README}" &&
+    grep -Fq 'docs/PLAN-OF-RECORD.md' "${README}" &&
     grep -Fq 'launcher-started sessions suppress the ordinary plugin load' \
         "${README}" &&
     grep -Fq 'in-session compatibility path' "${README}" ||
-    fail 'README does not document checkout wrapper priority, packaged path, and macOS support.'
+    fail 'README does not document the Fedora/Linux platform plan and launcher paths.'
 grep -Fq 'rhyolite-ui-validator' "${README}" &&
     grep -Fq 'rhyolite-tui-runtime-validator' "${README}" &&
     grep -Fq 'tests/validate-tui-runtime.mjs' "${README}" ||
@@ -1165,9 +1158,12 @@ grep -Fq 'prior-art as disabled' "${README}" ||
 grep -Fq 'scope-`2`/`3` prior-art start/end' "${README}" ||
     fail 'README does not describe scope 2/3 prior-art dates.'
 grep -Fq 'numbered picker for' "${README}" &&
-    grep -Fq '`Source`, `Output`, or `Scope`, re-asks only that field' \
+    grep -Fq '`Source`, `Model`, `Output`, or `Scope`, re-asks only that field' \
         "${README}" ||
     fail 'README does not describe Edit setup follow-up choices.'
+grep -Fq 'process-level `--fleet` flag' "${README}" &&
+    grep -Fq 'canonical repository URL' "${README}" ||
+    fail 'README does not describe native fleet and per-repository preferences.'
 grep -Fq 'numbered `ask_user` picker' "${README}" ||
     fail 'README does not describe native numbered setup choices.'
 grep -Fq 'final `Other` custom-answer option' "${README}" ||
@@ -1195,7 +1191,7 @@ grep -Fq 'userPromptSubmitted' \
     "${COPILOT_INSTRUCTIONS}" ||
     fail 'Copilot instructions do not describe the command plaque hook.'
 grep -Fq 'bin/rhyolite' "${COPILOT_INSTRUCTIONS}" &&
-    grep -Fq 'macOS Bash 3.2' "${COPILOT_INSTRUCTIONS}" &&
+    grep -Fq 'Fedora Linux 44' "${COPILOT_INSTRUCTIONS}" &&
     grep -Fq 'rhyolite-tui-runtime-validator.agent.md' \
         "${COPILOT_INSTRUCTIONS}" &&
     grep -Fq 'tests/validate-tui-runtime.mjs' "${COPILOT_INSTRUCTIONS}" ||
@@ -1313,129 +1309,84 @@ grep -Fq 'research specialist only when public' \
 
 for forbidden in \
     '--allow-all-tools' '--allow-all-paths' '--allow-all ' '--yolo'; do
-    ! grep -Fq -- "${forbidden}" "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+    ! grep -Fq -- "${forbidden}" "${RUNNER}" ||
         fail "Runner contains forbidden default or credential: ${forbidden}"
 done
 
 grep -Fq 'if ((ENABLE_PUBLIC_RESEARCH)); then' "${RUNNER}" ||
     fail 'Bash URL bypass is not gated by public research.'
-grep -Fq 'if ($using:publicResearchEnabled)' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell URL bypass is not gated by public research.'
 grep -Fq -- '--disable-builtin-mcps' "${RUNNER}" ||
     fail 'Bash runner does not disable built-in MCP servers.'
-grep -Fq -- '--disable-builtin-mcps' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not disable built-in MCP servers.'
 grep -Fq -- '--disallow-temp-dir' "${RUNNER}" ||
     fail 'Bash runner does not disable temporary-directory access.'
-grep -Fq -- '--disallow-temp-dir' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not disable temporary-directory access.'
 grep -Fq -- '--secret-env-vars' "${RUNNER}" ||
     fail 'Bash runner does not protect inherited authentication.'
-grep -Fq -- '--secret-env-vars' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not protect inherited authentication.'
 grep -Fq 'COPILOT_AUTH_BRIDGE_JSON' "${RUNNER}" ||
     fail 'Bash runner does not create an authentication bridge.'
-grep -Fq 'Get-CopilotAuthenticationBridge' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not create an authentication bridge.'
-grep -Fq 'GitHub CLI fallback' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
-    fail 'Runners do not support the GitHub CLI authentication fallback.'
+grep -Fq 'GitHub CLI fallback' "${RUNNER}" ||
+    fail 'Runner does not support the GitHub CLI authentication fallback.'
 ! grep -Fq 'Copilot authentication preflight passed.' \
-    "${RUNNER}" "${POWERSHELL_RUNNER}" ||
-    fail 'A runner still uses the speculative authentication preflight.'
-grep -Fq 'COPILOT_PROVIDER_API_KEY' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
-    fail 'Runners do not protect provider authentication.'
-grep -Fq 'GITHUB_COPILOT_API_TOKEN' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
-    fail 'Runners do not protect Copilot API tokens.'
+    "${RUNNER}" ||
+    fail 'The runner still uses the speculative authentication preflight.'
+grep -Fq 'COPILOT_PROVIDER_API_KEY' "${RUNNER}" ||
+    fail 'Runner does not protect provider authentication.'
+grep -Fq 'GITHUB_COPILOT_API_TOKEN' "${RUNNER}" ||
+    fail 'Runner does not protect Copilot API tokens.'
 grep -Fq 'ANONYMOUS_GIT_HOME=' "${RUNNER}" ||
     fail 'Bash anonymous Git home is missing.'
 grep -Fq 'HOME="${ANONYMOUS_GIT_HOME}"' "${RUNNER}" ||
     fail 'Bash clone can still read the user home.'
-grep -Fq '$anonymousGitHome' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell anonymous Git home is missing.'
-grep -Fq "Environment['HOME']" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell clone can still read the user home.'
 grep -Fq -- '-u COPILOT_GITHUB_TOKEN' "${RUNNER}" ||
     fail 'Bash clone still inherits Copilot credentials.'
-grep -Fq 'credential.interactive=false' \
-    "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'credential.interactive=false' "${RUNNER}" ||
     fail 'Anonymous clone credential interaction is not disabled.'
-grep -Fq 'http.curloptResolve=' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'http.curloptResolve=' "${RUNNER}" ||
     fail 'Repository DNS resolution is not pinned for Git.'
 grep -Fq 'address.is_global' "${RUNNER}" ||
     fail 'Bash runner does not reject non-public DNS answers.'
-grep -Fq 'Resolve-PublicRepositoryEndpoint' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not reject non-public DNS answers.'
-grep -Fq 'http.proxy=' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'http.proxy=' "${RUNNER}" ||
     fail 'Anonymous clone can still route through inherited proxies.'
-grep -Fq 'http.followRedirects=false' \
-    "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'http.followRedirects=false' "${RUNNER}" ||
     fail 'Anonymous clone redirects are not disabled.'
-grep -Fq 'ls-remote' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'ls-remote' "${RUNNER}" ||
     fail 'Repository accessibility preflight is not implemented.'
-grep -Fq 'AccessPreflightFailed' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'AccessPreflightFailed' "${RUNNER}" ||
     fail 'Repository accessibility preflight failures are not reported explicitly.'
-grep -Fq 'PreflightBlocked' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+grep -Fq 'PreflightBlocked' "${RUNNER}" ||
     fail 'Fail-closed multi-repository preflight blocking is not reported explicitly.'
-grep -Fq 'Local repository paths are not supported.' \
-    "${RUNNER}" "${POWERSHELL_RUNNER}" ||
-    fail 'Runners do not reject local repository paths explicitly.'
+grep -Fq 'Local repository paths are not supported.' "${RUNNER}" ||
+    fail 'Runner does not reject local repository paths explicitly.'
 grep -Fq 'STATE_SCHEMA_VERSION=3' "${RUNNER}" ||
     fail 'Bash runner does not emit source-aware schema version 3.'
-grep -Fq '$stateSchemaVersion = 3' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not emit source-aware schema version 3.'
 grep -Fq '"ProvenanceWindow": $(provenance_window_json' "${RUNNER}" ||
     fail 'Bash runner does not emit provenance-window state.'
-grep -Fq 'ProvenanceWindow = $provenanceWindowState' \
-    "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not emit provenance-window state.'
 grep -Fq 'children=(' "${DISCOVERY}" ||
     fail 'Bash discovery is not bounded to direct child paths.'
-grep -Fq 'Sort-Object Name' "${POWERSHELL_DISCOVERY}" ||
-    fail 'PowerShell discovery is not deterministic.'
 grep -Fq '"disableAllHooks": true' "${RUNNER}" ||
     fail 'Bash runner does not disable hooks in the isolated Copilot home.'
-grep -Fq '"disableAllHooks`": true' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not disable hooks in the isolated Copilot home.'
 grep -Fq '"defaultLocalOnly": true' "${RUNNER}" ||
     fail 'Bash runner does not exclude remote organization agents.'
-grep -Fq '"defaultLocalOnly`": true' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not exclude remote organization agents.'
 grep -Fq 'COPILOT_HOME=' "${RUNNER}" ||
     fail 'Bash runner does not isolate persisted Copilot state.'
-grep -Fq "'COPILOT_HOME'" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not isolate persisted Copilot state.'
 grep -Fq 'rhyolite-repo-review-copilot.XXXXXXXX' "${RUNNER}" ||
     fail 'Bash runner does not use a unique temporary Copilot home.'
-grep -Fq 'rhyolite-repo-review-copilot-' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not use a unique temporary Copilot home.'
 grep -Fq 'for state_entry in session-state session-store' "${RUNNER}" ||
     fail 'Bash runner does not allowlist persisted Copilot state.'
-grep -Fq "@('session-state', 'session-store')" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not allowlist persisted Copilot state.'
 grep -Fq 'sanitize_and_remove_runtime_copilot_home' "${RUNNER}" ||
     fail 'Bash runner does not sanitize and delete the temporary Copilot home.'
-grep -Fq 'Remove-Item -LiteralPath $runtimeCopilotHomePath' \
-    "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not delete the temporary Copilot home.'
 grep -Fq 'post_process_failure=1' "${RUNNER}" ||
     fail 'Bash runner drops results when temporary-home cleanup fails.'
-grep -Fq '$postProcessFailure = $true' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner drops results when temporary-home cleanup fails.'
 grep -Fq 'chmod 700 -- "${copilot_home_path}"' "${RUNNER}" ||
     fail 'Bash persisted Copilot home is not user-only.'
 grep -Fq 'find "${copilot_home_path}" -type f -exec chmod 600' "${RUNNER}" ||
     fail 'Bash persisted Copilot files are not user-only.'
 grep -Fq '* -export-ignore -export-subst' "${RUNNER}" ||
     fail 'Bash snapshot does not neutralize archive attributes.'
-grep -Fq '* -export-ignore -export-subst' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell snapshot does not neutralize archive attributes.'
 grep -Fq 'rhyolite:repo-review-worker' "${RUNNER}" ||
     fail 'Bash runner does not use the namespaced worker agent ID.'
-grep -Fq 'rhyolite:repo-review-worker' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell runner does not use the namespaced worker agent ID.'
 grep -Fq -- '--deny-tool write' "${RUNNER}" ||
     fail 'Bash runner does not deny write tools.'
-! grep -Fq 'shell(git' "${RUNNER}" "${POWERSHELL_RUNNER}" ||
+! grep -Fq 'shell(git' "${RUNNER}" ||
     fail 'A child runner still grants direct Git shell access.'
 grep -Fq -- '--deny-tool shell' "${RUNNER}" ||
     fail 'Bash runner does not globally deny nested shell tools.'
@@ -1444,23 +1395,18 @@ grep -Fq -- '--deny-tool shell' "${RUNNER}" ||
 grep -Fq "read -r -p 'Run this review plan? [y/N] ' confirm_input" \
     "${RUNNER}" ||
     fail 'Bash runner lost the direct interactive review-plan confirmation prompt.'
-grep -Fq 'ConvertTo-Json -Depth 8 -AsArray' "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell manifest is not forced to an array.'
-grep -Fq "Environment.Remove('COPILOT_ALLOW_ALL')" "${POWERSHELL_RUNNER}" ||
-    fail 'PowerShell child process does not remove allow-all mode.'
 grep -Fq -- '-u COPILOT_ALLOW_ALL' "${RUNNER}" ||
     fail 'Bash child process does not remove allow-all mode.'
 for artifact_name in \
     review.md review.html state.json handoff.md index.html request.txt agent-state; do
     grep -Fq "${artifact_name}" "${RUNNER}" ||
         fail "Bash runner artifact contract is missing: ${artifact_name}"
-    grep -Fq "${artifact_name}" "${POWERSHELL_RUNNER}" ||
-        fail "PowerShell runner artifact contract is missing: ${artifact_name}"
 done
 
 bash -n "${RUNNER}"
 bash -n "${DISCOVERY}"
 bash -n "${WELCOME_HELPER_BASH}"
+bash -n "${LAUNCHER_PREFERENCES_BASH}"
 bash -n "${ROOT_LAUNCHER}"
 bash -n "${RHYOLITE_LAUNCHER}"
 bash -n "${OUTPUT_HELPER}"
@@ -1484,26 +1430,19 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
     "${RHYOLITE_LAUNCHER}" &&
     grep -Fq "readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'" \
         "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq "readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'" \
+        "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '-C "${launch_dir}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--plugin-dir "${plugin_root}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--agent "${RHYOLITE_AGENT}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--model "${model}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- 'copilot_arguments=(--fleet "${copilot_arguments[@]}")' \
+        "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '-i "${initial_prompt}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq 'export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"' \
         "${RHYOLITE_LAUNCHER}" ||
     fail 'Unix launcher lost its trusted Copilot startup contract.'
-grep -Fq "\$RhyoliteStartMarker = 'RHYOLITE_START_COMMAND_V1'" \
-    "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq "\$RhyoliteLauncherImmediateStartMarker = 'RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'" \
-        "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq "'-C'" "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq "'--plugin-dir'" "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq "'--agent'" "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq "'-i'" "${RHYOLITE_LAUNCHER_PWSH}" &&
-    grep -Fq '$env:RHYOLITE_LAUNCHER_IMMEDIATE_START =' \
-        "${RHYOLITE_LAUNCHER_PWSH}" ||
-    fail 'PowerShell launcher lost its trusted Copilot startup contract.'
-! grep -Fq -- '--allow-all' \
-    "${RHYOLITE_LAUNCHER}" "${RHYOLITE_LAUNCHER_PWSH}" ||
+! grep -Fq -- '--allow-all' "${RHYOLITE_LAUNCHER}" ||
     fail 'Rhyolite launcher enables allow-all mode.'
 ! grep -Eq \
     'readlink[[:space:]]+-f|realpath|mktemp|date[[:space:]]+--|declare[[:space:]]+-A|mapfile|readarray|local[[:space:]]+-n|\$\{[^}]+,,\}' \
@@ -1512,12 +1451,18 @@ grep -Fq "\$RhyoliteStartMarker = 'RHYOLITE_START_COMMAND_V1'" \
 ! grep -Eq \
     'readlink[[:space:]]+-f|realpath|mktemp|date[[:space:]]+--|declare[[:space:]]+-A|mapfile|readarray|local[[:space:]]+-n|\$\{[^}]+,,\}' \
     "${RHYOLITE_LAUNCHER}" ||
-    fail 'Unix launcher uses a GNU-only command or post-Bash-3.2 syntax.'
-grep -Fq 'Library/Application Support' "${RHYOLITE_LAUNCHER}" ||
-    fail 'Unix launcher lacks the macOS Application Support state default.'
-grep -Fq 'RHYOLITE_LAUNCHER_IMMEDIATE_START' "${WELCOME_HELPER_BASH}" &&
-    grep -Fq 'RHYOLITE_LAUNCHER_IMMEDIATE_START' "${WELCOME_HELPER_PWSH}" ||
+    fail 'Linux launcher uses prohibited dynamic or path-obscuring shell constructs.'
+grep -Fq 'RHYOLITE_LAUNCHER_IMMEDIATE_START' "${WELCOME_HELPER_BASH}" ||
     fail 'Welcome helpers do not use the trusted launcher-start marker.'
+grep -Fq 'rhyolite_write_preference' "${LAUNCHER_PREFERENCES_BASH}" &&
+    grep -Fq -- '--remember-preferences' "${RUNNER}" &&
+    grep -Fq -- '--fleet-mode' "${RUNNER}" ||
+    fail 'Linux fleet/model preference persistence contract is incomplete.'
+grep -Fq "printf '\\nRhyolite execution mode\\n' >&2" \
+    "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq "printf '\\nReview model\\n' >&2" \
+        "${RHYOLITE_LAUNCHER}" ||
+    fail 'Unix launcher picker text can contaminate captured fleet/model values.'
 
 grep -Fq 'name: "repo-review"' "${RHYOLITE_EXTENSION}" ||
     fail 'Rhyolite extension does not register /repo-review.'
@@ -1564,17 +1509,71 @@ grep -Fq 'first public repository URL in the same turn' \
     fail 'Rhyolite skill can still stop after rendering its banner.'
 # shellcheck source=../plugins/rhyolite/skills/readonly-repository-review/scripts/review-output.sh
 source "${OUTPUT_HELPER}"
+# shellcheck source=../plugins/rhyolite/scripts/launcher-preferences.sh
+source "${LAUNCHER_PREFERENCES_BASH}"
 
 fixture_root="$(cd -- "${ROOT}/.." && pwd)/repo-reviewer-test-output"
 fixture_dir="${fixture_root}/validate-plugin-sh.$$.$RANDOM.$RANDOM"
 mkdir -p -- "${fixture_root}" "${fixture_dir}"
 trap 'chmod -R u+w -- "${fixture_dir}" 2>/dev/null || true; rm -rf -- "${fixture_dir}"' EXIT
 
+rhyolite_canonicalize_repository \
+    'https://github.com:443/octocat/Hello-World///' &&
+    [[ "${RHYOLITE_CANONICAL_REPOSITORY}" == \
+        'https://github.com/octocat/Hello-World' ]] ||
+    fail 'Bash launcher preference canonicalization retained port 443 or trailing slashes.'
+preference_helper_root="${fixture_dir}/preference-helper-state"
+rhyolite_write_preference \
+    'https://github.com/octocat/Hello-World' \
+    native \
+    gpt-5.6-sol \
+    "${preference_helper_root}" ||
+    fail 'Bash preference helper could not write a valid preference.'
+preference_helper_path="$(
+    rhyolite_preference_path \
+        'https://github.com/octocat/Hello-World' \
+        "${preference_helper_root}"
+)"
+cat > "${preference_helper_path}" <<'EOF'
+{
+  "schemaVersion": 1,
+  "canonicalRepository": "https://github.com/octocat/Hello-World",
+  "fleetMode": "native",
+  "model": "gpt-5.6-sol",
+  "updatedAt": "2026-09-30T12:00:00Z"
+}
+BROKEN
+EOF
+if rhyolite_read_preference \
+    'https://github.com/octocat/Hello-World' \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+    fail 'Bash preference helper accepted malformed JSON.'
+fi
+directory_preference_repository='https://github.com/octocat/Spoon-Knife'
+directory_preference_path="$(
+    rhyolite_preference_path \
+        "${directory_preference_repository}" \
+        "${preference_helper_root}"
+)"
+mkdir -p -- "${directory_preference_path}"
+if rhyolite_write_preference \
+    "${directory_preference_repository}" \
+    standard \
+    gpt-5.6-sol \
+    "${preference_helper_root}"; then
+    fail 'Bash preference helper treated a directory destination as success.'
+fi
+[[ -z "$(find "${directory_preference_path}" -mindepth 1 -print -quit)" ]] ||
+    fail 'Bash preference helper left a temporary file inside a directory destination.'
+
 welcome_progress_output="${fixture_dir}/welcome-progress.jsonl"
 welcome_progress_launcher_output="${fixture_dir}/welcome-progress-launcher.txt"
 welcome_progress_stderr="${fixture_dir}/welcome-progress.stderr"
 welcome_plaque_output="${fixture_dir}/welcome-plaque.jsonl"
 welcome_plaque_no_color="${fixture_dir}/welcome-plaque-no-color.jsonl"
+welcome_launcher_plaque_output="${fixture_dir}/welcome-launcher-plaque.jsonl"
+welcome_launcher_plaque_no_color="${fixture_dir}/welcome-launcher-plaque-no-color.jsonl"
 welcome_plaque_copilot_no_color="${fixture_dir}/welcome-plaque-copilot-no-color.jsonl"
 welcome_plaque_force_color_zero="${fixture_dir}/welcome-plaque-force-color-zero.jsonl"
 welcome_plaque_term_dumb="${fixture_dir}/welcome-plaque-term-dumb.jsonl"
@@ -1598,6 +1597,17 @@ printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
 printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
     NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_no_color}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+    env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
+        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_launcher_plaque_output}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+    env NO_COLOR=1 \
+        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_launcher_plaque_no_color}" \
+        2>>"${welcome_progress_stderr}"
 printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
     env -u NO_COLOR COPILOT_NO_COLOR=1 FORCE_COLOR=1 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
@@ -1644,6 +1654,21 @@ tui_runtime_result="$(
 )" || fail 'Bash TUI runtime artifact validation failed.'
 [[ "${tui_runtime_result}" == 'TUI_RUNTIME_VALIDATION: PASS' ]] ||
     fail 'TUI runtime validator returned an unexpected success contract.'
+launcher_tui_runtime_result="$(
+    node "${TUI_RUNTIME_VALIDATOR}" \
+        --plugin-manifest "${PLUGIN_MANIFEST}" \
+        --banner "${WELCOME_BANNER}" \
+        --progress-json "${welcome_progress_output}" \
+        --launcher-progress-output "${welcome_progress_launcher_output}" \
+        --plaque-json "${welcome_launcher_plaque_output}" \
+        --plaque-no-color-json "${welcome_launcher_plaque_no_color}" \
+        --start-command "${COMMAND_START}" \
+        --repo-review-command "${COMMAND_REPO_REVIEW}" \
+        --extension "${RHYOLITE_EXTENSION}" \
+        --plaque-mode launcher
+)" || fail 'Bash launcher TUI runtime artifact validation failed.'
+[[ "${launcher_tui_runtime_result}" == 'TUI_RUNTIME_VALIDATION: PASS' ]] ||
+    fail 'Launcher TUI runtime validator returned an unexpected success contract.'
 node - \
     "${PLUGIN_MANIFEST}" \
     "${WELCOME_METADATA}" \
@@ -1653,6 +1678,8 @@ node - \
     "${welcome_progress_launcher_output}" \
     "${welcome_plaque_output}" \
     "${welcome_plaque_no_color}" \
+    "${welcome_launcher_plaque_output}" \
+    "${welcome_launcher_plaque_no_color}" \
     "${welcome_panel_output}" <<'JS'
 const fs = require("fs");
 
@@ -1665,6 +1692,8 @@ const [
   launcherProgressPath,
   plaquePath,
   noColorPlaquePath,
+  launcherPlaquePath,
+  launcherNoColorPlaquePath,
   panelPath,
 ] = process.argv.slice(2);
 const plugin = JSON.parse(fs.readFileSync(pluginPath, "utf8"));
@@ -1675,6 +1704,9 @@ const progressText = fs.readFileSync(progressPath, "utf8");
 const launcherProgressText = fs.readFileSync(launcherProgressPath, "utf8");
 const plaqueText = fs.readFileSync(plaquePath, "utf8");
 const noColorPlaqueText = fs.readFileSync(noColorPlaquePath, "utf8");
+const launcherPlaqueText = fs.readFileSync(launcherPlaquePath, "utf8");
+const launcherNoColorPlaqueText =
+  fs.readFileSync(launcherNoColorPlaquePath, "utf8");
 const panel = fs.readFileSync(panelPath, "utf8");
 
 function normalizePanel(value) {
@@ -1779,6 +1811,26 @@ if (noColorPlaque.message !== expectedPlainPlaque ||
     noColorPlaque.message.includes("\u001b[")) {
   throw new Error("NO_COLOR output is not exact ANSI-free plaque content");
 }
+const launcherPlaque = JSON.parse(launcherPlaqueText.trim());
+const expectedPlainLauncherPlaque = [
+  ...bannerLines,
+  versionLine,
+  "",
+  "Rhyolite is running in automatic guided mode.",
+  "Startup is continuing automatically; wait for the first setup prompt before responding.",
+  "Use /rhyolite:help for commands or /rhyolite:status for current progress.",
+].join("\n");
+if (stripAnsi(launcherPlaque.message) !== expectedPlainLauncherPlaque ||
+    launcherPlaque.message.includes("Use /rhyolite:start to begin a review.")) {
+  throw new Error("launcher review-start plaque did not switch to automatic guided mode");
+}
+const launcherNoColorPlaque = JSON.parse(
+  launcherNoColorPlaqueText.trim(),
+);
+if (launcherNoColorPlaque.message !== expectedPlainLauncherPlaque ||
+    launcherNoColorPlaque.message.includes("\u001b[")) {
+  throw new Error("launcher NO_COLOR output is not exact ANSI-free plaque content");
+}
 if (!panel.startsWith(`${banner}\n`) &&
     panel !== `${banner}\n`) {
   throw new Error("welcome panel does not begin with the banner");
@@ -1847,71 +1899,6 @@ if (!normalizedPromptNativePanel.includes(versionLine)) {
   throw new Error("agent prompt-native welcome panel lost the plugin.json version");
 }
 JS
-if command -v pwsh >/dev/null 2>&1; then
-    pwsh_welcome_progress_output="${fixture_dir}/pwsh-welcome-progress.jsonl"
-    pwsh_welcome_progress_launcher_output="${fixture_dir}/pwsh-welcome-progress-launcher.txt"
-    pwsh_welcome_progress_stderr="${fixture_dir}/pwsh-welcome-progress.stderr"
-    pwsh_welcome_panel_output="${fixture_dir}/pwsh-welcome-panel.txt"
-    pwsh_welcome_panel_stderr="${fixture_dir}/pwsh-welcome-panel.stderr"
-    pwsh_welcome_plaque_output="${fixture_dir}/pwsh-welcome-plaque.jsonl"
-    pwsh_welcome_plaque_no_color="${fixture_dir}/pwsh-welcome-plaque-no-color.jsonl"
-    pwsh -NoLogo -NoProfile -File "${WELCOME_HELPER_PWSH}" -Mode Progress \
-        >"${pwsh_welcome_progress_output}" \
-        2>"${pwsh_welcome_progress_stderr}"
-    env RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
-        pwsh -NoLogo -NoProfile -File "${WELCOME_HELPER_PWSH}" -Mode Progress \
-        >"${pwsh_welcome_progress_launcher_output}" \
-        2>>"${pwsh_welcome_progress_stderr}"
-    [[ ! -s "${pwsh_welcome_progress_stderr}" ]] ||
-        fail 'PowerShell welcome progress helper wrote unexpected stderr.'
-    pwsh -NoLogo -NoProfile -File "${WELCOME_HELPER_PWSH}" -Mode Panel \
-        >"${pwsh_welcome_panel_output}" \
-        2>"${pwsh_welcome_panel_stderr}"
-    printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-        env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
-            pwsh -NoLogo -NoProfile -File "${WELCOME_HELPER_PWSH}" \
-                -Mode PromptPlaque >"${pwsh_welcome_plaque_output}" \
-                2>>"${pwsh_welcome_panel_stderr}"
-    printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-        NO_COLOR=1 pwsh -NoLogo -NoProfile -File "${WELCOME_HELPER_PWSH}" \
-            -Mode PromptPlaque >"${pwsh_welcome_plaque_no_color}" \
-            2>>"${pwsh_welcome_panel_stderr}"
-    [[ ! -s "${pwsh_welcome_panel_stderr}" ]] ||
-        fail 'PowerShell welcome panel helper wrote unexpected stderr.'
-    cmp -s "${welcome_progress_output}" "${pwsh_welcome_progress_output}" ||
-        fail 'PowerShell welcome progress helper does not match Bash output.'
-    cmp -s "${welcome_progress_launcher_output}" \
-        "${pwsh_welcome_progress_launcher_output}" ||
-        fail 'PowerShell launcher-started progress suppression does not match Bash output.'
-    cmp -s "${welcome_panel_output}" "${pwsh_welcome_panel_output}" ||
-        fail 'PowerShell welcome panel helper does not match Bash output.'
-    node - \
-        "${welcome_plaque_output}" \
-        "${pwsh_welcome_plaque_output}" \
-        "${welcome_plaque_no_color}" \
-        "${pwsh_welcome_plaque_no_color}" <<'JS'
-const fs = require("fs");
-const [bashColorPath, pwshColorPath, bashPlainPath, pwshPlainPath] =
-  process.argv.slice(2);
-const readMessage = (file) =>
-  JSON.parse(fs.readFileSync(file, "utf8").trim()).message;
-if (readMessage(bashColorPath) !== readMessage(pwshColorPath) ||
-    readMessage(bashPlainPath) !== readMessage(pwshPlainPath)) {
-  throw new Error("Bash and PowerShell plaque content differs");
-}
-JS
-    node "${TUI_RUNTIME_VALIDATOR}" \
-        --plugin-manifest "${PLUGIN_MANIFEST}" \
-        --banner "${WELCOME_BANNER}" \
-        --progress-json "${pwsh_welcome_progress_output}" \
-        --launcher-progress-output "${pwsh_welcome_progress_launcher_output}" \
-        --plaque-json "${pwsh_welcome_plaque_output}" \
-        --plaque-no-color-json "${pwsh_welcome_plaque_no_color}" \
-        --start-command "${COMMAND_START}" \
-        --repo-review-command "${COMMAND_REPO_REVIEW}" \
-        --extension "${RHYOLITE_EXTENSION}" >/dev/null ||
-        fail 'PowerShell TUI runtime artifact validation failed.'
-fi
 
 root_wrapper_fixture="${fixture_dir}/root wrapper source with spaces"
 root_wrapper_plugin_dir="${root_wrapper_fixture}/plugins/rhyolite/bin"
@@ -1946,6 +1933,9 @@ printf 'PACKAGED_RUN\n'
 SH
 chmod +x "${root_wrapper_plugin_dir}/rhyolite"
 ln -s "${root_wrapper_fixture}/rhyolite" "${root_wrapper_link}"
+root_wrapper_plugin_dir_physical="$(
+    cd -P -- "${root_wrapper_plugin_dir}" && pwd
+)"
 
 root_wrapper_help="$(
     RHYOLITE_LAUNCHER_TRUSTED_MARKER='trusted-root-wrapper-help' \
@@ -1958,10 +1948,10 @@ root_wrapper_version="$(
         "${root_wrapper_link}" --version
 )"
 [[ "${root_wrapper_help}" == \
-    "PACKAGED_HELP:${root_wrapper_plugin_dir}/rhyolite" ]] ||
+    "PACKAGED_HELP:${root_wrapper_plugin_dir_physical}/rhyolite" ]] ||
     fail 'Repository-root launcher did not forward --help to the packaged launcher.'
 [[ "${root_wrapper_version}" == \
-    "PACKAGED_VERSION:${root_wrapper_plugin_dir}/rhyolite" ]] ||
+    "PACKAGED_VERSION:${root_wrapper_plugin_dir_physical}/rhyolite" ]] ||
     fail 'Repository-root launcher did not forward --version to the packaged launcher.'
 
 rm -f -- "${root_wrapper_log}"
@@ -2031,6 +2021,8 @@ set -euo pipefail
     printf 'SESSION\0%s\0' "${RHYOLITE_LAUNCHER_SESSION_DIR-}"
     printf 'VERSION\0%s\0' "${RHYOLITE_LAUNCHER_VERSION-}"
     printf 'IMMEDIATE\0%s\0' "${RHYOLITE_LAUNCHER_IMMEDIATE_START-}"
+    printf 'FLEET\0%s\0' "${RHYOLITE_LAUNCHER_FLEET_MODE-}"
+    printf 'MODEL\0%s\0' "${RHYOLITE_LAUNCHER_MODEL-}"
     printf 'ARGS\0'
     printf '%s\0' "$@"
 } > "${RHYOLITE_STUB_LOG}"
@@ -2059,7 +2051,11 @@ launcher_version="$("${launcher_link}" --version)"
     XDG_STATE_HOME="${launcher_state_home}" \
         RHYOLITE_STUB_LOG="${launcher_stub_log}" \
         PATH="${launcher_mock_bin}:${PATH}" \
-        "${launcher_link}" -- \
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository.git \
+            --fleet-mode native \
+            --model claude-fable-5 \
+            -- \
             'Review https://example.com/owner/repository' \
             'with spaces' \
             $'line\nbreak\tkept?'
@@ -2099,6 +2095,12 @@ const expectedRequest =
   "Review https://example.com/owner/repository with spaces linebreakkept?";
 const expectedPrompt =
   "RHYOLITE_START_COMMAND_V1\n" +
+  "RHYOLITE_LAUNCHER_SETUP_V1\n" +
+  "Source=https://example.com/owner/repository\n" +
+  "FleetMode=native\n" +
+  "Model=claude-fable-5\n" +
+  "RememberPreferences=true\n" +
+  "END_RHYOLITE_LAUNCHER_SETUP_V1\n" +
   "Begin Rhyolite's guided repository-review setup now.\n" +
   "Treat the following text as the user's initial review request:\n\n" +
   expectedRequest;
@@ -2109,6 +2111,10 @@ if (fs.realpathSync(pluginRoot) !== fs.realpathSync(expectedPlugin) ||
 if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
+if (!args.includes("--fleet") ||
+    valueAfter("--model") !== "claude-fable-5") {
+  throw new Error("launcher did not apply fleet/model selections");
+}
 if (prompt !== expectedPrompt || /[\x00-\x09\x0B-\x1F\x7F]/u.test(prompt)) {
   throw new Error("launcher did not preserve and sanitize the initial request");
 }
@@ -2117,10 +2123,13 @@ if (!args.includes("--experimental") ||
     args.some((arg) => arg.startsWith("--allow-all"))) {
   throw new Error("launcher Copilot safety arguments are invalid");
 }
-if (path.resolve(values.get("CALLER")) !== path.resolve(root) ||
-    path.resolve(values.get("LAUNCH")) !== path.resolve(launchDirectory) ||
+if (fs.realpathSync(values.get("CALLER")) !== fs.realpathSync(root) ||
+    fs.realpathSync(values.get("LAUNCH")) !==
+      fs.realpathSync(launchDirectory) ||
     values.get("VERSION") !== expectedVersion ||
-    values.get("IMMEDIATE") !== "RHYOLITE_LAUNCHER_IMMEDIATE_START_V1") {
+    values.get("IMMEDIATE") !== "RHYOLITE_LAUNCHER_IMMEDIATE_START_V1" ||
+    values.get("FLEET") !== "native" ||
+    values.get("MODEL") !== "claude-fable-5") {
   throw new Error("launcher environment context is inconsistent");
 }
 let cursor = path.resolve(launchDirectory);
@@ -2145,8 +2154,84 @@ const context = fs.readFileSync(
 );
 if (context.includes("InitialRequest=") ||
     context.includes(expectedRequest) ||
+    context.includes("https://example.com/owner/repository") ||
+    !context.includes("FleetMode=native") ||
+    !context.includes("Model=claude-fable-5") ||
     /[\x00-\x08\x0B-\x1F\x7F]/u.test(context)) {
-  throw new Error("launcher context persisted the initial request");
+  throw new Error("launcher context persisted source/request data or lost settings");
+}
+JS
+
+launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
+rhyolite_write_preference \
+    'https://example.com/owner/repository' \
+    native \
+    claude-fable-5 \
+    "${launcher_preference_home}" ||
+    fail 'Could not create launcher preference reuse fixture.'
+rm -f -- "${launcher_stub_log}"
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository
+)
+node - "${launcher_stub_log}" <<'JS'
+const fs = require("fs");
+const fields = fs.readFileSync(process.argv[2], "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const argsIndex = fields.indexOf("ARGS");
+const args = fields.slice(argsIndex + 1);
+const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (!args.includes("--fleet") ||
+    valueAfter("--model") !== "claude-fable-5" ||
+    !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5\n")) {
+  throw new Error("launcher did not reuse the saved repository preference");
+}
+JS
+
+launcher_preference_path="$(
+    rhyolite_preference_path \
+        'https://example.com/owner/repository' \
+        "${launcher_preference_home}"
+)"
+cat > "${launcher_preference_path}" <<'EOF'
+{
+  "schemaVersion": 1,
+  "canonicalRepository": "https://example.com/owner/repository",
+  "fleetMode": "native",
+  "model": "claude-fable-5",
+  "updatedAt": "2026-09-30T12:00:00Z"
+}
+BROKEN
+EOF
+chmod 600 -- "${launcher_preference_path}"
+launcher_invalid_preference_stderr="${fixture_dir}/launcher-invalid-preference.stderr"
+rm -f -- "${launcher_stub_log}"
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository
+) 2>"${launcher_invalid_preference_stderr}"
+grep -Fq 'ignored an invalid saved preference' \
+    "${launcher_invalid_preference_stderr}" ||
+    fail 'Unix launcher did not warn about an invalid saved preference.'
+node - "${launcher_stub_log}" <<'JS'
+const fs = require("fs");
+const fields = fs.readFileSync(process.argv[2], "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const argsIndex = fields.indexOf("ARGS");
+const args = fields.slice(argsIndex + 1);
+const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (args.includes("--fleet") ||
+    valueAfter("--model") !== "gpt-5.6-sol" ||
+    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+  throw new Error("launcher did not ignore the invalid repository preference");
 }
 JS
 
@@ -2160,7 +2245,10 @@ set +e
         RHYOLITE_STUB_EXIT=37 \
         RHYOLITE_STUB_FAIL_MESSAGE='mock Copilot launcher detail retained' \
         PATH="${launcher_mock_bin}:${PATH}" \
-        "${launcher_link}"
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository \
+            --fleet-mode standard \
+            --model gpt-5.6-sol
 ) >"${launcher_failure_stdout}" 2>"${launcher_failure_stderr}"
 launcher_failure_exit=$?
 set -e
@@ -2208,24 +2296,6 @@ set -e
         "${unresolved_bash_stderr}" &&
     ! grep -Fq "${unresolved_owner_token}" "${unresolved_bash_stderr}" ||
     fail 'Unresolved Bash launcher metadata did not fail closed to local links.'
-if command -v pwsh >/dev/null 2>&1; then
-    unresolved_pwsh_stderr="${fixture_dir}/unresolved-pwsh-launcher.stderr"
-    unresolved_pwsh_path="$(command -v pwsh)"
-    set +e
-    env PATH=/usr/bin:/bin \
-        "${unresolved_pwsh_path}" -NoLogo -NoProfile -NonInteractive \
-        -File "${unresolved_plugin_fixture}/bin/rhyolite.ps1" \
-        >/dev/null 2>"${unresolved_pwsh_stderr}"
-    unresolved_pwsh_exit=$?
-    set -e
-    [[ "${unresolved_pwsh_exit}" -eq 127 ]] &&
-        grep -Fq 'Support: SUPPORT.md and local documentation' \
-            "${unresolved_pwsh_stderr}" &&
-        grep -Fq 'Contribute: CONTRIBUTING.md' \
-            "${unresolved_pwsh_stderr}" &&
-        ! grep -Fq "${unresolved_owner_token}" "${unresolved_pwsh_stderr}" ||
-        fail 'Unresolved PowerShell launcher metadata did not fail closed to local links.'
-fi
 
 fixture_timeline="${fixture_dir}/timeline.txt"
 fixture_report="${fixture_dir}/report.txt"
@@ -2522,6 +2592,36 @@ plan_scope_one_no_html_stderr="${fixture_dir}/plan-scope-1-no-html.stderr"
 [[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
     fail 'Bash scope 1 no-open-html plan-only created workspace or output roots.'
 
+plan_scope_one_canonical_json="${fixture_dir}/plan-scope-1-canonical.json"
+plan_scope_one_canonical_stderr="${fixture_dir}/plan-scope-1-canonical.stderr"
+"${RUNNER}" \
+    --repo https://github.com:443/octocat/Hello-World/// \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_canonical_json}" \
+    2>"${plan_scope_one_canonical_stderr}"
+[[ ! -s "${plan_scope_one_canonical_stderr}" ]] ||
+    fail 'Bash canonical URL plan-only wrote unexpected stderr.'
+
+plan_scope_one_fleet_json="${fixture_dir}/plan-scope-1-fleet.json"
+plan_scope_one_fleet_stderr="${fixture_dir}/plan-scope-1-fleet.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --fleet-mode native \
+    --remember-preferences \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_fleet_json}" \
+    2>"${plan_scope_one_fleet_stderr}"
+[[ ! -s "${plan_scope_one_fleet_stderr}" ]] ||
+    fail 'Bash scope 1 fleet plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash scope 1 fleet plan-only created workspace or output roots.'
+
 plan_scope_two_workspace="${fixture_dir}/plan workspace scope 2"
 plan_scope_two_output="${fixture_dir}/plan output scope 2"
 plan_scope_two_json="${fixture_dir}/plan-scope-2.json"
@@ -2640,6 +2740,8 @@ node - \
     "${plan_scope_one_alt_json}" \
     "$(realpath -m -- "${plan_scope_one_alt_output}")" \
     "${plan_scope_one_no_html_json}" \
+    "${plan_scope_one_canonical_json}" \
+    "${plan_scope_one_fleet_json}" \
     "${plan_scope_two_json}" \
     "$(realpath -m -- "${plan_scope_two_workspace}")" \
     "$(realpath -m -- "${plan_scope_two_output}")" \
@@ -2658,6 +2760,8 @@ const [
   scopeOneAltPath,
   scopeOneAltOutput,
   scopeOneNoHtmlPath,
+  scopeOneCanonicalPath,
+  scopeOneFleetPath,
   scopeTwoPath,
   scopeTwoWorkspace,
   scopeTwoOutput,
@@ -2716,6 +2820,7 @@ function assertCommonPlan(
   assertKeys(plan, [
     "ApprovalHash",
     "GeneratedAt",
+    "FleetMode",
     "MaxRepositories",
     "Model",
     "OpenHtmlPolicy",
@@ -2723,6 +2828,7 @@ function assertCommonPlan(
     "PriorArtWindow",
     "ProvenanceWindow",
     "ReviewDate",
+    "RememberPreferences",
     "SchemaVersion",
     "Scope",
     "SessionTimeoutMinutes",
@@ -2730,7 +2836,7 @@ function assertCommonPlan(
     "ThrottleLimit",
     "WorkspaceRoot",
   ], `${label} top-level`);
-  if (plan.SchemaVersion !== 1 ||
+  if (plan.SchemaVersion !== 2 ||
       !/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(plan.ReviewDate) ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(plan.GeneratedAt) ||
@@ -2739,6 +2845,8 @@ function assertCommonPlan(
       plan.ThrottleLimit !== 2 ||
       plan.MaxRepositories !== 5 ||
       plan.Model !== "gpt-5.6-sol" ||
+      plan.FleetMode !== "standard" ||
+      plan.RememberPreferences !== false ||
       plan.OpenHtmlPolicy !== expectedOpenHtmlPolicy ||
       !Array.isArray(plan.Sources) ||
       plan.Sources.length !== 1) {
@@ -2845,6 +2953,20 @@ if (scopeOneNoHtml.Scope.Number !== 1 ||
 }
 if (scopeOne.ApprovalHash === scopeOneNoHtml.ApprovalHash) {
   throw new Error("changing open-html policy did not change the approval hash");
+}
+
+const scopeOneCanonical = parsePlan(scopeOneCanonicalPath);
+if (scopeOneCanonical.Sources[0].RemoteUrl !==
+      "https://github.com/octocat/Hello-World" ||
+    scopeOneCanonical.ApprovalHash !== scopeOne.ApprovalHash) {
+  throw new Error("canonical URL variants changed the resolved plan");
+}
+
+const scopeOneFleet = parsePlan(scopeOneFleetPath);
+if (scopeOneFleet.FleetMode !== "native" ||
+    scopeOneFleet.RememberPreferences !== true ||
+    scopeOneFleet.ApprovalHash === scopeOne.ApprovalHash) {
+  throw new Error("fleet/preference settings did not change the approval hash");
 }
 
 const scopeTwo = parsePlan(scopeTwoPath);
@@ -3053,149 +3175,6 @@ grep -Fq \
     fail 'Bash local repository rejection still invoked git or DNS helpers.'
 [[ ! -e "${fixture_dir}/local-workspace" && ! -e "${fixture_dir}/local-output" ]] ||
     fail 'Bash local repository rejection created workspace or output roots.'
-if command -v pwsh >/dev/null 2>&1; then
-    pwsh_scope_two_json="${fixture_dir}/pwsh-plan-scope-2.json"
-    pwsh_scope_two_stderr="${fixture_dir}/pwsh-plan-scope-2.stderr"
-    pwsh -NoLogo -NoProfile -File "${POWERSHELL_RUNNER}" \
-        -Repository 'https://github.com/octocat/Hello-World' \
-        -Scope 2 \
-        -WorkspaceRoot "${plan_scope_two_workspace}" \
-        -OutputRoot "${plan_scope_two_output}" \
-        -NonInteractive \
-        -PlanOnly >"${pwsh_scope_two_json}" 2>"${pwsh_scope_two_stderr}"
-    [[ ! -s "${pwsh_scope_two_stderr}" ]] ||
-        fail 'PowerShell scope 2 plan-only wrote unexpected stderr.'
-    [[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
-        fail 'PowerShell scope 2 plan-only created workspace or output roots.'
-
-    pwsh_plan_json="${fixture_dir}/pwsh-plan.json"
-    pwsh_plan_stderr="${fixture_dir}/pwsh-plan.stderr"
-    pwsh -NoLogo -NoProfile -File "${POWERSHELL_RUNNER}" \
-        -Repository 'https://github.com/octocat/Hello-World' \
-        -Commit '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
-        -Scope 3 \
-        -ProvenanceLookbackMonths "${plan_scope_three_lookback}" \
-        -WorkspaceRoot "${plan_scope_three_workspace}" \
-        -OutputRoot "${plan_scope_three_output}" \
-        -NonInteractive \
-        -PlanOnly >"${pwsh_plan_json}" 2>"${pwsh_plan_stderr}"
-    [[ ! -s "${pwsh_plan_stderr}" ]] ||
-        fail 'PowerShell plan-only wrote unexpected stderr.'
-    [[ ! -e "${plan_scope_three_workspace}" && ! -e "${plan_scope_three_output}" ]] ||
-        fail 'PowerShell plan-only created workspace or output roots.'
-    node - \
-        "${plan_scope_two_json}" \
-        "${pwsh_scope_two_json}" \
-        "${plan_scope_three_json}" \
-        "${pwsh_plan_json}" \
-        "$(realpath -m -- "${plan_scope_two_workspace}")" \
-        "$(realpath -m -- "${plan_scope_two_output}")" \
-        "$(realpath -m -- "${plan_scope_three_workspace}")" \
-        "$(realpath -m -- "${plan_scope_three_output}")" \
-        "${default_prior_art_lookback}" \
-        "${plan_scope_three_lookback}" <<'JS'
-const fs = require("fs");
-
-const [
-  bashScopeTwoPath,
-  scopeTwoPath,
-  bashPlanPath,
-  planPath,
-  scopeTwoWorkspace,
-  scopeTwoOutput,
-  expectedWorkspace,
-  expectedOutput,
-  priorArtLookbackText,
-  lookbackText,
-] = process.argv.slice(2);
-const priorArtLookback = Number.parseInt(priorArtLookbackText, 10);
-const lookback = Number.parseInt(lookbackText, 10);
-const bashScopeTwo = JSON.parse(fs.readFileSync(bashScopeTwoPath, "utf8"));
-const scopeTwoText = fs.readFileSync(scopeTwoPath, "utf8");
-const scopeTwo = JSON.parse(scopeTwoText);
-const bashPlan = JSON.parse(fs.readFileSync(bashPlanPath, "utf8"));
-const text = fs.readFileSync(planPath, "utf8");
-const plan = JSON.parse(text);
-
-function daysInMonth(year, month) {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function subtractCalendarMonths(dateText, months) {
-  const [yearText, monthText, dayText] = dateText.split("-");
-  const year = Number.parseInt(yearText, 10);
-  const month = Number.parseInt(monthText, 10);
-  let day = Number.parseInt(dayText, 10);
-  const targetMonthIndex = year * 12 + (month - 1) - months;
-  const targetYear = Math.floor(targetMonthIndex / 12);
-  const targetMonth = targetMonthIndex % 12 + 1;
-  const maxDay = daysInMonth(targetYear, targetMonth);
-  if (day > maxDay) {
-    day = maxDay;
-  }
-  return `${String(targetYear).padStart(4, "0")}-${String(targetMonth).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-if (!scopeTwoText.trim().startsWith("{") || !scopeTwoText.trim().endsWith("}")) {
-  throw new Error("PowerShell scope 2 plan-only stdout is not JSON-only");
-}
-const expectedScopeTwoStart = subtractCalendarMonths(scopeTwo.ReviewDate, priorArtLookback);
-if (scopeTwo.SchemaVersion !== 1 ||
-    !/^[0-9a-f]{64}$/.test(scopeTwo.ApprovalHash) ||
-    scopeTwo.WorkspaceRoot !== scopeTwoWorkspace ||
-    scopeTwo.OutputRoot !== scopeTwoOutput ||
-    scopeTwo.Scope?.Number !== 2 ||
-    scopeTwo.Scope?.PublicResearch !== true ||
-    scopeTwo.Scope?.ProvenanceResearch !== false ||
-    !scopeTwo.PriorArtWindow ||
-    scopeTwo.PriorArtWindow.Enabled !== true ||
-    scopeTwo.PriorArtWindow.LookbackMonths !== priorArtLookback ||
-    scopeTwo.PriorArtWindow.StartDate !== expectedScopeTwoStart ||
-    scopeTwo.PriorArtWindow.EndDate !== scopeTwo.ReviewDate ||
-    scopeTwo.ProvenanceWindow !== null ||
-    scopeTwo.SessionTimeoutMinutes !== 120 ||
-    scopeTwo.OpenHtmlPolicy !== "default") {
-  throw new Error("PowerShell scope 2 plan-only JSON contract is invalid");
-}
-if (scopeTwo.ApprovalHash !== bashScopeTwo.ApprovalHash) {
-  throw new Error("PowerShell scope 2 plan-only approval hash does not match Bash");
-}
-
-if (!text.trim().startsWith("{") || !text.trim().endsWith("}")) {
-  throw new Error("PowerShell plan-only stdout is not JSON-only");
-}
-const expectedStart = subtractCalendarMonths(plan.ReviewDate, lookback);
-if (plan.SchemaVersion !== 1 ||
-    !/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
-    plan.WorkspaceRoot !== expectedWorkspace ||
-    plan.OutputRoot !== expectedOutput ||
-    plan.Scope?.Number !== 3 ||
-    plan.Scope?.PublicResearch !== true ||
-    plan.Scope?.ProvenanceResearch !== true ||
-    !plan.PriorArtWindow ||
-    plan.PriorArtWindow.Enabled !== true ||
-    plan.PriorArtWindow.LookbackMonths !== priorArtLookback ||
-    plan.PriorArtWindow.StartDate !== subtractCalendarMonths(plan.ReviewDate, priorArtLookback) ||
-    plan.PriorArtWindow.EndDate !== plan.ReviewDate ||
-    plan.SessionTimeoutMinutes !== 240 ||
-    plan.OpenHtmlPolicy !== "default" ||
-    !Array.isArray(plan.Sources) ||
-    plan.Sources.length !== 1 ||
-    plan.Sources[0].Kind !== "RemoteUrl" ||
-    plan.Sources[0].RemoteUrl !== "https://github.com/octocat/Hello-World" ||
-    plan.Sources[0].RequestedCommit !==
-      "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
-    !plan.ProvenanceWindow ||
-    plan.ProvenanceWindow.LookbackMonths !== lookback ||
-    plan.ProvenanceWindow.StartDate !== expectedStart ||
-    plan.ProvenanceWindow.EndDate !== plan.ReviewDate) {
-  throw new Error("PowerShell plan-only JSON contract is invalid");
-}
-if (plan.ApprovalHash !== bashPlan.ApprovalHash) {
-  throw new Error("PowerShell plan-only approval hash does not match Bash");
-}
-JS
-fi
 
 printf 'local-repository\n' > "${fixture_dir}/repositories.txt"
 list_validation_stdout="${fixture_dir}/list-validation.stdout"
@@ -3226,6 +3205,7 @@ discovery_root="${fixture_dir}/discovery"
 mkdir -p -- \
     "${discovery_root}/child/subdirectory" \
     "${discovery_root}/container/deep"
+discovery_root_physical="$(cd -P -- "${discovery_root}" && pwd)"
 git init -q "${discovery_root}/child"
 git init -q "${discovery_root}/container/deep"
 discovered_children="$(
@@ -3234,13 +3214,15 @@ discovered_children="$(
 )"
 [[ "$(grep -c . <<< "${discovered_children}")" -eq 1 ]] ||
     fail 'Bash discovery recursed below immediate children.'
-grep -Fq $'child\t'"${discovery_root}/child" <<< "${discovered_children}" ||
+grep -Fq $'child\t'"${discovery_root_physical}/child" \
+    <<< "${discovered_children}" ||
     fail 'Bash discovery missed an immediate child repository.'
 discovered_current="$(
     env GIT_CEILING_DIRECTORIES="${fixture_root}" \
         "${DISCOVERY}" --root "${discovery_root}/child/subdirectory"
 )"
-grep -Fq $'current\t'"${discovery_root}/child" <<< "${discovered_current}" ||
+grep -Fq $'current\t'"${discovery_root_physical}/child" \
+    <<< "${discovered_current}" ||
     fail 'Bash discovery did not identify the current worktree.'
 ln -s -- "${discovery_root}/child" "${discovery_root}/linked-child"
 [[ "$(
@@ -3303,24 +3285,15 @@ for schema_fragment in \
     grep -Fq "${schema_fragment}" "${RUNNER}" ||
         fail "Bash runner is missing state schema fragment: ${schema_fragment}"
 done
-for schema_fragment in \
-    'Source = [ordered]@{' 'Scope = [ordered]@{' 'Session = [ordered]@{' \
-    'Paths = [ordered]@{' 'Artifacts = [ordered]@{'; do
-    grep -Fq "${schema_fragment}" "${POWERSHELL_RUNNER}" ||
-        fail "PowerShell runner is missing state schema fragment: ${schema_fragment}"
-done
 for failure_contract in \
     'AccessPreflightFailed' 'CloneFailed' 'CommitResolutionFailed' \
     'SnapshotFailed' 'TimedOut' 'Incomplete report' \
     'temporary Copilot runtime home' 'RHYOLITE ERROR'; do
     grep -Fq "${failure_contract}" "${RUNNER}" ||
         fail "Bash runner is missing failure contract: ${failure_contract}"
-    grep -Fq "${failure_contract}" "${POWERSHELL_RUNNER}" ||
-        fail "PowerShell runner is missing failure contract: ${failure_contract}"
 done
-grep -Fq 'redact_credentials' "${RUNNER}" &&
-    grep -Fq 'RedactCredentials' "${POWERSHELL_RUNNER}" ||
-    fail 'Runner error sanitizers do not redact credentials on both platforms.'
+grep -Fq 'redact_credentials' "${RUNNER}" ||
+    fail 'Runner error sanitizer does not redact credentials.'
 
 mock_bin="${fixture_dir}/mock-bin"
 mock_log="${fixture_dir}/mock-copilot-args.txt"
@@ -3726,6 +3699,7 @@ grep -Fq 'mock public endpoint resolution failure' "${resolve_fail_stderr}" ||
 
 mock_plan_json="${fixture_dir}/mock-run-plan.json"
 mock_plan_stderr="${fixture_dir}/mock-run-plan.stderr"
+mock_preference_state="${fixture_dir}/mock-preference-state"
 if ! MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
     MOCK_RUNTIME_LOG="${runtime_log}" \
@@ -3735,6 +3709,7 @@ if ! MOCK_LOG="${mock_log}" \
     COPILOT_ALLOW_ALL=true \
     GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
     GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    XDG_STATE_HOME="${mock_preference_state}" \
     TMPDIR="${runtime_tmp}" \
     PATH="${mock_bin}:${PATH}" \
     "${RUNNER}" \
@@ -3744,6 +3719,8 @@ if ! MOCK_LOG="${mock_log}" \
         --provenance-lookback-months 1 \
         --output-root "${fixture_dir}/mock&output" \
         --workspace-root "${fixture_dir}/mock&workspace" \
+        --fleet-mode native \
+        --remember-preferences \
         --non-interactive \
         --no-open-html \
         --plan-only >"${mock_plan_json}" 2>"${mock_plan_stderr}"; then
@@ -3754,6 +3731,8 @@ fi
     fail 'Mock Bash plan-only wrote unexpected stderr.'
 [[ ! -e "${fixture_dir}/mock&workspace" && ! -e "${fixture_dir}/mock&output" ]] ||
     fail 'Mock Bash plan-only created workspace or output roots.'
+[[ ! -e "${mock_preference_state}/rhyolite/launcher/preferences" ]] ||
+    fail 'Mock Bash plan-only persisted launcher preferences.'
 mock_expected_hash="$(
     node -e 'const fs=require("fs");const plan=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)){process.exit(1)}process.stdout.write(plan.ApprovalHash)' \
         "${mock_plan_json}"
@@ -3773,6 +3752,7 @@ if ! MOCK_LOG="${mock_log}" \
     COPILOT_ALLOW_ALL=true \
     GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
     GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    XDG_STATE_HOME="${mock_preference_state}" \
     TMPDIR="${runtime_tmp}" \
     PATH="${mock_bin}:${PATH}" \
     "${RUNNER}" \
@@ -3783,6 +3763,8 @@ if ! MOCK_LOG="${mock_log}" \
         --output-root "${mock_output}" \
         --workspace-root "${mock_workspace}" \
         --expected-plan-hash "${mock_expected_hash}" \
+        --fleet-mode native \
+        --remember-preferences \
         --non-interactive \
         --no-open-html >"${mock_run_output}" 2>"${mock_run_stderr}"; then
     cat "${mock_run_stderr}" >&2
@@ -3796,6 +3778,17 @@ mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
 [[ -n "${mock_run}" ]] || fail 'Mock Bash run did not create an output bundle.'
 grep -Fq 'EFFECTIVE REVIEW PLAN' "${mock_run_output}" ||
     fail 'Mock Bash run did not print the effective review plan.'
+grep -Fq 'Remembered approved fleet/model settings for 1 repositories.' \
+    "${mock_run_output}" ||
+    fail 'Mock Bash run did not report saved launcher preferences.'
+if ! rhyolite_read_preference \
+    'https://github.com/octocat/Hello-World' \
+    "${mock_preference_state}/rhyolite/launcher"; then
+    fail 'Mock Bash run did not persist readable launcher preferences.'
+fi
+[[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
+    fail 'Mock Bash run persisted incorrect launcher preferences.'
 grep -Fxq \
     'Starting 3 - Full review plus whole-repository exact-commit evidence-based provenance of agentically generated code; public research enabled; provenance enabled.' \
     "${mock_run_output}" ||
@@ -3813,13 +3806,14 @@ const fs = require("fs");
 const path = require("path");
 
 const [
-  run,
+  runInput,
   provenanceLookbackText,
   stdoutPath,
   expectedWorkspaceRoot,
   expectedOutputRoot,
   expectedApprovalHash,
 ] = process.argv.slice(2);
+const run = fs.realpathSync(runInput);
 const provenanceLookback = Number.parseInt(provenanceLookbackText, 10);
 const repository = path.join(run, "github--octocat--hello-world");
 const reviewPlanJsonPath = path.join(run, "review-plan.json");
@@ -3935,6 +3929,7 @@ if (expectedPriorArtStartDate === expectedProvenanceStartDate) {
 }
 assertKeys(reviewPlan, [
   "ApprovalHash",
+  "FleetMode",
   "GeneratedAt",
   "MaxRepositories",
   "Model",
@@ -3943,6 +3938,7 @@ assertKeys(reviewPlan, [
   "PriorArtWindow",
   "ProvenanceWindow",
   "ReviewDate",
+  "RememberPreferences",
   "RunId",
   "SchemaVersion",
   "Scope",
@@ -3972,7 +3968,7 @@ assertKeys(reviewPlan.PriorArtWindow, [
   "LookbackMonths",
   "StartDate",
 ], "review plan prior-art window");
-if (reviewPlan.SchemaVersion !== 1 ||
+if (reviewPlan.SchemaVersion !== 2 ||
     reviewPlan.ApprovalHash !== expectedApprovalHash ||
     reviewPlan.RunId !== runId ||
     reviewPlan.WorkspaceRoot !== expectedWorkspaceRoot ||
@@ -3984,6 +3980,8 @@ if (reviewPlan.SchemaVersion !== 1 ||
     reviewPlan.ThrottleLimit !== 2 ||
     reviewPlan.MaxRepositories !== 5 ||
     reviewPlan.Model !== "gpt-5.6-sol" ||
+    reviewPlan.FleetMode !== "native" ||
+    reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
     reviewPlan.PriorArtWindow?.Enabled !== true ||
     reviewPlan.PriorArtWindow?.LookbackMonths !== 6 ||
@@ -4649,8 +4647,7 @@ while IFS= read -r -d '' path; do
 done < <(
     find "${ROOT}" -type f \
         -not -path "${ROOT}/.test-output/*" \
-        \( -name '*.md' -o -name '*.json' -o -name '*.ps1' \
-        -o -name '*.psm1' \
+        \( -name '*.md' -o -name '*.json' \
         -o -name '*.sh' -o -name '*.txt' -o -name '*.yml' \
         -o -name '*.mjs' -o -path "${ROOT_LAUNCHER}" \
         -o -path "${RHYOLITE_LAUNCHER}" \) \

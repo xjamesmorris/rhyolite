@@ -4,30 +4,28 @@ Changes are accepted through pull requests.
 
 ## Requirements
 
+- Develop and validate on Fedora Linux 44.
+- Keep Bash as the canonical implementation.
 - Keep the plugin read-only by construction.
-- Do not add broad tool approval or URL bypass as a default.
-- Do not add shared credentials or service tokens.
+- Do not add broad tool approval, shared credentials, or URL bypass as
+  a default.
 - Keep public research and provenance analysis independently opt-in.
-- Describe Scope 3 as evidence-based provenance review for agentically
-  generated code.
-- Keep public-facing docs and metadata neutral; do not reintroduce
-  organization-specific branding, internal-only URLs, or automatic
-  update hooks.
-- Keep skills concise; put deterministic orchestration in scripts.
-- Add or update validation for every behavior or policy change.
-- Preserve PowerShell and Bash parity.
+- Keep deterministic orchestration in scripts and agent/skill files
+  focused on workflow and policy.
+- Use maximum reasoning effort by default; high is the hard minimum for
+  every task, including general-purpose and mechanical work.
+- Add or update Linux validation for every behavior or policy change.
 - Bump the plugin and marketplace versions together for releases.
 
-Run both validation scripts when the required shells are available:
-
-```powershell
-pwsh .\tests\validate-plugin.ps1
-```
+Run:
 
 ```bash
+git diff --check
+node tests/validate-tui-runtime.mjs --self-check
 bash ./tests/validate-plugin.sh
+bash ./tools/public-release/test-public-release.sh
+bash ./tests/test-install.sh
 ```
 
-Before publishing, choose and add a `LICENSE` file, add
-repository-specific `CODEOWNERS`, configure support and security
-contacts, and require the appropriate reviewers.
+Additional platform support may be proposed later, but it is not part
+of the current release scope.

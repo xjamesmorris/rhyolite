@@ -17,10 +17,10 @@ is not already intentionally public.
 Prioritize completeness, clarity, and correctness. Use a current frontier
 reasoning model at the maximum available reasoning effort and context for
 source-landscape, research, commercial-activity, and provenance judgments (as
-of August 2026, examples include Sol 5.6 and Fable 5). Do not automatically
-fall back to a less capable model. A lower-capability model may only perform
-fully specified mechanical normalization or formatting and must not rank,
-interpret, or assess evidence.
+of September 30, 2026, examples include Sol 5.6 and Fable 5). Do not automatically
+fall back to a less capable model. Maximum reasoning effort is the default and
+high is the hard minimum; never use none, minimal, low, or medium effort,
+including for mechanical normalization or formatting.
 
 ## Goal
 

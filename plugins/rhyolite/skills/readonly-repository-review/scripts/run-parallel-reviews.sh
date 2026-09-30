@@ -7,6 +7,7 @@ SKILL_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN_ROOT="$(cd -- "${SKILL_ROOT}/../.." && pwd)"
 PROMPT_PATH="${SKILL_ROOT}/review-prompt.txt"
 OUTPUT_HELPER="${SCRIPT_DIR}/review-output.sh"
+PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 
 if [[ ! -f "${OUTPUT_HELPER}" ]]; then
     printf 'Output processing helper not found: %s\n' "${OUTPUT_HELPER}" >&2
@@ -14,16 +15,26 @@ if [[ ! -f "${OUTPUT_HELPER}" ]]; then
 fi
 # shellcheck source=review-output.sh
 source "${OUTPUT_HELPER}"
+if [[ ! -f "${PREFERENCE_HELPER}" ]]; then
+    printf 'Launcher preference helper not found: %s\n' \
+        "${PREFERENCE_HELPER}" >&2
+    exit 2
+fi
+# shellcheck source=../../../scripts/launcher-preferences.sh
+source "${PREFERENCE_HELPER}"
 
 THROTTLE_LIMIT=2
 MAX_REPOSITORIES=5
 SESSION_TIMEOUT_MINUTES=0
 WORKSPACE_ROOT="${HOME}/.cache/rhyolite/repo-review/workspaces"
 OUTPUT_ROOT=""
-PLAN_SCHEMA_VERSION=1
+PLAN_SCHEMA_VERSION=2
 SCOPE=0
 SCOPE_SPECIFIED=0
 MODEL="gpt-5.6-sol"
+REASONING_EFFORT="max"
+FLEET_MODE="standard"
+REMEMBER_PREFERENCES=0
 ENABLE_PUBLIC_RESEARCH=0
 ENABLE_PROVENANCE_RESEARCH=0
 DEFAULT_PRIOR_ART_LOOKBACK_MONTHS=6
@@ -65,6 +76,8 @@ Options:
   --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
   --commit SHA                     Exact 40-character commit for one repository
   --model MODEL                    Copilot model (default: gpt-5.6-sol)
+  --fleet-mode MODE                Outer launcher mode: native or standard
+  --remember-preferences           Save fleet/model per repository after approval
   --enable-public-research         Permit arbitrary public URL access
   --enable-provenance-research     Enable whole-repository exact-commit provenance research
   --provenance-lookback-months N   Scope 3 calendar-month lookback (1-60, default: 6)
@@ -521,6 +534,9 @@ write_approval_hash_material() {
     printf 'ThrottleLimit=%s\n' "${THROTTLE_LIMIT}"
     printf 'MaxRepositories=%s\n' "${MAX_REPOSITORIES}"
     printf 'Model=%s\n' "$(approval_hash_string "${MODEL}")"
+    printf 'FleetMode=%s\n' "$(approval_hash_string "${FLEET_MODE}")"
+    printf 'RememberPreferences=%s\n' \
+        "$(json_boolean "${REMEMBER_PREFERENCES}")"
     printf 'OpenHtmlPolicy=%s\n' \
         "$(approval_hash_string "$(review_plan_open_html_policy)")"
 }
@@ -638,6 +654,8 @@ write_review_plan_json() {
   "ThrottleLimit": ${THROTTLE_LIMIT},
   "MaxRepositories": ${MAX_REPOSITORIES},
   "Model": "$(json_escape "${MODEL}")",
+  "FleetMode": "$(json_escape "${FLEET_MODE}")",
+  "RememberPreferences": $(json_boolean "${REMEMBER_PREFERENCES}"),
   "OpenHtmlPolicy": "$(json_escape "$(review_plan_open_html_policy)")"
 }
 EOF
@@ -686,6 +704,9 @@ write_review_plan_text() {
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
+    printf '%-20s %s\n' 'Fleet mode:' "${FLEET_MODE}"
+    printf '%-20s %s\n' 'Remember settings:' \
+        "$(status_word "${REMEMBER_PREFERENCES}")"
     printf '%-20s %s\n' 'Open HTML policy:' "$(review_plan_open_html_policy)"
     printf '%-20s %s\n' 'Sources:' "${#canonical_urls[@]}"
     number=1
@@ -766,6 +787,15 @@ while (($# > 0)); do
             MODEL="$2"
             shift 2
             ;;
+        --fleet-mode)
+            require_value "$1" "${2-}"
+            FLEET_MODE="$2"
+            shift 2
+            ;;
+        --remember-preferences)
+            REMEMBER_PREFERENCES=1
+            shift
+            ;;
         --enable-public-research)
             ENABLE_PUBLIC_RESEARCH=1
             shift
@@ -831,6 +861,18 @@ if [[ -n "${EXPECTED_PLAN_HASH}" ]]; then
     fi
     EXPECTED_PLAN_HASH="${EXPECTED_PLAN_HASH,,}"
 fi
+if ! rhyolite_valid_model_id "${MODEL}"; then
+    printf 'Invalid Copilot model identifier: %s\n' "${MODEL}" >&2
+    exit 2
+fi
+case "${FLEET_MODE}" in
+    native|standard) ;;
+    *)
+        printf 'Fleet mode must be native or standard: %s\n' \
+            "${FLEET_MODE}" >&2
+        exit 2
+        ;;
+esac
 
 if [[ -n "${repository_file}" ]]; then
     if [[ ! -f "${repository_file}" ]]; then
@@ -1253,11 +1295,14 @@ decode_url_path() {
 
 canonicalize_repository() {
     local input="$1"
-    local value="${input%/}"
+    local value="${input}"
     local authority path host port decoded_path host_part path_part slug remainder
     local lower_value suffix label
     local -a host_labels
 
+    while [[ "${value}" == */ ]]; do
+        value="${value%/}"
+    done
     lower_value="${value,,}"
     if [[ "${lower_value}" != https://* ]] ||
         [[ "${value}" == *'?'* ]] ||
@@ -1297,6 +1342,9 @@ canonicalize_repository() {
             printf 'Repository URL contains an invalid HTTPS port: %s\n' \
                 "${input}" >&2
             return 1
+        fi
+        if ((10#${port} == 443)); then
+            port=""
         fi
     fi
     host="${host,,}"
@@ -1459,6 +1507,8 @@ if ((VALIDATE_ONLY)); then
         printf 'Provenance window:    disabled\n'
     fi
     printf 'Model:                %s\n' "${MODEL}"
+    printf 'Fleet mode:           %s\n' "${FLEET_MODE}"
+    printf 'Remember settings:    %s\n' "${REMEMBER_PREFERENCES}"
     exit 0
 fi
 
@@ -1488,6 +1538,25 @@ printf 'Starting %s; public research %s; provenance %s.\n' \
     "${SCOPE_NAME}" \
     "$(status_word "${ENABLE_PUBLIC_RESEARCH}")" \
     "$(status_word "${ENABLE_PROVENANCE_RESEARCH}")"
+if ((REMEMBER_PREFERENCES)); then
+    launcher_preference_home="$(rhyolite_launcher_home)"
+    for repository in "${canonical_urls[@]}"; do
+        rhyolite_write_preference \
+            "${repository}" \
+            "${FLEET_MODE}" \
+            "${MODEL}" \
+            "${launcher_preference_home}" ||
+            {
+                printf '%s\n' \
+                    'Could not persist approved launcher preferences.' \
+                    "Repository: ${repository}" \
+                    "Preference root: ${launcher_preference_home}" >&2
+                exit 2
+            }
+    done
+    printf 'Remembered approved fleet/model settings for %s repositories.\n' \
+        "${#canonical_urls[@]}"
+fi
 
 authentication_variables=(
     COPILOT_GITHUB_TOKEN
@@ -2462,6 +2531,7 @@ EOF
         --session-id "${session_id}"
         --agent rhyolite:repo-review-worker
         --model "${MODEL}"
+        --reasoning-effort "${REASONING_EFFORT}"
         --context long_context
         --no-ask-user
         --no-color

@@ -11,16 +11,17 @@ Rhyolite combines:
   `/rhyolite:help`.
 - The short `/repo-review` guided-start command when extension commands
   are available.
-- Cross-platform launchers that select the restricted agent and start
-  from a clean non-Git orchestration directory.
+- A Linux Bash launcher that collects public sources, native fleet mode,
+  and the review model before selecting the restricted agent from a
+  clean non-Git orchestration directory.
 - Separate repository-only development validators for finite pickers and
   terminal/runtime UI.
 - The `readonly-repository-review` skill.
 - A private `research-source-assessment` skill that maps fresh,
   subject-specific community, research, and commercial sources.
-- Parallel PowerShell and Bash runners.
+- A Bash review runner for the supported Linux workflow.
 - Separate security and public-source research passes.
-- Centralized welcome branding plus cross-platform onboarding helpers.
+- Centralized welcome branding plus Linux onboarding helpers.
 - A local display-only `sessionStart` availability hook.
 - Persisted plain-text, Markdown, HTML, session, state, and handoff
   artifacts.
@@ -35,17 +36,23 @@ GitHub and other public DNS hosts. It does not review authenticated,
 private, or internal repositories, execute target code, modify target
 repositories, or use shared service credentials.
 
+**Platform support:** Fedora Linux 44 is the sole development and
+validation baseline for this release. Runtime support is Linux-only.
+Other operating systems and Linux distributions are not currently
+validated or supported. See
+[docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
+
 Rhyolite is licensed under the GNU General Public License version 2
 only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 ## Quick notes
 
 - Recommended model: use a current frontier reasoning model at the
-  maximum available reasoning effort and context (as of August 2026,
+  maximum available reasoning effort and context (as of September 30, 2026,
   examples include Sol 5.6 and Fable 5). Do not automatically downgrade
-  analytical review, security, research, or provenance work.
-  Lower-capability models are permitted only for fully specified
-  mechanical work, never evidence judgments.
+  any project work. Maximum effort is the default and high is the hard
+  minimum, including for general-purpose and mechanical tasks; never use
+  none, minimal, low, or medium effort.
 - Run `copilot login` and complete Copilot sign-in before starting a
   review.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
@@ -60,56 +67,58 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 ## Install for development
 
 The recommended reliable checkout entrypoint is the repository-root
-wrapper. From a checkout, use Bash on Linux or macOS:
+wrapper on Fedora Linux 44:
 
 ```bash
-./rhyolite -- \
-  "Review https://github.com/owner/repository"
+./rhyolite --repo https://github.com/owner/repository
 ```
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
-argument unchanged to the canonical packaged launcher at
-`./plugins/rhyolite/bin/rhyolite`. The packaged path remains available
-when you need to exercise the packaged launcher directly. The Unix
-launcher supports the Bash 3.2 version shipped with macOS and uses
-portable BSD-compatible path handling; it does not require
-`readlink -f` or `realpath`. On Windows, use PowerShell 7:
-
-```powershell
-pwsh .\plugins\rhyolite\bin\rhyolite.ps1 -- `
-  "Review https://github.com/owner/repository"
-```
+argument unchanged to the canonical packaged Bash launcher at
+`./plugins/rhyolite/bin/rhyolite`.
 
 The checkout wrapper delegates to the packaged launcher, and the
 packaged launchers resolve their plugin root, choose a `-C` directory
 outside every Git worktree, pass `--plugin-dir`, preselect
-`rhyolite:repo-review`, and submit a trusted `-i` start marker while
-preserving the optional initial request after removing control
-characters. They never enable allow-all mode. Because setup starts
+`rhyolite:repo-review`, and submit a trusted `-i` setup block while
+preserving any optional initial request after removing control
+characters. Before Copilot starts, they syntactically canonicalize the
+selected public HTTPS repository URLs, ask whether to use native
+Copilot fleet mode, and confirm the review model. Native mode adds the
+process-level `--fleet` flag, and every launch passes the selected
+`--model`. They never enable allow-all mode. Because setup starts
 immediately, launcher-started sessions suppress the ordinary plugin load
-line (`Rhyolite v... loaded — type /rhyolite:start to start.`); the
-checkout wrapper preserves that trusted launcher/helper behavior by
+line (`Rhyolite v... loaded — type /rhyolite:start to start.`) and
+show automatic-guided-mode copy that tells the user to wait for the
+first setup prompt.
+
+The checkout wrapper preserves that trusted launcher/helper behavior by
 delegating in place to the canonical packaged launcher. Per-launch
-context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux (falling back to
-`~/.local/state/rhyolite/launcher`),
-`~/Library/Application Support/Rhyolite/Launcher` on macOS, and the
-local application-data directory on Windows. The Unix launcher creates
-that state with user-only permissions, and neither launcher persists the
-initial review request in its context file.
+context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
+(falling back to
+`~/.local/state/rhyolite/launcher`). The launcher creates that state
+with user-only permissions and does not persist the initial review
+request or selected source in its context file.
+After the user approves the effective plan, the runner atomically saves
+only the canonical repository URL, fleet mode, model, and update time
+in a user-only hashed preference file below the same launcher state
+root. Future launcher runs reuse a preference only when every selected
+repository has the same valid setting; mixed, missing, or malformed
+preferences are never chosen silently.
 
 To inspect or install the checkout manually:
 
-```powershell
-copilot --plugin-dir .\plugins\rhyolite plugin list
-copilot plugin install .\plugins\rhyolite
+```bash
+copilot --plugin-dir ./plugins/rhyolite plugin list
+copilot plugin install ./plugins/rhyolite
 ```
 
-Installation includes `bin/rhyolite` and `bin/rhyolite.ps1` along with
-the Rhyolite agent, skill, short-command extension, helpers, and local
-display-only `sessionStart` hook. The repository-only validator agents
-are not packaged. Current Copilot CLI releases load extension-provided
-commands in experimental mode.
+Installation includes the Bash launcher, Rhyolite agent, skill,
+short-command extension, helpers, and local display-only `sessionStart`
+hook. The repository-only validator agents are not packaged. Current
+Copilot CLI releases load extension-provided commands in experimental
+mode.
 
 If a launcher cannot be used, start manually from outside every Git
 worktree:
@@ -212,8 +221,10 @@ immediately beneath it, full/half-block contours that approximate
 antialiasing in a terminal cell grid, and the wordmark's blue-family
 TrueColor gradient, with the version line using the final subordinate
 gradient stop. The accompanying copy remains three concise functional
-sentences describing Rhyolite and the start/help/status commands; it
-contains no themed labels or faux telemetry.
+sentences. Manual starts describe Rhyolite and the start/help/status
+commands. Launcher starts instead identify automatic guided mode and
+tell the user to wait for the first setup prompt; neither mode contains
+themed labels or faux telemetry.
 
 Color is explicitly disabled through `NO_COLOR`,
 `COPILOT_NO_COLOR=1`, `FORCE_COLOR=0`, or `TERM=dumb`; uncertain
@@ -239,19 +250,24 @@ isolated child then verifies its actual authentication path when invoked;
 if that fails, run `copilot login` from a clean non-Git directory,
 complete sign-in, and retry.
 
-Guided setup asks only for one or more anonymously readable public HTTPS
-Git repository URLs. It does not discover local repositories, inspect
-local origins, or offer filesystem paths as review sources. If the
-orchestration directory is inside a Git worktree, the runner stops and
-requires a clean restart before planning or review execution.
+Launcher-guided setup collects one or more anonymously readable public
+HTTPS Git repository URLs, fleet mode, and model before Copilot starts.
+Manual in-session setup asks for the same source and model information;
+because native fleet mode is process-level, choosing it from a manual
+session requires restarting through the launcher. Rhyolite does not
+discover local repositories, inspect local origins, or offer filesystem
+paths as review sources. If the orchestration directory is inside a Git
+worktree, the runner stops and requires a clean restart before planning
+or review execution.
 
 During guided setup, these exact setup intents remain available at any
 stage without resetting collected answers:
 
 - `help` **without a leading slash** reruns the full static panel, then
   immediately shows a
-  `CURRENT SETUP STATUS` block with live `Source`, `Output`, `Scope`,
-  and `Provenance lookback months` values or `NOT SELECTED`.
+  `CURRENT SETUP STATUS` block with live `Source`, `Fleet mode`,
+  `Model`, `Remember settings`, `Output`, `Scope`, and
+  `Provenance lookback months` values or `NOT SELECTED`.
 - `status` **without a leading slash** shows the same live
   `CURRENT SETUP STATUS` block.
 - `explain scopes` **without a leading slash** restates the scope `1`/`2`/`3`
@@ -274,11 +290,16 @@ analysis.
 The agent asks one question at a time:
 
 1. Which source to review.
-2. Whether the output parent is the current directory, home directory,
+2. Whether to continue in standard mode or restart through the launcher
+   for native fleet mode when setup did not come from the launcher.
+3. Which frontier review model to use.
+4. Whether to remember fleet/model settings for the selected
+   repositories after plan approval.
+5. Whether the output parent is the current directory, home directory,
    or a custom location.
-3. Which review scope to use.
-4. For scope `3`, which provenance lookback to use.
-5. After those answers are collected, the agent requests the runner's
+6. Which review scope to use.
+7. For scope `3`, which provenance lookback to use.
+8. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
 
@@ -321,7 +342,7 @@ defaults, and native Other/custom-answer behavior. The separate
 repository-only `rhyolite-tui-runtime-validator` checks ANSI/TrueColor
 rendering, width, no-color behavior, command handoff, and screenshot
 regressions. `tests/validate-tui-runtime.mjs` provides the deterministic
-cross-platform artifact contract used by both platform validators.
+Linux artifact contract used by the Fedora validator.
 Neither development agent is packaged with or invoked by installed
 Rhyolite sessions.
 
@@ -360,13 +381,15 @@ limitations, before listing artifact paths.
 These are rough planning ranges. Large repositories and broad research
 topics can take substantially longer.
 
-The guided plan step uses the runner's platform-specific
-`--plan-only`/`-PlanOnly` mode and corresponding review-plan artifacts.
+The guided plan step uses the runner's `--plan-only` mode and
+corresponding review-plan artifacts.
 The plan JSON also supplies an `ApprovalHash`, which the agent must
 retain and pass back unchanged to the actual runner with
-`--expected-plan-hash`/`-ExpectedPlanHash`. The actual review must reuse
+`--expected-plan-hash`. The actual review must reuse
 the same resolved inputs that were accepted in the `EFFECTIVE REVIEW
-PLAN`. The `EFFECTIVE REVIEW PLAN` summary shows prior-art as disabled
+PLAN`. Fleet mode, model, and whether settings will be remembered are
+part of the plan and approval hash. The `EFFECTIVE REVIEW PLAN` summary
+shows prior-art as disabled
 for scope `1`, or the authoritative scope-`2`/`3` prior-art start/end
 window from `PriorArtWindow`. It also labels `ReviewDate`,
 `PriorArtWindow`, and `ProvenanceWindow` as local-session calendar
@@ -374,10 +397,11 @@ dates, while `GeneratedAt` is labeled as UTC. For scope `3`, it shows
 the authoritative provenance start/end window from `ProvenanceWindow`;
 for other scopes, provenance window is shown as disabled. If the user
 selects `Edit setup`, the agent uses another numbered picker for
-`Source`, `Output`, or `Scope`, re-asks only that field, preserves the
-others, clears provenance when scope is not `3`, and regenerates the
-plan. Exact `Change scope` is still accepted as a shortcut into editing
-`Scope`. If the runner reports a plan-hash mismatch, the agent
+`Source`, `Model`, `Output`, or `Scope`, re-asks only that field,
+preserves the others, clears provenance when scope is not `3`, and
+regenerates the plan. Fleet mode cannot change in an already-running
+process. Exact `Change scope` is still accepted as a shortcut into
+editing `Scope`. If the runner reports a plan-hash mismatch, the agent
 preserves the answers, explains that the approved effective plan
 changed, regenerates the plan, and reconfirms. Examples can include
 edited source URLs, source/output/scope/settings changes, or
@@ -406,20 +430,6 @@ copilot --agent rhyolite:repo-review --prompt "..."
 
 ## Use the batch runner directly
 
-PowerShell 7:
-
-```powershell
-pwsh .\plugins\rhyolite\skills\readonly-repository-review\scripts\run-parallel-reviews.ps1 `
-  -Repository @(
-    'https://github.com/owner/repository-one'
-    'https://gitlab.com/owner/repository-two'
-  ) `
-  -OutputRoot (Join-Path $HOME 'rhyolite-output\repo-review') `
-  -Scope 2
-```
-
-Bash:
-
 ```bash
 ./plugins/rhyolite/skills/readonly-repository-review/scripts/run-parallel-reviews.sh \
   --repo https://github.com/owner/repository-one \
@@ -428,9 +438,8 @@ Bash:
   --scope 2
 ```
 
-For one exact commit, add `-Commit <full-sha>` on PowerShell or
-`--commit <full-sha>` on Bash. Session timeouts default by scope to 60,
-120, and 240 minutes respectively; `-SessionTimeoutMinutes` or
+For one exact commit, add `--commit <full-sha>`. Session timeouts
+default by scope to 60, 120, and 240 minutes respectively;
 `--timeout-minutes` overrides the default up to 720 minutes.
 
 Repository-list files must contain only public HTTPS URLs, one per line.
@@ -438,10 +447,10 @@ Local paths are rejected explicitly. The global commit option is valid
 only for one remote URL.
 
 When an output root or scope is omitted in a terminal, the runner offers
-the safe default and scope guidance interactively. Use `-NonInteractive`
-or `--non-interactive` for automation; automation defaults to scope 1.
-The direct runners are a lower-level interface than the agent: their
-interactive prompt order can differ, but they still resolve and enforce
+the safe default and scope guidance interactively. Use
+`--non-interactive` for automation; automation defaults to scope 1.
+The direct runner is a lower-level interface than the agent: its
+interactive prompt order can differ, but it still resolves and enforces
 the same effective plan and plan approval hash before execution.
 
 The runner does not guess whether authentication will work. It gives each
@@ -568,24 +577,17 @@ Important defaults:
 
 ## Validate
 
-Windows:
-
-```powershell
-pwsh .\tests\validate-plugin.ps1
-```
-
-Linux:
+Run validation on Fedora Linux 44:
 
 ```bash
 bash ./tests/validate-plugin.sh
 ```
 
-The repository validation scripts cover manifests, launcher smoke tests,
-macOS Bash 3.2 portability, public-source rejection order, anonymous
-preflight and clone arguments, source-aware state, prompt placeholders,
-split picker/TUI runtime validation, PowerShell and Bash syntax, line
-endings, and forbidden permission defaults. They do not execute code
-from a reviewed repository.
+The repository validator covers manifests, launcher smoke tests,
+public-source rejection order, anonymous preflight and clone arguments,
+source-aware state, prompt placeholders, split picker/TUI runtime
+validation, Bash syntax, line endings, and forbidden permission
+defaults. It does not execute code from a reviewed repository.
 
 ## Name
 

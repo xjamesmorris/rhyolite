@@ -17,15 +17,15 @@ remote. Publish only from an approved exported tree.
    `plugins/rhyolite/branding/welcome-metadata.json` and the
    prompt-native help panel.
 3. Keep `.github/CODEOWNERS` assigned to `@xjamesmorris`. The initial
-   branch policy may require status checks but must not require an
+   branch policy must not require hosted validation checks or an
    unavailable external approval.
 4. Publish the support routes, including the usage-question issue form,
    GitHub private vulnerability reporting, and the private conduct
    contact.
-5. Configure branch protection and smoke-test the published support and
-   release paths.
-6. Run both validators and smoke-test installation and manual update from
-   the published repository.
+5. Configure branch protection without hosted-CI requirements and
+   smoke-test the published support and release paths.
+6. Run the Fedora Linux 44 Bash validator and smoke-test installation
+   and manual update from the published repository.
 7. Smoke-test the onboarding flow from a new Copilot CLI session:
    confirm the one-line version/start status, invoke `/rhyolite:start`
    to see the large plaque, verify exact
@@ -53,9 +53,6 @@ remote. Publish only from an approved exported tree.
      --destination ../rhyolite-public \
      --source-commit <resolved-commit-from-export-audit>
    ```
-
-   PowerShell users should run the sibling `.ps1` wrappers with the same
-   arguments.
 
 3. Review the export audit report and preflight output. Do not proceed until
    the exported tree is approved.
@@ -166,27 +163,29 @@ that onboarding notice.
 
 1. Update `VERSION`, `plugins/rhyolite/plugin.json`,
    `.github/plugin/marketplace.json`, and `CHANGELOG.md`.
-2. Run both validators:
+2. On Fedora Linux 44, run the release validator:
 
-   ```text
-   pwsh ./tests/validate-plugin.ps1
+   ```bash
    bash ./tests/validate-plugin.sh
    ```
 
-3. Run `git diff --check` and review the complete source change set.
-4. Export the approved source ref with `tools/public-release/public-export.*`
-   and run `tools/public-release/public-preflight.*` against the exported tree.
-5. Install from a local marketplace fixture and smoke-test the namespaced
+3. Run `git diff --check`,
+   `node tests/validate-tui-runtime.mjs --self-check`, and review the
+   complete source change set.
+4. Run `bash ./tests/test-install.sh`.
+5. Export the approved source ref with `tools/public-release/public-export.sh`
+   and run `tools/public-release/public-preflight.sh` against the exported tree.
+6. Install from a local marketplace fixture and smoke-test the namespaced
    agents from the approved exported tree.
-6. Apply the approved exported tree to the public repository checkout, review
+7. Apply the approved exported tree to the public repository checkout, review
    the public diff, commit there, and push the public branch.
-7. Create and push the matching stable tag from the public repository, for
+8. Create and push the matching stable tag from the public repository, for
    example `v0.4.0`.
-8. Verify a fresh remote install and a manual update from the prior public
+9. Verify a fresh remote install and a manual update from the prior public
    release, including the one-line load status, the large plaque after
    a review-start command, and the exact
    `help`/`status`/`explain scopes` setup behavior.
-9. If the source of truth is non-public, never push its branch, history,
+10. If the source of truth is non-public, never push its branch, history,
    or tags to the public remote.
 
 Only stable tags matching `vX.Y.Z` and created in the public repository should

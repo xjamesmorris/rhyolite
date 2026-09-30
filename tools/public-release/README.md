@@ -1,15 +1,14 @@
 # Public release export tooling
 
-`public-export.sh` / `public-export.ps1` require a clean source worktree,
-archive an exact source ref into an empty destination with `git archive`, run
-preflight, run both `bash tests/validate-plugin.sh` and
-`pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1` from the exported
-tree by default, and write an audit report alongside the destination. Export
+`public-export.sh` requires a clean source worktree, archives an exact source
+ref into an empty destination with `git archive`, runs preflight, runs
+`bash tests/validate-plugin.sh` from the exported tree by default, and writes
+an audit report alongside the destination. Export
 staging is transactional: files are extracted into a temporary sibling and
 moved into the destination only after export, scanning, and validation
 succeed.
 
-`public-preflight.sh` / `public-preflight.ps1` run the same checks and optional
+`public-preflight.sh` runs the same checks and optional
 validation against an existing exported tree. Preflight is self-contained: it
 can scan a standalone exported directory with no source Git repo and supports
 `--destination .` from a public checkout. When the destination is a Git
@@ -18,13 +17,11 @@ using current filesystem contents and ignores that checkout's root `.git` plus
 untracked or ignored local artifacts. History-free exports with no Git
 metadata are scanned entry-by-entry.
 
-By default, release validation requires both validators to run successfully.
-Missing either runtime, missing either script, or either validator exiting
-nonzero blocks the release.
+By default, release validation requires the Bash validator to run
+successfully. A missing Bash runtime, missing validator script, or nonzero
+validator exit blocks the release.
 
 ## Usage
-
-### Bash
 
 ```bash
 tools/public-release/public-export.sh \
@@ -38,23 +35,6 @@ tools/public-release/public-preflight.sh \
 # from inside a public checkout of the exported tree
 tools/public-release/public-preflight.sh \
   --destination . \
-  --source-commit <resolved-commit>
-```
-
-### PowerShell
-
-```powershell
-tools/public-release/public-export.ps1 `
-  --source-ref <commit-or-tag> `
-  --destination ..\rhyolite-public
-
-tools/public-release/public-preflight.ps1 `
-  --destination ..\rhyolite-public `
-  --source-commit <resolved-commit>
-
-# from inside a public checkout of the exported tree
-tools/public-release/public-preflight.ps1 `
-  --destination . `
   --source-commit <resolved-commit>
 ```
 
@@ -75,8 +55,8 @@ repository, and non-empty destinations. The audit report records the resolved
 source commit plus sorted relative paths and SHA-256 hashes. It is written
 alongside the destination, not inside it. If export extraction, scanning, or
 validation fails, the destination stays absent or empty and temporary staging
-state is removed. The audit report records both validator results even when a
-runtime is missing, a validator fails, validation is skipped, or extraction
+state is removed. The audit report records the Bash validator result even when
+the runtime is missing, validation fails, validation is skipped, or extraction
 fails before validation can run.
 
 Default preflight blocks internal GitHub policy paths, unresolved public

@@ -87,6 +87,15 @@ version_line() {
 }
 
 plaque_sentences() {
+    if launcher_started_immediately; then
+        printf '%s\n' \
+            '' \
+            'Rhyolite is running in automatic guided mode.' \
+            'Startup is continuing automatically; wait for the first setup prompt before responding.' \
+            'Use /rhyolite:help for commands or /rhyolite:status for current progress.'
+        return
+    fi
+
     printf '%s\n' \
         '' \
         'Rhyolite guides evidence-based, read-only reviews of public HTTPS Git repositories.' \

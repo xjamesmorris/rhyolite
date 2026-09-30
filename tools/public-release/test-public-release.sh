@@ -19,7 +19,6 @@ FAKE_BIN="${WORK_ROOT}/fake-bin"
 PRIVATE_DENY_SOURCE="${ROOT}/tools/public-release/private-deny-patterns.json"
 PRIVATE_DENY_SANDBOX="${SANDBOX}/tools/public-release/private-deny-patterns.json"
 VALIDATION_FULL_BIN="${WORK_ROOT}/validation-full-bin"
-VALIDATION_BASH_ONLY_BIN="${WORK_ROOT}/validation-bash-only-bin"
 VALIDATION_NO_BASH_BIN="${WORK_ROOT}/validation-no-bash-bin"
 VALIDATION_LOG="${REPORTS_ROOT}/validation.log"
 
@@ -181,25 +180,6 @@ fi
 exit "\${MOCK_VALIDATE_BASH_EXIT:-0}"
 EOF_SH
     chmod +x "${target_path}/tests/validate-plugin.sh"
-
-    cat <<'EOF_PS1' > "${target_path}/tests/validate-plugin.ps1"
-[CmdletBinding()]
-param()
-
-if ($env:MOCK_VALIDATE_PWSH_OUTPUT) {
-    Write-Error $env:MOCK_VALIDATE_PWSH_OUTPUT
-}
-
-$exitCode = 0
-if ($env:MOCK_VALIDATE_PWSH_EXIT) {
-    $parsed = 0
-    if ([int]::TryParse($env:MOCK_VALIDATE_PWSH_EXIT, [ref] $parsed)) {
-        $exitCode = $parsed
-    }
-}
-
-exit $exitCode
-EOF_PS1
 }
 
 prepare_validation_tree() {
@@ -216,7 +196,6 @@ prepare_clean_release_source_repository() {
     rm -rf -- "${repo_path}"
     mkdir -p -- \
         "${repo_path}/tools" \
-        "${repo_path}/.github/workflows" \
         "${repo_path}/.github/plugin" \
         "${repo_path}/plugins/demo"
     cp -R -- "${ROOT}/tools/public-release" "${repo_path}/tools/"
@@ -260,17 +239,6 @@ EOF_PLUGIN
   ]
 }
 EOF_MARKETPLACE
-    cat <<'EOF_WORKFLOW' > "${repo_path}/.github/workflows/release.yml"
-name: release
-on:
-  workflow_dispatch:
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo public release validation
-EOF_WORKFLOW
-
     ensure_release_gate_files "${repo_path}"
     write_mock_validator_scripts "${repo_path}"
 
@@ -291,12 +259,11 @@ prepare_clean_release_tree() {
 }
 
 write_validation_runtime_bins() {
-    rm -rf -- "${VALIDATION_FULL_BIN}" "${VALIDATION_BASH_ONLY_BIN}" "${VALIDATION_NO_BASH_BIN}"
-    mkdir -p -- "${VALIDATION_FULL_BIN}" "${VALIDATION_BASH_ONLY_BIN}" "${VALIDATION_NO_BASH_BIN}"
+    rm -rf -- "${VALIDATION_FULL_BIN}" "${VALIDATION_NO_BASH_BIN}"
+    mkdir -p -- "${VALIDATION_FULL_BIN}" "${VALIDATION_NO_BASH_BIN}"
 
     for bin_path in \
         "${VALIDATION_FULL_BIN}" \
-        "${VALIDATION_BASH_ONLY_BIN}" \
         "${VALIDATION_NO_BASH_BIN}"; do
         ln -s "${REAL_NODE}" "${bin_path}/node"
         ln -s "${REAL_GIT}" "${bin_path}/git"
@@ -313,21 +280,6 @@ fi
 exec "${REAL_BASH}" "\$@"
 EOF_BASH
     chmod +x "${VALIDATION_FULL_BIN}/bash"
-    cp -- "${VALIDATION_FULL_BIN}/bash" "${VALIDATION_BASH_ONLY_BIN}/bash"
-
-    cat <<EOF_PWSH > "${VALIDATION_FULL_BIN}/pwsh"
-#!${REAL_BASH}
-set -euo pipefail
-if [[ -n "\${PUBLIC_RELEASE_VALIDATION_LOG:-}" ]]; then
-    printf 'pwsh %s\n' "\$*" >> "\${PUBLIC_RELEASE_VALIDATION_LOG}"
-fi
-if [[ -n "\${MOCK_VALIDATE_PWSH_OUTPUT:-}" ]]; then
-    printf '%s\n' "\${MOCK_VALIDATE_PWSH_OUTPUT}" >&2
-fi
-exit "\${MOCK_VALIDATE_PWSH_EXIT:-0}"
-EOF_PWSH
-    chmod +x "${VALIDATION_FULL_BIN}/pwsh"
-    cp -- "${VALIDATION_FULL_BIN}/pwsh" "${VALIDATION_NO_BASH_BIN}/pwsh"
 }
 
 assert_public_tool_has_no_private_literals() {
@@ -359,7 +311,9 @@ write_validation_runtime_bins
 mkdir -p -- "${WORK_ROOT}" "${TREES_ROOT}" "${REPORTS_ROOT}" "${FAILED_PARENT}" "${FAKE_BIN}"
 prepare_source_repository "${SANDBOX}"
 rm -f -- "${PRIVATE_DENY_SANDBOX}"
-commit_all "${SANDBOX}" 'public-sandbox'
+if [[ -n "$(git -C "${SANDBOX}" status --porcelain --untracked-files=all)" ]]; then
+    commit_all "${SANDBOX}" 'public-sandbox'
+fi
 SANDBOX_COMMIT="$(git -C "${SANDBOX}" rev-parse HEAD)"
 CLEAN_RELEASE_SOURCE="${WORK_ROOT}/clean-release-source"
 prepare_clean_release_source_repository "${CLEAN_RELEASE_SOURCE}"
@@ -569,9 +523,8 @@ printf '%s\n' "$(build_dev_azure_https_fixture)" > "${PUBLIC_CHECKOUT_TREE}/docs
 printf 'Private handoff reference: %s\n' "$(build_nonpublic_email_fixture)" > "${PUBLIC_CHECKOUT_TREE}/HANDOFF.md"
 if [[ -f "${PRIVATE_DENY_SOURCE}" ]]; then
     cp -- "${PRIVATE_DENY_SOURCE}" "${PUBLIC_CHECKOUT_TREE}/tools/public-release/private-deny-patterns.json"
-fi
-PRIVATE_OVERLAY_EXPORT_IGNORE_URL="$(build_dev_azure_https_fixture)"
-node - <<'EOF_NODE' "${PUBLIC_CHECKOUT_TREE}/tools/public-release/private-deny-patterns.json" "${PRIVATE_OVERLAY_EXPORT_IGNORE_URL}"
+    PRIVATE_OVERLAY_EXPORT_IGNORE_URL="$(build_dev_azure_https_fixture)"
+    node - <<'EOF_NODE' "${PUBLIC_CHECKOUT_TREE}/tools/public-release/private-deny-patterns.json" "${PRIVATE_OVERLAY_EXPORT_IGNORE_URL}"
 const fs = require('fs');
 const filePath = process.argv[2];
 const exportIgnoreUrl = process.argv[3];
@@ -579,6 +532,7 @@ const document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 document.exportIgnoreFixture = exportIgnoreUrl;
 fs.writeFileSync(filePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
 EOF_NODE
+fi
 cat <<'PUBLIC_CHECKOUT_GITIGNORE' > "${PUBLIC_CHECKOUT_TREE}/.gitignore"
 /.test-output/
 /.claude/
@@ -672,7 +626,7 @@ reject_grep '[gate|required-codeowners-gate]' "${REPORTS_ROOT}/gate-placeholder.
 reject_grep '[gate|required-license-gate]' "${REPORTS_ROOT}/gate-placeholder.audit.txt"
 
 # Fully resolved gate files must allow both export and preflight to succeed
-# with both validators passing and no findings.
+# with Bash validation passing and no findings.
 CLEAN_EXPORT_DEST="${WORK_ROOT}/clean-release-export"
 : > "${VALIDATION_LOG}"
 expect_success "${REPORTS_ROOT}/clean-export.stdout.txt" \
@@ -685,8 +639,6 @@ require_grep 'preflight: passed' "${REPORTS_ROOT}/clean-export.audit.txt"
 require_grep 'validation: passed' "${REPORTS_ROOT}/clean-export.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/clean-export.audit.txt"
 require_grep '[bash] status=passed command=bash tests/validate-plugin.sh exit_code=0' \
-    "${REPORTS_ROOT}/clean-export.audit.txt"
-require_grep '[pwsh] status=passed command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 exit_code=0' \
     "${REPORTS_ROOT}/clean-export.audit.txt"
 [[ -x "${CLEAN_EXPORT_DEST}/rhyolite" ]] ||
     fail 'Public export did not preserve the root launcher executable.'
@@ -703,9 +655,8 @@ require_grep 'preflight: passed' "${REPORTS_ROOT}/clean-preflight.audit.txt"
 require_grep 'validation: passed' "${REPORTS_ROOT}/clean-preflight.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/clean-preflight.audit.txt"
 require_grep "bash ${CLEAN_EXPORT_DEST}/tests/validate-plugin.sh" "${VALIDATION_LOG}"
-require_grep "pwsh -NoLogo -NoProfile -File ${CLEAN_EXPORT_DEST}/tests/validate-plugin.ps1" "${VALIDATION_LOG}"
 
-# Full validation matrix: both bash and pwsh validators run and are recorded.
+# Bash validation is run and recorded.
 VALIDATION_TREE="${TREES_ROOT}/validation-tree"
 prepare_validation_tree "${VALIDATION_TREE}"
 : > "${VALIDATION_LOG}"
@@ -720,12 +671,9 @@ require_grep 'validation: passed' "${REPORTS_ROOT}/validation-pass.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/validation-pass.audit.txt"
 require_grep '[bash] status=passed command=bash tests/validate-plugin.sh exit_code=0' \
     "${REPORTS_ROOT}/validation-pass.audit.txt"
-require_grep '[pwsh] status=passed command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 exit_code=0' \
-    "${REPORTS_ROOT}/validation-pass.audit.txt"
 require_grep "bash ${VALIDATION_TREE}/tests/validate-plugin.sh" "${VALIDATION_LOG}"
-require_grep "pwsh -NoLogo -NoProfile -File ${VALIDATION_TREE}/tests/validate-plugin.ps1" "${VALIDATION_LOG}"
 
-# Skipping validation must still block release and record both validators as skipped.
+# Skipping validation must still block release and record Bash as skipped.
 : > "${VALIDATION_LOG}"
 expect_failure "${REPORTS_ROOT}/validation-skip.stdout.txt" \
     env PATH="${VALIDATION_FULL_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" \
@@ -735,32 +683,13 @@ expect_failure "${REPORTS_ROOT}/validation-skip.stdout.txt" \
     --skip-validation \
     --audit-report "${REPORTS_ROOT}/validation-skip.audit.txt"
 require_grep 'validation: skipped' "${REPORTS_ROOT}/validation-skip.audit.txt"
-require_grep '[validation|validation-skipped] Validation was skipped by option; public release requires both bash tests/validate-plugin.sh and pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1.' \
+require_grep '[validation|validation-skipped] Validation was skipped by option; public release requires bash tests/validate-plugin.sh on Fedora Linux 44.' \
     "${REPORTS_ROOT}/validation-skip.audit.txt"
 require_grep '[bash] status=skipped command=bash tests/validate-plugin.sh' \
     "${REPORTS_ROOT}/validation-skip.audit.txt"
-require_grep '[pwsh] status=skipped command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1' \
-    "${REPORTS_ROOT}/validation-skip.audit.txt"
 [[ ! -s "${VALIDATION_LOG}" ]] || fail 'Skipped validation unexpectedly invoked validators.'
 
-# Missing pwsh runtime must block even when bash validation passes.
-: > "${VALIDATION_LOG}"
-expect_failure "${REPORTS_ROOT}/validation-missing-pwsh.stdout.txt" \
-    env PATH="${VALIDATION_BASH_ONLY_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" \
-    "${REAL_BASH}" "${SANDBOX}/tools/public-release/public-preflight.sh" \
-    --destination "${VALIDATION_TREE}" \
-    --source-commit "${SANDBOX_COMMIT}" \
-    --audit-report "${REPORTS_ROOT}/validation-missing-pwsh.audit.txt"
-require_grep '[validation|validation-pwsh] Missing validator runtime: pwsh.' \
-    "${REPORTS_ROOT}/validation-missing-pwsh.audit.txt"
-require_grep '[bash] status=passed command=bash tests/validate-plugin.sh exit_code=0' \
-    "${REPORTS_ROOT}/validation-missing-pwsh.audit.txt"
-require_grep '[pwsh] status=failed command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1' \
-    "${REPORTS_ROOT}/validation-missing-pwsh.audit.txt"
-require_grep 'message: Missing validator runtime: pwsh.' \
-    "${REPORTS_ROOT}/validation-missing-pwsh.audit.txt"
-
-# Missing bash runtime must block even when pwsh validation passes.
+# Missing Bash runtime must block validation.
 : > "${VALIDATION_LOG}"
 expect_failure "${REPORTS_ROOT}/validation-missing-bash.stdout.txt" \
     env PATH="${VALIDATION_NO_BASH_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" \
@@ -773,8 +702,6 @@ require_grep '[validation|validation-bash] Missing validator runtime: bash.' \
 require_grep '[bash] status=failed command=bash tests/validate-plugin.sh' \
     "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
 require_grep 'message: Missing validator runtime: bash.' \
-    "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
-require_grep '[pwsh] status=passed command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 exit_code=0' \
     "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
 
 # Failing bash validator must block and capture the validator result.
@@ -792,22 +719,6 @@ require_grep '[bash] status=failed command=bash tests/validate-plugin.sh exit_co
 require_grep 'message: bash tests/validate-plugin.sh failed with exit code 17.' \
     "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
 require_grep '  mock bash failure' "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
-
-# Failing pwsh validator must block and capture the validator result.
-: > "${VALIDATION_LOG}"
-expect_failure "${REPORTS_ROOT}/validation-failing-pwsh.stdout.txt" \
-    env PATH="${VALIDATION_FULL_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" MOCK_VALIDATE_PWSH_EXIT=19 MOCK_VALIDATE_PWSH_OUTPUT='mock pwsh failure' \
-    "${REAL_BASH}" "${SANDBOX}/tools/public-release/public-preflight.sh" \
-    --destination "${VALIDATION_TREE}" \
-    --source-commit "${SANDBOX_COMMIT}" \
-    --audit-report "${REPORTS_ROOT}/validation-failing-pwsh.audit.txt"
-require_grep '[validation|validation-pwsh] pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 failed with exit code 19.' \
-    "${REPORTS_ROOT}/validation-failing-pwsh.audit.txt"
-require_grep '[pwsh] status=failed command=pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 exit_code=19' \
-    "${REPORTS_ROOT}/validation-failing-pwsh.audit.txt"
-require_grep 'message: pwsh -NoLogo -NoProfile -File tests/validate-plugin.ps1 failed with exit code 19.' \
-    "${REPORTS_ROOT}/validation-failing-pwsh.audit.txt"
-require_grep '  mock pwsh failure' "${REPORTS_ROOT}/validation-failing-pwsh.audit.txt"
 
 # Exact occurrence waivers: one content waiver must not suppress another match in the same file.
 OCCURRENCE_TREE="${TREES_ROOT}/occurrence-tree"
