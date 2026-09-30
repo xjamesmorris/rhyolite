@@ -44,9 +44,10 @@
   user-retrieval priorities.
 - Added High/Medium/Low confidence plus evidence-basis requirements for
   substantive assessment points.
-- Required a current frontier reasoning model with maximum effort by
-  default and high as the hard minimum for analytical, general-purpose,
-  orchestration, formatting, and mechanical work.
+- Required maximum reasoning effort by default for every repository
+  development task across sessions, including explicit handoff
+  carry-forward. Only mechanical or fully scoped work may downgrade, and
+  only to high; analytical or open-ended work remains at maximum effort.
 - Replaced the broken `/rhyolite:banner` command with
   `/rhyolite:start` as the stable in-session review-session entry point.
 - Added a large terminal-aware RHYOLITE logo with a blue-family ANSI

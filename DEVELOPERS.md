@@ -84,11 +84,14 @@ The root wrapper remains delegation-only. The packaged implementation is
 
 ## Reasoning policy
 
-- Maximum reasoning effort is the default for all project work.
-- High is the hard minimum.
-- Never use none, minimal, low, or medium effort.
-- The floor applies to analytical, general-purpose, formatting,
-  orchestration, and mechanical validation work.
+- Use maximum available reasoning effort by default for every
+  development task in this repository.
+- This repository-wide policy persists across sessions. Carry it into
+  every development handoff or continuation note.
+- Downgrade only mechanical or fully scoped work, and only to high
+  reasoning effort.
+- Keep analytical or open-ended work at maximum effort. Never use none,
+  minimal, low, or medium effort for repository development.
 - Use a current frontier reasoning model; do not silently downgrade.
 
 Supported launcher and child review invocations pass

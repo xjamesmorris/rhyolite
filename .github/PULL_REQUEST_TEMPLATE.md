@@ -18,8 +18,8 @@ Describe the change and why it is needed.
 - [ ] Scope 3 is still described as evidence-based provenance review for
       agentically generated code.
 - [ ] Fedora Linux 44 remains the sole supported validation platform.
-- [ ] Maximum reasoning effort remains the default and high remains the
-      hard minimum.
+- [ ] Maximum reasoning effort remains the cross-session default; only
+      mechanical or fully scoped work may downgrade, and only to high.
 
 ## Additional context
 

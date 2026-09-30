@@ -49,9 +49,11 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 - Recommended model: use a current frontier reasoning model at the
   maximum available reasoning effort and context (as of September 30, 2026,
-  examples include Sol 5.6 and Fable 5). Do not automatically downgrade
-  any project work. Maximum effort is the default and high is the hard
-  minimum, including for general-purpose and mechanical tasks; never use
+  examples include Sol 5.6 and Fable 5). Use maximum available reasoning
+  effort by default for every repository development task. This policy
+  persists across sessions, and development handoffs must carry it
+  forward. Downgrade only mechanical or fully scoped work, and only to
+  high; keep analytical or open-ended work at maximum effort. Never use
   none, minimal, low, or medium effort.
 - Run `copilot login` and complete Copilot sign-in before starting a
   review.

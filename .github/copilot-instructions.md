@@ -24,6 +24,17 @@ metadata, prompt contracts, safety flags, Bash syntax, mocked runner
 behavior, state/artifact output, and UTF-8-without-BOM/LF-only text
 formatting.
 
+## Development reasoning policy
+
+- Use maximum available reasoning effort by default for every
+  development task in this repository.
+- This repository-wide policy persists across sessions. Carry it into
+  every development handoff or continuation note.
+- Downgrade only mechanical or fully scoped work, and only to high
+  reasoning effort.
+- Keep analytical or open-ended work at maximum effort. Never use none,
+  minimal, low, or medium effort for repository development.
+
 ## Platform plan of record
 
 `docs/PLAN-OF-RECORD.md` is authoritative: Fedora Linux 44 is the sole

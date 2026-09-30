@@ -34,6 +34,7 @@ LAUNCHER_PREFERENCES_BASH="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 MARKETPLACE="${ROOT}/.github/plugin/marketplace.json"
 VERSION_FILE="${ROOT}/VERSION"
 README="${ROOT}/README.md"
+DEVELOPERS="${ROOT}/DEVELOPERS.md"
 CONTRIBUTING="${ROOT}/CONTRIBUTING.md"
 SECURITY="${ROOT}/SECURITY.md"
 PRIVACY="${ROOT}/PRIVACY.md"
@@ -162,6 +163,7 @@ required_files=(
     "${ISSUE_TEMPLATE_QUESTION}"
     "${ISSUE_TEMPLATE_CONFIG}"
     "${README}"
+    "${DEVELOPERS}"
     "${CONTRIBUTING}"
     "${CHANGELOG}"
     "${SECURITY}"
@@ -1233,6 +1235,33 @@ grep -Fq 'date-derived' "${COPILOT_INSTRUCTIONS}" ||
 grep -Fq 'prior-art/provenance window rollover' \
     "${COPILOT_INSTRUCTIONS}" ||
     fail 'Copilot instructions do not mention date-derived prior-art/provenance rollover.'
+for development_policy_file in \
+    "${COPILOT_INSTRUCTIONS}" "${DEVELOPERS}" "${CONTRIBUTING}" "${README}"; do
+    normalized_development_policy="$(
+        tr '\r\n\t' '   ' < "${development_policy_file}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    grep -Fqi 'maximum available reasoning effort by default' \
+        <<< "${normalized_development_policy}" ||
+        fail "Development maximum-effort default is missing: ${development_policy_file}"
+    grep -Fqi 'persists across sessions' \
+        <<< "${normalized_development_policy}" ||
+        grep -Fqi 'default across sessions' \
+            <<< "${normalized_development_policy}" ||
+        fail "Cross-session reasoning policy is missing: ${development_policy_file}"
+    grep -Fqi 'development handoff' \
+        <<< "${normalized_development_policy}" ||
+        fail "Development handoff carry-forward is missing: ${development_policy_file}"
+    grep -Fqi 'mechanical or fully scoped' \
+        <<< "${normalized_development_policy}" ||
+        fail "Scoped downgrade rule is missing: ${development_policy_file}"
+    grep -Fqi 'only to high' \
+        <<< "${normalized_development_policy}" ||
+        fail "High reasoning-effort downgrade floor is missing: ${development_policy_file}"
+    grep -Fqi 'analytical or open-ended work' \
+        <<< "${normalized_development_policy}" ||
+        fail "Maximum-effort analytical rule is missing: ${development_policy_file}"
+done
 
 skill_requirements=(
     'supports anonymously readable public HTTPS Git'

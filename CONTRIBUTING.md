@@ -12,8 +12,11 @@ Changes are accepted through pull requests.
 - Keep public research and provenance analysis independently opt-in.
 - Keep deterministic orchestration in scripts and agent/skill files
   focused on workflow and policy.
-- Use maximum reasoning effort by default; high is the hard minimum for
-  every task, including general-purpose and mechanical work.
+- Use maximum available reasoning effort by default for every
+  development task. This policy persists across sessions and must be
+  carried into development handoffs. Downgrade only mechanical or fully
+  scoped work, and only to high; keep analytical or open-ended work at
+  maximum effort.
 - Add or update Linux validation for every behavior or policy change.
 - Bump the plugin and marketplace versions together for releases.
 
