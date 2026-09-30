@@ -2185,6 +2185,8 @@ process_repository() {
     local agent_state_path="${result_path}/agent-state"
     local copilot_home_path="${agent_state_path}/copilot-home"
     local raw_output="${result_path}/copilot-output.raw"
+    local transcript_plain_path="${transcript_path}.plain"
+    local transcript_report_path="${report_path}.transcript"
     local session_id=""
     local session_name=""
     local commit=""
@@ -2688,34 +2690,55 @@ EOF
             redact_emails > "${error_path}.tmp"
         mv -- "${error_path}.tmp" "${error_path}"
     fi
+    if [[ -f "${transcript_path}" ]]; then
+        tr -d '\r' < "${transcript_path}" |
+            strip_terminal_controls |
+            redact_credentials |
+            redact_emails > "${transcript_plain_path}"
+    fi
 
     if ((exit_code == 0)); then
         review_progress "${slug}" 'analysis' 'agent response received'
+        local report_extracted=0
         if extract_report "${timeline_path}" "${report_path}"; then
-            if ! awk '
-                NF { line = $0 }
-                END {
-                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-                    exit(line ~ /^=+$/ && length(line) >= 80 ? 0 : 1)
-                }
-            ' "${report_path}"; then
-                printf '%s\n' \
-                    'Incomplete report: final closing delimiter was missing; recovered text was saved through end of agent output.' \
-                    >> "${error_path}"
-                exit_code=1
+            report_extracted=1
+        fi
+        if ((report_extracted == 0)) ||
+            ! report_has_closing_delimiter "${report_path}"; then
+            if [[ -s "${transcript_plain_path}" ]] &&
+                extract_final_copilot_report \
+                    "${transcript_plain_path}" \
+                    "${transcript_report_path}"; then
+                if report_has_closing_delimiter "${transcript_report_path}"; then
+                    mv -- "${transcript_report_path}" "${report_path}"
+                    report_extracted=1
+                    review_progress \
+                        "${slug}" \
+                        'analysis' \
+                        'complete report recovered from sanitized session transcript'
+                elif ((report_extracted == 0)); then
+                    mv -- "${transcript_report_path}" "${report_path}"
+                    report_extracted=1
+                fi
             fi
-            if grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${report_path}"; then
-                printf '%s\n' \
-                    'Final report contains a Markdown table.' >> "${error_path}"
-                exit_code=1
-            fi
-        else
+            rm -f -- "${transcript_report_path}"
+        fi
+        if ((report_extracted == 0)); then
             printf '%s\n' \
                 'Final report extraction failed. See analysis-timeline.txt.' \
                 > "${report_path}"
             printf '%s\n' \
                 'Final report header or end marker was not found.' \
                 >> "${error_path}"
+            exit_code=1
+        elif ! report_has_closing_delimiter "${report_path}"; then
+            printf '%s\n' \
+                'Incomplete report: final closing delimiter was missing; recovered text was saved through end of agent output.' \
+                >> "${error_path}"
+            exit_code=1
+        elif grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${report_path}"; then
+            printf '%s\n' \
+                'Final report contains a Markdown table.' >> "${error_path}"
             exit_code=1
         fi
     elif ((exit_code == 124)); then
@@ -2756,16 +2779,12 @@ EOF
     fi
 
     if [[ -f "${transcript_path}" ]]; then
-        tr -d '\r' < "${transcript_path}" |
-            strip_terminal_controls |
-            redact_credentials |
-            redact_emails > "${transcript_path}.plain"
         write_safe_markdown_document \
             'Copilot Session Transcript' \
-            "${transcript_path}.plain" \
+            "${transcript_plain_path}" \
             "${transcript_path}.tmp"
         mv -- "${transcript_path}.tmp" "${transcript_path}"
-        rm -f -- "${transcript_path}.plain"
+        rm -f -- "${transcript_plain_path}"
     fi
 
     if ((exit_code == 0)); then

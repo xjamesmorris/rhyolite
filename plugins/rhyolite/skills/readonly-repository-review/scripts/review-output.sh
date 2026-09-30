@@ -54,31 +54,91 @@ extract_report() {
         { lines[NR] = $0 }
         END {
             start = 0
-            finish = NR
-            while (finish > 0 && lines[finish] ~ /^[[:space:]]*$/) {
-                finish--
+            last = NR
+            candidate_finish = 0
+            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) {
+                last--
             }
-            for (i = 1; i <= NR; i++) {
+            for (i = 1; i <= last; i++) {
                 if (is_delimiter(lines[i])) {
                     window = lines[i]
-                    for (j = 1; j <= 3 && i + j <= NR; j++) {
+                    header = 0
+                    for (j = 1; j <= 3 && i + j <= last; j++) {
                         window = window " " lines[i + j]
+                        if (toupper(lines[i + j]) ~ /REPOSITORY.*REVIEW.*REPORT/) {
+                            header = i + j
+                        }
                     }
-                    if (toupper(window) ~ /REPOSITORY.*REVIEW.*REPORT/) {
+                    if (header > 0 &&
+                        toupper(window) ~ /REPOSITORY.*REVIEW.*REPORT/) {
                         start = i
-                        break
+                        candidate_finish = 0
+                        for (j = header + 1; j <= last; j++) {
+                            if (is_delimiter(lines[j])) {
+                                candidate_finish = j
+                                break
+                            }
+                        }
                     }
                 }
             }
             if (start == 0) {
                 exit 42
             }
+            finish = candidate_finish > 0 ? candidate_finish : last
             for (i = start; i <= finish; i++) {
                 sub(/^ /, "", lines[i])
                 print lines[i]
             }
         }
     ' "${timeline}" > "${report}"
+}
+
+extract_final_copilot_report() {
+    local transcript="$1"
+    local report="$2"
+    local final_message="${report}.final-message"
+    local extraction_status=0
+
+    if ! awk '
+        { lines[NR] = $0 }
+        END {
+            start = 0
+            for (i = 1; i <= NR; i++) {
+                marker = lines[i]
+                sub(/^[[:space:]]+/, "", marker)
+                sub(/[[:space:]]+$/, "", marker)
+                if (marker == "### Copilot") {
+                    start = i + 1
+                }
+            }
+            if (start == 0) {
+                exit 42
+            }
+            for (i = start; i <= NR; i++) {
+                print lines[i]
+            }
+        }
+    ' "${transcript}" > "${final_message}"; then
+        rm -f -- "${final_message}"
+        return 42
+    fi
+
+    extract_report "${final_message}" "${report}" || extraction_status=$?
+    rm -f -- "${final_message}"
+    return "${extraction_status}"
+}
+
+report_has_closing_delimiter() {
+    local report="$1"
+
+    awk '
+        NF { line = $0 }
+        END {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+            exit(line ~ /^=+$/ && length(line) >= 80 ? 0 : 1)
+        }
+    ' "${report}"
 }
 
 write_markdown_report() {
