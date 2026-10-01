@@ -364,12 +364,13 @@ yet. Instead:
 
 1. Build the exact resolved runner arguments from the collected
    answers. Pass only remote URLs with `--repo`. Always
-   pass the chosen fleet mode, model, output root, and scope. Pass
+   pass `--harness copilot`, the chosen fleet mode, model, output root,
+   and scope. Pass
    `--remember-preferences` only when selected.
    For scope `3`, pass the chosen lookback months explicitly.
 2. Invoke the Bash plan-only mode with non-interactive and the exact
    resolved inputs:
-   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --plan-only --non-interactive ...`
+   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive ...`
    Do not reorder, widen, narrow, or otherwise mutate the resolved
    inputs between planning and execution. The actual run must reuse the
    same inputs.
@@ -428,7 +429,7 @@ the runner. Keep `Stage` and `/rhyolite:status` aligned with the latest
 milestone.
 
 When the user selects `Run review`, invoke the same Bash runner from
-`<SKILL_DIR>/scripts/` with the
+`<SKILL_DIR>/scripts/` with explicit `--harness copilot` and the
 identical resolved inputs from the accepted plan, dropping only
 `--plan-only` and adding
 `--expected-plan-hash <ApprovalHash>`.

@@ -249,7 +249,7 @@ repository:
   skill tool supplies that source path; treat it as authoritative and
   refer to the directory as `<SKILL_DIR>`.
 - Run:
-  `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh'`
+  `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot`
 
 Do not reimplement the orchestration in an ad hoc shell command.
 Do not guess a checkout path, search unrelated directories, or export a
@@ -369,7 +369,7 @@ Before invoking the runner:
     and optional provenance answers are collected, build the exact
     resolved runner arguments and invoke Bash plan-only mode with
     non-interactive:
-    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --plan-only --non-interactive ...`
+    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive ...`
     Pass the exact resolved source arguments, fleet mode, model, output
     root, scope, and scope-`3` lookback explicitly. Pass
     `--remember-preferences` only when selected.
@@ -421,8 +421,8 @@ Before invoking the runner:
     `RHYOLITE PROGRESS`. Keep the current stage and status response
     aligned with the latest milestone.
 23. When the user selects `Run review`, invoke the actual Bash runner with
-    the identical resolved inputs from the accepted plan, dropping only
-    `--plan-only` and adding the retained
+    explicit `--harness copilot` and the identical resolved inputs from
+    the accepted plan, dropping only `--plan-only` and adding the retained
     `--expected-plan-hash <ApprovalHash>`.
     Keep the non-interactive flag so the agent, not a nested process,
     owns the conversation, and keep using the runner under

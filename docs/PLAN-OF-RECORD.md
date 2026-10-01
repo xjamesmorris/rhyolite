@@ -27,8 +27,9 @@ preserved speculatively.
 1. New features and fixes target Linux and Bash only.
 2. Do not add alternate-platform implementations, branches, or parity
    assertions unless a later decision explicitly restores that scope.
-3. `bash ./tests/validate-plugin.sh` on Fedora 44 is the authoritative
-   full plugin validator.
+3. `bash ./tests/validate-all.sh` on Fedora 44 is the authoritative
+   full validation gate. It runs the focused harness contract validator
+   before the legacy monolithic plugin validator.
 4. No hosted workflow is required or shipped. Maintainers run release
    validation locally on Fedora Linux 44.
 5. Public documentation advertises only the Fedora/Linux/Bash workflow.

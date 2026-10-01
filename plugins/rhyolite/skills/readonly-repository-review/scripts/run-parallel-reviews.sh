@@ -8,101 +8,9 @@ PLUGIN_ROOT="$(cd -- "${SKILL_ROOT}/../.." && pwd)"
 PROMPT_PATH="${SKILL_ROOT}/review-prompt.txt"
 OUTPUT_HELPER="${SCRIPT_DIR}/review-output.sh"
 PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
-
-if [[ ! -f "${OUTPUT_HELPER}" ]]; then
-    printf 'Output processing helper not found: %s\n' "${OUTPUT_HELPER}" >&2
-    exit 2
-fi
-# shellcheck source=review-output.sh
-source "${OUTPUT_HELPER}"
-if [[ ! -f "${PREFERENCE_HELPER}" ]]; then
-    printf 'Launcher preference helper not found: %s\n' \
-        "${PREFERENCE_HELPER}" >&2
-    exit 2
-fi
-# shellcheck source=../../../scripts/launcher-preferences.sh
-source "${PREFERENCE_HELPER}"
-
-THROTTLE_LIMIT=2
-MAX_REPOSITORIES=5
-SESSION_TIMEOUT_MINUTES=0
-WORKSPACE_ROOT="${HOME}/.cache/rhyolite/repo-review/workspaces"
-OUTPUT_ROOT=""
-PLAN_SCHEMA_VERSION=2
-SCOPE=0
-SCOPE_SPECIFIED=0
-MODEL="gpt-5.6-sol"
-REASONING_EFFORT="max"
-FLEET_MODE="standard"
-REMEMBER_PREFERENCES=0
-ENABLE_PUBLIC_RESEARCH=0
-ENABLE_PROVENANCE_RESEARCH=0
-DEFAULT_PRIOR_ART_LOOKBACK_MONTHS=6
-DEFAULT_PROVENANCE_LOOKBACK_MONTHS=6
-PROVENANCE_LOOKBACK_MONTHS=""
-PROVENANCE_START_DATE=""
-PROVENANCE_LOOKBACK_SPECIFIED=0
-STATE_SCHEMA_VERSION=3
-NON_INTERACTIVE=0
-OPEN_HTML=0
-NO_OPEN_HTML=0
-VALIDATE_ONLY=0
-PLAN_ONLY=0
-REQUESTED_COMMIT=""
-EXPECTED_PLAN_HASH=""
-APPROVAL_HASH=""
+HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
-
-repositories=()
-repository_file=""
-
-usage() {
-    cat <<'EOF'
-Usage:
-  run-parallel-reviews.sh --repo URL [--repo URL ...] [options]
-  run-parallel-reviews.sh --repo-file FILE [options]
-
-Options:
-  --repo URL                       Anonymous public HTTPS Git repository URL
-  --repo-path PATH                 Rejected; local repository paths are unsupported
-  --repo-file FILE                 Public HTTPS Git repository URLs, one per line
-  --throttle N                     Parallel session limit (default: 2)
-  --max-repositories N             Maximum repositories per run (default: 5)
-  --timeout-minutes N              Per-session timeout (default: scope-based)
-  --workspace-root PATH            Clone workspace root
-  --output-root PATH               Writable artifact root outside the checkout
-  --result-root PATH               Deprecated alias for --output-root
-  --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
-  --commit SHA                     Exact 40-character commit for one repository
-  --model MODEL                    Copilot model (default: gpt-5.6-sol)
-  --fleet-mode MODE                Outer launcher mode: native or standard
-  --remember-preferences           Save fleet/model per repository after approval
-  --enable-public-research         Permit arbitrary public URL access
-  --enable-provenance-research     Enable whole-repository exact-commit provenance research
-  --provenance-lookback-months N   Scope 3 calendar-month lookback (1-60, default: 6)
-  --non-interactive                Use defaults without terminal prompts
-  --open-html                      Open the HTML run index after completion
-  --no-open-html                   Never open the HTML run index
-  --validate-only                  Validate arguments without cloning or review
-  --plan-only                      Resolve and print the effective plan as JSON
-  --expected-plan-hash SHA256      Require the resolved plan approval hash
-  --help                           Show this help
-EOF
-}
-
-review_progress() {
-    local subject="$1"
-    local stage="$2"
-    local detail="${3-}"
-
-    if [[ -n "${detail}" ]]; then
-        printf 'RHYOLITE PROGRESS | %s | %s | %s\n' \
-            "${subject}" "${stage}" "${detail}"
-    else
-        printf 'RHYOLITE PROGRESS | %s | %s\n' "${subject}" "${stage}"
-    fi
-}
 
 read_metadata_string() {
     local field="$1"
@@ -136,9 +44,194 @@ load_repository_support_links() {
     RHYOLITE_CONTRIBUTE_TEXT="${pulls_url}"
 }
 
+strip_runner_error_controls() {
+    LC_ALL=C tr -d '\000-\010\013-\037\177'
+}
+
+load_repository_support_links
+
+print_runner_error() {
+    local summary="$1"
+    local stage="$2"
+    local source="$3"
+    local details="$4"
+    local consequence="$5"
+    local remediation="$6"
+    local artifacts="${7:-NONE}"
+    local exit_code="${8:-2}"
+    local safe_details
+
+    safe_details="$(
+        printf '%s\n' "${details}" |
+            strip_runner_error_controls |
+            sed -E \
+                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
+                -e 's/((Authorization|authorization|Proxy-Authorization|proxy-authorization):[[:space:]]*)((Bearer|bearer|Basic|basic)[[:space:]]+)?[^[:space:]]+/\1[credential omitted]/g' \
+                -e 's/((access[_-]?token|ACCESS[_-]?TOKEN|api[_-]?key|API[_-]?KEY|password|PASSWORD|secret|SECRET|token|TOKEN)[[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1[credential omitted]/g' \
+                -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[credential omitted]/g' \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' |
+            awk '
+                NF {
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+                    if (length(output) > 0) {
+                        output = output " | "
+                    }
+                    output = output $0
+                }
+                END {
+                    if (length(output) == 0) {
+                        output = "No additional safe detail was returned."
+                    }
+                    printf "%s", output
+                }
+            '
+    )"
+
+    printf '\n%s\n' 'RHYOLITE ERROR' >&2
+    printf '%s\n' \
+        "Summary: ${summary}" \
+        "Stage: ${stage}" \
+        "Source: ${source}" \
+        "Details: ${safe_details} (exit code ${exit_code})" \
+        "Consequence: ${consequence}" \
+        "Remediation: ${remediation}" \
+        "Artifacts: ${artifacts}" \
+        "Support: ${RHYOLITE_SUPPORT_TEXT}" \
+        "Contribute: ${RHYOLITE_CONTRIBUTE_TEXT}" >&2
+}
+
+if [[ ! -f "${HARNESS_COMMON}" ]]; then
+    print_runner_error \
+        'The Rhyolite harness loader is missing.' \
+        'harness unresolved load' \
+        'Harness unresolved' \
+        "Harness loader was not found at ${HARNESS_COMMON}." \
+        'Review planning and execution did not start.' \
+        'Restore the complete Rhyolite plugin installation and retry.'
+    exit 2
+fi
+# shellcheck source=../../../lib/harness/common.sh
+source "${HARNESS_COMMON}"
+
+if [[ ! -f "${OUTPUT_HELPER}" ]]; then
+    printf 'Output processing helper not found: %s\n' "${OUTPUT_HELPER}" >&2
+    exit 2
+fi
+# shellcheck source=review-output.sh
+source "${OUTPUT_HELPER}"
+if [[ ! -f "${PREFERENCE_HELPER}" ]]; then
+    printf 'Launcher preference helper not found: %s\n' \
+        "${PREFERENCE_HELPER}" >&2
+    exit 2
+fi
+# shellcheck source=../../../scripts/launcher-preferences.sh
+source "${PREFERENCE_HELPER}"
+
+THROTTLE_LIMIT=2
+MAX_REPOSITORIES=5
+SESSION_TIMEOUT_MINUTES=0
+WORKSPACE_ROOT="${HOME}/.cache/rhyolite/repo-review/workspaces"
+OUTPUT_ROOT=""
+PLAN_SCHEMA_VERSION=2
+SCOPE=0
+SCOPE_SPECIFIED=0
+MODEL=""
+REASONING_EFFORT=""
+REQUESTED_HARNESS=""
+HARNESS=""
+HARNESS_DISPLAY_NAME=""
+HARNESS_CLI_NAME=""
+HARNESS_LOGIN_REMEDIATION=""
+MODEL_FROM_HARNESS=0
+FLEET_MODE="standard"
+REMEMBER_PREFERENCES=0
+ENABLE_PUBLIC_RESEARCH=0
+ENABLE_PROVENANCE_RESEARCH=0
+DEFAULT_PRIOR_ART_LOOKBACK_MONTHS=6
+DEFAULT_PROVENANCE_LOOKBACK_MONTHS=6
+PROVENANCE_LOOKBACK_MONTHS=""
+PROVENANCE_START_DATE=""
+PROVENANCE_LOOKBACK_SPECIFIED=0
+STATE_SCHEMA_VERSION=3
+NON_INTERACTIVE=0
+OPEN_HTML=0
+NO_OPEN_HTML=0
+VALIDATE_ONLY=0
+PLAN_ONLY=0
+REQUESTED_COMMIT=""
+EXPECTED_PLAN_HASH=""
+APPROVAL_HASH=""
+
+repositories=()
+repository_file=""
+
+usage() {
+    cat <<'EOF'
+Usage:
+  run-parallel-reviews.sh --repo URL [--repo URL ...] [options]
+  run-parallel-reviews.sh --repo-file FILE [options]
+
+Options:
+  --repo URL                       Anonymous public HTTPS Git repository URL
+  --repo-path PATH                 Rejected; local repository paths are unsupported
+  --repo-file FILE                 Public HTTPS Git repository URLs, one per line
+  --throttle N                     Parallel session limit (default: 2)
+  --max-repositories N             Maximum repositories per run (default: 5)
+  --timeout-minutes N              Per-session timeout (default: scope-based)
+  --workspace-root PATH            Clone workspace root
+  --output-root PATH               Writable artifact root outside the checkout
+  --result-root PATH               Deprecated alias for --output-root
+  --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
+  --commit SHA                     Exact 40-character commit for one repository
+  --harness ID                     Review harness (default: copilot)
+  --model MODEL                    Copilot model (default: gpt-5.6-sol)
+  --fleet-mode MODE                Outer launcher mode: native or standard
+  --remember-preferences           Save fleet/model per repository after approval
+  --enable-public-research         Permit arbitrary public URL access
+  --enable-provenance-research     Enable whole-repository exact-commit provenance research
+  --provenance-lookback-months N   Scope 3 calendar-month lookback (1-60, default: 6)
+  --non-interactive                Use defaults without terminal prompts
+  --open-html                      Open the HTML run index after completion
+  --no-open-html                   Never open the HTML run index
+  --validate-only                  Validate arguments without cloning or review
+  --plan-only                      Resolve and print the effective plan as JSON
+  --expected-plan-hash SHA256      Require the resolved plan approval hash
+  --help                           Show this help
+EOF
+}
+
+review_progress() {
+    local subject="$1"
+    local stage="$2"
+    local detail="${3-}"
+
+    if [[ -n "${detail}" ]]; then
+        printf 'RHYOLITE PROGRESS | %s | %s | %s\n' \
+            "${subject}" "${stage}" "${detail}"
+    else
+        printf 'RHYOLITE PROGRESS | %s | %s\n' "${subject}" "${stage}"
+    fi
+}
+
 repository_failure_stage() {
     local status="$1"
     local errors_path="$2"
+    local harness_stage
+
+    harness_stage="$(
+        sed -n \
+            's/^Harness failure stage: \(harness [a-z][a-z0-9-]* [a-zA-Z_][a-zA-Z0-9_]*\)$/\1/p' \
+            "${errors_path}" 2>/dev/null | head -n 1
+    )"
+    if [[ -n "${harness_stage}" ]]; then
+        if [[ "${harness_stage}" == \
+            "harness ${HARNESS} harness_sanitize_runtime_home" ]]; then
+            printf 'cleanup'
+            return
+        fi
+        printf '%s' "${harness_stage}"
+        return
+    fi
 
     case "${status}" in
         AccessPreflightFailed|PreflightBlocked)
@@ -158,7 +251,7 @@ repository_failure_stage() {
             ;;
         ReviewFailed)
             if grep -Eq \
-                'temporary Copilot runtime home|sanitize the temporary Copilot|cleanup' \
+                'temporary harness runtime home|cleanup' \
                 "${errors_path}" 2>/dev/null; then
                 printf 'cleanup'
             elif grep -Eq \
@@ -201,10 +294,13 @@ repository_failure_summary() {
         ReviewFailed)
             case "${stage}" in
                 cleanup)
-                    printf 'The review failed closed because temporary Copilot runtime cleanup did not complete safely.'
+                    printf 'The review failed closed because temporary harness runtime cleanup did not complete safely.'
                     ;;
                 'report validation')
                     printf 'The worker response did not satisfy the complete canonical report contract.'
+                    ;;
+                harness\ *)
+                    printf 'The selected review harness failed while preparing, running, or finalizing the worker session.'
                     ;;
                 *)
                     printf 'The repository-review worker exited without a completed review.'
@@ -256,9 +352,12 @@ repository_failure_remediation() {
                     printf '%s' \
                         'Rerun the review; use the saved timeline and errors artifacts to diagnose repeated incomplete output.'
                     ;;
-                *)
+                harness\ *)
                     printf '%s' \
-                        'Review the sanitized errors and timeline. If they show Copilot authentication failure, run copilot login from a clean non-Git directory, then retry.'
+                        'Inspect the sanitized harness failure detail, restore or correct the selected adapter, and retry without weakening isolation.'
+                    ;;
+                *)
+                    printf '%s' "${HARNESS_LOGIN_REMEDIATION}"
                     ;;
             esac
             ;;
@@ -276,8 +375,8 @@ safe_error_details() {
         printf 'No additional safe detail was returned.'
         return
     fi
-    tr -d '\r' < "${errors_path}" |
-        strip_terminal_controls |
+    strip_terminal_controls < "${errors_path}" |
+        strip_runner_error_controls |
         redact_credentials |
         redact_emails |
         awk '
@@ -337,8 +436,6 @@ print_repository_error() {
         "Support: ${RHYOLITE_SUPPORT_TEXT}" \
         "Contribute: ${RHYOLITE_CONTRIBUTE_TEXT}"
 }
-
-load_repository_support_links
 
 require_value() {
     local option="$1"
@@ -782,6 +879,11 @@ while (($# > 0)); do
             REQUESTED_COMMIT="$2"
             shift 2
             ;;
+        --harness)
+            require_value "$1" "${2-}"
+            REQUESTED_HARNESS="$2"
+            shift 2
+            ;;
         --model)
             require_value "$1" "${2-}"
             MODEL="$2"
@@ -847,6 +949,91 @@ while (($# > 0)); do
     esac
 done
 
+if ! HARNESS="$(rhyolite_harness_resolve "${REQUESTED_HARNESS}")"; then
+    print_runner_error \
+        'The requested review harness is invalid.' \
+        'harness unresolved context' \
+        'Harness unresolved' \
+        'The --harness or RHYOLITE_HARNESS value could not be resolved safely.' \
+        'Review planning and execution did not start.' \
+        'Pass --harness copilot, set RHYOLITE_HARNESS=copilot, or unset the environment override.'
+    exit 2
+fi
+if ! rhyolite_harness_validate_context "${HARNESS}"; then
+    print_runner_error \
+        'The selected review harness does not match the launcher context.' \
+        "harness ${HARNESS} context" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness launcher context validation failed.}" \
+        'Review planning and execution did not start.' \
+        'Restart through the matching Rhyolite launcher or invoke the runner directly with no launcher harness marker.'
+    exit 2
+fi
+if ! rhyolite_harness_load "${PLUGIN_ROOT}" "${HARNESS}"; then
+    print_runner_error \
+        'The selected review harness adapter is unavailable or incomplete.' \
+        "harness ${HARNESS} load" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness adapter loading failed.}" \
+        'Review planning and execution did not start.' \
+        'Use a supported harness with a complete Rhyolite plugin installation.'
+    exit 2
+fi
+if ! rhyolite_harness_capture HARNESS_DISPLAY_NAME harness_display_name ||
+    [[ -z "${HARNESS_DISPLAY_NAME}" ||
+        "${HARNESS_DISPLAY_NAME}" == *[[:cntrl:]]* ]]; then
+    [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]] ||
+        RHYOLITE_HARNESS_ERROR_DETAIL='Harness display name is empty or contains unsupported characters.'
+    print_runner_error \
+        'The selected review harness could not report a safe display name.' \
+        "harness ${HARNESS} harness_display_name" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+if ! rhyolite_harness_capture HARNESS_CLI_NAME harness_cli_name ||
+    [[ ! "${HARNESS_CLI_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]]; then
+    [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]] ||
+        RHYOLITE_HARNESS_ERROR_DETAIL='Harness CLI name is empty or contains unsupported characters.'
+    print_runner_error \
+        'The selected review harness could not report a safe CLI name.' \
+        "harness ${HARNESS} harness_cli_name" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+if ! rhyolite_harness_capture \
+    HARNESS_LOGIN_REMEDIATION harness_login_remediation ||
+    [[ -z "${HARNESS_LOGIN_REMEDIATION}" ||
+        "${HARNESS_LOGIN_REMEDIATION}" == *[[:cntrl:]]* ]]; then
+    [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]] ||
+        RHYOLITE_HARNESS_ERROR_DETAIL='Harness login remediation is empty or contains unsupported characters.'
+    print_runner_error \
+        'The selected review harness could not report safe login remediation.' \
+        "harness ${HARNESS} harness_login_remediation" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+if [[ -z "${MODEL}" ]]; then
+    if ! rhyolite_harness_capture MODEL harness_default_model; then
+        print_runner_error \
+            'The selected review harness could not resolve its default model.' \
+            "harness ${HARNESS} harness_default_model" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness default-model resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    MODEL_FROM_HARNESS=1
+fi
 if ((VALIDATE_ONLY && PLAN_ONLY)); then
     printf '%s\n' \
         '--validate-only and --plan-only cannot be used together.' >&2
@@ -861,8 +1048,41 @@ if [[ -n "${EXPECTED_PLAN_HASH}" ]]; then
     fi
     EXPECTED_PLAN_HASH="${EXPECTED_PLAN_HASH,,}"
 fi
-if ! rhyolite_valid_model_id "${MODEL}"; then
-    printf 'Invalid Copilot model identifier: %s\n' "${MODEL}" >&2
+if ! rhyolite_harness_invoke \
+    harness_validate_model_id "${MODEL}" >/dev/null 2>&1; then
+    if ((MODEL_FROM_HARNESS)); then
+        print_runner_error \
+            'The selected review harness returned an invalid default model.' \
+            "harness ${HARNESS} harness_default_model" \
+            "Harness ${HARNESS}" \
+            'Harness default model is empty or contains unsupported characters.' \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    printf 'Invalid %s model identifier: %s\n' \
+        "${HARNESS_DISPLAY_NAME}" "${MODEL}" >&2
+    exit 2
+fi
+if ! rhyolite_harness_capture \
+    REASONING_EFFORT harness_max_reasoning_effort "${MODEL}"; then
+    print_runner_error \
+        'The selected review harness could not resolve maximum reasoning effort.' \
+        "harness ${HARNESS} harness_max_reasoning_effort" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness reasoning-effort resolution failed.}" \
+        'Review planning and execution did not start.' \
+        'Select a valid model for this harness and retry.'
+    exit 2
+fi
+if [[ ! "${REASONING_EFFORT}" =~ ^[A-Za-z][A-Za-z0-9_-]{0,31}$ ]]; then
+    print_runner_error \
+        'The selected review harness returned an invalid reasoning effort.' \
+        "harness ${HARNESS} harness_max_reasoning_effort" \
+        "Harness ${HARNESS}" \
+        'Harness reasoning effort is empty or contains unsupported characters.' \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
     exit 2
 fi
 case "${FLEET_MODE}" in
@@ -1239,10 +1459,17 @@ if ((PLAN_ONLY || !VALIDATE_ONLY)); then
 fi
 
 if ((!VALIDATE_ONLY && !PLAN_ONLY)); then
-    command -v copilot >/dev/null 2>&1 || {
-        printf 'copilot is required.\n' >&2
+    if ! rhyolite_harness_invoke \
+        harness_require_cli >/dev/null 2>/dev/null; then
+        print_runner_error \
+            "The ${HARNESS_DISPLAY_NAME} CLI is unavailable." \
+            "harness ${HARNESS} harness_require_cli" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Required harness CLI validation failed.}" \
+            'Review execution did not start.' \
+            "Install or repair the ${HARNESS_DISPLAY_NAME} CLI, then retry."
         exit 2
-    }
+    fi
     command -v timeout >/dev/null 2>&1 || {
         printf 'GNU timeout is required.\n' >&2
         exit 2
@@ -1558,63 +1785,45 @@ if ((REMEMBER_PREFERENCES)); then
         "${#canonical_urls[@]}"
 fi
 
-authentication_variables=(
-    COPILOT_GITHUB_TOKEN
-    GH_TOKEN
-    GITHUB_TOKEN
-    COPILOT_PROVIDER_API_KEY
-    COPILOT_PROVIDER_BEARER_TOKEN
-    ANTHROPIC_API_KEY
-    AZURE_OPENAI_API_KEY
-    OPENAI_API_KEY
-    CAPI_HMAC_KEY
-    COPILOT_HMAC_KEY
-    GITHUB_COPILOT_API_TOKEN
-)
-source_copilot_home="${COPILOT_HOME:-${HOME}/.copilot}"
-mapfile -t copilot_auth_bridge < <(
-    python3 - "${source_copilot_home}/config.json" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-bridge = {}
-if path.is_file():
-    try:
-        text = "\n".join(
-            line for line in path.read_text(encoding="utf-8").splitlines()
-            if not line.lstrip().startswith("//")
-        )
-        config = json.loads(text)
-        for name in (
-            "lastLoggedInUser",
-            "loggedInUsers",
-            "copilotTokens",
-            "last_logged_in_user",
-            "logged_in_users",
-            "copilot_tokens",
-        ):
-            if name in config:
-                bridge[name] = config[name]
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        bridge = {}
-
-has_plaintext_tokens = any(
-    isinstance(bridge.get(name), dict) and bridge[name]
-    for name in ("copilotTokens", "copilot_tokens")
-)
-print("1" if has_plaintext_tokens else "0")
-print(json.dumps(bridge, separators=(",", ":")))
-PY
-)
-COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT="${copilot_auth_bridge[0]:-0}"
-COPILOT_AUTH_BRIDGE_JSON="${copilot_auth_bridge[1]:-}"
-[[ -n "${COPILOT_AUTH_BRIDGE_JSON}" ]] ||
-    COPILOT_AUTH_BRIDGE_JSON='{}'
-unset copilot_auth_bridge
-printf '%s\n' \
-    'Copilot authentication will be verified by the first isolated review session using the current environment, system credential store, GitHub CLI fallback, configured provider, or an ephemeral local auth bridge.'
+declare -a authentication_variables=()
+authentication_variables_output=''
+if ! rhyolite_harness_capture \
+    authentication_variables_output harness_auth_secret_env_vars; then
+    print_runner_error \
+        'The selected review harness could not report protected authentication variables.' \
+        "harness ${HARNESS} harness_auth_secret_env_vars" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness authentication-variable resolution failed.}" \
+        'Repository review execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+mapfile -t authentication_variables <<< "${authentication_variables_output}"
+declare -A authentication_variable_seen=()
+for authentication_variable in "${authentication_variables[@]}"; do
+    if [[ ! "${authentication_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+        [[ -n "${authentication_variable_seen[${authentication_variable}]+x}" ]]; then
+        print_runner_error \
+            'The selected review harness returned an invalid protected authentication-variable list.' \
+            "harness ${HARNESS} harness_auth_secret_env_vars" \
+            "Harness ${HARNESS}" \
+            'Harness authentication-variable names must be nonempty, unique shell identifiers.' \
+            'Repository review execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    authentication_variable_seen["${authentication_variable}"]=1
+done
+if ! rhyolite_harness_invoke harness_prepare_run 2>/dev/null; then
+    print_runner_error \
+        'The selected review harness could not prepare its run context.' \
+        "harness ${HARNESS} harness_prepare_run" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness run preparation failed.}" \
+        'Repository review execution did not start.' \
+        'Correct the harness authentication or local configuration and retry.'
+    exit 2
+fi
 
 git_version="$(git --version 2>/dev/null)" || {
     printf 'Could not determine the installed Git version.\n' >&2
@@ -1898,8 +2107,8 @@ finalize_repository_artifacts() {
     fi
     [[ -f "${errors}" ]] || : > "${errors}"
     if [[ -s "${errors}" ]]; then
-        tr -d '\r' < "${errors}" |
-            strip_terminal_controls |
+        strip_terminal_controls < "${errors}" |
+            strip_runner_error_controls |
             redact_credentials |
             redact_emails > "${errors}.tmp"
         mv -- "${errors}.tmp" "${errors}"
@@ -2133,31 +2342,6 @@ new_session_id() {
         "${hex:16:4}" "${hex:20:12}"
 }
 
-sanitize_and_remove_runtime_copilot_home() {
-    local runtime_home="$1"
-    local attempt
-
-    [[ -n "${runtime_home}" && -e "${runtime_home}" ]] || return 0
-    if [[ -f "${runtime_home}/config.json" ]]; then
-        if ! rm -f -- "${runtime_home}/config.json"; then
-            {
-                printf '%s\n' \
-                    '// User settings belong in settings.json.' \
-                    '// This file is managed automatically.' \
-                    '{}'
-            } > "${runtime_home}/config.json" 2>/dev/null || true
-            chmod 600 -- "${runtime_home}/config.json" 2>/dev/null || true
-        fi
-    fi
-
-    for attempt in 1 2 3; do
-        rm -rf -- "${runtime_home}" 2>/dev/null || true
-        [[ ! -e "${runtime_home}" ]] && return 0
-        sleep 1
-    done
-    return 1
-}
-
 process_repository() {
     local repository="$1"
     local slug="$2"
@@ -2183,17 +2367,17 @@ process_repository() {
     local state_path="${result_path}/state.json"
     local handoff_path="${result_path}/handoff.md"
     local agent_state_path="${result_path}/agent-state"
-    local copilot_home_path="${agent_state_path}/copilot-home"
-    local raw_output="${result_path}/copilot-output.raw"
+    local raw_output="${result_path}/${HARNESS}-output.raw"
     local transcript_plain_path="${transcript_path}.plain"
     local transcript_report_path="${report_path}.transcript"
+    local final_message_path="${transcript_report_path}.final-message"
     local session_id=""
     local session_name=""
     local commit=""
     local status="ReviewFailed"
     local exit_code=1
     local post_process_failure=0
-    local runtime_copilot_home=""
+    local runtime_harness_home=""
 
     mkdir -p -- "${result_path}"
     : > "${error_path}"
@@ -2379,6 +2563,7 @@ EOF
             printf '\n'
         } |
             strip_terminal_controls |
+            strip_runner_error_controls |
             redact_credentials |
             redact_emails |
             head -c 65536
@@ -2457,61 +2642,42 @@ EOF
     review_path="${snapshot_path}"
     review_progress "${slug}" 'snapshot' 'read-only source snapshot prepared'
 
-    while IFS= read -r template_line || [[ -n "${template_line}" ]]; do
-        case "${template_line}" in
-            'Repository URL: {{REPOSITORY_URL}}')
-                printf 'Repository URL: %s\n' "${repository}"
-                ;;
-            'Read-only source snapshot: {{REPOSITORY_PATH}}')
-                printf 'Read-only source snapshot: %s\n' "${review_path}"
-                ;;
-            'Exact commit to review: {{COMMIT}}')
-                printf 'Exact commit to review: %s\n' "${commit}"
-                ;;
-            'Review date: {{REVIEW_DATE}}')
-                printf 'Review date: %s\n' "${REVIEW_DATE}"
-                ;;
-            'Recent-prior-art window: {{PRIOR_ART_START_DATE}} through {{REVIEW_DATE}}')
-                printf 'Recent-prior-art window: %s through %s\n' \
-                    "${PRIOR_ART_START_DATE}" "${REVIEW_DATE}"
-                ;;
-            'Provenance lookback months: {{PROVENANCE_LOOKBACK_MONTHS}}')
-                if ((ENABLE_PROVENANCE_RESEARCH)); then
-                    printf 'Provenance lookback months: %s\n' \
-                        "${PROVENANCE_LOOKBACK_MONTHS}"
-                else
-                    printf 'Provenance lookback months: disabled\n'
-                fi
-                ;;
-            'Provenance start date: {{PROVENANCE_START_DATE}}')
-                if ((ENABLE_PROVENANCE_RESEARCH)); then
-                    printf 'Provenance start date: %s\n' \
-                        "${PROVENANCE_START_DATE}"
-                else
-                    printf 'Provenance start date: disabled\n'
-                fi
-                ;;
-            'Selected scope: {{SCOPE_NAME}}')
-                printf 'Selected scope: %s\n' "${SCOPE_NAME}"
-                ;;
-            'Trusted wrapper artifact directory: {{OUTPUT_DIRECTORY}}')
-                printf 'Trusted wrapper artifact directory: %s\n' \
-                    "${result_path}"
-                ;;
-            '{{REPOSITORY_METADATA}}')
-                printf '%s\n' "${repository_metadata}"
-                ;;
-            '{{PUBLIC_RESEARCH_INSTRUCTIONS}}')
-                printf '%s\n' "${PUBLIC_RESEARCH_INSTRUCTIONS}"
-                ;;
-            '{{PROVENANCE_INSTRUCTIONS}}')
-                printf '%s\n' "${PROVENANCE_INSTRUCTIONS}"
-                ;;
-            *)
-                printf '%s\n' "${template_line}"
-                ;;
-        esac
-    done < "${PROMPT_PATH}" > "${request_path}"
+    if ! rhyolite_harness_invoke harness_render_request \
+        "${PROMPT_PATH}" \
+        "${request_path}" \
+        "${repository}" \
+        "${review_path}" \
+        "${commit}" \
+        "${REVIEW_DATE}" \
+        "${PRIOR_ART_START_DATE}" \
+        "${ENABLE_PROVENANCE_RESEARCH}" \
+        "${PROVENANCE_LOOKBACK_MONTHS}" \
+        "${PROVENANCE_START_DATE}" \
+        "${SCOPE_NAME}" \
+        "${result_path}" \
+        "${repository_metadata}" \
+        "${PUBLIC_RESEARCH_INSTRUCTIONS}" \
+        "${PROVENANCE_INSTRUCTIONS}" \
+        >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_render_request" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness request rendering failed.}" \
+            >> "${error_path}"
+        cat > "${report_path}" <<'EOF'
+================================================================================
+REPOSITORY REVIEW REPORT
+Harness request rendering failed. See errors.txt.
+================================================================================
+EOF
+        finalize_repository_artifacts \
+            "${state_path}" "${slug}" "${repository}" "" "${commit}" \
+            "ReviewFailed" 1 "${review_path}" "${result_path}" \
+            "${report_path}" "${markdown_path}" "${html_path}" \
+            "${timeline_path}" "${transcript_path}" "${request_path}" \
+            "${error_path}" "${handoff_path}" "${started_at}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        return 1
+    fi
 
     session_id="$(new_session_id)"
     local session_prefix='review-'
@@ -2526,175 +2692,164 @@ EOF
         available_tools+=',web_fetch'
     fi
 
-    local -a copilot_arguments=(
-        -C "${session_root}"
-        --plugin-dir "${PLUGIN_ROOT}"
-        --name "${session_name}"
-        --session-id "${session_id}"
-        --agent rhyolite:repo-review-worker
-        --model "${MODEL}"
-        --reasoning-effort "${REASONING_EFFORT}"
-        --context long_context
-        --no-ask-user
-        --no-color
-        --no-custom-instructions
-        --disable-builtin-mcps
-        --disallow-temp-dir
-        --no-remote-export
-        --secret-env-vars "$(IFS=,; printf '%s' "${authentication_variables[*]}")"
-        --available-tools "${available_tools}"
-        --allow-tool read
-        --deny-tool write
-        --deny-tool shell
-        --stream off
-        --share "${transcript_path}"
-        --silent
-    )
-    if ((ENABLE_PUBLIC_RESEARCH)); then
-        copilot_arguments+=(--allow-all-urls)
-    fi
-
-    runtime_copilot_home="$(
-        mktemp -d "${TMPDIR:-/tmp}/rhyolite-repo-review-copilot.XXXXXXXX"
+    local -a worker_arguments=()
+    local -a worker_environment=()
+    local authentication_variable_list
+    local worker_ready=1
+    local worker_started=0
+    authentication_variable_list="$(
+        IFS=,
+        printf '%s' "${authentication_variables[*]}"
     )"
-    chmod 700 -- "${runtime_copilot_home}"
-    REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN="${runtime_copilot_home}"
-    trap '
-        if [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]]; then
-            sanitize_and_remove_runtime_copilot_home \
-                "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN}" \
-                >/dev/null 2>&1 || true
-        fi
-    ' EXIT
-    if ((COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT)); then
-        cat > "${runtime_copilot_home}/settings.json" <<'EOF'
-{
-  "storeTokenPlaintext": true,
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    else
-        cat > "${runtime_copilot_home}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    fi
-    {
+    if ! rhyolite_harness_invoke harness_worker_argv \
+        worker_arguments \
+        "${session_root}" \
+        "${PLUGIN_ROOT}" \
+        "${session_name}" \
+        "${session_id}" \
+        "${MODEL}" \
+        "${REASONING_EFFORT}" \
+        "${authentication_variable_list}" \
+        "${available_tools}" \
+        "${transcript_path}" \
+        "${ENABLE_PUBLIC_RESEARCH}" \
+        >/dev/null 2>> "${error_path}"; then
         printf '%s\n' \
-            '// User settings belong in settings.json.' \
-            '// This file is managed automatically.'
-        printf '%s\n' "${COPILOT_AUTH_BRIDGE_JSON}"
-    } > "${runtime_copilot_home}/config.json"
-    chmod 600 -- \
-        "${runtime_copilot_home}/settings.json" \
-        "${runtime_copilot_home}/config.json"
+            "Harness failure stage: harness ${HARNESS} harness_worker_argv" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker argument construction failed.}" \
+            >> "${error_path}"
+        worker_ready=0
+    fi
 
-    review_progress \
-        "${slug}" \
-        'analysis' \
-        "${MODEL} review started; scope ${SCOPE}"
-    set +e
-    timeout \
-        --signal=TERM \
-        --kill-after=30s \
-        "${SESSION_TIMEOUT_MINUTES}m" \
-        env \
-        -u COPILOT_ALLOW_ALL \
-        -u COPILOT_SKILLS_DIRS \
-        -u COPILOT_CUSTOM_INSTRUCTIONS_DIRS \
-        -u COPILOT_DYNAMIC_RETRIEVAL_SKILLS \
-        -u COPILOT_EMBEDDING_ONLY_SKILLS \
-        COPILOT_HOME="${runtime_copilot_home}" \
-        copilot "${copilot_arguments[@]}" \
-        < "${request_path}" \
-        > "${raw_output}" \
-        2> "${error_path}" &
-    local review_process_id=$!
-    local analysis_started_epoch
-    analysis_started_epoch="$(date +%s)"
-    while kill -0 "${review_process_id}" 2>/dev/null; do
-        sleep 30
-        if kill -0 "${review_process_id}" 2>/dev/null; then
-            local elapsed_seconds=$(( $(date +%s) - analysis_started_epoch ))
-            review_progress \
-                "${slug}" \
-                'analysis' \
-                "still running; elapsed $((elapsed_seconds / 60))m $((elapsed_seconds % 60))s"
+    if ((worker_ready)); then
+        runtime_harness_home="$(
+            mktemp -d \
+                "${TMPDIR:-/tmp}/rhyolite-repo-review-${HARNESS}.XXXXXXXX"
+        )"
+        REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN="${runtime_harness_home}"
+        trap '
+            if [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]]; then
+                rhyolite_harness_invoke harness_sanitize_runtime_home \
+                    "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN}" \
+                    >/dev/null 2>&1 || true
+            fi
+        ' EXIT
+        if ! rhyolite_harness_invoke harness_prepare_worker_home \
+            "${runtime_harness_home}" \
+            >/dev/null 2>> "${error_path}"; then
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_prepare_worker_home" \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker-home preparation failed.}" \
+                >> "${error_path}"
+            worker_ready=0
         fi
-    done
-    wait "${review_process_id}"
-    exit_code=$?
-    set -e
+    fi
 
-    mkdir -p -- "${copilot_home_path}"
-    chmod 700 -- "${copilot_home_path}"
-    cat > "${copilot_home_path}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    cat > "${copilot_home_path}/config.json" <<'EOF'
-// User settings belong in settings.json.
-// This file is managed automatically.
-{}
-EOF
-    chmod 600 -- \
-        "${copilot_home_path}/settings.json" \
-        "${copilot_home_path}/config.json"
-    local state_entry source_entry destination_entry state_file
-    local relative_state_file destination_state_file
-    for state_entry in session-state session-store; do
-        source_entry="${runtime_copilot_home}/${state_entry}"
-        [[ -d "${source_entry}" ]] || continue
-        destination_entry="${copilot_home_path}/${state_entry}"
-        mkdir -p -- "${destination_entry}"
-        while IFS= read -r -d '' state_file; do
-            relative_state_file="${state_file#"${source_entry}/"}"
-            destination_state_file="${destination_entry}/${relative_state_file}"
-            mkdir -p -- "$(dirname -- "${destination_state_file}")"
-            cp -- "${state_file}" "${destination_state_file}"
-        done < <(find "${source_entry}" -type f -print0)
-    done
-    find "${copilot_home_path}" -type d -exec chmod 700 -- {} +
-    find "${copilot_home_path}" -type f -exec chmod 600 -- {} +
-    if sanitize_and_remove_runtime_copilot_home "${runtime_copilot_home}"; then
-        runtime_copilot_home=""
+    if ((worker_ready)) &&
+        ! rhyolite_harness_invoke harness_worker_env worker_environment \
+            >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_worker_env" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker environment construction failed.}" \
+            >> "${error_path}"
+        worker_ready=0
+    fi
+
+    if ((worker_ready)); then
+        review_progress \
+            "${slug}" \
+            'analysis' \
+            "${MODEL} review started; scope ${SCOPE}"
+        set +e
+        timeout \
+            --signal=TERM \
+            --kill-after=30s \
+            "${SESSION_TIMEOUT_MINUTES}m" \
+            env \
+            "${worker_environment[@]}" \
+            "${HARNESS_CLI_NAME}" "${worker_arguments[@]}" \
+            < "${request_path}" \
+            > "${raw_output}" \
+            2> "${error_path}" &
+        local review_process_id=$!
+        local analysis_started_epoch
+        worker_started=1
+        analysis_started_epoch="$(date +%s)"
+        while kill -0 "${review_process_id}" 2>/dev/null; do
+            sleep 30
+            if kill -0 "${review_process_id}" 2>/dev/null; then
+                local elapsed_seconds=$(( $(date +%s) - analysis_started_epoch ))
+                review_progress \
+                    "${slug}" \
+                    'analysis' \
+                    "still running; elapsed $((elapsed_seconds / 60))m $((elapsed_seconds % 60))s"
+            fi
+        done
+        wait "${review_process_id}"
+        exit_code=$?
+        set -e
+    else
+        : > "${raw_output}"
+        exit_code=1
+    fi
+
+    if ((worker_started == 0)); then
+        session_id=""
+        session_name=""
+    fi
+
+    if ((worker_started)) &&
+        ! rhyolite_harness_invoke harness_persist_agent_state \
+            "${runtime_harness_home}" \
+            "${agent_state_path}" \
+            >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
+            >> "${error_path}"
+        post_process_failure=1
+    fi
+    if rhyolite_harness_invoke harness_sanitize_runtime_home \
+        "${runtime_harness_home}" \
+        >/dev/null 2>> "${error_path}"; then
+        runtime_harness_home=""
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
         trap - EXIT
     else
         printf '%s\n' \
-            "Could not remove the temporary Copilot runtime home after three attempts: ${runtime_copilot_home}" \
+            "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Could not remove the temporary harness runtime home.}" \
             >> "${error_path}"
         post_process_failure=1
     fi
 
-    tr -d '\r' < "${raw_output}" |
-        strip_terminal_controls |
+    strip_terminal_controls < "${raw_output}" |
+        strip_runner_error_controls |
         redact_credentials |
         redact_emails > "${timeline_path}"
     rm -f -- "${raw_output}"
     if [[ -s "${error_path}" ]]; then
-        tr -d '\r' < "${error_path}" |
-            strip_terminal_controls |
+        strip_terminal_controls < "${error_path}" |
+            strip_runner_error_controls |
             redact_credentials |
             redact_emails > "${error_path}.tmp"
         mv -- "${error_path}.tmp" "${error_path}"
     fi
     if [[ -f "${transcript_path}" ]]; then
-        tr -d '\r' < "${transcript_path}" |
-            strip_terminal_controls |
+        strip_terminal_controls < "${transcript_path}" |
+            strip_runner_error_controls |
             redact_credentials |
             redact_emails > "${transcript_plain_path}"
+    fi
+    if ((worker_started)) &&
+        ! rhyolite_harness_invoke harness_verify_isolation \
+        "${timeline_path}" \
+        >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_verify_isolation" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness isolation verification failed.}" \
+            >> "${error_path}"
+        exit_code=1
     fi
 
     if ((exit_code == 0)); then
@@ -2705,20 +2860,30 @@ EOF
         fi
         if ((report_extracted == 0)) ||
             ! report_has_closing_delimiter "${report_path}"; then
-            if [[ -s "${transcript_plain_path}" ]] &&
-                extract_final_copilot_report \
+            if [[ -s "${transcript_plain_path}" ]]; then
+                if rhyolite_harness_invoke harness_extract_final_report \
+                    "${timeline_path}" \
                     "${transcript_plain_path}" \
-                    "${transcript_report_path}"; then
-                if report_has_closing_delimiter "${transcript_report_path}"; then
-                    mv -- "${transcript_report_path}" "${report_path}"
-                    report_extracted=1
-                    review_progress \
-                        "${slug}" \
-                        'analysis' \
-                        'complete report recovered from sanitized session transcript'
-                elif ((report_extracted == 0)); then
-                    mv -- "${transcript_report_path}" "${report_path}"
-                    report_extracted=1
+                    "${final_message_path}" \
+                    "${transcript_report_path}" \
+                    >/dev/null 2>> "${error_path}"; then
+                    if report_has_closing_delimiter \
+                        "${transcript_report_path}"; then
+                        mv -- "${transcript_report_path}" "${report_path}"
+                        report_extracted=1
+                        review_progress \
+                            "${slug}" \
+                            'analysis' \
+                            'complete report recovered from sanitized session transcript'
+                    elif ((report_extracted == 0)); then
+                        mv -- "${transcript_report_path}" "${report_path}"
+                        report_extracted=1
+                    fi
+                else
+                    printf '%s\n' \
+                        "Harness failure stage: harness ${HARNESS} harness_extract_final_report" \
+                        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness final-report extraction failed.}" \
+                        >> "${error_path}"
                 fi
             fi
             rm -f -- "${transcript_report_path}"
@@ -3137,14 +3302,12 @@ if ((failure)); then
     done
 fi
 
-allow_all="${COPILOT_ALLOW_ALL:-false}"
-allow_all="${allow_all,,}"
 should_open=0
 if ((OPEN_HTML)); then
     should_open=1
 elif ((!NO_OPEN_HTML)) &&
-    [[ "${allow_all}" == "true" || "${allow_all}" == "1" ||
-        "${allow_all}" == "yes" ]]; then
+    rhyolite_harness_invoke \
+        harness_allow_all_detected >/dev/null 2>&1; then
     should_open=1
 elif ((!NO_OPEN_HTML)) && is_interactive_console; then
     read -r -p 'Open the local HTML report index now? [y/N]: ' open_input

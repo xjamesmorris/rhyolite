@@ -168,6 +168,20 @@ ensure_release_gate_files() {
 write_mock_validator_scripts() {
     local target_path="$1"
     mkdir -p -- "${target_path}/tests"
+    cat <<EOF_SH > "${target_path}/tests/validate-all.sh"
+#!${REAL_BASH}
+set -euo pipefail
+ROOT="\$(cd -- "\$(dirname -- "\${BASH_SOURCE[0]}")/.." && pwd)"
+bash "\${ROOT}/tests/validate-harness-contract.sh"
+bash "\${ROOT}/tests/validate-plugin.sh"
+EOF_SH
+    cat <<EOF_SH > "${target_path}/tests/validate-harness-contract.sh"
+#!${REAL_BASH}
+set -euo pipefail
+if [[ -n "\${PUBLIC_RELEASE_VALIDATION_LOG:-}" ]]; then
+    printf 'validator-script-harness-contract %s\n' "\$PWD" >> "\${PUBLIC_RELEASE_VALIDATION_LOG}"
+fi
+EOF_SH
     cat <<EOF_SH > "${target_path}/tests/validate-plugin.sh"
 #!${REAL_BASH}
 set -euo pipefail
@@ -179,7 +193,10 @@ if [[ -n "\${MOCK_VALIDATE_BASH_OUTPUT:-}" ]]; then
 fi
 exit "\${MOCK_VALIDATE_BASH_EXIT:-0}"
 EOF_SH
-    chmod +x "${target_path}/tests/validate-plugin.sh"
+    chmod +x \
+        "${target_path}/tests/validate-all.sh" \
+        "${target_path}/tests/validate-harness-contract.sh" \
+        "${target_path}/tests/validate-plugin.sh"
 }
 
 prepare_validation_tree() {
@@ -626,7 +643,7 @@ reject_grep '[gate|required-codeowners-gate]' "${REPORTS_ROOT}/gate-placeholder.
 reject_grep '[gate|required-license-gate]' "${REPORTS_ROOT}/gate-placeholder.audit.txt"
 
 # Fully resolved gate files must allow both export and preflight to succeed
-# with Bash validation passing and no findings.
+# with aggregate Bash validation passing and no findings.
 CLEAN_EXPORT_DEST="${WORK_ROOT}/clean-release-export"
 : > "${VALIDATION_LOG}"
 expect_success "${REPORTS_ROOT}/clean-export.stdout.txt" \
@@ -638,7 +655,7 @@ expect_success "${REPORTS_ROOT}/clean-export.stdout.txt" \
 require_grep 'preflight: passed' "${REPORTS_ROOT}/clean-export.audit.txt"
 require_grep 'validation: passed' "${REPORTS_ROOT}/clean-export.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/clean-export.audit.txt"
-require_grep '[bash] status=passed command=bash tests/validate-plugin.sh exit_code=0' \
+require_grep '[bash] status=passed command=bash tests/validate-all.sh exit_code=0' \
     "${REPORTS_ROOT}/clean-export.audit.txt"
 [[ -x "${CLEAN_EXPORT_DEST}/rhyolite" ]] ||
     fail 'Public export did not preserve the root launcher executable.'
@@ -654,9 +671,11 @@ expect_success "${REPORTS_ROOT}/clean-preflight.stdout.txt" \
 require_grep 'preflight: passed' "${REPORTS_ROOT}/clean-preflight.audit.txt"
 require_grep 'validation: passed' "${REPORTS_ROOT}/clean-preflight.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/clean-preflight.audit.txt"
+require_grep "bash ${CLEAN_EXPORT_DEST}/tests/validate-all.sh" "${VALIDATION_LOG}"
+require_grep "bash ${CLEAN_EXPORT_DEST}/tests/validate-harness-contract.sh" "${VALIDATION_LOG}"
 require_grep "bash ${CLEAN_EXPORT_DEST}/tests/validate-plugin.sh" "${VALIDATION_LOG}"
 
-# Bash validation is run and recorded.
+# Aggregate Bash validation is run and recorded.
 VALIDATION_TREE="${TREES_ROOT}/validation-tree"
 prepare_validation_tree "${VALIDATION_TREE}"
 : > "${VALIDATION_LOG}"
@@ -669,11 +688,14 @@ expect_success "${REPORTS_ROOT}/validation-pass.stdout.txt" \
 require_grep 'preflight: passed' "${REPORTS_ROOT}/validation-pass.audit.txt"
 require_grep 'validation: passed' "${REPORTS_ROOT}/validation-pass.audit.txt"
 require_grep 'finding_count: 0' "${REPORTS_ROOT}/validation-pass.audit.txt"
-require_grep '[bash] status=passed command=bash tests/validate-plugin.sh exit_code=0' \
+require_grep '[bash] status=passed command=bash tests/validate-all.sh exit_code=0' \
     "${REPORTS_ROOT}/validation-pass.audit.txt"
+require_grep "bash ${VALIDATION_TREE}/tests/validate-all.sh" "${VALIDATION_LOG}"
+require_grep "bash ${VALIDATION_TREE}/tests/validate-harness-contract.sh" "${VALIDATION_LOG}"
 require_grep "bash ${VALIDATION_TREE}/tests/validate-plugin.sh" "${VALIDATION_LOG}"
 
-# Skipping validation must still block release and record Bash as skipped.
+# Skipping validation must still block release and record aggregate Bash as
+# skipped.
 : > "${VALIDATION_LOG}"
 expect_failure "${REPORTS_ROOT}/validation-skip.stdout.txt" \
     env PATH="${VALIDATION_FULL_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" \
@@ -683,9 +705,9 @@ expect_failure "${REPORTS_ROOT}/validation-skip.stdout.txt" \
     --skip-validation \
     --audit-report "${REPORTS_ROOT}/validation-skip.audit.txt"
 require_grep 'validation: skipped' "${REPORTS_ROOT}/validation-skip.audit.txt"
-require_grep '[validation|validation-skipped] Validation was skipped by option; public release requires bash tests/validate-plugin.sh on Fedora Linux 44.' \
+require_grep '[validation|validation-skipped] Validation was skipped by option; public release requires bash tests/validate-all.sh on Fedora Linux 44.' \
     "${REPORTS_ROOT}/validation-skip.audit.txt"
-require_grep '[bash] status=skipped command=bash tests/validate-plugin.sh' \
+require_grep '[bash] status=skipped command=bash tests/validate-all.sh' \
     "${REPORTS_ROOT}/validation-skip.audit.txt"
 [[ ! -s "${VALIDATION_LOG}" ]] || fail 'Skipped validation unexpectedly invoked validators.'
 
@@ -699,12 +721,13 @@ expect_failure "${REPORTS_ROOT}/validation-missing-bash.stdout.txt" \
     --audit-report "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
 require_grep '[validation|validation-bash] Missing validator runtime: bash.' \
     "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
-require_grep '[bash] status=failed command=bash tests/validate-plugin.sh' \
+require_grep '[bash] status=failed command=bash tests/validate-all.sh' \
     "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
 require_grep 'message: Missing validator runtime: bash.' \
     "${REPORTS_ROOT}/validation-missing-bash.audit.txt"
 
-# Failing bash validator must block and capture the validator result.
+# A failing legacy plugin validator must fail the aggregate validator and
+# capture its result.
 : > "${VALIDATION_LOG}"
 expect_failure "${REPORTS_ROOT}/validation-failing-bash.stdout.txt" \
     env PATH="${VALIDATION_FULL_BIN}" PUBLIC_RELEASE_VALIDATION_LOG="${VALIDATION_LOG}" MOCK_VALIDATE_BASH_EXIT=17 MOCK_VALIDATE_BASH_OUTPUT='mock bash failure' \
@@ -712,12 +735,14 @@ expect_failure "${REPORTS_ROOT}/validation-failing-bash.stdout.txt" \
     --destination "${VALIDATION_TREE}" \
     --source-commit "${SANDBOX_COMMIT}" \
     --audit-report "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
-require_grep '[validation|validation-bash] bash tests/validate-plugin.sh failed with exit code 17.' \
+require_grep '[validation|validation-bash] bash tests/validate-all.sh failed with exit code 17.' \
     "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
-require_grep '[bash] status=failed command=bash tests/validate-plugin.sh exit_code=17' \
+require_grep '[bash] status=failed command=bash tests/validate-all.sh exit_code=17' \
     "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
-require_grep 'message: bash tests/validate-plugin.sh failed with exit code 17.' \
+require_grep 'message: bash tests/validate-all.sh failed with exit code 17.' \
     "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
+require_grep "bash ${VALIDATION_TREE}/tests/validate-harness-contract.sh" "${VALIDATION_LOG}"
+require_grep "bash ${VALIDATION_TREE}/tests/validate-plugin.sh" "${VALIDATION_LOG}"
 require_grep '  mock bash failure' "${REPORTS_ROOT}/validation-failing-bash.audit.txt"
 
 # Exact occurrence waivers: one content waiver must not suppress another match in the same file.

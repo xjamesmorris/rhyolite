@@ -20,6 +20,7 @@ fail() {
     local remediation="$4"
     local exit_code="${5:-1}"
     local artifacts="${6:-NONE}"
+    local consequence="${7:-Copilot and guided repository-review setup did not start or complete.}"
     local safe_details
 
     safe_details="$(
@@ -42,7 +43,7 @@ fail() {
         "Stage: ${stage}" \
         'Source: NOT APPLICABLE' \
         "Details: ${safe_details} (exit code ${exit_code})" \
-        'Consequence: Copilot and guided repository-review setup did not start or complete.' \
+        "Consequence: ${consequence}" \
         "Remediation: ${remediation}" \
         "Artifacts: ${artifacts}" \
         "Support: ${RHYOLITE_SUPPORT_TEXT}" \
@@ -458,11 +459,12 @@ Rhyolite launcher v${version}
 Usage:
   rhyolite [--help]
   rhyolite [--version]
-  rhyolite [--repo URL ...] [--fleet-mode native|standard]
+  rhyolite [--repo URL ...] [--harness ID] [--fleet-mode native|standard]
            [--model MODEL] [--yolo] [--autopilot]
            [--] [initial review request...]
 
 Options:
+  --harness ID  Select the review harness (currently: copilot).
   --yolo       Start Copilot in YOLO mode for this launch.
   --autopilot  Start Copilot in autopilot mode for this launch.
 
@@ -476,6 +478,7 @@ main() {
     local script_path
     local script_dir
     local plugin_root
+    local harness_common
     local version
     local mode='launch'
     local original_dir
@@ -485,6 +488,8 @@ main() {
     local log_dir
     local initial_request
     local initial_prompt
+    local requested_harness=''
+    local harness
     local fleet_mode=''
     local model=''
     local yolo=0
@@ -510,6 +515,16 @@ main() {
     script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
     script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
     plugin_root="$(cd -P "${script_dir}/.." && pwd)"
+    harness_common="${plugin_root}/lib/harness/common.sh"
+    [ -f "${harness_common}" ] ||
+        fail \
+            'launcher harness validation' \
+            'The launcher harness helper is missing.' \
+            "Harness helper was not found at ${harness_common}." \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+    # shellcheck source=../lib/harness/common.sh
+    source "${harness_common}"
     configure_repository_links "${plugin_root}"
 
     [ -f "${plugin_root}/plugin.json" ] ||
@@ -618,6 +633,25 @@ main() {
                 esac
                 shift 2
                 ;;
+            --harness)
+                [ "$#" -ge 2 ] && [ -n "$2" ] ||
+                    fail \
+                        'launcher argument validation' \
+                        'A harness identifier is missing.' \
+                        '--harness requires a supported harness identifier.' \
+                        'Pass --harness copilot or omit it to use the default.' \
+                        2
+                requested_harness="$2"
+                shift 2
+                ;;
+            --harness=*)
+                fail \
+                    'launcher argument validation' \
+                    'The harness option used unsupported equals-form syntax.' \
+                    'The launcher accepts the harness identifier only as a separate argument.' \
+                    'Use --harness ID, for example --harness copilot.' \
+                    2
+                ;;
             --model)
                 [ "$#" -ge 2 ] && rhyolite_valid_model_id "$2" ||
                     fail \
@@ -650,6 +684,30 @@ main() {
                 ;;
         esac
     done
+
+    harness="$(rhyolite_harness_resolve "${requested_harness}")" ||
+        fail \
+            'launcher harness resolution' \
+            'The requested launcher harness is invalid.' \
+            'The --harness or RHYOLITE_HARNESS value could not be resolved safely.' \
+            'Pass --harness copilot, set RHYOLITE_HARNESS=copilot, or unset the environment override.' \
+            2
+    rhyolite_harness_validate_context "${harness}" ||
+        fail \
+            'launcher harness context' \
+            'The inherited launcher harness context is invalid.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The inherited launcher harness marker could not be validated.}" \
+            'Retry from a fresh environment after unsetting RHYOLITE_LAUNCHER_HARNESS, or restart from the trusted launcher with the same supported harness selected in both contexts.' \
+            2 \
+            'NONE' \
+            'The inherited launcher marker was rejected before Copilot, launcher state, or guided setup could start.'
+    rhyolite_harness_load "${plugin_root}" "${harness}" ||
+        fail \
+            'launcher harness validation' \
+            'The requested launcher harness is unavailable.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness adapter '${harness}' could not be loaded from the packaged plugin.}" \
+            'Use --harness copilot with a complete Rhyolite plugin installation.' \
+            2
 
     copilot_path="$(command -v copilot || true)"
     [ -n "${copilot_path}" ] ||
@@ -788,6 +846,7 @@ main() {
     export RHYOLITE_LAUNCHER_CALLER_DIR="${original_dir}"
     export RHYOLITE_LAUNCHER_LAUNCH_DIR="${launch_dir}"
     export RHYOLITE_LAUNCHER_PLUGIN_ROOT="${plugin_root}"
+    export RHYOLITE_LAUNCHER_HARNESS="${harness}"
     export RHYOLITE_LAUNCHER_SESSION_DIR="${session_dir}"
     export RHYOLITE_LAUNCHER_VERSION="${version}"
     export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"

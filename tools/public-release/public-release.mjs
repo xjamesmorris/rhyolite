@@ -177,15 +177,15 @@ const CODEOWNERS_GATE_MESSAGE =
 const LICENSE_GATE_MESSAGE =
     'Public release requires a regular LICENSE* file with substantive non-whitespace content.';
 const VALIDATION_SKIP_MESSAGE =
-    'Validation was skipped by option; public release requires bash tests/validate-plugin.sh on Fedora Linux 44.';
+    'Validation was skipped by option; public release requires bash tests/validate-all.sh on Fedora Linux 44.';
 const VALIDATION_NOT_RUN_MESSAGE =
     'Validation did not run because export extraction failed.';
 const VALIDATOR_DEFINITIONS = [
     {
         id: 'bash',
         command: 'bash',
-        commandLine: 'bash tests/validate-plugin.sh',
-        scriptRelativePath: 'tests/validate-plugin.sh',
+        commandLine: 'bash tests/validate-all.sh',
+        scriptRelativePath: 'tests/validate-all.sh',
         buildArgs(scriptPath) {
             return [scriptPath];
         },
@@ -206,7 +206,7 @@ function usage(command) {
             'Usage:',
             '  public-export --source-ref <ref> --destination <directory> [options]',
             '',
-            'Runs bash tests/validate-plugin.sh by default.',
+            'Runs bash tests/validate-all.sh by default.',
             '',
             'Options:',
             '  --source-ref <ref>         Exact source ref or commit to export.',
@@ -220,7 +220,7 @@ function usage(command) {
             'Usage:',
             '  public-preflight --destination <directory> [options]',
             '',
-            'Runs bash tests/validate-plugin.sh by default.',
+            'Runs bash tests/validate-all.sh by default.',
             '',
             'Options:',
             '  --destination <directory>  Existing exported tree to scan.',

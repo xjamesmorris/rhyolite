@@ -4,7 +4,7 @@ Describe the change and why it is needed.
 
 ## Validation
 
-- [ ] `bash ./tests/validate-plugin.sh`
+- [ ] `bash ./tests/validate-all.sh`
 - [ ] `bash ./tests/test-install.sh`
 - [ ] `bash ./tools/public-release/test-public-release.sh`
 - [ ] Not run (explain why below)

@@ -10,19 +10,20 @@ compile or package build step. From the repository root:
 copilot --plugin-dir ./plugins/rhyolite plugin list
 
 # Full Fedora Linux 44 validation.
-bash ./tests/validate-plugin.sh
+bash ./tests/validate-all.sh
 ```
 
-The Linux validation script is monolithic and does not support selecting
-an individual assertion. For a single changed Bash file, use
-`bash -n <file>` as the narrowest syntax check; the full validator also
-requires Node.js. The Bash review runner additionally requires Python 3,
-and anonymous clone enforcement requires Git 2.41 or newer.
+The fail-fast aggregate runs the focused harness contract validator first,
+then the legacy monolithic plugin validator. Use
+`bash ./tests/validate-harness-contract.sh` for the focused harness seam or
+`bash -n <file>` as the narrowest syntax check for one changed Bash file.
+The full validator also requires Node.js. The Bash review runner additionally
+requires Python 3, and anonymous clone enforcement requires Git 2.41 or newer.
 
-There is no separate lint command. The Linux validator covers JSON
-metadata, prompt contracts, safety flags, Bash syntax, mocked runner
-behavior, state/artifact output, and UTF-8-without-BOM/LF-only text
-formatting.
+There is no separate lint command. The Linux validation gate covers the
+harness adapter/runner contract, JSON metadata, prompt contracts, safety
+flags, Bash syntax, mocked runner behavior, state/artifact output, and
+UTF-8-without-BOM/LF-only text formatting.
 
 ## Development reasoning policy
 

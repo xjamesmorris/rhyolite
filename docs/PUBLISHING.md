@@ -166,7 +166,7 @@ that onboarding notice.
 2. On Fedora Linux 44, run the release validator:
 
    ```bash
-   bash ./tests/validate-plugin.sh
+   bash ./tests/validate-all.sh
    ```
 
 3. Run `git diff --check`,

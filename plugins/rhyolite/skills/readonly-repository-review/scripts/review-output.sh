@@ -94,41 +94,6 @@ extract_report() {
     ' "${timeline}" > "${report}"
 }
 
-extract_final_copilot_report() {
-    local transcript="$1"
-    local report="$2"
-    local final_message="${report}.final-message"
-    local extraction_status=0
-
-    if ! awk '
-        { lines[NR] = $0 }
-        END {
-            start = 0
-            for (i = 1; i <= NR; i++) {
-                marker = lines[i]
-                sub(/^[[:space:]]+/, "", marker)
-                sub(/[[:space:]]+$/, "", marker)
-                if (marker == "### Copilot") {
-                    start = i + 1
-                }
-            }
-            if (start == 0) {
-                exit 42
-            }
-            for (i = start; i <= NR; i++) {
-                print lines[i]
-            }
-        }
-    ' "${transcript}" > "${final_message}"; then
-        rm -f -- "${final_message}"
-        return 42
-    fi
-
-    extract_report "${final_message}" "${report}" || extraction_status=$?
-    rm -f -- "${final_message}"
-    return "${extraction_status}"
-}
-
 report_has_closing_delimiter() {
     local report="$1"
 

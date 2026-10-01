@@ -602,14 +602,16 @@ Important defaults:
 Run validation on Fedora Linux 44:
 
 ```bash
-bash ./tests/validate-plugin.sh
+bash ./tests/validate-all.sh
 ```
 
-The repository validator covers manifests, launcher smoke tests,
-public-source rejection order, anonymous preflight and clone arguments,
-source-aware state, prompt placeholders, split picker/TUI runtime
-validation, Bash syntax, line endings, and forbidden permission
-defaults. It does not execute code from a reviewed repository.
+The fail-fast validation gate runs the focused harness contract checks
+before the legacy monolithic plugin validator. Together they cover
+manifests, launcher smoke tests, public-source rejection order,
+anonymous preflight and clone arguments, source-aware state, prompt
+placeholders, split picker/TUI runtime validation, Bash syntax, line
+endings, and forbidden permission defaults. They do not execute code
+from a reviewed repository.
 
 ## Name
 

@@ -10,6 +10,8 @@ SOURCE_ASSESSMENT_SKILL="${PLUGIN_ROOT}/skills/research-source-assessment/SKILL.
 RUNNER="${SKILL_ROOT}/scripts/run-parallel-reviews.sh"
 DISCOVERY="${SKILL_ROOT}/scripts/discover-repositories.sh"
 OUTPUT_HELPER="${SKILL_ROOT}/scripts/review-output.sh"
+HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
+COPILOT_HARNESS="${PLUGIN_ROOT}/lib/harness/copilot.sh"
 PROMPT="${SKILL_ROOT}/review-prompt.txt"
 SKILL="${SKILL_ROOT}/SKILL.md"
 AGENT="${PLUGIN_ROOT}/agents/repo-review.agent.md"
@@ -44,6 +46,7 @@ CHANGELOG="${ROOT}/CHANGELOG.md"
 THREAT_MODEL="${ROOT}/docs/THREAT-MODEL.md"
 PUBLISHING_DOC="${ROOT}/docs/PUBLISHING.md"
 PLATFORM_POR="${ROOT}/docs/PLAN-OF-RECORD.md"
+HARNESS_ARCHITECTURE="${ROOT}/docs/HARNESS-ARCHITECTURE.md"
 PR_TEMPLATE="${ROOT}/.github/PULL_REQUEST_TEMPLATE.md"
 COPILOT_INSTRUCTIONS="${ROOT}/.github/copilot-instructions.md"
 ISSUE_TEMPLATE_CONFIG="${ROOT}/.github/ISSUE_TEMPLATE/config.yml"
@@ -57,6 +60,8 @@ PUBLIC_RELEASE_EXPORT_BASH="${PUBLIC_RELEASE_ROOT}/public-export.sh"
 PUBLIC_RELEASE_PREFLIGHT_BASH="${PUBLIC_RELEASE_ROOT}/public-preflight.sh"
 PUBLIC_RELEASE_TEST="${PUBLIC_RELEASE_ROOT}/test-public-release.sh"
 INSTALL_TEST="${ROOT}/tests/test-install.sh"
+VALIDATE_ALL="${ROOT}/tests/validate-all.sh"
+HARNESS_CONTRACT_VALIDATOR="${ROOT}/tests/validate-harness-contract.sh"
 
 fail() {
     printf 'ERROR: %s\n' "$1" >&2
@@ -155,7 +160,10 @@ required_files=(
     "${RUNNER}"
     "${DISCOVERY}"
     "${OUTPUT_HELPER}"
+    "${HARNESS_COMMON}"
+    "${COPILOT_HARNESS}"
     "${PLATFORM_POR}"
+    "${HARNESS_ARCHITECTURE}"
     "${PR_TEMPLATE}"
     "${COPILOT_INSTRUCTIONS}"
     "${ISSUE_TEMPLATE_BUG}"
@@ -178,10 +186,44 @@ required_files=(
     "${PUBLIC_RELEASE_PREFLIGHT_BASH}"
     "${PUBLIC_RELEASE_TEST}"
     "${INSTALL_TEST}"
+    "${VALIDATE_ALL}"
+    "${HARNESS_CONTRACT_VALIDATOR}"
 )
 for path in "${required_files[@]}"; do
     [[ -f "${path}" ]] || fail "Required file is missing: ${path}"
 done
+
+contract_validation_line="$(
+    grep -nF 'bash "${ROOT}/tests/validate-harness-contract.sh"' \
+        "${VALIDATE_ALL}" | cut -d: -f1
+)"
+legacy_validation_line="$(
+    grep -nF 'bash "${ROOT}/tests/validate-plugin.sh"' \
+        "${VALIDATE_ALL}" | cut -d: -f1
+)"
+[[ -n "${contract_validation_line}" &&
+    -n "${legacy_validation_line}" &&
+    "${contract_validation_line}" -lt "${legacy_validation_line}" ]] ||
+    fail 'validate-all.sh does not run focused harness validation before legacy plugin validation.'
+grep -Fq 'bash ./tests/validate-all.sh' "${COPILOT_INSTRUCTIONS}" &&
+    grep -Fq 'bash ./tests/validate-all.sh' "${PR_TEMPLATE}" ||
+    fail 'Repository instructions and pull-request validation do not use validate-all.sh.'
+for validation_document in \
+    "${README}" \
+    "${PUBLISHING_DOC}" \
+    "${PLATFORM_POR}"; do
+    grep -Fq 'bash ./tests/validate-all.sh' "${validation_document}" ||
+        fail "Authoritative validation documentation does not use validate-all.sh: ${validation_document}"
+done
+grep -Fq "commandLine: 'bash tests/validate-all.sh'" \
+    "${PUBLIC_RELEASE_MODULE}" &&
+    grep -Fq "scriptRelativePath: 'tests/validate-all.sh'" \
+        "${PUBLIC_RELEASE_MODULE}" ||
+    fail 'Public-release preflight does not execute validate-all.sh.'
+grep -Fq 'bash ./tests/validate-all.sh' "${HARNESS_ARCHITECTURE}" &&
+    grep -Fq 'bash ./tests/validate-harness-contract.sh' \
+        "${HARNESS_ARCHITECTURE}" ||
+    fail 'Harness architecture does not document the authoritative validation commands.'
 
 if find "${ROOT}" -type f \( -name '*.ps1' -o -name '*.psm1' \) \
     -print -quit | grep -q .; then
@@ -530,10 +572,20 @@ done
 grep -Fq 'as of September 30, 2026' "${README}" &&
     grep -Fq 'Sol 5.6 and Fable 5' "${README}" ||
     fail 'README does not provide the dated model examples.'
-grep -Fq 'MODEL="gpt-5.6-sol"' "${RUNNER}" ||
+grep -Fq 'rhyolite_harness_capture MODEL harness_default_model' "${RUNNER}" &&
+    grep -Fq "printf '%s\\n' 'gpt-5.6-sol'" "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not default to GPT-5.6 Sol.'
-grep -Fq 'REASONING_EFFORT="max"' "${RUNNER}" &&
-    grep -Fq -- '--reasoning-effort "${REASONING_EFFORT}"' "${RUNNER}" ||
+grep -Fq \
+    'harness_validate_model_id "${MODEL}" >/dev/null 2>&1; then' \
+    "${RUNNER}" &&
+    grep -Fq 'harness_validate_model_id() {' "${COPILOT_HARNESS}" ||
+    fail 'Bash runner does not use Copilot harness model validation.'
+grep -Fq \
+    'REASONING_EFFORT harness_max_reasoning_effort "${MODEL}"; then' \
+    "${RUNNER}" &&
+    grep -Fq "printf '%s\\n' 'max'" "${COPILOT_HARNESS}" &&
+    grep -Fq -- '--reasoning-effort "${reasoning_effort}"' \
+        "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not enforce maximum reasoning effort.'
 grep -Fq "readonly RHYOLITE_REASONING_EFFORT='max'" \
     "${RHYOLITE_LAUNCHER}" &&
@@ -660,7 +712,7 @@ grep -Fq '`readonly-repository-review/SKILL.md`' "${AGENT}" ||
     fail 'Agent does not identify the loaded SKILL.md path as authoritative.'
 grep -Fq '`<SKILL_DIR>`' "${AGENT}" ||
     fail 'Agent does not introduce the <SKILL_DIR> alias.'
-grep -Fq "bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --plan-only --non-interactive ..." \
+grep -Fq "bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive ..." \
     "${AGENT}" ||
     fail 'Agent does not resolve plan-only runs from <SKILL_DIR>.'
 grep -Fq 'same Bash runner from' \
@@ -1338,28 +1390,29 @@ grep -Fq 'research specialist only when public' \
 
 for forbidden in \
     '--allow-all-tools' '--allow-all-paths' '--allow-all ' '--yolo'; do
-    ! grep -Fq -- "${forbidden}" "${RUNNER}" ||
-        fail "Runner contains forbidden default or credential: ${forbidden}"
+    ! grep -Fq -- "${forbidden}" "${RUNNER}" "${COPILOT_HARNESS}" ||
+        fail "Runner or Copilot harness contains forbidden default or credential: ${forbidden}"
 done
 
-grep -Fq 'if ((ENABLE_PUBLIC_RESEARCH)); then' "${RUNNER}" ||
+grep -Fq 'if ((enable_public_research)); then' "${COPILOT_HARNESS}" &&
+    grep -Fq 'output_arguments+=(--allow-all-urls)' "${COPILOT_HARNESS}" ||
     fail 'Bash URL bypass is not gated by public research.'
-grep -Fq -- '--disable-builtin-mcps' "${RUNNER}" ||
+grep -Fq -- '--disable-builtin-mcps' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not disable built-in MCP servers.'
-grep -Fq -- '--disallow-temp-dir' "${RUNNER}" ||
+grep -Fq -- '--disallow-temp-dir' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not disable temporary-directory access.'
-grep -Fq -- '--secret-env-vars' "${RUNNER}" ||
+grep -Fq -- '--secret-env-vars' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not protect inherited authentication.'
-grep -Fq 'COPILOT_AUTH_BRIDGE_JSON' "${RUNNER}" ||
+grep -Fq 'COPILOT_AUTH_BRIDGE_JSON' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not create an authentication bridge.'
-grep -Fq 'GitHub CLI fallback' "${RUNNER}" ||
+grep -Fq 'GitHub CLI fallback' "${COPILOT_HARNESS}" ||
     fail 'Runner does not support the GitHub CLI authentication fallback.'
 ! grep -Fq 'Copilot authentication preflight passed.' \
-    "${RUNNER}" ||
+    "${RUNNER}" "${COPILOT_HARNESS}" ||
     fail 'The runner still uses the speculative authentication preflight.'
-grep -Fq 'COPILOT_PROVIDER_API_KEY' "${RUNNER}" ||
+grep -Fq 'COPILOT_PROVIDER_API_KEY' "${COPILOT_HARNESS}" ||
     fail 'Runner does not protect provider authentication.'
-grep -Fq 'GITHUB_COPILOT_API_TOKEN' "${RUNNER}" ||
+grep -Fq 'GITHUB_COPILOT_API_TOKEN' "${COPILOT_HARNESS}" ||
     fail 'Runner does not protect Copilot API tokens.'
 grep -Fq 'ANONYMOUS_GIT_HOME=' "${RUNNER}" ||
     fail 'Bash anonymous Git home is missing.'
@@ -1391,40 +1444,48 @@ grep -Fq '"ProvenanceWindow": $(provenance_window_json' "${RUNNER}" ||
     fail 'Bash runner does not emit provenance-window state.'
 grep -Fq 'children=(' "${DISCOVERY}" ||
     fail 'Bash discovery is not bounded to direct child paths.'
-grep -Fq '"disableAllHooks": true' "${RUNNER}" ||
+grep -Fq '"disableAllHooks": true' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not disable hooks in the isolated Copilot home.'
-grep -Fq '"defaultLocalOnly": true' "${RUNNER}" ||
+grep -Fq '"defaultLocalOnly": true' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not exclude remote organization agents.'
-grep -Fq 'COPILOT_HOME=' "${RUNNER}" ||
+grep -Fq 'COPILOT_HOME=${COPILOT_RUNTIME_HOME}' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not isolate persisted Copilot state.'
-grep -Fq 'rhyolite-repo-review-copilot.XXXXXXXX' "${RUNNER}" ||
+grep -Fq \
+    '"${TMPDIR:-/tmp}/rhyolite-repo-review-${HARNESS}.XXXXXXXX"' \
+    "${RUNNER}" ||
     fail 'Bash runner does not use a unique temporary Copilot home.'
-grep -Fq 'for state_entry in session-state session-store' "${RUNNER}" ||
+grep -Fq 'harness_persist_agent_state' "${RUNNER}" &&
+    grep -Fq 'for state_entry in session-state session-store' \
+        "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not allowlist persisted Copilot state.'
-grep -Fq 'sanitize_and_remove_runtime_copilot_home' "${RUNNER}" ||
+grep -Fq 'harness_sanitize_runtime_home() {' "${COPILOT_HARNESS}" &&
+    grep -Fq \
+        'if rhyolite_harness_invoke harness_sanitize_runtime_home' \
+        "${RUNNER}" ||
     fail 'Bash runner does not sanitize and delete the temporary Copilot home.'
 grep -Fq 'post_process_failure=1' "${RUNNER}" ||
     fail 'Bash runner drops results when temporary-home cleanup fails.'
-grep -Fq 'chmod 700 -- "${copilot_home_path}"' "${RUNNER}" ||
+grep -Fq 'chmod 700 -- "${copilot_home_path}"' "${COPILOT_HARNESS}" ||
     fail 'Bash persisted Copilot home is not user-only.'
-grep -Fq 'find "${copilot_home_path}" -type f -exec chmod 600' "${RUNNER}" ||
+grep -Fq 'find "${copilot_home_path}" -type f -exec chmod 600' \
+    "${COPILOT_HARNESS}" ||
     fail 'Bash persisted Copilot files are not user-only.'
 grep -Fq '* -export-ignore -export-subst' "${RUNNER}" ||
     fail 'Bash snapshot does not neutralize archive attributes.'
-grep -Fq 'rhyolite:repo-review-worker' "${RUNNER}" ||
+grep -Fq 'rhyolite:repo-review-worker' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not use the namespaced worker agent ID.'
-grep -Fq -- '--deny-tool write' "${RUNNER}" ||
+grep -Fq -- '--deny-tool write' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not deny write tools.'
 ! grep -Fq 'shell(git' "${RUNNER}" ||
     fail 'A child runner still grants direct Git shell access.'
-grep -Fq -- '--deny-tool shell' "${RUNNER}" ||
+grep -Fq -- '--deny-tool shell' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not globally deny nested shell tools.'
 ! grep -Fq -- '--foreground' "${RUNNER}" ||
     fail 'Bash timeout leaves descendant processes outside timeout control.'
 grep -Fq "read -r -p 'Run this review plan? [y/N] ' confirm_input" \
     "${RUNNER}" ||
     fail 'Bash runner lost the direct interactive review-plan confirmation prompt.'
-grep -Fq -- '-u COPILOT_ALLOW_ALL' "${RUNNER}" ||
+grep -Fq -- '-u COPILOT_ALLOW_ALL' "${COPILOT_HARNESS}" ||
     fail 'Bash child process does not remove allow-all mode.'
 for artifact_name in \
     review.md review.html state.json handoff.md index.html request.txt agent-state; do
@@ -1439,6 +1500,8 @@ bash -n "${LAUNCHER_PREFERENCES_BASH}"
 bash -n "${ROOT_LAUNCHER}"
 bash -n "${RHYOLITE_LAUNCHER}"
 bash -n "${OUTPUT_HELPER}"
+bash -n "${HARNESS_COMMON}"
+bash -n "${COPILOT_HARNESS}"
 node --check "${RHYOLITE_EXTENSION}"
 node --check "${TUI_RUNTIME_VALIDATOR}"
 node "${TUI_RUNTIME_VALIDATOR}" --self-check >/dev/null
@@ -1544,6 +1607,8 @@ grep -Fq 'first public repository URL in the same turn' \
     fail 'Rhyolite skill can still stop after rendering its banner.'
 # shellcheck source=../plugins/rhyolite/skills/readonly-repository-review/scripts/review-output.sh
 source "${OUTPUT_HELPER}"
+# shellcheck source=../plugins/rhyolite/lib/harness/copilot.sh
+source "${COPILOT_HARNESS}"
 # shellcheck source=../plugins/rhyolite/scripts/launcher-preferences.sh
 source "${LAUNCHER_PREFERENCES_BASH}"
 
@@ -2424,8 +2489,10 @@ Complete report recovered from the final assistant message.
 
 <sub>Generated by GitHub Copilot CLI</sub>
 EOF
-extract_final_copilot_report \
+harness_extract_final_report \
+    '' \
     "${fixture_transcript}" \
+    "${fixture_transcript_report}.final-message" \
     "${fixture_transcript_report}" ||
     fail 'Bash output did not recover a complete final Copilot report.'
 report_has_closing_delimiter "${fixture_transcript_report}" ||
@@ -2444,8 +2511,10 @@ cat >> "${fixture_transcript}" <<'EOF'
 REPOSITORY REVIEW REPORT
 Latest assistant report remains incomplete.
 EOF
-extract_final_copilot_report \
+harness_extract_final_report \
+    '' \
     "${fixture_transcript}" \
+    "${fixture_transcript_report}.final-message" \
     "${fixture_transcript_report}" ||
     fail 'Bash output did not preserve an incomplete latest Copilot report.'
 grep -Fq 'Latest assistant report remains incomplete.' \
@@ -3391,7 +3460,7 @@ done
 for failure_contract in \
     'AccessPreflightFailed' 'CloneFailed' 'CommitResolutionFailed' \
     'SnapshotFailed' 'TimedOut' 'Incomplete report' \
-    'temporary Copilot runtime home' 'RHYOLITE ERROR'; do
+    'temporary harness runtime home' 'RHYOLITE ERROR'; do
     grep -Fq "${failure_contract}" "${RUNNER}" ||
         fail "Bash runner is missing failure contract: ${failure_contract}"
 done
@@ -4717,7 +4786,11 @@ if MOCK_UNTERMINATED=1 \
         2>"${incomplete_stderr}"; then
     fail 'Mock unterminated report unexpectedly completed.'
 fi
-grep -Fq 'Stage: report validation' "${incomplete_stdout}" &&
+grep -Fq 'Stage: harness copilot harness_extract_final_report' \
+    "${incomplete_stdout}" &&
+    grep -Fq \
+        'Harness failure stage: harness copilot harness_extract_final_report' \
+        "${incomplete_stdout}" &&
     grep -Fq 'Incomplete report: final closing delimiter was missing' \
         "${incomplete_stdout}" &&
     grep -Fq 'Artifacts: State ' "${incomplete_stdout}" ||
@@ -4743,7 +4816,7 @@ if (state.Status !== "ReviewFailed" ||
 }
 JS
 
-for failure_case in worker timeout cleanup; do
+for failure_case in worker timeout; do
     case "${failure_case}" in
         worker)
             failure_exit=33
@@ -4756,12 +4829,6 @@ for failure_case in worker timeout cleanup; do
             failure_message='mock worker timeout detail retained'
             expected_stage='worker timeout'
             expected_status='TimedOut'
-            ;;
-        cleanup)
-            failure_exit=1
-            failure_message='Could not remove the temporary Copilot runtime home after three attempts: mock-runtime-home'
-            expected_stage='cleanup'
-            expected_status='ReviewFailed'
             ;;
     esac
     case_output="${fixture_dir}/${failure_case}-failure-output"
@@ -4806,7 +4873,7 @@ const state = JSON.parse(fs.readFileSync(
 ));
 if (state.Status !== expectedStatus ||
     state.ExitCode !== Number.parseInt(expectedExitText, 10)) {
-  throw new Error("worker/timeout/cleanup failure state lost status or exit code");
+  throw new Error("worker/timeout failure state lost status or exit code");
 }
 JS
 done

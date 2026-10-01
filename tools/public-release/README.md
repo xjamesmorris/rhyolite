@@ -2,7 +2,7 @@
 
 `public-export.sh` requires a clean source worktree, archives an exact source
 ref into an empty destination with `git archive`, runs preflight, runs
-`bash tests/validate-plugin.sh` from the exported tree by default, and writes
+`bash tests/validate-all.sh` from the exported tree by default, and writes
 an audit report alongside the destination. Export
 staging is transactional: files are extracted into a temporary sibling and
 moved into the destination only after export, scanning, and validation
@@ -17,9 +17,13 @@ using current filesystem contents and ignores that checkout's root `.git` plus
 untracked or ignored local artifacts. History-free exports with no Git
 metadata are scanned entry-by-entry.
 
-By default, release validation requires the Bash validator to run
-successfully. A missing Bash runtime, missing validator script, or nonzero
-validator exit blocks the release.
+The authoritative validation command for public-release preflight is
+`bash tests/validate-all.sh`. It runs the focused
+`bash tests/validate-harness-contract.sh` validator first, then the legacy
+`bash tests/validate-plugin.sh` validator. By default, release validation
+requires this aggregate Bash validator to run successfully. A missing Bash
+runtime, missing aggregate validator script, or nonzero validator exit blocks
+the release.
 
 ## Usage
 
@@ -36,6 +40,9 @@ tools/public-release/public-preflight.sh \
 tools/public-release/public-preflight.sh \
   --destination . \
   --source-commit <resolved-commit>
+
+# authoritative validation command used by export and preflight
+bash tests/validate-all.sh
 ```
 
 ## Common options
@@ -55,9 +62,9 @@ repository, and non-empty destinations. The audit report records the resolved
 source commit plus sorted relative paths and SHA-256 hashes. It is written
 alongside the destination, not inside it. If export extraction, scanning, or
 validation fails, the destination stays absent or empty and temporary staging
-state is removed. The audit report records the Bash validator result even when
-the runtime is missing, validation fails, validation is skipped, or extraction
-fails before validation can run.
+state is removed. The audit report records the aggregate Bash validator result
+even when the runtime is missing, validation fails, validation is skipped, or
+extraction fails before validation can run.
 
 Default preflight blocks internal GitHub policy paths, unresolved public
 placeholder tokens, non-public maintainer/tool wording, corporate email
