@@ -58,6 +58,12 @@
     hijacks unrelated sessions before the user invokes the review agent.
 20. A tampered or mismatched launcher preference silently changes fleet
     mode or model, leaks a selected source, or bypasses review approval.
+21. An explicit `--yolo` launch broadens the outer Copilot orchestrator
+    to all permissions for that launch. Its allow-all state also makes the
+    runner open the local HTML report index without confirmation unless
+    that behavior is disabled.
+22. An explicit `--autopilot` launch permits autonomous continuation;
+    combining it with `--yolo` combines both outer-session risks.
 
 ## Controls
 
@@ -97,6 +103,14 @@
   starts. The trusted launcher setup block contains only canonical
   source URLs plus constrained fleet/model/remember fields; sources
   remain untrusted data rather than prompt instructions.
+- `--yolo` and `--autopilot` are disabled by default and are ephemeral
+  per-launch outer-orchestrator switches. `--yolo` opts the outer
+  Copilot orchestrator into all permissions, `--autopilot` enables
+  autonomous continuation, and selecting both combines the behaviors.
+  Neither is persisted in launcher context, copied into the trusted
+  launcher setup block, or remembered as a preference. The runner still
+  reads allow-all state to decide whether to open the local HTML report
+  index automatically; `--no-open-html` disables that behavior.
 - Per-repository fleet/model preferences are keyed by a SHA-256 hash of
   the canonical public URL, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
@@ -127,7 +141,10 @@
   and supplies bounded Git metadata from the trusted wrapper.
 - Child file access is rooted at the checkout and automatic
   temporary-directory access is disabled.
-- Child processes remove inherited `COPILOT_ALLOW_ALL`.
+- Outer `--yolo` or `--autopilot` state does not relax child review
+  restrictions. Runner-enforced tool isolation remains in place, and the
+  runner removes inherited `COPILOT_ALLOW_ALL` state from child process
+  environments after applying its own report-opening policy.
 - Child remote export is disabled.
 - Installed hook changes load only in new outer sessions; child review
   homes still set `disableAllHooks` and do not inherit the onboarding

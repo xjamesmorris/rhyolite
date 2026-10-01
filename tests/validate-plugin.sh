@@ -1465,6 +1465,12 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
     grep -Fq -- '--plugin-dir "${plugin_root}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--agent "${RHYOLITE_AGENT}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--model "${model}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--yolo)' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--autopilot)' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- 'copilot_arguments=(--yolo "${copilot_arguments[@]}")' \
+        "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- 'copilot_arguments=(--autopilot "${copilot_arguments[@]}")' \
+        "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- 'copilot_arguments=(--fleet "${copilot_arguments[@]}")' \
         "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '-i "${initial_prompt}"' "${RHYOLITE_LAUNCHER}" &&
@@ -1472,7 +1478,7 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
         "${RHYOLITE_LAUNCHER}" ||
     fail 'Unix launcher lost its trusted Copilot startup contract.'
 ! grep -Fq -- '--allow-all' "${RHYOLITE_LAUNCHER}" ||
-    fail 'Rhyolite launcher enables allow-all mode.'
+    fail 'Rhyolite launcher contains the forbidden literal --allow-all spelling.'
 ! grep -Eq \
     'readlink[[:space:]]+-f|realpath|mktemp|date[[:space:]]+--|declare[[:space:]]+-A|mapfile|readarray|local[[:space:]]+-n|\$\{[^}]+,,\}' \
     "${ROOT_LAUNCHER}" ||
@@ -1988,7 +1994,7 @@ rm -f -- "${root_wrapper_log}"
     cd "${ROOT}"
     RHYOLITE_LAUNCHER_TRUSTED_MARKER='trusted-root-wrapper-run' \
         RHYOLITE_ROOT_WRAPPER_LOG="${root_wrapper_log}" \
-        "${root_wrapper_link}" -- \
+        "${root_wrapper_link}" --yolo --autopilot -- \
             'Review https://example.com/owner/repository' \
             'with spaces' \
             $'line\nbreak\tkept?'
@@ -2014,6 +2020,8 @@ if (fields[index] !== "ARGS") {
 }
 const args = fields.slice(index + 1);
 const expectedArgs = [
+  "--yolo",
+  "--autopilot",
   "--",
   "Review https://example.com/owner/repository",
   "with spaces",
@@ -2067,7 +2075,9 @@ rm -f -- "${launcher_stub_log}"
 launcher_help="$("${launcher_link}" --help)"
 launcher_version="$("${launcher_link}" --version)"
 [[ "${launcher_help}" == *'Rhyolite launcher v'* &&
-    "${launcher_help}" == *'initial review request'* ]] ||
+    "${launcher_help}" == *'initial review request'* &&
+    "${launcher_help}" == *'--yolo'* &&
+    "${launcher_help}" == *'--autopilot'* ]] ||
     fail 'Unix launcher --help output is incomplete.'
 [[ "${launcher_version}" == \
     "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}")" ]] ||
@@ -2084,9 +2094,15 @@ launcher_version="$("${launcher_link}" --version)"
             --repo https://example.com/owner/repository.git \
             --fleet-mode native \
             --model claude-fable-5 \
+            --yolo \
+            --autopilot \
+            --yolo \
+            --autopilot \
             -- \
             'Review https://example.com/owner/repository' \
             'with spaces' \
+            '--yolo' \
+            '--autopilot' \
             $'line\nbreak\tkept?'
 )
 [[ -s "${launcher_stub_log}" ]] ||
@@ -2110,6 +2126,7 @@ while (index < fields.length && fields[index] !== "ARGS") {
 }
 if (fields[index] !== "ARGS") throw new Error("launcher stub log has no ARGS marker");
 const args = fields.slice(index + 1);
+const countArg = (flag) => args.filter((arg) => arg === flag).length;
 const valueAfter = (flag) => {
   const flagIndex = args.indexOf(flag);
   if (flagIndex < 0 || flagIndex + 1 >= args.length) {
@@ -2121,7 +2138,8 @@ const launchDirectory = valueAfter("-C");
 const pluginRoot = valueAfter("--plugin-dir");
 const prompt = valueAfter("-i");
 const expectedRequest =
-  "Review https://example.com/owner/repository with spaces linebreakkept?";
+  "Review https://example.com/owner/repository with spaces " +
+  "--yolo --autopilot linebreakkept?";
 const expectedPrompt =
   "RHYOLITE_START_COMMAND_V1\n" +
   "RHYOLITE_LAUNCHER_SETUP_V1\n" +
@@ -2143,6 +2161,9 @@ if (valueAfter("--agent") !== "rhyolite:repo-review") {
 if (!args.includes("--fleet") ||
     valueAfter("--model") !== "claude-fable-5") {
   throw new Error("launcher did not apply fleet/model selections");
+}
+if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 1) {
+  throw new Error("launcher did not de-duplicate yolo/autopilot selections");
 }
 if (prompt !== expectedPrompt || /[\x00-\x09\x0B-\x1F\x7F]/u.test(prompt)) {
   throw new Error("launcher did not preserve and sanitize the initial request");
@@ -2214,6 +2235,9 @@ if (fields.at(-1) === "") fields.pop();
 const argsIndex = fields.indexOf("ARGS");
 const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (args.includes("--yolo") || args.includes("--autopilot")) {
+  throw new Error("launcher enabled yolo/autopilot without explicit flags");
+}
 if (!args.includes("--fleet") ||
     valueAfter("--model") !== "claude-fable-5" ||
     !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5\n")) {

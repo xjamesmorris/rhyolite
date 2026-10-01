@@ -21,11 +21,17 @@
   recommended reliable entrypoint, `/rhyolite:start` as the in-session
   compatibility entrypoint, `/rhyolite:repo-review` as an alias, and
   `/repo-review` as the extension shorthand.
-- Added the `bin/rhyolite` launcher that resolves the
-  plugin root, move Copilot orchestration outside Git worktrees,
-  preselect the restricted agent, collect public source/fleet/model
-  settings, preserve a sanitized initial request, and never enable
-  allow-all mode or persist that request/source in launch context.
+- Added the `bin/rhyolite` launcher, which resolves the plugin root,
+  moves Copilot orchestration outside Git worktrees, preselects the
+  restricted agent, collects public source/fleet/model settings, and
+  preserves a sanitized initial request without persisting that request
+  or source in launch context. Neither `--yolo` nor `--autopilot` is
+  enabled by default. Explicit per-launch `--yolo` gives the outer
+  Copilot orchestrator all permissions, `--autopilot` enables autonomous
+  continuation, and they can be combined. These switches are not persisted
+  in launcher context, copied into trusted setup, or remembered as
+  preferences; child restrictions stay unchanged, including runner-enforced
+  tool isolation and removal of inherited `COPILOT_ALLOW_ALL`.
 - Added native launcher `--fleet`/`--model` selection and versioned,
   user-only per-repository fleet/model preferences. Approved settings
   are included in the plan hash and are saved atomically only after plan

@@ -75,6 +75,26 @@ wrapper on Fedora Linux 44:
 ./rhyolite --repo https://github.com/owner/repository
 ```
 
+Optional switches change the outer Copilot session for that launch.
+`--yolo` also affects report handling:
+
+```bash
+./rhyolite --repo https://github.com/owner/repository --yolo
+./rhyolite --repo https://github.com/owner/repository --autopilot
+./rhyolite --repo https://github.com/owner/repository --yolo --autopilot
+```
+
+Neither switch is enabled by default. `--yolo` explicitly opts the outer
+Copilot orchestrator into all permissions for that launch;
+`--autopilot` enables autonomous continuation; they can be combined.
+Both are ephemeral per-launch switches: neither is persisted in launcher
+context, copied into trusted setup, or remembered as a preference.
+Because `--yolo` sets allow-all mode, a completed review opens the local
+HTML report index automatically instead of prompting unless the runner's
+`--no-open-html` option is selected. Restricted child review sessions
+retain runner-enforced tool isolation and remove inherited
+`COPILOT_ALLOW_ALL` state.
+
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
 argument unchanged to the canonical packaged Bash launcher at
@@ -89,11 +109,11 @@ characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs, ask whether to use native
 Copilot fleet mode, and confirm the review model. Native mode adds the
 process-level `--fleet` flag, and every launch passes the selected
-`--model`. They never enable allow-all mode. Because setup starts
-immediately, launcher-started sessions suppress the ordinary plugin load
-line (`Rhyolite v... loaded — type /rhyolite:start to start.`) and
-show automatic-guided-mode copy that tells the user to wait for the
-first setup prompt.
+`--model`. Because setup starts immediately,
+launcher-started sessions suppress the ordinary plugin load line
+(`Rhyolite v... loaded — type /rhyolite:start to start.`) and show
+automatic-guided-mode copy that tells the user to wait for the first
+setup prompt.
 
 The checkout wrapper preserves that trusted launcher/helper behavior by
 delegating in place to the canonical packaged launcher. Per-launch

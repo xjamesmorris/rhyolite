@@ -330,7 +330,7 @@ prompt_for_fleet_mode() {
     while true; do
         printf '\nRhyolite execution mode\n' >&2
         if [[ -n "${remembered_mode}" ]]; then
-            printf '  1. Keep remembered mode (%s)\n' \
+            printf '  1. Keep previously used (%s)\n' \
                 "${remembered_mode}" >&2
             printf '  2. Native Copilot fleet mode\n' >&2
             printf '  3. Standard Copilot mode\n' >&2
@@ -362,7 +362,7 @@ prompt_for_model() {
     while true; do
         printf '\nReview model\n' >&2
         if [[ -n "${remembered_model}" ]]; then
-            printf '  1. Keep remembered model (%s)\n' \
+            printf '  1. Keep previously used (%s)\n' \
                 "${remembered_model}" >&2
             printf '  2. GPT-5.6 Sol (%s)\n' \
                 "${RHYOLITE_DEFAULT_MODEL}" >&2
@@ -459,7 +459,12 @@ Usage:
   rhyolite [--help]
   rhyolite [--version]
   rhyolite [--repo URL ...] [--fleet-mode native|standard]
-           [--model MODEL] [--] [initial review request...]
+           [--model MODEL] [--yolo] [--autopilot]
+           [--] [initial review request...]
+
+Options:
+  --yolo       Start Copilot in YOLO mode for this launch.
+  --autopilot  Start Copilot in autopilot mode for this launch.
 
 Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
 collects launcher settings, selects ${RHYOLITE_AGENT}, and begins guided setup
@@ -482,6 +487,8 @@ main() {
     local initial_prompt
     local fleet_mode=''
     local model=''
+    local yolo=0
+    local autopilot=0
     local remembered_fleet_mode=''
     local remembered_model=''
     local remembered_consistent=1
@@ -621,6 +628,14 @@ main() {
                         2
                 model="$2"
                 shift 2
+                ;;
+            --yolo)
+                yolo=1
+                shift
+                ;;
+            --autopilot)
+                autopilot=1
+                shift
                 ;;
             --)
                 shift
@@ -790,6 +805,12 @@ main() {
         --no-custom-instructions
         -i "${initial_prompt}"
     )
+    if ((autopilot)); then
+        copilot_arguments=(--autopilot "${copilot_arguments[@]}")
+    fi
+    if ((yolo)); then
+        copilot_arguments=(--yolo "${copilot_arguments[@]}")
+    fi
     if [[ "${fleet_mode}" == native ]]; then
         copilot_arguments=(--fleet "${copilot_arguments[@]}")
     fi
