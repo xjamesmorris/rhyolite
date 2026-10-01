@@ -18,6 +18,9 @@ an individual assertion. For a single changed Bash file, use
 `bash -n <file>` as the narrowest syntax check; the full validator also
 requires Node.js. The Bash review runner additionally requires Python 3,
 and anonymous clone enforcement requires Git 2.41 or newer.
+For broker/policy changes, run
+`python3 tests/test-research-egress-broker.py` before the monolithic
+validator.
 
 There is no separate lint command. The Linux validator covers JSON
 metadata, prompt contracts, safety flags, Bash syntax, mocked runner
@@ -88,7 +91,12 @@ scope.
   on Copilot CLI's automatic final custom-answer option rather than
   adding an explicit `Other` choice.
   `repo-review-worker.agent.md` is the non-user-invocable,
-  write-disabled child that analyzes one isolated snapshot.
+  write-disabled main child that analyzes one isolated snapshot and
+  consumes only a validated sanitized research dossier/summary when
+  research is enabled. `repo-research-worker.agent.md` is the separate
+  non-user-invocable, write/shell/agent-disabled child that runs first for
+  scope 2/3 and receives only snapshot reads/searches plus the exact local
+  broker tools.
 - `.github/agents/rhyolite-ui-validator.agent.md` is repository-only
   development tooling for finite picker drafts only. The separate
   `.github/agents/rhyolite-tui-runtime-validator.agent.md` covers
@@ -116,22 +124,36 @@ scope.
   includes a brief executive summary.
 - `skills/readonly-repository-review/SKILL.md` defines the review and
   safety contract. `review-prompt.txt` is rendered by the Bash runner;
-  its placeholders form an interface shared by the template, runner,
-  and Linux validator.
+  `research-prompt.txt` defines the dedicated dossier contract.
+  Their placeholders form strict interfaces shared by the templates,
+  runner, workers, and Linux validator.
 - `skills/research-source-assessment/SKILL.md` is private to the model.
   For scopes 2/3 it maps fresh subject-specific community, research, and
   commercial sources, deepens provenance coverage for scope 3, and
   requires persisted source-landscape, inaccessible-resource, and
   retrieval-priority report sections.
+- `research-policy.json` is the versioned default broker policy.
+  `scripts/research-egress-broker.py` is the explicitly approved Python
+  standard-library exception to the Bash-first rule. It implements the
+  deterministic local stdio MCP protocol, immutable public-HTTPS/DNS/TLS/no-
+  auth/no-proxy floor, direct fetch, anonymous GitHub, provider-disabled
+  general search, cookie isolation, TLS/HTTP evidence, and private unsupported-
+  body storage. `scripts/launch-research-egress-broker.sh` starts it under a
+  minimal `env -i` environment.
 - `run-parallel-reviews.sh` is the supported trusted boundary. It validates
   public HTTPS sources, rejects local paths before any `.git`
   inspection or network access, performs a fail-closed anonymous-access
   preflight for every selected source through pinned public DNS with
   credentials/helpers/proxies/redirects disabled, anonymously clones
   and pins the exact commit, creates a read-only `.git`-free snapshot,
-  supplies bounded Git metadata, creates an isolated Copilot home, and
-  invokes the worker with write/shell/custom instructions/built-in MCPs
-  disabled.
+  supplies bounded Git metadata, creates isolated Copilot homes, and
+  invokes workers with write/shell/custom instructions/built-in MCPs
+  disabled. Scope 1 creates no research process/config/log. Scope 2/3
+  launches dedicated research through an ephemeral local MCP config,
+  validates at least one successful public response, the dossier,
+  permissions, and cleanup, then passes only the read-only sanitized
+  dossier/summary to the main worker. No child receives `web_fetch` or
+  `--allow-all-urls`.
 - User-facing launcher, extension, agent, and runner boundaries render
   `RHYOLITE ERROR` with safe stage/source/status/exit/artifact detail,
   consequence, remediation, support, and contribution guidance. Runner
@@ -139,7 +161,7 @@ scope.
   worker, timeout, incomplete-report, and cleanup failures.
 - Analytical command and worker agents, plus direct runners, use a
   current frontier reasoning model at maximum available effort and
-  context and must not automatically downgrade. As of September 30, 2026,
+  context and must not automatically downgrade. As of October 1, 2026,
   examples include Sol 5.6 and Fable 5. Maximum effort is the default
   and high is the hard minimum for analytical, general-purpose,
   formatting, orchestration, and mechanical work. Never use none,
@@ -149,9 +171,10 @@ scope.
   High/Medium/Low confidence with an evidence basis. Completeness,
   clarity, and correctness take priority over speed.
 - `review-output.sh` extracts the canonical report, sanitizes it, and
-  produces plain-text, inert Markdown, escaped HTML, state, and handoff
-  artifacts. Per-repository artifacts roll up into a run manifest,
-  state, handoff, and HTML index.
+  extracts the canonical research dossier, and produces plain-text,
+  inert Markdown, escaped HTML, state, and handoff artifacts.
+  Per-repository artifacts, research/network warnings, and transport
+  state roll up into a run manifest, state, handoff, and HTML index.
 - Release validation is local only on Fedora Linux 44. Do not add or
   require hosted CI workflows for the current release.
 
@@ -175,7 +198,8 @@ scope.
   intentional and guarded by validation.
 - Exact `help` must render the static panel and then a live
   `CURRENT SETUP STATUS` block. If scope is not `3`, clear any prior
-  provenance lookback and show `NOT SELECTED`.
+  provenance lookback and show `NOT SELECTED`. If scope is `1`, also
+  clear research-cookie consent and show `NOT SELECTED`.
 - Public home/docs/support/issues/pulls URLs are centralized under
   `https://github.com/xjamesmorris/rhyolite`. If metadata becomes
   missing, empty, unreadable, or unresolved, user-facing output must
@@ -185,6 +209,11 @@ scope.
   must be described as evidence-based provenance review for agentically
   generated code and still requires public research and human review
   before distribution.
+- Guided scope 2/3 setup asks whether research cookie replay is `off`
+  (recommended) or `ephemeral`. Either mode privately retains raw
+  Set-Cookie values for transport analysis; raw values and unsupported
+  bodies never reach a model or rendered report. Provider and policy
+  selection remain advanced-only.
 - Keep deterministic orchestration in scripts and keep agent/skill files
   focused on workflow and policy.
 - In agent/skill instructions, resolve runner scripts from
@@ -195,7 +224,8 @@ scope.
   `Run review`, `Edit setup`, and `Explain scope`, while still accepting
   exact `Change scope` as a shortcut into editing `Scope`.
 - Plan-only output now includes `ApprovalHash`. It also includes
-  `FleetMode`, `Model`, and `RememberPreferences`. Preserve the approved
+  `FleetMode`, `Model`, `RememberPreferences`, and `ResearchTransport`.
+  Preserve the approved
   settings, pass the hash
   unchanged to the actual runner with
   `--expected-plan-hash`/`-ExpectedPlanHash`, and never execute without
@@ -210,6 +240,13 @@ scope.
   changed, regenerate the plan, and reconfirm. Examples can include
   edited source URLs, source/output/scope/settings changes, or
   date-derived prior-art/provenance window rollover.
+- `ResearchTransport` is approval-hash material. For scope 2/3 it must
+  disclose dedicated-worker mode, broker/policy schema versions,
+  provider IDs, effective policy digest/resource profile, exact tools,
+  anonymous GitHub/no-auth mode, disabled general-web-search
+  availability, cookie replay, private raw Set-Cookie retention,
+  private unsupported-body retention, and network-log policy. Scope 1
+  fixes the object to disabled and clears stale cookie consent.
 - The direct runners are a lower-level interface than the agent: their
   interactive prompt order may differ, but they must still resolve and
   enforce the same effective plan and approval hash before execution.
@@ -217,14 +254,25 @@ scope.
   Bash/PowerShell parity; existing PowerShell counterparts are legacy
   files scheduled for removal under the platform POR.
 - Treat prompt placeholders as a strict interface. Adding or changing one
-  requires coordinated updates to `review-prompt.txt`, the Bash template
-  renderer, and Linux validation. The canonical report must retain the
+  requires coordinated updates to `review-prompt.txt` or
+  `research-prompt.txt`, the Bash template renderer, and Linux
+  validation. The canonical report and dossier must retain the
   80-or-more-character `=` delimiters and exact `REPOSITORY REVIEW
   REPORT` heading expected by the output extractors.
 - Preserve canonical, symlink-aware separation between clone, snapshot,
   and writable output roots. Unsafe URLs, non-public DNS answers,
   credential or proxy inheritance, path overlap, incomplete reports, and
   cleanup failures fail closed rather than weakening isolation.
+- Research policy files must resolve before clone, be trusted and
+  outside Git worktrees/target/output roots unless they are the bundled
+  default, and reduce to an effective digest. Version 1 accepts no
+  arbitrary executable, remote MCP, credentialed provider, HTTP/private
+  destination, proxy, imported cookie, or TLS bypass.
+- `research/network/private` is mode 0700 and its files are mode 0600.
+  Raw cookies and unsupported bodies are inert local evidence, never
+  linked individually from HTML or copied into dossier/report/state
+  prose. Broker jar/config/runtime state must be destroyed after each
+  repository phase; retained ledgers are never reloadable state.
 - Keep output safe for rendering: redact email addresses and terminal
   controls plus credential-bearing URL userinfo, authorization values,
   tokens, passwords, secrets, and API keys; render untrusted Markdown as

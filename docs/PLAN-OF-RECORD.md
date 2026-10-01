@@ -2,6 +2,8 @@
 
 **Decision date:** September 30, 2026
 
+**Constrained broker exception approved:** October 1, 2026
+
 ## Decision
 
 Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
@@ -12,6 +14,10 @@ Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
   currently validated.
 - Bash is the canonical launcher, helper, runner, and validation
   implementation.
+- The bundled Python 3 standard-library research egress broker is the one
+  approved constrained exception. Bash remains authoritative for
+  orchestration, planning, lifecycle, policy trust, cleanup, failure mapping,
+  and artifact finalization.
 - Validation is local only. Hosted continuous integration is not part of
   the current release gate.
 - Additional operating systems, shells, and Linux distributions are not
@@ -24,7 +30,9 @@ preserved speculatively.
 
 ## Immediate engineering policy
 
-1. New features and fixes target Linux and Bash only.
+1. New features and fixes target Linux and Bash only, except for the approved
+   local Python research broker. Do not add alternate shells, platforms,
+   broker runtimes, or PowerShell parity.
 2. Do not add alternate-platform implementations, branches, or parity
    assertions unless a later decision explicitly restores that scope.
 3. `bash ./tests/validate-plugin.sh` on Fedora 44 is the authoritative

@@ -129,6 +129,89 @@ extract_final_copilot_report() {
     return "${extraction_status}"
 }
 
+extract_research_dossier() {
+    local timeline="$1"
+    local dossier="$2"
+
+    awk '
+        function is_delimiter(value, trimmed) {
+            trimmed = value
+            sub(/^[[:space:]]+/, "", trimmed)
+            sub(/[[:space:]]+$/, "", trimmed)
+            return trimmed ~ /^=+$/ && length(trimmed) >= 80
+        }
+        { lines[NR] = $0 }
+        END {
+            start = 0
+            last = NR
+            candidate_finish = 0
+            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) {
+                last--
+            }
+            for (i = 1; i <= last; i++) {
+                if (is_delimiter(lines[i])) {
+                    header = 0
+                    for (j = 1; j <= 3 && i + j <= last; j++) {
+                        if (toupper(lines[i + j]) == "REPOSITORY RESEARCH DOSSIER") {
+                            header = i + j
+                        }
+                    }
+                    if (header > 0) {
+                        start = i
+                        candidate_finish = 0
+                        for (j = header + 1; j <= last; j++) {
+                            if (is_delimiter(lines[j])) {
+                                candidate_finish = j
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            if (start == 0) {
+                exit 42
+            }
+            finish = candidate_finish > 0 ? candidate_finish : last
+            for (i = start; i <= finish; i++) {
+                sub(/^ /, "", lines[i])
+                print lines[i]
+            }
+        }
+    ' "${timeline}" > "${dossier}"
+}
+
+canonicalize_research_dossier_closing_delimiter() {
+    local dossier="$1"
+
+    python3 - "${dossier}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+lines = text.splitlines()
+required_sections = [
+    "RESEARCH CAPABILITY RECORD",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH LIMITATIONS",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+]
+if (
+    len(lines) < 3
+    or len(lines[0].strip()) < 80
+    or set(lines[0].strip()) != {"="}
+    or lines[1].strip() != "REPOSITORY RESEARCH DOSSIER"
+    or any(lines.count(section) != 1 for section in required_sections)
+):
+    raise SystemExit(1)
+if lines[-1].strip() and set(lines[-1].strip()) == {"="}:
+    raise SystemExit(0)
+path.write_text(text.rstrip() + "\n" + "=" * 80 + "\n", encoding="utf-8")
+PY
+}
+
 report_has_closing_delimiter() {
     local report="$1"
 
@@ -243,6 +326,12 @@ write_review_handoff() {
     local source_kind="${11:-RemoteUrl}"
     local source_path="${12:-}"
     local provenance_window="${13:-Disabled}"
+    local research_transport="${14:-Disabled}"
+    local research_status="${15:-Disabled}"
+    local research_directory="${16:-}"
+    local research_dossier="${17:-}"
+    local research_network_summary="${18:-}"
+    local research_private_directory="${19:-}"
     local continuation
 
     if [[ -n "${session_id}" ]]; then
@@ -265,6 +354,18 @@ write_review_handoff() {
             printf '    %s\n' "${line}"
         done <<< "${provenance_window}"
         printf '\n'
+        printf 'Research transport:\n\n'
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            printf '    %s\n' "${line}"
+        done <<< "${research_transport}"
+        printf '\n'
+        printf 'Research status:\n\n    %s\n\n' "${research_status}"
+        if [[ -n "${research_directory}" ]]; then
+            printf 'Research artifact directory:\n\n    %s\n\n' \
+                "${research_directory}"
+            printf '%s\n\n' \
+                'The research network/private directory may contain sensitive tracking identifiers and hostile unsupported bytes. Keep it local and do not render or execute private evidence.'
+        fi
         printf 'Read-only checkout:\n\n    %s\n\n' "${checkout}"
         printf 'Writable output directory:\n\n    %s\n\n' "${output_directory}"
         printf 'Copilot session:\n\n    %s\n\n' "${session}"
@@ -282,6 +383,17 @@ write_review_handoff() {
         printf 'Request:\n\n    %s/request.txt\n\n' "${output_directory}"
         printf 'Errors:\n\n    %s/errors.txt\n\n' "${output_directory}"
         printf 'State:\n\n    %s/state.json\n\n' "${output_directory}"
+        if [[ -n "${research_dossier}" ]]; then
+            printf 'ResearchDossier:\n\n    %s\n\n' "${research_dossier}"
+        fi
+        if [[ -n "${research_network_summary}" ]]; then
+            printf 'ResearchNetworkSummary:\n\n    %s\n\n' \
+                "${research_network_summary}"
+        fi
+        if [[ -n "${research_private_directory}" ]]; then
+            printf 'ResearchPrivateEvidence:\n\n    %s\n\n' \
+                "${research_private_directory}"
+        fi
         printf 'AgentState:\n\n    %s/agent-state\n' "${output_directory}"
     } > "${handoff}"
 }

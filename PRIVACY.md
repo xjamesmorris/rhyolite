@@ -14,10 +14,28 @@ Do not use this version with:
 
 ## Public research
 
-Public web research is disabled by default. When enabled, searches must
-use public project terminology and must not contain private code,
-internal project names, internal URLs, credentials, or non-public
-personal information.
+Public research is disabled by default. Scope 2/3 uses a dedicated
+write-disabled research worker and bundled local stdio broker; the main
+review worker has no direct network tool. Research queries must use
+public project terminology and must not contain private code, internal
+project names, internal URLs, credentials, or non-public personal
+information.
+
+The broker sends only fixed unauthenticated GET/HEAD requests to
+validated public HTTPS destinations. It does not import authentication,
+proxy settings, netrc files, browser state, client certificates, or
+preexisting cookies. Anonymous GitHub REST/search is enabled; the stable
+general-web-search interface is provider-disabled by default in version
+`0.4.0`.
+
+Guided scope 2/3 setup explicitly asks whether research cookie replay is
+off or uses a fresh per-repository ephemeral jar. Off is recommended
+and the default. In either mode, raw Set-Cookie values are retained
+locally in a private per-repository ledger for transport analysis. They
+are never supplied to a model or rendered report. When replay is
+enabled, only bounded exact-host Secure cookies are eligible; the jar
+starts empty, is isolated to one repository/run, and is destroyed after
+the research phase.
 
 The research-source assessment records public URLs, source categories,
 check dates, freshness, ownership, and access failures. It never
@@ -72,6 +90,20 @@ reviewed repository. They may contain public usernames, public
 statements, source excerpts, vulnerability analysis, local filesystem
 paths, and Copilot session names and IDs.
 
+Scope 2/3 additionally creates a `research/` bundle. The sanitized
+dossier, network summary, and event ledger contain public URLs, response
+metadata, cookie names/attributes/value hashes, TLS certificate
+metadata, rate-limit information, access failures, and ownership-aware
+anomaly summaries. `research/network/private/` is mode 0700; its files
+are mode 0600. `cookies.jsonl` contains raw Set-Cookie values.
+Unsupported or binary response bodies are retained as content-addressed
+`.bin` files with a private manifest.
+
+Those private artifacts may contain tracking identifiers, personal data
+already published by a server, copyrighted material, misleading
+content, or hostile bytes. They are local, inert, unindexed, not
+individually linked from HTML, and never exposed to a model by Rhyolite.
+
 Rhyolite currently accepts only anonymously readable public HTTPS Git
 repository URLs as review sources. Local repository paths are rejected
 before any `.git` inspection, origin/`HEAD` resolution, DNS lookup, or
@@ -96,6 +128,9 @@ authentication environment variables are marked secret for child tools.
 The plugin omits author email addresses by default. Users are
 responsible for storing, sharing, and deleting reports according to
 their own applicable data handling and retention requirements.
+That responsibility includes deleting private research ledgers and
+bodies when they are no longer needed; Rhyolite does not automatically
+reuse or expire them.
 
 HTML reports contain no scripts or remote assets and escape untrusted
 content. Markdown reports, transcripts, and handoffs render untrusted
@@ -103,5 +138,5 @@ text as inert code rather than active links or images. Opening HTML uses
 the operating system's local browser association and does not upload the
 report.
 
-No telemetry, report upload, or background network requests are
-implemented by this plugin.
+No telemetry, report upload, background network requests, or reusable
+cross-run research cookie store is implemented by this plugin.

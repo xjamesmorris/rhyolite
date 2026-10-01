@@ -49,6 +49,42 @@ The supported runner path:
   sessions.
 - Denies all write tools in child review sessions.
 - Denies shell tools globally, including for nested specialist agents.
+- Removes direct `web_fetch` and broad URL approval from every child.
+- For scopes 2/3, launches a dedicated research worker before the main
+  reviewer with exactly five local broker tools. The main reviewer receives
+  only a validated read-only sanitized dossier and network summary.
+- Starts one bundled local stdio broker per repository through an ephemeral
+  mode-0600 MCP configuration and a minimal `env -i` launcher. The launcher
+  does not inherit proxy, netrc, GitHub, Copilot, SSH-agent, browser-cookie,
+  client-certificate, or model-provider credentials.
+- Restricts broker transport to GET/HEAD over HTTPS on approved TLS ports,
+  rejects URL userinfo and IP literals, resolves every initial/redirect host,
+  requires every DNS answer to be globally routable, connects to a pinned
+  address, and verifies TLS/SNI/hostname against the original host.
+- Revalidates and bounds redirects; applies fixed safe headers, per-host
+  pacing, request/concurrency/time/header/body/normalized-output limits, and
+  never accepts model-supplied headers or request bodies.
+- Keeps TLS verification mandatory. After verification failure, a second
+  metadata-only diagnostic handshake may fingerprint and describe the
+  presented leaf certificate, but sends no HTTP request and never converts the
+  failed retrieval into success.
+- Supports normalized HTML, text, JSON, XML, RSS, and Atom evidence. Active
+  HTML elements are stripped. Unsupported or binary bodies are retained only
+  as private content-addressed `.bin` evidence and are never rendered, parsed,
+  indexed, linked individually, or exposed to a model.
+- Keeps research cookie replay off by default. Optional replay uses a fresh
+  empty per-repository/per-run jar and only bounded exact-host Secure cookies.
+  Wider Domain cookies and insecure/oversized/expired cookies are rejected.
+  No jar is imported or reused.
+- Retains raw Set-Cookie values in a private mode-0600 ledger in either cookie
+  mode. Sanitized model/report surfaces contain only names, attributes, value
+  hashes, rejection reasons, and aggregate observations.
+- Validates the broker capability record, exact tool list, policy digest,
+  request ledger, at least one successful public response, canonical research
+  dossier, and broker/MCP/runtime cleanup before the main worker starts.
+- Fails closed with distinct `ResearchCapabilityFailed` and `ResearchFailed`
+  states when the transport/tool contract is unavailable, the phase has no
+  successful public response, the dossier is malformed, or cleanup is unsafe.
 - Supplies bounded, sanitized Git metadata from the trusted wrapper.
 - Pre-approves only checkout-contained file reads/searches and disables
   automatic access to the system temporary directory.
@@ -89,7 +125,7 @@ The supported runner path:
 - Escapes all untrusted report and metadata content before writing HTML.
 - Wraps transcripts and handoff values as inert Markdown code text.
 - Performs network activity only for user-requested anonymous clones and,
-  when enabled, public research.
+  when enabled, the approval-bound local research broker.
 - Does not perform background network requests or telemetry uploads.
 
 The custom agent delegates every review to the bundled runner, including
@@ -112,6 +148,13 @@ Headless Linux can use supported environment variables, a local
 provider, the GitHub CLI fallback, or Copilot's configured
 plaintext-token mode. Plaintext tokens exist only in the temporary
 runtime home and are not retained with review artifacts.
+
+Research policy/provider selection is an advanced trusted runner surface, not
+a guided picker. Version 1 accepts only the bundled `local-broker`, direct
+HTTPS adapter, anonymous GitHub adapter, and provider-disabled general-web
+search interface. A custom policy is reduced to an effective digest and cannot
+enable plaintext, private destinations, authentication, arbitrary executables
+or remote MCPs, TLS bypass, imported cookies, proxies, or cross-run state.
 
 ## Reporting a vulnerability
 

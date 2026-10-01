@@ -73,6 +73,16 @@ fi
 
 [[ -x "${installed_plugin_root}/bin/rhyolite" ]] ||
     fail 'Installed plugin is missing the executable Bash launcher.'
+[[ -x "${installed_plugin_root}/skills/readonly-repository-review/scripts/research-egress-broker.py" ]] ||
+    fail 'Installed plugin is missing the executable research egress broker.'
+[[ -x "${installed_plugin_root}/skills/readonly-repository-review/scripts/launch-research-egress-broker.sh" ]] ||
+    fail 'Installed plugin is missing the executable research broker launcher.'
+[[ -f "${installed_plugin_root}/agents/repo-research-worker.agent.md" ]] ||
+    fail 'Installed plugin is missing the dedicated research worker.'
+[[ -f "${installed_plugin_root}/skills/readonly-repository-review/research-prompt.txt" ]] ||
+    fail 'Installed plugin is missing the research prompt contract.'
+[[ -f "${installed_plugin_root}/skills/readonly-repository-review/research-policy.json" ]] ||
+    fail 'Installed plugin is missing the research policy.'
 [[ ! -e "${installed_plugin_root}/rhyolite" ]] ||
     fail 'Installed plugin unexpectedly contains a root-level launcher.'
 [[ ! -e "${installed_plugin_root}/agents/rhyolite-ui-validator.agent.md" ]] ||

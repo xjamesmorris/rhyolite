@@ -17,7 +17,11 @@
 - Issues, pull requests, release notes, and commit messages.
 - Public web pages, mailing-list posts, social media, and search
   results.
+- Broker-normalized HTTP bodies, redirect targets, TLS certificates,
+  response headers, cookies, and anonymous GitHub search results.
 - Repository URLs supplied to the runner.
+- User-selected trusted research policy files and advanced provider/cookie
+  settings.
 - User-local launcher fleet/model preference files.
 - User-selected output workspace paths and generated artifact paths.
 
@@ -64,6 +68,19 @@
     that behavior is disabled.
 22. An explicit `--autopilot` launch permits autonomous continuation;
     combining it with `--yolo` combines both outer-session risks.
+23. A research URL or redirect reaches loopback, private, link-local,
+    reserved, or rebinding-controlled infrastructure.
+24. Research transport inherits authentication, proxies, netrc, browser
+    cookies, client certificates, or caller-supplied headers.
+25. Server-issued cookies broaden scope, persist across repositories/runs, or
+    expose raw tracking identifiers to a model/report.
+26. Unsupported bodies or active HTML become executable, rendered, indexed,
+    or model-visible.
+27. A missing/broken MCP tool, zero-success research phase, malformed dossier,
+    or orphaned broker process is mistaken for completed live research.
+28. A custom policy/provider path selects target-derived configuration,
+    arbitrary executables, remote MCP endpoints, TLS bypass, or a weaker
+    transport floor.
 
 ## Controls
 
@@ -139,6 +156,45 @@
 - Custom agent tools exclude editing.
 - Runner denies write and shell tools globally, removes direct Git tools,
   and supplies bounded Git metadata from the trusted wrapper.
+- Scope 1 creates no broker process, MCP config, cookie jar, or research log.
+- Scope 2/3 launches a dedicated research worker before the main reviewer.
+  The research worker receives snapshot reads/searches and exactly
+  `research_capabilities`, `fetch_public_url`, `search_public_github`,
+  `search_public_web`, and `research_network_summary`. The main reviewer
+  receives only a validated read-only dossier and sanitized network summary.
+- Direct `web_fetch`, broad URL approval, built-in MCPs, shell, and writes are
+  unavailable to both research and main review children.
+- One bundled Python standard-library stdio broker is started per repository
+  through an ephemeral mode-0600 MCP config and an `env -i` launcher.
+- The broker permits GET/HEAD over HTTPS only, rejects userinfo/IP literals and
+  reserved hosts, resolves every initial/redirect target, requires every answer
+  to be globally routable, pins the selected address, and verifies TLS/SNI and
+  hostname against the original host.
+- Redirects, requests, concurrency, per-host rate, connect/total time, headers,
+  wire body, normalized output, links, cookies, and TLS ports are bounded by an
+  approval-hashed effective policy plus immutable code limits.
+- Fixed safe headers exclude Referer and Authorization. Model-supplied headers,
+  request bodies, authentication, inherited proxies/netrc/cookies/client
+  certificates, arbitrary executables, and remote MCP endpoints are forbidden.
+- A failed verified TLS handshake can trigger only a metadata-only diagnostic
+  handshake. It sends no HTTP request and cannot turn failure into success.
+- HTML active elements are stripped. Supported text/JSON/XML/RSS/Atom is
+  normalized as untrusted evidence. Unsupported or binary bodies are stored
+  privately by SHA-256 without original/executable extensions.
+- Cookie replay defaults off. Optional replay starts with a fresh empty
+  per-repository/per-run jar and permits only bounded exact-host Secure cookies
+  under path/expiry constraints. Raw Set-Cookie values remain only in a private
+  mode-0600 ledger in either mode and are never model/report inputs.
+- Broker capabilities, exact tools, policy digest, request ledger, at least one
+  successful public response, dossier headings/delimiters, private permissions,
+  and broker/config/runtime cleanup are validated before main analysis.
+- Distinct `ResearchCapabilityFailed` and `ResearchFailed` statuses prevent
+  missing transport, zero-success research, malformed output, or cleanup
+  failures from becoming a completed review.
+- Custom research policy files must be trusted and outside Git worktrees and
+  target/output roots. Version 1 accepts only bundled adapters; the effective
+  policy digest, providers, limits, and cookie mode are part of
+  `ApprovalHash`.
 - Child file access is rooted at the checkout and automatic
   temporary-directory access is disabled.
 - Outer `--yolo` or `--autopilot` state does not relax child review
@@ -150,8 +206,8 @@
   homes still set `disableAllHooks` and do not inherit the onboarding
   hook.
 - Only the trusted runner writes artifact files.
-- The web-fetch tool is unavailable unless public research is explicitly
-  enabled.
+- Public research egress is unavailable unless scope 2/3 is explicitly
+  approved, and then only through the local broker.
 - Target code execution is explicitly prohibited.
 - Public research and evidence-based provenance review for agentically
   generated code are separate opt-ins.
@@ -195,9 +251,14 @@
 - Public web sources can contain prompt injection and false claims.
 - The wrapper command itself can write to the user-selected artifact
   workspace.
-- `--allow-all-urls` is used only after explicit public-research opt-in
-  because comprehensive research cannot be represented by a stable domain
-  allowlist.
+- Public research still sends project terminology and public URLs to selected
+  public endpoints. The constrained broker reduces transport risk but cannot
+  establish source truthfulness.
+- Raw private cookie/body evidence may contain tracking identifiers,
+  copyrighted material, misleading content, or hostile bytes until the user
+  deletes the local run bundle.
+- Version 1 intentionally has no enabled general-web-search provider. Direct
+  HTTPS and anonymous GitHub retrieval can leave coverage gaps.
 - A local user can intentionally override the runner or plugin
   safeguards.
 - Public DNS classification and pinning reduce, but cannot eliminate,

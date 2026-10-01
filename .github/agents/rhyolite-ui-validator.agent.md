@@ -74,6 +74,21 @@ Require both paths to be absolute, to share the
 current working directory and home directory. The host-provided final
 custom-answer option handles another parent or path.
 
+For the research-cookie interaction, require explanatory text before the
+picker stating that raw Set-Cookie values are retained only in a private
+per-repository transport ledger in either mode and are never exposed to a
+model or rendered report. Require exactly these explicit choices in order:
+
+```text
+Do not replay research cookies (Recommended)
+Allow a fresh per-repository research cookie jar
+```
+
+Require the first choice to map to `off`, the second to `ephemeral`, and the
+ephemeral explanation to state that the jar starts empty, is isolated to one
+repository/run, accepts only bounded exact-host Secure cookies, and is never
+imported or reused. Scope 1 must skip this picker and clear the stored choice.
+
 Return exactly one of these forms:
 
 ```text

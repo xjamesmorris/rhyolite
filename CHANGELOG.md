@@ -2,6 +2,38 @@
 
 ## 0.4.0 - Unreleased
 
+- Replaced child `web_fetch`/`--allow-all-urls` research with a dedicated
+  write-disabled research worker and deterministic local stdio MCP egress
+  broker. The main review worker now receives only a validated read-only
+  sanitized dossier and network summary.
+- Added the versioned `research-policy.json` contract and Python 3
+  standard-library broker with immutable HTTPS/public-DNS/DNS-pinning/
+  verified-TLS/no-auth/no-proxy controls, bounded redirects and resources,
+  safe HTML/text/JSON/XML/RSS/Atom normalization, anonymous GitHub search,
+  and a provider-disabled general-web-search interface.
+- Added explicit scope 2/3 cookie consent. Replay defaults off; optional
+  ephemeral replay uses a fresh bounded exact-host Secure jar per repository
+  and run. Raw Set-Cookie values are retained only in a mode-0600 private
+  ledger in either mode and are never exposed to a model or rendered report.
+- Added structured DNS, TLS, HTTP, redirect, rate-limit, cookie, timeout,
+  format, and ownership-aware transport evidence. TLS verification failures
+  may trigger only a metadata-only diagnostic handshake that sends no HTTP
+  request.
+- Added private content-addressed retention for unsupported/binary response
+  bodies, with mode-0700 private directories, mode-0600 files, no executable
+  extensions, and no model/render/index links.
+- Added `ResearchTransport` to plan JSON/text, approval hashes, repository/run
+  state, manifests, handoffs, and HTML summaries; bumped plan schema to 3 and
+  state schema to 4 while keeping version `0.4.0`.
+- Added distinct `ResearchCapabilityFailed` and `ResearchFailed` boundaries,
+  two-phase progress reporting, broker/MCP/runtime cleanup enforcement, and
+  fail-closed validation requiring exact tools, capability evidence, a valid
+  dossier, and at least one successful public response before main analysis.
+- Added offline broker protocol/policy/DNS/TLS/cookie/body/provider/budget
+  tests and deterministic runner assertions for scope 1 isolation, exact MCP
+  arguments, two-phase ordering, source-level failures, system-wide transport
+  failure, private-evidence non-disclosure, permissions, cleanup, approval-hash
+  changes, and multi-repository cookie isolation.
 - Finalized the `xjamesmorris/rhyolite` public repository metadata,
   public-preview status, CODEOWNERS, private vulnerability reporting
   route, and conduct contact while preserving a fail-closed local-link
