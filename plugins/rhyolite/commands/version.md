@@ -7,4 +7,4 @@ disable-model-invocation: true
 
 Reply with exactly:
 
-Rhyolite v0.4.0
+Rhyolite v0.4.1

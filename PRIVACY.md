@@ -2,7 +2,7 @@
 
 ## Release scope
 
-Version `0.4.0` reviews anonymously readable public HTTPS Git
+Version `0.4.1` reviews anonymously readable public HTTPS Git
 repositories.
 
 Do not use this version with:
@@ -26,7 +26,7 @@ validated public HTTPS destinations. It does not import authentication,
 proxy settings, netrc files, browser state, client certificates, or
 preexisting cookies. Anonymous GitHub REST/search is enabled; the stable
 general-web-search interface is provider-disabled by default in version
-`0.4.0`.
+`0.4.1`.
 
 Guided scope 2/3 setup explicitly asks whether research cookie replay is
 off or uses a fresh per-repository ephemeral jar. Off is recommended

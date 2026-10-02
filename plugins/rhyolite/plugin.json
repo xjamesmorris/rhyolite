@@ -1,7 +1,7 @@
 {
   "name": "rhyolite",
   "description": "Rhyolite provides guided, evidence-based, read-only reviews of untrusted public HTTPS Git repositories, with optional provenance review for agentically generated code.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": {
     "name": "Rhyolite maintainers"
   },

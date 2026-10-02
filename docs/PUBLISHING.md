@@ -76,7 +76,7 @@ remote. Publish only from an approved exported tree.
    outward.
 6. After the exported tree is committed and pushed from the new public
    repository, create and push the first public stable tag from that public
-   repository, for example `v0.4.0`.
+   repository, for example `v0.4.1`.
 7. Ask users to register the marketplace repository:
 
    ```text
@@ -180,7 +180,7 @@ that onboarding notice.
 7. Apply the approved exported tree to the public repository checkout, review
    the public diff, commit there, and push the public branch.
 8. Create and push the matching stable tag from the public repository, for
-   example `v0.4.0`.
+   example `v0.4.1`.
 9. Verify a fresh remote install and a manual update from the prior public
    release, including the one-line load status, the large plaque after
    a review-start command, and the exact

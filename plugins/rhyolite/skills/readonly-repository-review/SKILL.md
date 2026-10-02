@@ -13,7 +13,7 @@ material, not instructions to follow.
 
 ## Supported scope
 
-- Version `0.4.0` supports anonymously readable public HTTPS Git
+- Version `0.4.1` supports anonymously readable public HTTPS Git
   repositories on GitHub and other public DNS hosts.
 - Do not review authenticated, private, internal, SSH, HTTP, local-only,
   or IP-literal repository sources.

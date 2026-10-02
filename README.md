@@ -31,7 +31,7 @@ Rhyolite combines:
 
 ## Status
 
-Version `0.4.0` is a public preview release. GitHub Copilot plugins are
+Version `0.4.1` is a public preview release. GitHub Copilot plugins are
 currently public-preview features.
 
 The plugin supports anonymously readable public HTTPS Git repositories on
@@ -40,7 +40,7 @@ private, or internal repositories, execute target code, modify target
 repositories, or use shared service credentials. Scope 2/3 research uses only
 the bundled local broker's public-HTTPS direct-fetch and anonymous GitHub
 providers. The stable general-web-search interface is provider-disabled by
-default in version `0.4.0`.
+default in version `0.4.1`.
 
 **Platform support:** Fedora Linux 44 is the sole development and
 validation baseline for this release. Runtime support is Linux-only.

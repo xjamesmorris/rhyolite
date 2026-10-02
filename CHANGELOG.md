@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - Unreleased
 
 - Replaced child `web_fetch`/`--allow-all-urls` research with a dedicated
   write-disabled research worker and deterministic local stdio MCP egress
@@ -23,8 +23,8 @@
   bodies, with mode-0700 private directories, mode-0600 files, no executable
   extensions, and no model/render/index links.
 - Added `ResearchTransport` to plan JSON/text, approval hashes, repository/run
-  state, manifests, handoffs, and HTML summaries; bumped plan schema to 3 and
-  state schema to 4 while keeping version `0.4.0`.
+  state, manifests, handoffs, and HTML summaries; bumped plan schema to 3,
+  state schema to 4, and the release version to `0.4.1`.
 - Added distinct `ResearchCapabilityFailed` and `ResearchFailed` boundaries,
   two-phase progress reporting, broker/MCP/runtime cleanup enforcement, and
   fail-closed validation requiring exact tools, capability evidence, a valid
