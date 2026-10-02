@@ -801,6 +801,7 @@ main() {
         --agent "${RHYOLITE_AGENT}"
         --model "${model}"
         --reasoning-effort "${RHYOLITE_REASONING_EFFORT}"
+        --context long_context
         --log-dir "${log_dir}"
         --no-custom-instructions
         -i "${initial_prompt}"

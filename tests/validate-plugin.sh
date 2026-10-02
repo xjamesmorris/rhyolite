@@ -562,8 +562,9 @@ grep -Fq 'REASONING_EFFORT="max"' "${RUNNER}" &&
 grep -Fq "readonly RHYOLITE_REASONING_EFFORT='max'" \
     "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--reasoning-effort "${RHYOLITE_REASONING_EFFORT}"' \
-        "${RHYOLITE_LAUNCHER}" ||
-    fail 'Launcher does not enforce maximum reasoning effort.'
+        "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--context long_context' "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher does not enforce maximum reasoning effort and long context.'
 grep -Fq '"${MODEL} review started; scope ${SCOPE}"' "${RUNNER}" ||
     fail 'Bash progress does not display the selected model.'
 grep -Fq 'name: rhyolite-ui-validator' "${UI_VALIDATOR_AGENT}" ||
@@ -2317,8 +2318,12 @@ if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
 if (!args.includes("--fleet") ||
-    valueAfter("--model") !== "claude-fable-5") {
-  throw new Error("launcher did not apply fleet/model selections");
+    valueAfter("--model") !== "claude-fable-5" ||
+    valueAfter("--reasoning-effort") !== "max" ||
+    valueAfter("--context") !== "long_context") {
+  throw new Error(
+    "launcher did not apply fleet/model/reasoning/context selections",
+  );
 }
 if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 1) {
   throw new Error("launcher did not de-duplicate yolo/autopilot selections");
@@ -3968,6 +3973,29 @@ grep -Fxq -- 'shell' "${invocation_log}" || exit 76
 [[ -f "${COPILOT_HOME}/settings.json" ]] || exit 77
 grep -Fq '"disableAllHooks": true' "${COPILOT_HOME}/settings.json" || exit 78
 grep -Fq '"defaultLocalOnly": true' "${COPILOT_HOME}/settings.json" || exit 80
+python3 - "${COPILOT_HOME}/settings.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+settings = json.loads(Path(sys.argv[1]).read_text())
+agents = settings.get("subagents", {}).get("agents", {})
+for name in (
+    "explore",
+    "task",
+    "code-review",
+    "general-purpose",
+    "research",
+    "security-review",
+    "rubber-duck",
+):
+    profile = agents.get(name)
+    if profile != {
+        "effortLevel": "max",
+        "contextTier": "long_context",
+    }:
+        raise SystemExit(f"unexpected {name} subagent profile: {profile!r}")
+PY
 case "${agent}" in
     rhyolite:repo-research-worker)
         [[ "${COPILOT_HOME}" == \
@@ -5135,11 +5163,30 @@ if (!transcript.includes("    # Mock Copilot session")) {
   throw new Error("session transcript is not wrapped as inert Markdown");
 }
 const agentState = path.join(repository, "agent-state", "copilot-home");
-const settings = fs.readFileSync(path.join(agentState, "settings.json"), "utf8");
+const settingsText = fs.readFileSync(
+  path.join(agentState, "settings.json"),
+  "utf8",
+);
+const settings = JSON.parse(settingsText);
 const configText = fs.readFileSync(path.join(agentState, "config.json"), "utf8");
 const config = JSON.parse(configText.split("\n")
   .filter((line) => !line.trimStart().startsWith("//")).join("\n"));
-if (settings.includes("storeTokenPlaintext") ||
+for (const name of [
+  "explore",
+  "task",
+  "code-review",
+  "general-purpose",
+  "research",
+  "security-review",
+  "rubber-duck",
+]) {
+  const profile = settings.subagents?.agents?.[name];
+  if (profile?.effortLevel !== "max" ||
+      profile?.contextTier !== "long_context") {
+    throw new Error(`persisted ${name} subagent profile is not pinned`);
+  }
+}
+if (settingsText.includes("storeTokenPlaintext") ||
     Object.keys(config).length !== 0 ||
     !fs.existsSync(path.join(
       agentState, "session-state", "mock-session", "state.json")) ||

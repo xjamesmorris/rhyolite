@@ -104,7 +104,7 @@ The root wrapper remains delegation-only. The packaged implementation is
 - Use a current frontier reasoning model; do not silently downgrade.
 
 Supported launcher and child review invocations pass
-`--reasoning-effort max`.
+`--reasoning-effort max` and `--context long_context`.
 
 ## Validation
 

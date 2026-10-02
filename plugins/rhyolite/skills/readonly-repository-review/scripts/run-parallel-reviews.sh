@@ -2598,6 +2598,57 @@ sanitize_and_remove_runtime_copilot_home() {
     return 1
 }
 
+write_isolated_copilot_settings() {
+    local settings_path="$1"
+    local store_token_plaintext="$2"
+
+    {
+        printf '{\n'
+        if ((store_token_plaintext)); then
+            printf '  "storeTokenPlaintext": true,\n'
+        fi
+        cat <<'EOF'
+  "disableAllHooks": true,
+  "customAgents": {
+    "defaultLocalOnly": true
+  },
+  "subagents": {
+    "agents": {
+      "explore": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "task": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "code-review": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "general-purpose": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "research": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "security-review": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "rubber-duck": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      }
+    }
+  }
+}
+EOF
+    } > "${settings_path}"
+}
+
 initialize_runtime_copilot_home() {
     local runtime_home="$1"
 
@@ -2606,26 +2657,9 @@ initialize_runtime_copilot_home() {
     else
         mkdir -m 700 -- "${runtime_home}"
     fi
-    if ((COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT)); then
-        cat > "${runtime_home}/settings.json" <<'EOF'
-{
-  "storeTokenPlaintext": true,
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    else
-        cat > "${runtime_home}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    fi
+    write_isolated_copilot_settings \
+        "${runtime_home}/settings.json" \
+        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}"
     {
         printf '%s\n' \
             '// User settings belong in settings.json.' \
@@ -3934,26 +3968,9 @@ EOF
                 >/dev/null 2>&1 || true
         fi
     ' EXIT
-    if ((COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT)); then
-        cat > "${runtime_copilot_home}/settings.json" <<'EOF'
-{
-  "storeTokenPlaintext": true,
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    else
-        cat > "${runtime_copilot_home}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    fi
+    write_isolated_copilot_settings \
+        "${runtime_copilot_home}/settings.json" \
+        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}"
     {
         printf '%s\n' \
             '// User settings belong in settings.json.' \
@@ -4012,14 +4029,9 @@ EOF
 
     mkdir -p -- "${copilot_home_path}"
     chmod 700 -- "${copilot_home_path}"
-    cat > "${copilot_home_path}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
+    write_isolated_copilot_settings \
+        "${copilot_home_path}/settings.json" \
+        0
     cat > "${copilot_home_path}/config.json" <<'EOF'
 // User settings belong in settings.json.
 // This file is managed automatically.
