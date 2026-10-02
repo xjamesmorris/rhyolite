@@ -67,8 +67,10 @@
     runner open the local HTML report index without confirmation unless
     that behavior is disabled.
 22. The retired launcher `--autopilot` spelling is mistaken for an initial
-    request, or user-enabled in-session Copilot autopilot is assumed to bypass
-    Rhyolite's interactive setup and effective-plan approval.
+    request, or an in-session plan/autopilot transition replays the plaque,
+    presents a misleading model-change notice, continues the guided review
+    outside interactive mode, or prevents a stop request from terminating the
+    runner process tree.
 23. A research URL or redirect reaches loopback, private, link-local,
     reserved, or rebinding-controlled infrastructure.
 24. Research transport inherits authentication, proxies, netrc, browser
@@ -122,11 +124,13 @@
   rewritten.
 - Unique user-only temporary Copilot runtime homes with
   `disableAllHooks` enabled, plus separate sanitized persisted homes.
-- A local plugin `sessionStart` hook emits one plain version/start line.
-  A display-only `userPromptSubmitted` command hook recognizes only
-  trusted Rhyolite start markers/commands and emits the plaque without
-  modifying or persisting the prompt. Neither hook performs network
-  access, Git commands, writes, or environment/auth inspection.
+- A local plugin `sessionStart` hook emits one plain version/start line
+  for ordinary loads or the exactly-once launcher plaque. A display-only
+  `userPromptSubmitted` command hook emits a plaque only for exact manual
+  review-start commands and ignores internal resumes, marker-bearing
+  continuations, launcher prompts, and unrelated text. Neither hook
+  performs network access, Git commands, writes, prompt mutation, or
+  environment/auth inspection.
 - Native fleet mode and the outer model are selected before Copilot
   starts. The trusted launcher setup block contains only canonical
   source URLs plus constrained fleet/model/remember fields; sources
@@ -139,9 +143,16 @@
   index automatically; `--no-open-html` disables that behavior.
 - The launcher has an explicit retired-option parser branch for
   `--autopilot`; it renders `RHYOLITE ERROR` and exits `2` before Copilot
-  starts. Guided setup and effective-plan approval remain interactive. A user
-  may independently enable Copilot's own in-session autopilot behavior after
-  startup, but it is not a launcher flag and does not bypass approval.
+  starts. It passes `--mode interactive` explicitly. Rhyolite does not support
+  plan/autopilot mode during guided setup or execution, and mode-related UI
+  notices do not change the approval-bound worker model.
+- Launcher startup emits the plaque once from `sessionStart`; the prompt hook
+  matches only exact manual review-start commands and ignores internal
+  resumes, marker-bearing continuations, and unrelated prompts.
+- Exact `stop` and `cancel` intents use targeted execution cancellation. The
+  Bash runner propagates INT/TERM/HUP through tracked repository, timeout,
+  Copilot worker, and broker processes, then records `Interrupted` state and
+  artifacts.
 - Per-repository fleet/model preferences are keyed by a SHA-256 hash of
   the canonical public URL, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or

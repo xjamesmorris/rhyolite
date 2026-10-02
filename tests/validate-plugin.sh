@@ -628,16 +628,16 @@ mapfile -t packaged_agents < <(
 ! grep -Eq 'tools:.*(read|search|execute|edit|agent|web|ask_user)' \
     "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent gained a tool capability.'
-grep -Fq 'On any other first user turn in a new `repo-review` session' \
+grep -Fq 'On launcher startup, the trusted display-only `sessionStart` hook' \
     "${AGENT}" ||
     fail 'Agent does not define first-turn plaque/setup behavior.'
 grep -Fq 'BEGIN PROMPT_NATIVE_WELCOME_PANEL' "${AGENT}" ||
     fail 'Agent does not embed the prompt-native welcome panel marker.'
 grep -Fq 'END PROMPT_NATIVE_WELCOME_PANEL' "${AGENT}" ||
     fail 'Agent does not close the prompt-native welcome panel marker.'
-grep -Fq 'display-only command hook renders' "${AGENT}" &&
-    grep -Fq 'Do not repeat the prompt-native help panel.' "${AGENT}" ||
-    fail 'Agent does not rely on the one-time command plaque.'
+grep -Fq 'display-only prompt hook renders that plaque only for' "${AGENT}" &&
+    grep -Fq 'Do not repeat the prompt-native' "${AGENT}" ||
+    fail 'Agent does not rely on the exactly-once launcher/manual plaque boundary.'
 ! grep -Fq 'COPILOT_PLUGIN_ROOT' "${AGENT}" ||
     fail 'Agent still depends on COPILOT_PLUGIN_ROOT.'
 grep -Fq 'Preserve setup answers across turns' "${AGENT}" ||
@@ -991,7 +991,7 @@ grep -Fq 'three to five concise bullets' "${AGENT}" &&
     fail 'Executive summary length is not bounded.'
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' 'artifacts' \
-    'finalizing' 'completed' 'still running; elapsed'; do
+    'finalizing' 'interrupted' 'completed' 'still running; elapsed'; do
     grep -Fq "${progress_stage}" "${RUNNER}" ||
         fail "Runner progress contract is missing: ${progress_stage}"
 done
@@ -1004,9 +1004,18 @@ normalized_skill="$(
     tr '\r\n\t' '   ' < "${SKILL}" |
         sed -E 's/[[:space:]]+/ /g'
 )"
-grep -Fq 'ANSI/Unicode plaque after a review-start command' \
+grep -Fq 'Launcher startup uses the trusted display-only `sessionStart` hook' \
     <<< "${normalized_skill}" ||
-    fail 'Skill does not require the review-start plaque.'
+    fail 'Skill does not require the exactly-once launcher plaque.'
+grep -Fq 'Always recognize exact `stop` and `cancel`' "${SKILL}" &&
+    grep -Fq 'recognize exact `stop` or `cancel`' "${AGENT}" &&
+    grep -Fq '`stop_bash`' "${SKILL}" &&
+    grep -Fq '`stop_bash`' "${AGENT}" ||
+    fail 'Guided workflow does not prioritize exact stop/cancel control.'
+grep -Fq 'Keep the outer Copilot session in interactive mode.' "${SKILL}" &&
+    grep -Fq 'Rhyolite requires the outer Copilot session to remain in interactive' \
+        "${AGENT}" ||
+    fail 'Guided workflow does not enforce the interactive-mode boundary.'
 grep -Fq 'user-invocable: false' "${SKILL}" ||
     fail 'Internal repository-review skill is exposed as a user command.'
 grep -Fq 'user-invocable: false' "${SOURCE_ASSESSMENT_SKILL}" ||
@@ -1047,7 +1056,8 @@ grep -Fq 'Show top-priority source retrieval' "${AGENT}" &&
     fail 'Agent does not offer inaccessible-source retrieval priorities.'
 grep -Fq 'embedded prompt-native' "${SKILL}" ||
     fail 'Skill does not describe the prompt-native welcome panel contract.'
-grep -Fq 'display-only command hook renders' <<< "${normalized_skill}" &&
+grep -Fq 'Manual review-start commands use the display-only prompt hook' \
+    <<< "${normalized_skill}" &&
     grep -Fq 'must not repeat the prompt-native panel' \
         <<< "${normalized_skill}" ||
     fail 'Skill does not separate the start plaque from the help panel.'
@@ -1197,8 +1207,8 @@ grep -Fq '/experimental on' "${README}" "${PUBLISHING_DOC}" ||
     fail 'Public docs do not explain the extension-mode requirement.'
 grep -Fq 'without a leading slash' "${README}" ||
     fail 'README does not distinguish Rhyolite prompts from CLI commands.'
-grep -Fq 'one plain line' "${README}" &&
-    grep -Fq 'display-only command hook' "${README}" &&
+grep -Fq 'one plain versioned line' "${README}" &&
+    grep -Fq 'display-only prompt hook' "${README}" &&
     grep -Fq 'blue-family' "${README}" ||
     fail 'README does not describe load status and command plaque.'
 grep -Fq './rhyolite' "${README}" &&
@@ -1539,7 +1549,7 @@ grep -Fq 'freeform `ask_user`' "${AGENT}" &&
 grep -Fq 'with the explicit choices' "${AGENT}" &&
     grep -Fq '`Open HTML index` or `Keep it closed`, in that order' "${AGENT}" ||
     fail 'Agent does not ask before opening HTML.'
-grep -Fq 'YOLO, allow-all,' "${AGENT}" ||
+grep -Fq 'YOLO or allow-all mode' "${AGENT}" ||
     fail 'Agent does not define allow-all HTML behavior.'
 grep -Fq 'provenance window specified by the prompt' "${WORKER_AGENT}" ||
     fail 'Worker agent does not preserve the trusted provenance window.'
@@ -1753,6 +1763,7 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
     grep -Fq -- '--plugin-dir "${plugin_root}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--agent "${RHYOLITE_AGENT}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--model "${model}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--mode interactive' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--yolo)' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--autopilot)' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- 'The launcher --autopilot option has been retired.' \
@@ -1893,15 +1904,17 @@ fi
     fail 'Bash preference helper left a temporary file inside a directory destination.'
 
 welcome_progress_output="${fixture_dir}/welcome-progress.jsonl"
-welcome_progress_launcher_output="${fixture_dir}/welcome-progress-launcher.txt"
+welcome_progress_launcher_output="${fixture_dir}/welcome-progress-launcher.jsonl"
+welcome_progress_launcher_no_color="${fixture_dir}/welcome-progress-launcher-no-color.jsonl"
 welcome_progress_stderr="${fixture_dir}/welcome-progress.stderr"
 welcome_plaque_output="${fixture_dir}/welcome-plaque.jsonl"
 welcome_plaque_no_color="${fixture_dir}/welcome-plaque-no-color.jsonl"
-welcome_launcher_plaque_output="${fixture_dir}/welcome-launcher-plaque.jsonl"
-welcome_launcher_plaque_no_color="${fixture_dir}/welcome-launcher-plaque-no-color.jsonl"
 welcome_plaque_copilot_no_color="${fixture_dir}/welcome-plaque-copilot-no-color.jsonl"
 welcome_plaque_force_color_zero="${fixture_dir}/welcome-plaque-force-color-zero.jsonl"
 welcome_plaque_term_dumb="${fixture_dir}/welcome-plaque-term-dumb.jsonl"
+welcome_plaque_marker_only="${fixture_dir}/welcome-plaque-marker-only.txt"
+welcome_plaque_internal_resume="${fixture_dir}/welcome-plaque-internal-resume.txt"
+welcome_plaque_launcher_prompt="${fixture_dir}/welcome-plaque-launcher-prompt.txt"
 welcome_plaque_unrelated="${fixture_dir}/welcome-plaque-unrelated.txt"
 welcome_panel_output="${fixture_dir}/welcome-panel.txt"
 welcome_panel_c_locale_output="${fixture_dir}/welcome-panel-c-locale.txt"
@@ -1913,35 +1926,28 @@ env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
     RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
     bash "${WELCOME_HELPER_BASH}" --progress \
     >"${welcome_progress_launcher_output}" 2>>"${welcome_progress_stderr}"
+env NO_COLOR=1 \
+    RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+    bash "${WELCOME_HELPER_BASH}" --progress \
+    >"${welcome_progress_launcher_no_color}" 2>>"${welcome_progress_stderr}"
 [[ ! -s "${welcome_progress_stderr}" ]] ||
     fail 'Bash welcome progress helper wrote unexpected stderr.'
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_output}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_no_color}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-    env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
-        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
-        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
-        >"${welcome_launcher_plaque_output}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-    env NO_COLOR=1 \
-        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
-        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
-        >"${welcome_launcher_plaque_no_color}" \
-        2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR COPILOT_NO_COLOR=1 FORCE_COLOR=1 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_copilot_no_color}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=0 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_force_color_zero}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=dumb \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_term_dumb}" 2>>"${welcome_progress_stderr}"
@@ -1952,11 +1958,27 @@ for no_color_output in \
     cmp -s "${welcome_plaque_no_color}" "${no_color_output}" ||
         fail "No-color signal output differs: ${no_color_output}"
 done
+printf '{"prompt":"RHYOLITE_START_COMMAND_V1 continuation"}\n' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_marker_only}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"/repo-review --rhyolite-resume internal"}\n' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_internal_resume}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"/rhyolite:start"}\n' |
+    RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_launcher_prompt}" 2>>"${welcome_progress_stderr}"
 printf '{"prompt":"ordinary user prompt"}\n' |
     bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_unrelated}" 2>>"${welcome_progress_stderr}"
-[[ ! -s "${welcome_plaque_unrelated}" ]] ||
-    fail 'Unrelated prompts trigger the Rhyolite plaque.'
+for suppressed_plaque_output in \
+    "${welcome_plaque_marker_only}" \
+    "${welcome_plaque_internal_resume}" \
+    "${welcome_plaque_launcher_prompt}" \
+    "${welcome_plaque_unrelated}"; do
+    [[ ! -s "${suppressed_plaque_output}" ]] ||
+        fail "Non-user or unrelated prompt triggers the Rhyolite plaque: ${suppressed_plaque_output}"
+done
 bash "${WELCOME_HELPER_BASH}" --panel >"${welcome_panel_output}" \
     2>"${welcome_panel_stderr}"
 LC_ALL=C bash "${WELCOME_HELPER_BASH}" --panel \
@@ -1985,8 +2007,8 @@ launcher_tui_runtime_result="$(
         --banner "${WELCOME_BANNER}" \
         --progress-json "${welcome_progress_output}" \
         --launcher-progress-output "${welcome_progress_launcher_output}" \
-        --plaque-json "${welcome_launcher_plaque_output}" \
-        --plaque-no-color-json "${welcome_launcher_plaque_no_color}" \
+        --plaque-json "${welcome_progress_launcher_output}" \
+        --plaque-no-color-json "${welcome_progress_launcher_no_color}" \
         --start-command "${COMMAND_START}" \
         --repo-review-command "${COMMAND_REPO_REVIEW}" \
         --extension "${RHYOLITE_EXTENSION}" \
@@ -2003,8 +2025,8 @@ node - \
     "${welcome_progress_launcher_output}" \
     "${welcome_plaque_output}" \
     "${welcome_plaque_no_color}" \
-    "${welcome_launcher_plaque_output}" \
-    "${welcome_launcher_plaque_no_color}" \
+    "${welcome_progress_launcher_output}" \
+    "${welcome_progress_launcher_no_color}" \
     "${welcome_panel_output}" <<'JS'
 const fs = require("fs");
 
@@ -2065,9 +2087,7 @@ const expectedLoadStatus =
 if (progress.message !== expectedLoadStatus || progress.message.includes("\u001b[")) {
   throw new Error("plugin-load status is not exact plain single-line guidance");
 }
-if (launcherProgressText !== "") {
-  throw new Error("launcher-started progress helper must emit no payload or output");
-}
+const launcherProgress = JSON.parse(launcherProgressText.trim());
 const plaque = JSON.parse(plaqueText.trim());
 const expectedPlainPlaque = [
   ...bannerLines,
@@ -2148,6 +2168,10 @@ const expectedPlainLauncherPlaque = [
 if (stripAnsi(launcherPlaque.message) !== expectedPlainLauncherPlaque ||
     launcherPlaque.message.includes("Use /rhyolite:start to begin a review.")) {
   throw new Error("launcher review-start plaque did not switch to automatic guided mode");
+}
+if (launcherProgress.type !== "progress" ||
+    launcherProgress.message !== launcherPlaque.message) {
+  throw new Error("launcher sessionStart output is not the canonical launcher plaque");
 }
 const launcherNoColorPlaque = JSON.parse(
   launcherNoColorPlaqueText.trim(),
@@ -2482,6 +2506,7 @@ if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
 if (!args.includes("--fleet") ||
+    valueAfter("--mode") !== "interactive" ||
     valueAfter("--model") !== "claude-fable-5" ||
     valueAfter("--reasoning-effort") !== "max" ||
     valueAfter("--context") !== "long_context") {
@@ -4588,13 +4613,17 @@ for schema_fragment in \
 done
 for failure_contract in \
     'AccessPreflightFailed' 'CloneFailed' 'CommitResolutionFailed' \
-    'SnapshotFailed' 'TimedOut' 'Incomplete report' \
+    'SnapshotFailed' 'TimedOut' 'Interrupted' 'Incomplete report' \
     'temporary Copilot runtime home' 'RHYOLITE ERROR'; do
     grep -Fq "${failure_contract}" "${RUNNER}" ||
         fail "Bash runner is missing failure contract: ${failure_contract}"
 done
 grep -Fq 'redact_credentials' "${RUNNER}" ||
     fail 'Runner error sanitizer does not redact credentials.'
+grep -Fq 'signal_process_tree' "${RUNNER}" &&
+    grep -Fq "trap 'interrupt_run INT' INT" "${RUNNER}" &&
+    grep -Fq "trap 'interrupt_repository_process TERM' TERM" "${RUNNER}" ||
+    fail 'Runner does not propagate targeted interruption signals.'
 
 mock_bin="${fixture_dir}/mock-bin"
 mock_log="${fixture_dir}/mock-copilot-args.txt"
@@ -4953,6 +4982,32 @@ printf 'repo-reviewer-secret-sentinel\n' \
 
 [[ -d "${working_directory}/source" &&
     ! -e "${working_directory}/.git" ]] || exit 79
+
+if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]]; then
+    mock_block_child_pid=""
+    mock_block_exit() {
+        local exit_code="$1"
+
+        trap - INT TERM HUP
+        if [[ -n "${mock_block_child_pid}" ]]; then
+            kill "${mock_block_child_pid}" 2>/dev/null || true
+            wait "${mock_block_child_pid}" 2>/dev/null || true
+        fi
+        exit "${exit_code}"
+    }
+    trap 'mock_block_exit 130' INT
+    trap 'mock_block_exit 143' TERM
+    trap 'mock_block_exit 129' HUP
+    [[ -n "${MOCK_COPILOT_PID_FILE-}" ]] &&
+        printf '%s\n' "$$" > "${MOCK_COPILOT_PID_FILE}"
+    sleep 300 &
+    mock_block_child_pid=$!
+    [[ -n "${MOCK_COPILOT_CHILD_PID_FILE-}" ]] &&
+        printf '%s\n' "${mock_block_child_pid}" \
+            > "${MOCK_COPILOT_CHILD_PID_FILE}"
+    wait "${mock_block_child_pid}"
+    exit 96
+fi
 
 if [[ "${agent}" == 'rhyolite:repo-research-worker' ]]; then
     [[ -n "${additional_mcp_config}" &&
@@ -7235,6 +7290,87 @@ if (state.Status !== expectedStatus ||
 }
 JS
 done
+
+interrupt_output="${fixture_dir}/interrupt-output"
+interrupt_workspace="${fixture_dir}/interrupt-workspace"
+interrupt_stdout="${fixture_dir}/interrupt.stdout"
+interrupt_stderr="${fixture_dir}/interrupt.stderr"
+interrupt_copilot_pid_file="${fixture_dir}/interrupt-copilot.pid"
+interrupt_child_pid_file="${fixture_dir}/interrupt-child.pid"
+MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_PID_FILE="${interrupt_copilot_pid_file}" \
+    MOCK_COPILOT_CHILD_PID_FILE="${interrupt_child_pid_file}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${interrupt_output}" \
+        --workspace-root "${interrupt_workspace}" \
+        --non-interactive \
+        --no-open-html >"${interrupt_stdout}" 2>"${interrupt_stderr}" &
+interrupt_runner_pid=$!
+interrupt_ready=0
+for attempt in $(seq 1 30); do
+    if [[ -s "${interrupt_copilot_pid_file}" &&
+        -s "${interrupt_child_pid_file}" ]]; then
+        interrupt_ready=1
+        break
+    fi
+    if ! kill -0 "${interrupt_runner_pid}" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if ((interrupt_ready == 0)); then
+    kill "${interrupt_runner_pid}" 2>/dev/null || true
+    wait "${interrupt_runner_pid}" 2>/dev/null || true
+    fail 'Interrupt fixture did not start its nested mock worker process tree.'
+fi
+set +e
+kill -TERM "${interrupt_runner_pid}"
+wait "${interrupt_runner_pid}"
+interrupt_exit=$?
+set -e
+[[ "${interrupt_exit}" -eq 143 ]] ||
+    fail "Interrupted runner returned ${interrupt_exit}, expected 143."
+for pid_file in \
+    "${interrupt_copilot_pid_file}" \
+    "${interrupt_child_pid_file}"; do
+    read -r interrupted_process_id < "${pid_file}"
+    if kill -0 "${interrupted_process_id}" 2>/dev/null; then
+        fail "Interrupted runner left process ${interrupted_process_id} alive."
+    fi
+done
+interrupt_run="$(
+    find "${interrupt_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+node - "${interrupt_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const run = process.argv[2];
+const repository = path.join(run, "github--octocat--hello-world");
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (runState.Status !== "Interrupted" ||
+    state.Status !== "Interrupted" ||
+    state.ExitCode !== 143 ||
+    state.Research?.Status !== "Disabled" ||
+    !errors.includes("Runner received TERM") ||
+    !errors.includes("terminated its tracked repository-review process tree")) {
+  throw new Error("interrupted runner did not persist truthful cancellation state");
+}
+JS
+grep -Fq 'Stage: user interruption' "${interrupt_stdout}" &&
+    grep -Fq 'Status Interrupted; exit code 143' "${interrupt_stdout}" &&
+    grep -Fq 'RHYOLITE PROGRESS | run | completed | Interrupted;' \
+        "${interrupt_stdout}" ||
+    fail 'Interrupted runner terminal output lost its cancellation boundary.'
 
 while IFS= read -r -d '' path; do
     if head -c 3 "${path}" | grep -q $'^\xEF\xBB\xBF'; then

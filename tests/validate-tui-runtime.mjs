@@ -181,13 +181,6 @@ function parseSingleLineJsonArtifact(filePath, label, findings) {
     }
 }
 
-function validateEmptyArtifact(filePath, label, findings) {
-    const raw = readUtf8File(filePath, label);
-    if (raw.length !== 0) {
-        findings.push(`${label} must be completely empty when launcher startup already begins setup.`);
-    }
-}
-
 function expectExactKeys(payload, label, findings) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         findings.push(`${label} must be a JSON object with only "type" and "message".`);
@@ -635,7 +628,7 @@ function validateArtifacts(options) {
     const pluginManifest = parseJsonFile(options.pluginManifest, 'plugin manifest', findings);
     const bannerText = readUtf8File(options.banner, 'banner');
     const progressPayload = parseSingleLineJsonArtifact(options.progressJson, 'Progress payload', findings);
-    validateEmptyArtifact(
+    const launcherProgressPayload = parseSingleLineJsonArtifact(
         options.launcherProgressOutput,
         'Launcher-started progress output',
         findings,
@@ -669,6 +662,17 @@ function validateArtifacts(options) {
     const expectedPlainPlaque = typeof pluginVersion === 'string' && pluginVersion.length > 0
         ? buildExpectedPlainPlaque(bannerText, pluginVersion, plaqueCopyLines)
         : buildExpectedPlainPlaque(bannerText, '<missing-version>', plaqueCopyLines);
+    const expectedLauncherPlaque = typeof pluginVersion === 'string' && pluginVersion.length > 0
+        ? buildExpectedPlainPlaque(bannerText, pluginVersion, LAUNCHER_PLAQUE_COPY_LINES)
+        : buildExpectedPlainPlaque(bannerText, '<missing-version>', LAUNCHER_PLAQUE_COPY_LINES);
+    validatePlaquePayload(
+        launcherProgressPayload,
+        'Launcher-started progress output',
+        expectedLauncherPlaque,
+        options.maxColumns,
+        findings,
+        { bannerLineCount, requireColor: true },
+    );
     validatePlaquePayload(
         plaquePayload,
         'Colored plaque payload',
@@ -847,7 +851,7 @@ function runSelfCheck() {
         );
         writeFixture(fixturePaths.banner, `${banner}\n`);
         writeFixture(fixturePaths.progress, `${progress}\n`);
-        writeFixture(fixturePaths.launcherProgress, '');
+        writeFixture(fixturePaths.launcherProgress, `${coloredLauncherPlaque}\n`);
         writeFixture(fixturePaths.plaque, `${coloredPlaque}\n`);
         writeFixture(fixturePaths.plaqueNoColor, `${noColorPlaque}\n`);
         writeFixture(fixturePaths.launcherPlaque, `${coloredLauncherPlaque}\n`);

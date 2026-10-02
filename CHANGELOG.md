@@ -2,6 +2,18 @@
 
 ## 0.4.1 - Unreleased
 
+- Fixed launcher sessions that could render the Rhyolite plaque again during a
+  `Shift+Tab` mode transition. Launcher startup now owns one `sessionStart`
+  plaque, while the prompt hook matches only exact manual start commands and
+  ignores internal resumes and marker-bearing continuations.
+- The launcher now passes `--mode interactive` explicitly. Rhyolite treats
+  plan/autopilot transitions as unsupported during guided setup or execution,
+  preserves the approval-bound worker model, and no longer auto-opens reports
+  merely because the outer session entered autopilot.
+- Added exact `stop`/`cancel` control handling and targeted INT/TERM/HUP
+  propagation through repository shells, timeout wrappers, Copilot workers,
+  and research brokers. Interrupted runs now finalize truthful `Interrupted`
+  repository/run state and artifacts instead of leaving detached work alive.
 - Retired the Rhyolite launcher `--autopilot` option. The parser now rejects
   the legacy spelling with a `RHYOLITE ERROR` diagnostic and exit code `2`;
   guided setup and effective-plan approval remain interactive. Users can still

@@ -132,6 +132,63 @@ review_progress() {
     fi
 }
 
+child_process_ids() {
+    local parent_pid="$1"
+
+    ps -o pid= --ppid "${parent_pid}" 2>/dev/null |
+        awk '{ print $1 }'
+}
+
+signal_process_tree() {
+    local signal_name="$1"
+    local process_id="$2"
+    local child_process_id
+
+    [[ "${process_id}" =~ ^[0-9]+$ ]] || return 0
+    while IFS= read -r child_process_id; do
+        [[ "${child_process_id}" =~ ^[0-9]+$ ]] || continue
+        signal_process_tree "${signal_name}" "${child_process_id}"
+    done < <(child_process_ids "${process_id}")
+    kill "-${signal_name}" "${process_id}" 2>/dev/null || true
+}
+
+terminate_process_tree() {
+    local process_id="$1"
+    local attempt
+
+    [[ "${process_id}" =~ ^[0-9]+$ ]] || return 0
+    signal_process_tree TERM "${process_id}"
+    for attempt in 1 2 3 4 5; do
+        kill -0 "${process_id}" 2>/dev/null || return 0
+        sleep 1
+    done
+    signal_process_tree KILL "${process_id}"
+}
+
+repository_interrupt_exit_code() {
+    case "$1" in
+        INT) printf '130' ;;
+        HUP) printf '129' ;;
+        *) printf '143' ;;
+    esac
+}
+
+interrupt_repository_process() {
+    local signal_name="$1"
+    local interrupt_exit_code
+
+    trap - INT TERM HUP
+    interrupt_exit_code="$(repository_interrupt_exit_code "${signal_name}")"
+    if [[ -n "${RHYOLITE_REPOSITORY_ERROR_PATH-}" ]]; then
+        printf 'Repository review interrupted by %s; terminating tracked child processes.\n' \
+            "${signal_name}" >> "${RHYOLITE_REPOSITORY_ERROR_PATH}"
+    fi
+    if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
+        terminate_process_tree "${RHYOLITE_ACTIVE_CHILD_PID}"
+    fi
+    exit "${interrupt_exit_code}"
+}
+
 research_private_evidence_warning() {
     if ((ENABLE_PUBLIC_RESEARCH)); then
         printf '%s' \
@@ -193,6 +250,9 @@ repository_failure_stage() {
         TimedOut)
             printf 'worker timeout'
             ;;
+        Interrupted)
+            printf 'user interruption'
+            ;;
         ResearchCapabilityFailed)
             printf 'research capability'
             ;;
@@ -250,6 +310,9 @@ repository_failure_summary() {
             ;;
         TimedOut)
             printf 'The repository-review worker exceeded its configured time limit.'
+            ;;
+        Interrupted)
+            printf 'The repository review was interrupted before completion.'
             ;;
         ResearchCapabilityFailed)
             printf 'The dedicated research worker could not verify its approval-bound local broker tools and policy.'
@@ -314,6 +377,10 @@ repository_failure_remediation() {
         TimedOut)
             printf '%s' \
                 'Retry with a larger runner timeout or a narrower review scope.'
+            ;;
+        Interrupted)
+            printf '%s' \
+                'No recovery action is required. Restart the review only when you want a new run.'
             ;;
         ResearchCapabilityFailed)
             printf '%s' \
@@ -1677,6 +1744,10 @@ if ((!VALIDATE_ONLY && !PLAN_ONLY)); then
         printf 'GNU timeout is required.\n' >&2
         exit 2
     }
+    command -v ps >/dev/null 2>&1 || {
+        printf 'ps is required for targeted cancellation.\n' >&2
+        exit 2
+    }
     command -v tar >/dev/null 2>&1 || {
         printf 'tar is required.\n' >&2
         exit 2
@@ -2448,7 +2519,11 @@ write_repository_failure_result() {
     local session_id=""
     local RESEARCH_STATUS
     if ((ENABLE_PUBLIC_RESEARCH)); then
-        RESEARCH_STATUS='NotStarted'
+        if [[ "${status}" == 'Interrupted' ]]; then
+            RESEARCH_STATUS='Interrupted'
+        else
+            RESEARCH_STATUS='NotStarted'
+        fi
     else
         RESEARCH_STATUS='Disabled'
     fi
@@ -3222,6 +3297,12 @@ process_repository() {
     local RESEARCH_NETWORK_EVENTS_PATH=""
     local RESEARCH_PRIVATE_DIRECTORY=""
     local RESEARCH_STATE_PATH=""
+    local RHYOLITE_ACTIVE_CHILD_PID=""
+    local RHYOLITE_REPOSITORY_ERROR_PATH="${error_path}"
+
+    trap 'interrupt_repository_process INT' INT
+    trap 'interrupt_repository_process TERM' TERM
+    trap 'interrupt_repository_process HUP' HUP
 
     mkdir -p -- "${result_path}"
     : > "${error_path}"
@@ -3685,6 +3766,7 @@ EOF
             > "${research_raw_output}" \
             2> "${research_error_path}" &
         local research_process_id=$!
+        RHYOLITE_ACTIVE_CHILD_PID="${research_process_id}"
         local research_started_epoch
         local research_last_heartbeat_epoch
         research_started_epoch="$(date +%s)"
@@ -3708,6 +3790,7 @@ EOF
         done
         wait "${research_process_id}"
         research_exit_code=$?
+        RHYOLITE_ACTIVE_CHILD_PID=""
         set -e
 
         tr -d '\r' < "${research_raw_output}" |
@@ -4082,6 +4165,7 @@ EOF
         > "${raw_output}" \
         2> "${error_path}" &
     local review_process_id=$!
+    RHYOLITE_ACTIVE_CHILD_PID="${review_process_id}"
     local analysis_started_epoch
     local analysis_last_heartbeat_epoch
     analysis_started_epoch="$(date +%s)"
@@ -4105,6 +4189,7 @@ EOF
     done
     wait "${review_process_id}"
     exit_code=$?
+    RHYOLITE_ACTIVE_CHILD_PID=""
     set -e
 
     mkdir -p -- "${copilot_home_path}"
@@ -4282,6 +4367,7 @@ EOF
     exit_code="${FINALIZED_REPOSITORY_EXIT_CODE}"
     review_progress "${slug}" 'artifacts' "${status}; ${result_path}"
 
+    trap - INT TERM HUP
     ((exit_code == 0))
 }
 
@@ -4293,6 +4379,60 @@ declare -a preflight_started_ats=()
 pids=()
 failure=0
 preflight_failed=0
+RUN_INTERRUPTED=0
+RUN_INTERRUPT_SIGNAL=""
+RUN_INTERRUPT_EXIT_CODE=1
+
+interrupt_run() {
+    local signal_name="$1"
+    local process_id
+
+    if ((RUN_INTERRUPTED)); then
+        for process_id in "${pids[@]}"; do
+            signal_process_tree KILL "${process_id}"
+        done
+        return
+    fi
+
+    RUN_INTERRUPTED=1
+    RUN_INTERRUPT_SIGNAL="${signal_name}"
+    RUN_INTERRUPT_EXIT_CODE="$(repository_interrupt_exit_code "${signal_name}")"
+    failure=1
+    review_progress \
+        'run' \
+        'interrupted' \
+        "received ${signal_name}; terminating tracked review processes"
+    for process_id in "${pids[@]}"; do
+        signal_process_tree TERM "${process_id}"
+    done
+}
+
+write_missing_interrupted_results() {
+    local index
+    local state_path
+    local started_at
+
+    for index in "${!canonical_urls[@]}"; do
+        state_path="${RUN_RESULTS}/${slugs[index]}/state.json"
+        [[ -f "${state_path}" ]] && continue
+        started_at="${preflight_started_ats[index]:-${RUN_STARTED_AT}}"
+        write_repository_failure_result \
+            "${slugs[index]}" \
+            "${canonical_urls[index]}" \
+            "${requested_commits[index]}" \
+            "${source_kinds[index]}" \
+            "${source_paths[index]}" \
+            'Interrupted' \
+            'Repository review interrupted at user request before completion.' \
+            "Runner received ${RUN_INTERRUPT_SIGNAL:-TERM} and terminated its tracked repository-review process tree." \
+            "${started_at}" \
+            "${RUN_INTERRUPT_EXIT_CODE}"
+    done
+}
+
+trap 'interrupt_run INT' INT
+trap 'interrupt_run TERM' TERM
+trap 'interrupt_run HUP' HUP
 
 review_progress \
     'run' \
@@ -4300,6 +4440,7 @@ review_progress \
     'verifying anonymous public access before clone or worker start'
 
 for index in "${!canonical_urls[@]}"; do
+    ((RUN_INTERRUPTED == 0)) || break
     preflight_started_ats[index]="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if preflight_repository_access \
         "${canonical_urls[index]}" \
@@ -4321,7 +4462,9 @@ for index in "${!canonical_urls[@]}"; do
     fi
 done
 
-if ((preflight_failed)); then
+if ((RUN_INTERRUPTED)); then
+    write_missing_interrupted_results
+elif ((preflight_failed)); then
     failing_repositories_text='Failing repositories:'
     for index in "${!canonical_urls[@]}"; do
         if ((preflight_passed[index] == 0)); then
@@ -4375,6 +4518,7 @@ else
         'all selected repositories anonymously accessible'
 
     for index in "${!canonical_urls[@]}"; do
+        ((RUN_INTERRUPTED == 0)) || break
         process_repository \
             "${canonical_urls[index]}" \
             "${slugs[index]}" \
@@ -4388,6 +4532,9 @@ else
             if ! wait "${pids[0]}"; then
                 failure=1
             fi
+            if ((RUN_INTERRUPTED)); then
+                break
+            fi
             pids=("${pids[@]:1}")
         fi
     done
@@ -4397,6 +4544,9 @@ else
             failure=1
         fi
     done
+    if ((RUN_INTERRUPTED)); then
+        write_missing_interrupted_results
+    fi
 fi
 
 review_progress \
@@ -4447,7 +4597,9 @@ for result_file in "${result_files[@]}"; do
 done
 
 RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-if ((failure == 0)); then
+if ((RUN_INTERRUPTED)); then
+    RUN_STATUS='Interrupted'
+elif ((failure == 0)); then
     RUN_STATUS='Completed'
 elif ((completed_result_count > 0)); then
     RUN_STATUS='Partial'
@@ -4643,10 +4795,14 @@ if ((failure)); then
     done
 fi
 
+trap - INT TERM HUP
+
 allow_all="${COPILOT_ALLOW_ALL:-false}"
 allow_all="${allow_all,,}"
 should_open=0
-if ((OPEN_HTML)); then
+if ((RUN_INTERRUPTED)); then
+    should_open=0
+elif ((OPEN_HTML)); then
     should_open=1
 elif ((!NO_OPEN_HTML)) &&
     [[ "${allow_all}" == "true" || "${allow_all}" == "1" ||
@@ -4671,4 +4827,7 @@ if ((should_open)); then
     fi
 fi
 
+if ((RUN_INTERRUPTED)); then
+    exit "${RUN_INTERRUPT_EXIT_CODE}"
+fi
 exit "${failure}"

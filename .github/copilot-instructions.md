@@ -54,8 +54,9 @@ scope.
   points to `plugins/rhyolite/`. Rhyolite's `plugin.json` registers
   agents, prompt commands, a skill, the `/repo-review` shorthand
   extension, and root-level `hooks.json` for a display-only local
-  `sessionStart` version/start line plus a display-only
-  `userPromptSubmitted` review-start plaque.
+  `sessionStart` version/start line or exactly-once launcher plaque plus
+  a display-only `userPromptSubmitted` plaque for exact manual
+  review-start commands only.
 - `branding/banner.txt` and `branding/welcome-metadata.json` centralize
   replaceable onboarding branding and public home/docs/support/issues/
   pulls URLs. `scripts/show-welcome-panel.sh` renders the supported
@@ -67,10 +68,12 @@ scope.
   non-Git `-C` directory, syntactically canonicalize selected public
   sources, collect native fleet/model settings, preselect
   `rhyolite:repo-review`, and submit a trusted `-i` setup block without
-  enabling allow-all mode. They also
+  enabling allow-all mode. They pass `--mode interactive` explicitly and
+  also
   export a narrow trusted immediate-start marker so the display-only
-  `sessionStart` helper suppresses the redundant ordinary load line when
-  launcher startup already begins setup. The Unix launcher supports
+  `sessionStart` helper replaces the ordinary load line with the single
+  launcher plaque while the prompt hook suppresses launcher/internal
+  continuations. The Unix launcher supports
   macOS Bash 3.2, BSD utilities, symlinked paths, and paths containing
   spaces, creates user-only launcher state, and does not persist the
   initial review request or source in launch context. The trusted runner
@@ -158,7 +161,15 @@ scope.
   `RHYOLITE ERROR` with safe stage/source/status/exit/artifact detail,
   consequence, remediation, support, and contribution guidance. Runner
   terminal summaries distinguish preflight, clone, commit, snapshot,
-  worker, timeout, incomplete-report, and cleanup failures.
+  worker, timeout, interruption, incomplete-report, and cleanup failures.
+- Exact `stop` and `cancel` are highest-priority orchestrator controls.
+  They terminate the active execution shell and same-review tasks rather
+  than entering the review prompt. The Bash runner propagates INT/TERM/HUP
+  through tracked repository, timeout, Copilot worker, and broker processes,
+  then finalizes truthful `Interrupted` artifacts.
+- Plan/autopilot mode is unsupported during guided setup and review
+  execution. A mode-related UI notice never changes the approval-bound
+  worker model; return to interactive mode before continuing.
 - Analytical command and worker agents, plus direct runners, use a
   current frontier reasoning model at maximum available effort and
   context and must not automatically downgrade. As of October 1, 2026,

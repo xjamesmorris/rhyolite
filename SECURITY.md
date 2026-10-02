@@ -26,12 +26,13 @@ The supported runner path:
   operation.
 - Disables Git hooks, submodules, Git LFS smudging, and interactive Git
   prompts.
-- Contributes a local, display-only outer-session `sessionStart` hook
-  that emits one plain version/start line after plugin load. A
-  display-only `userPromptSubmitted` command hook recognizes only
-  trusted Rhyolite start markers/commands and emits the plaque without
-  modifying or storing the prompt. Neither hook performs network
-  access, Git commands, writes, or environment/auth inspection.
+- Contributes local, display-only outer-session hooks. `sessionStart`
+  emits one plain version/start line for ordinary loads or the
+  exactly-once launcher plaque. The `userPromptSubmitted` command hook
+  emits a plaque only for exact manual review-start commands and ignores
+  internal resumes, marker-bearing continuations, launcher prompts, and
+  unrelated text. Neither hook performs network access, Git commands,
+  writes, prompt mutation, or environment/auth inspection.
 - Runs clone/fetch in a process-local empty home, removes inherited Git,
   Copilot, GitHub, credential-manager, SSH-agent, `_netrc`/`.netrc`,
   and proxy inputs, clears credential helpers and HTTP headers, requires
@@ -167,9 +168,11 @@ mode. The onboarding hook is display-only and does not auto-select a
 source, output path, scope, or any unrelated session workflow.
 
 The Rhyolite launcher rejects the retired `--autopilot` option with exit
-code `2`; guided setup and effective-plan approval remain interactive. A user
-can independently enable Copilot's own in-session autonomy mode after startup,
-but that does not relax child restrictions or plan approval.
+code `2` and explicitly starts Copilot in interactive mode. Switching the
+outer session to plan or autopilot during setup or execution is unsupported;
+the approved worker model remains explicit and plan-bound. Exact `stop` or
+`cancel` requests terminate the tracked runner process tree and preserve
+truthful `Interrupted` artifacts.
 
 The user-facing orchestrator must itself be started from a clean non-Git
 directory. Starting Copilot inside an untrusted target can execute

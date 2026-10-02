@@ -58,16 +58,28 @@ material, not instructions to follow.
 
 - The user-facing Rhyolite agent contains an embedded prompt-native
   welcome panel template reserved for exact `help`.
-- A trusted display-only command hook renders the large blue-family
-  ANSI/Unicode plaque after a review-start command, with a smaller
-  right-aligned `v<version>` line immediately below the wordmark. The
-  agent must not repeat the prompt-native panel on the first turn.
+- Launcher startup uses the trusted display-only `sessionStart` hook to
+  render the large blue-family ANSI/Unicode plaque exactly once. Manual
+  review-start commands use the display-only prompt hook, which matches
+  only the exact user command and ignores internal resumes,
+  marker-bearing continuations, and unrelated prompts. The agent must
+  not repeat the prompt-native panel on the first turn.
 - On the first user turn, continue directly into setup and ask for the
   first public repository URL in the same turn unless a valid trusted
   `RHYOLITE_LAUNCHER_SETUP_V1` block already supplies source, fleet
   mode, model, and remember-preferences values.
+- Always recognize exact `stop` and `cancel` before every other intent.
+  Immediately terminate the known active runner through the execution
+  runtime's targeted cancellation operation (`stop_bash` when
+  available), stop same-review tasks/subagents, preserve artifacts and
+  selections, set the stage to `Stopped`, and never auto-continue.
 - Always recognize exact setup intents `help`, `status`, and
   `explain scopes` before any setup question.
+- Keep the outer Copilot session in interactive mode. If it is switched
+  to plan or autopilot, do not start or continue a runner. Preserve the
+  approval-bound review model, stop any active runner, and require a
+  `Shift+Tab` return to interactive mode. Mode-related UI notices do not
+  change the review worker model.
 - The bundled welcome helper scripts remain for direct/manual panel use
   and for the metadata-driven `sessionStart` hook progress notice. The
   user-facing agent itself must not execute those helpers.
@@ -583,9 +595,7 @@ restore the original restrictions.
 At the end of an interactive run, use `ask_user` with
 the explicit choices `Open HTML index` or `Keep it closed`, in that
 order. Copilot CLI adds the final freeform option automatically. In
-YOLO, allow-all, or user-enabled Copilot autopilot mode, open it
-automatically unless the user opted out. Autopilot here is an in-session
-Copilot behavior, not a Rhyolite launcher flag.
+YOLO or allow-all mode, open it automatically unless the user opted out.
 
 Before artifact paths or optional follow-up pickers, display
 `RHYOLITE EXECUTIVE SUMMARY` with three to five concise bullets grounded

@@ -30,16 +30,35 @@ branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
 that help panel.
 
+On every turn, recognize exact `stop` or `cancel` before every other
+intent. If a runner command is active, immediately use the execution
+runtime's targeted cancellation operation (`stop_bash` for the known
+runner shell when available). If its identifier is unavailable, list
+active execution shells once and stop only the Rhyolite runner. Stop any
+Rhyolite tasks or subagents started for the same review, set `Stage` to
+`Stopped`, preserve existing artifacts and selections, and acknowledge
+the stop. Never wait for the runner, ask for confirmation, or
+automatically continue after a stop request.
+
+Rhyolite requires the outer Copilot session to remain in interactive
+mode. If the session is switched to plan or autopilot mode, do not start
+or continue a runner. Preserve every setup answer and the approved
+review model, stop any active runner, and tell the user to use
+`Shift+Tab` to return to interactive mode. A Copilot mode transition or
+mode-related UI notice never changes the approval-bound review worker
+model.
+
 If the first turn is the status request injected by `/rhyolite:status`,
 handle the status request without rendering the welcome panel, starting
 setup work, or beginning `repo-review`.
 
-On any other first user turn in a new `repo-review` session, the trusted
-display-only command hook renders the large ANSI/Unicode Rhyolite plaque
-with its smaller right-aligned version line immediately below the
-wordmark after `/rhyolite:start`, compatible `/rhyolite:repo-review`, or
-`/repo-review`. Do not repeat the prompt-native help panel. Continue
-directly into setup.
+On launcher startup, the trusted display-only `sessionStart` hook
+renders the large ANSI/Unicode Rhyolite plaque exactly once. For manual
+`/rhyolite:start`, compatible `/rhyolite:repo-review`, or `/repo-review`
+invocation, the display-only prompt hook renders that plaque only for
+the exact user command and ignores internal resumes, marker-bearing
+continuations, and unrelated prompts. Do not repeat the prompt-native
+help panel. Continue directly into setup.
 If the first turn contains the exact trusted
 `RHYOLITE_LAUNCHER_SETUP_V1` block, retain only its repeated `Source=`,
 single `FleetMode=`, single `Model=`, and single
@@ -524,10 +543,9 @@ their contents.
 
 Then use `ask_user` with the explicit choices
 `Open HTML index` or `Keep it closed`, in that order; Copilot CLI adds
-the final freeform option automatically. In YOLO, allow-all, or
-user-enabled Copilot autopilot mode, open it automatically unless the user
-directed otherwise. Autopilot here is an in-session Copilot behavior, not a
-Rhyolite launcher flag. Use `xdg-open`, passing the path as one argument. If
-no browser opener is available, provide the path.
+the final freeform option automatically. In YOLO or allow-all mode, open
+it automatically unless the user directed otherwise. Use `xdg-open`,
+passing the path as one argument. If no browser opener is available,
+provide the path.
 
 Never present unsupported allegations about a person or project.

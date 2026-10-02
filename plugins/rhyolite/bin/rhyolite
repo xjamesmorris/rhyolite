@@ -468,8 +468,9 @@ Options:
   --yolo         Start Copilot in YOLO mode for this launch.
 
 Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
-collects launcher settings, selects ${RHYOLITE_AGENT}, and begins guided setup
-immediately. Approved fleet/model settings are remembered per repository.
+collects launcher settings, selects ${RHYOLITE_AGENT}, starts explicit
+interactive mode, and begins guided setup immediately. Approved fleet/model
+settings are remembered per repository.
 EOF
 }
 
@@ -638,7 +639,7 @@ main() {
                     'launcher argument validation' \
                     'The launcher --autopilot option has been retired.' \
                     'Rhyolite no longer forwards --autopilot because guided setup and effective-plan approval must remain interactive.' \
-                    "Remove --autopilot and retry. After Rhyolite starts, you may independently enable Copilot's in-session autonomy mode." \
+                    'Remove --autopilot and retry. Rhyolite starts explicitly in interactive mode and keeps the approved review model bound to the effective plan.' \
                     2
                 ;;
             --)
@@ -802,6 +803,7 @@ main() {
         --experimental
         -C "${launch_dir}"
         --plugin-dir "${plugin_root}"
+        --mode interactive
         --agent "${RHYOLITE_AGENT}"
         --model "${model}"
         --reasoning-effort "${RHYOLITE_REASONING_EFFORT}"

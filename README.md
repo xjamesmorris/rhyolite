@@ -25,7 +25,8 @@ Rhyolite combines:
   Python 3 standard library under a fixed immutable transport safety floor.
 - Separate security and dedicated public-source research passes.
 - Centralized welcome branding plus Linux onboarding helpers.
-- A local display-only `sessionStart` availability hook.
+- Local display-only hooks for one load notice or exactly-once launcher
+  plaque plus exact manual review-start plaques.
 - Persisted plain-text, Markdown, HTML, session, state, and handoff
   artifacts.
 
@@ -100,9 +101,18 @@ retain runner-enforced tool isolation and remove inherited
 The former launcher `--autopilot` option is retired. The packaged launcher
 rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
 be mistaken for initial request text. Rhyolite setup and effective-plan
-approval remain interactive. After Rhyolite starts, a user may independently
-enable Copilot's own in-session autonomy mode; that is not a launcher flag and
-does not bypass plan approval or child isolation.
+approval remain interactive, and the launcher now passes
+`--mode interactive` explicitly. Switching the outer session to plan or
+autopilot mode during setup or execution is unsupported: return to
+interactive mode before continuing. A mode-related UI notice does not change
+the model recorded in the approved plan or the explicit model passed to the
+isolated review workers.
+
+Exact `stop` and `cancel` requests are control intents, not review prompts.
+The orchestrator immediately stops the active runner, and the runner
+propagates interruption signals through its tracked repository, timeout,
+Copilot worker, and broker processes before writing truthful `Interrupted`
+artifacts.
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
@@ -148,8 +158,8 @@ copilot plugin install ./plugins/rhyolite
 ```
 
 Installation includes the Bash launcher, Rhyolite agent, skill,
-short-command extension, helpers, and local display-only `sessionStart`
-hook. The repository-only validator agents are not packaged. Current
+short-command extension, helpers, and local display-only onboarding
+hooks. The repository-only validator agents are not packaged. Current
 Copilot CLI releases load extension-provided commands in experimental
 mode.
 
@@ -237,18 +247,19 @@ compatibility agent path is
 | `/rhyolite:version` | Show the installed Rhyolite version. |
 | `/rhyolite:help` | Show Rhyolite command help. |
 
-The installed plugin contributes a local, display-only `sessionStart`
-hook. In a new outer Copilot CLI session it emits one plain line with
-the installed version and `/rhyolite:start`; it performs no network
-access, Git commands, writes, prompt mutation, or environment/auth
-inspection. When extension mode is enabled, the extension emits the same
-plain guidance immediately while the hook remains the non-experimental
-fallback.
+The installed plugin contributes local, display-only onboarding hooks.
+In an ordinary new outer Copilot CLI session, `sessionStart` emits one
+plain line with the installed version and `/rhyolite:start`. Launcher
+startup instead receives the full launcher plaque from `sessionStart`
+exactly once. Neither path performs network access, Git commands,
+writes, prompt mutation, or environment/auth inspection.
 
 After `/rhyolite:start`, compatible `/rhyolite:repo-review`, or the
-`/repo-review` shorthand, a display-only command hook recognizes only
-the trusted start marker/command and emits the large plaque. It does not
-modify the prompt or persist state. The visual treatment is limited to
+`/repo-review` shorthand, a display-only prompt hook recognizes only the
+exact manual start command and emits the large plaque. It ignores
+internal resumes, marker-bearing continuations, launcher prompts, and
+unrelated user text; it does not modify the prompt or persist state. The
+visual treatment is limited to
 the large RHYOLITE wordmark, a smaller right-aligned `v<version>` line
 immediately beneath it, full/half-block contours that approximate
 antialiasing in a terminal cell grid, and the wordmark's blue-family
@@ -613,10 +624,8 @@ is shared.
 
 At the end of an interactive run, the runner asks whether to open the
 local HTML index. Use `--open-html` to open it automatically or
-`--no-open-html` to disable opening. Allow-all/YOLO
-sessions and user-enabled Copilot autopilot sessions also open it
-automatically unless disabled. Autopilot here is an in-session Copilot
-behavior, not a Rhyolite launcher option.
+`--no-open-html` to disable opening. Allow-all/YOLO sessions also open
+it automatically unless disabled.
 
 ## Output
 
@@ -717,8 +726,8 @@ Important defaults:
 - Target repositories are never modified.
 - Local repository paths are rejected; supply only public HTTPS Git
   repository URLs.
-- The outer `sessionStart` hook is local, display-only, and performs no
-  network access, Git commands, writes, prompt interception, or
+- The outer onboarding hooks are local and display-only. They perform no
+  network access, Git commands, writes, prompt mutation, or
   environment/auth inspection.
 - The full welcome panel appears only when the
   `rhyolite:repo-review` agent handles exact `help`, and it is rendered
