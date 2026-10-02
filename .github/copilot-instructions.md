@@ -139,10 +139,11 @@ scope.
   `scripts/research-egress-broker.py` is the explicitly approved Python
   standard-library exception to the Bash-first rule. It implements the
   deterministic local stdio MCP protocol, immutable public-HTTPS/DNS/TLS/no-
-  auth/no-proxy floor, direct fetch, anonymous GitHub, provider-disabled
-  general search, cookie isolation, TLS/HTTP evidence, and private unsupported-
-  body storage. `scripts/launch-research-egress-broker.sh` starts it under a
-  minimal `env -i` environment.
+  auth/no-proxy floor, direct fetch, anonymous GitHub, fixed anonymous
+  `duckduckgo-html-v1` search with explicit `none`, cookie isolation, TLS/HTTP
+  evidence, and private unsupported-body storage.
+  `scripts/launch-research-egress-broker.sh` starts it under a minimal `env -i`
+  environment.
 - `run-parallel-reviews.sh` is the supported trusted boundary. It validates
   public HTTPS sources, rejects local paths before any `.git`
   inspection or network access, performs a fail-closed anonymous-access
@@ -181,6 +182,11 @@ scope.
   observations, remediation priorities, and overall conclusions carry
   High/Medium/Low confidence with an evidence basis. Completeness,
   clarity, and correctness take priority over speed.
+- Scope 3 keeps direct model/effort/harness attribution direct-evidence-only.
+  Heuristic model candidates are separate non-attribution about repository
+  assets, never people; they prefer family-level identification, cite
+  path/commit/public evidence, preserve counterevidence and alternatives, and
+  use only Not applicable/Low/Medium confidence, never High.
 - `review-output.sh` extracts the canonical report, sanitizes it, and
   extracts the canonical research dossier, and produces plain-text,
   inert Markdown, escaped HTML, state, and handoff artifacts.
@@ -254,7 +260,7 @@ scope.
 - `ResearchTransport` is approval-hash material. For scope 2/3 it must
   disclose dedicated-worker mode, broker/policy schema versions,
   provider IDs, effective policy digest/resource profile, exact tools,
-  anonymous GitHub/no-auth mode, disabled general-web-search
+  anonymous GitHub/no-auth mode, selected general-web-search provider and
   availability, cookie replay, private raw Set-Cookie retention,
   private unsupported-body retention, and network-log policy. Scope 1
   fixes the object to disabled and clears stale cookie consent.
@@ -276,9 +282,10 @@ scope.
   cleanup failures fail closed rather than weakening isolation.
 - Research policy files must resolve before clone, be trusted and
   outside Git worktrees/target/output roots unless they are the bundled
-  default, and reduce to an effective digest. Version 1 accepts no
-  arbitrary executable, remote MCP, credentialed provider, HTTP/private
-  destination, proxy, imported cookie, or TLS bypass.
+  default, and reduce to an effective digest. Policy schema 1 accepts only
+  shipped provider adapters and no arbitrary executable, remote MCP,
+  credentialed or configurable-endpoint provider, HTTP/private destination,
+  proxy, imported cookie, challenge bypass, fallback provider, or TLS bypass.
 - `research/network/private` is mode 0700 and its files are mode 0600.
   Raw cookies and unsupported bodies are inert local evidence, never
   linked individually from HTML or copied into dossier/report/state

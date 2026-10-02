@@ -398,6 +398,12 @@ isolated to one repository and run, accepts only bounded exact-host
 Secure cookies, and is never imported or reused. Scope `1` skips this
 picker and clears any previous cookie choice immediately.
 
+Scope `2`/`3` uses the runner's fixed anonymous `duckduckgo-html-v1`
+general-web-search provider by default. Provider selection is an advanced
+direct-runner option, not a guided picker; explicit `none` is the only opt-out.
+Never invent or pass a configurable endpoint, credential, header, request body,
+proxy, challenge bypass, or fallback provider.
+
 State that all timing estimates are rough and can increase
 substantially for a large repository or broad research topic.
 
@@ -437,8 +443,8 @@ start the review yet. Instead:
    `ProvenanceWindow`; otherwise show provenance window as disabled.
    For `ResearchTransport`, show dedicated-worker mode, broker and policy
    schema versions, provider IDs, policy digest, resource profile, exact
-   tools, anonymous GitHub/no-auth mode, disabled general-web-search
-   availability, cookie replay mode, private raw Set-Cookie retention,
+   tools, anonymous GitHub/no-auth mode, selected general-web-search provider
+   and availability, cookie replay mode, private raw Set-Cookie retention,
    private unsupported-body retention, and network-log policy. Also
    include planning range/resource/network expectations and any returned
    review-plan artifact paths.
@@ -511,8 +517,12 @@ must also contain the exact `GENERATED-CODE PROVENANCE ASSESSMENT`
 section and required fields. Preserve the report's evidence discipline:
 never infer human generation from absent evidence; do not treat style,
 quality, verbosity, test density, bulk commits, generic fingerprints, or
-tool configuration as proof; and allow exact model/family/effort/harness
-attribution only from directly bound commit-specific evidence.
+tool configuration alone as proof. Keep direct model, effort, and harness
+attribution direct-evidence-only. Heuristic model candidates must concern
+repository assets rather than people, remain explicitly non-attributive,
+prefer family-level identification, cite path/commit/public evidence, preserve
+counterevidence and alternatives, and use only Not applicable, Low, or Medium
+heuristic confidence, never High.
 
 If the user asks to review a private or internal repository, stop and
 explain that plugin version `0.4.1` supports anonymously readable

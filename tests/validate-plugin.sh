@@ -1451,9 +1451,11 @@ for agent_targeting_field in \
 done
 for provenance_field in \
     'Generation assessment:' \
-    'Model attribution:' \
-    'Effort attribution:' \
-    'Harness attribution:' \
+    'Direct model attribution:' \
+    'Heuristic model candidates (not attribution):' \
+    'Heuristic model confidence:' \
+    'Direct effort attribution:' \
+    'Direct harness attribution:' \
     'Coverage/window:' \
     'Alternative explanations:' \
     'Confidence:' \
@@ -1466,7 +1468,10 @@ done
 grep -Fq 'No supporting evidence found' "${PROMPT}" &&
     grep -Fq 'Never infer human generation' "${PROMPT}" &&
     grep -Fq 'configuration, not generation' "${PROMPT}" &&
-    grep -Fq 'directly bound' "${WORKER_AGENT}" ||
+    grep -Fq 'direct-evidence-only' "${WORKER_AGENT}" &&
+    grep -Fq 'repository assets, never people' "${PROMPT}" &&
+    grep -Fq 'never `High`' "${PROMPT}" &&
+    grep -Fq 'No candidate identified' "${SKILL}" ||
     fail 'Generated-code provenance evidence discipline is incomplete.'
 grep -Fq \
     'For scope 1, do not emit any of those four research headings.' \
@@ -1684,11 +1689,11 @@ const expectedTools = {
   maxCookieJarBytes: 65536,
 };
 if (policy.schemaVersion !== 1 ||
-    policy.policyId !== "rhyolite-public-research-v1" ||
+    policy.policyId !== "rhyolite-public-research-v2" ||
     policy.providers?.directHttps !== true ||
     policy.providers?.anonymousGitHub !== true ||
     JSON.stringify(policy.providers?.generalWebSearch) !==
-      JSON.stringify(["none"]) ||
+      JSON.stringify(["duckduckgo-html-v1", "none"]) ||
     policy.scopeRequestBudgets?.["2"] !== 500 ||
     policy.scopeRequestBudgets?.["3"] !== 1000) {
   throw new Error("research policy provider or budget contract is invalid");
@@ -1699,6 +1704,24 @@ for (const [key, value] of Object.entries(expectedTools)) {
   }
 }
 JS
+grep -Fq \
+    'DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"' \
+    "${RESEARCH_BROKER}" &&
+    grep -Fq 'WEB_PROVIDER_IDS = (WEB_PROVIDER_ID, WEB_PROVIDER_NONE)' \
+        "${RESEARCH_BROKER}" &&
+    grep -Fq 'body_normalizer=normalize_duckduckgo_search_body' \
+        "${RESEARCH_BROKER}" &&
+    grep -Fq 'unwrap_duckduckgo_result_url' "${RESEARCH_BROKER}" &&
+    grep -Fq 'provider_challenge' "${RESEARCH_BROKER}" ||
+    fail 'Fixed anonymous web-search provider dispatch is incomplete.'
+! grep -Eq \
+    -- '--web-search-(endpoint|header|credential)|caller_headers|captcha_bypass|fallback_provider' \
+    "${RESEARCH_BROKER}" ||
+    fail 'Research broker exposes configurable or bypass web-search behavior.'
+grep -Fq 'duckduckgo-html-v1 (default) or none' "${RUNNER}" &&
+    grep -Fq 'duckduckgo-html-v1' "${README}" &&
+    grep -Fq 'repository assets, never people' "${PROMPT}" ||
+    fail 'Provider or heuristic provenance documentation is incomplete.'
 grep -Fq -- '--deny-tool write' "${RUNNER}" ||
     fail 'Bash runner does not deny write tools.'
 ! grep -Fq 'shell(git' "${RUNNER}" ||
@@ -3293,13 +3316,16 @@ No material anomaly.
 GENERATED-CODE PROVENANCE ASSESSMENT
 1. Generation assessment:
    Indeterminate. No directly bound evidence was available.
-- Model attribution: Indeterminate - no directly bound evidence.
-2) Effort attribution: Indeterminate; no directly bound evidence.
-* Harness attribution:
-  Indeterminate: no directly bound evidence.
+- Direct model attribution: No direct attribution.
+2) Heuristic model candidates (not attribution): No candidate identified
+* Heuristic model confidence:
+  Not applicable
++ Direct effort attribution: No direct attribution.
+5. Direct harness attribution:
+   No direct attribution.
 + Coverage/window: Exact commit and approved provenance window.
-6. Alternative explanations: No directly bound generation evidence.
-7) Confidence: Low; Evidence basis:
+7. Alternative explanations: No directly bound generation evidence.
+8) Confidence: Low; Evidence basis:
    Static validation fixture.
 
 AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
@@ -3473,12 +3499,37 @@ if validate_review_report_contract "${missing_provenance}" 3 \
 fi
 
 missing_provenance_field="${fixture_dir}/missing-provenance-field.txt"
-grep -Fv 'Harness attribution:' "${scope_three_report}" \
+grep -Fv 'Direct harness attribution:' "${scope_three_report}" \
     > "${missing_provenance_field}"
 if validate_review_report_contract "${missing_provenance_field}" 3 \
     >/dev/null 2>&1; then
     fail 'Bash scope 3 validation accepted an omitted provenance field.'
 fi
+
+invalid_heuristic_confidence="${fixture_dir}/invalid-heuristic-confidence.txt"
+sed 's/^  Not applicable$/  High/' \
+    "${scope_three_report}" > "${invalid_heuristic_confidence}"
+if validate_review_report_contract "${invalid_heuristic_confidence}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted High heuristic model confidence.'
+fi
+
+invalid_heuristic_absence="${fixture_dir}/invalid-heuristic-absence.txt"
+sed \
+    's/Heuristic model candidates (not attribution): No candidate identified/Heuristic model candidates (not attribution): Claude-family candidate/' \
+    "${scope_three_report}" > "${invalid_heuristic_absence}"
+if validate_review_report_contract "${invalid_heuristic_absence}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted Not applicable for a named heuristic candidate.'
+fi
+
+valid_heuristic_candidate="${fixture_dir}/valid-heuristic-candidate.txt"
+sed \
+    -e 's/Heuristic model candidates (not attribution): No candidate identified/Heuristic model candidates (not attribution): Claude family/' \
+    -e 's/^  Not applicable$/  Medium/' \
+    "${scope_three_report}" > "${valid_heuristic_candidate}"
+validate_review_report_contract "${valid_heuristic_candidate}" 3 ||
+    fail 'Bash scope 3 validation rejected a Medium family-level heuristic candidate.'
 
 invalid_provenance_verdict="${fixture_dir}/invalid-provenance-verdict.txt"
 sed 's/^   Indeterminate\./   Probably generated./' \
@@ -3778,6 +3829,22 @@ plan_scope_two_stderr="${fixture_dir}/plan-scope-2.stderr"
 [[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
     fail 'Bash scope 2 plan-only created workspace or output roots.'
 
+plan_scope_two_none_json="${fixture_dir}/plan-scope-2-none.json"
+plan_scope_two_none_stderr="${fixture_dir}/plan-scope-2-none.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --research-web-search-provider none \
+    --workspace-root "${plan_scope_two_workspace}" \
+    --output-root "${plan_scope_two_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_two_none_json}" \
+    2>"${plan_scope_two_none_stderr}"
+[[ ! -s "${plan_scope_two_none_stderr}" ]] ||
+    fail 'Bash scope 2 web-search opt-out plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
+    fail 'Bash scope 2 web-search opt-out plan-only created workspace or output roots.'
+
 plan_scope_two_cookie_json="${fixture_dir}/plan-scope-2-cookie.json"
 plan_scope_two_cookie_stderr="${fixture_dir}/plan-scope-2-cookie.stderr"
 "${RUNNER}" \
@@ -3943,6 +4010,7 @@ node - \
     "${plan_scope_one_canonical_json}" \
     "${plan_scope_one_fleet_json}" \
     "${plan_scope_two_json}" \
+    "${plan_scope_two_none_json}" \
     "${plan_scope_two_cookie_json}" \
     "${plan_scope_two_custom_json}" \
     "$(realpath -m -- "${plan_scope_two_workspace}")" \
@@ -3965,6 +4033,7 @@ const [
   scopeOneCanonicalPath,
   scopeOneFleetPath,
   scopeTwoPath,
+  scopeTwoNonePath,
   scopeTwoCookiePath,
   scopeTwoCustomPath,
   scopeTwoWorkspace,
@@ -4079,8 +4148,15 @@ function assertCommonPlan(
   ], `${label} prior-art window`);
 }
 
-function assertResearchTransport(plan, label, enabled, cookieMode) {
+function assertResearchTransport(
+  plan,
+  label,
+  enabled,
+  cookieMode,
+  webProvider = enabled ? "duckduckgo-html-v1" : "none",
+) {
   const transport = plan.ResearchTransport;
+  const webAvailable = enabled && webProvider !== "none";
   if (!transport || typeof transport !== "object" || Array.isArray(transport)) {
     throw new Error(`${label} research transport is missing`);
   }
@@ -4103,8 +4179,8 @@ function assertResearchTransport(plan, label, enabled, cookieMode) {
   if (transport.Enabled !== enabled ||
       transport.Cookies?.ReplayMode !== cookieMode ||
       transport.Cookies?.StartsEmpty !== true ||
-      transport.GeneralWebSearch?.ProviderId !== "none" ||
-      transport.GeneralWebSearch?.Available !== false ||
+      transport.GeneralWebSearch?.ProviderId !== webProvider ||
+      transport.GeneralWebSearch?.Available !== webAvailable ||
       transport.AnonymousGitHub?.Authentication !== "none") {
     throw new Error(`${label} research transport mode is invalid`);
   }
@@ -4133,7 +4209,7 @@ function assertResearchTransport(plan, label, enabled, cookieMode) {
   ];
   if (transport.Mode !== "dedicated-worker-local-stdio-mcp" ||
       transport.ProviderId !== "local-broker" ||
-      transport.BrokerVersion !== "1.0" ||
+      transport.BrokerVersion !== "1.1" ||
       transport.PolicySchemaVersion !== 1 ||
       typeof transport.PolicyId !== "string" ||
       transport.PolicyId.length === 0 ||
@@ -4277,6 +4353,27 @@ if (scopeOne.ApprovalHash === scopeTwo.ApprovalHash) {
 }
 if (scopeTwo.ResearchTransport.ResourceProfile.RequestBudget !== 500) {
   throw new Error("scope 2 research request budget is invalid");
+}
+
+const scopeTwoNone = parsePlan(scopeTwoNonePath);
+assertCommonPlan(
+  scopeTwoNone,
+  scopeTwoWorkspace,
+  scopeTwoOutput,
+  "scope 2 web-search opt-out",
+);
+assertPriorArtWindow(scopeTwoNone, "scope 2 web-search opt-out", true);
+assertResearchTransport(
+  scopeTwoNone,
+  "scope 2 web-search opt-out",
+  true,
+  "off",
+  "none",
+);
+if (scopeTwoNone.ApprovalHash === scopeTwo.ApprovalHash ||
+    scopeTwoNone.ResearchTransport.PolicyDigest ===
+      scopeTwo.ResearchTransport.PolicyDigest) {
+  throw new Error("web-search provider selection did not change plan binding");
 }
 
 const scopeTwoCookie = parsePlan(scopeTwoCookiePath);
@@ -5084,7 +5181,7 @@ PY
         "${cookie_mode}" =~ ^(off|ephemeral)$ &&
         "${repository_url}" == https://* &&
         "${policy_digest}" =~ ^[0-9a-f]{64}$ &&
-        "${web_provider}" == 'none' ]] || exit 100
+        "${web_provider}" == 'duckduckgo-html-v1' ]] || exit 100
     mkdir -p -- "${network_root}/private/bodies"
     chmod 700 -- \
         "${network_root}" \
@@ -5120,9 +5217,9 @@ EOF
     cat > "${network_root}/summary.json" <<EOF
 {
   "SchemaVersion": 1,
-  "BrokerVersion": "1.0",
+  "BrokerVersion": "1.1",
   "PolicySchemaVersion": 1,
-  "PolicyId": "rhyolite-public-research-v1",
+  "PolicyId": "rhyolite-public-research-v2",
   "PolicyDigest": "${policy_digest}",
   "Health": "${health}",
   "CookieMode": "${cookie_mode}",
@@ -5142,7 +5239,8 @@ EOF
     "Providers": {
       "direct-public-https-v1": 1,
       "anonymous-github-rest-v1": 0,
-      "none": 1
+      "duckduckgo-html-v1": 0,
+      "none": 0
     }
   },
   "Cookies": {
@@ -5156,8 +5254,8 @@ EOF
   "RateLimits": {},
   "ProjectControlledEndpointObservations": [],
   "GeneralWebSearch": {
-    "ProviderId": "none",
-    "Available": false
+    "ProviderId": "duckduckgo-html-v1",
+    "Available": true
   },
   "AnonymousGitHub": {
     "ProviderId": "anonymous-github-rest-v1",
@@ -5189,7 +5287,7 @@ EOF
         "${network_root}/private/body-manifest.jsonl"
     cat > "${broker_runtime}/broker-exit.json" <<'EOF'
 {
-  "BrokerVersion": "1.0",
+  "BrokerVersion": "1.1",
   "CleanExit": true,
   "CompletedAt": "2026-10-01T00:00:03Z"
 }
@@ -5207,8 +5305,9 @@ EOF
 REPOSITORY RESEARCH DOSSIER
 RESEARCH CAPABILITY RECORD
 Broker health ready; approved exact tools were available. One successful public
-response was observed. General web search was provider_disabled.
-Broker version: 1.0
+response was observed. General web search provider duckduckgo-html-v1 was
+available.
+Broker version: 1.1
 Policy digest: ${policy_digest}
 Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
 Unsupported bodies use private-content-addressed retention.
@@ -5231,7 +5330,8 @@ TOP USER RETRIEVAL PRIORITIES
 None that would change a material conclusion.
 
 RESEARCH LIMITATIONS
-One independent source was inaccessible. General web search is disabled.
+One independent source was inaccessible. The fixed anonymous web-search
+provider returned no additional source needed for this fixture.
 Confidence: High. Evidence basis: sanitized broker events.
 
 RESEARCH TRANSPORT OBSERVATIONS
@@ -5247,8 +5347,9 @@ DOSSIER
 REPOSITORY RESEARCH DOSSIER
 RESEARCH CAPABILITY RECORD
 Broker health ready; approved exact tools were available. One successful public
-response was observed. General web search was provider_disabled.
-Broker version: 1.0
+response was observed. General web search provider duckduckgo-html-v1 was
+available.
+Broker version: 1.1
 Policy digest: ${policy_digest}
 Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
 Unsupported bodies use private-content-addressed retention.
@@ -5268,8 +5369,8 @@ TOP USER RETRIEVAL PRIORITIES
 None.
 
 RESEARCH LIMITATIONS
-General web search provider is disabled; direct HTTPS and anonymous GitHub are
-the available provider paths.
+The fixed anonymous duckduckgo-html-v1 provider was available; the fixture used
+the direct HTTPS provider for its successful response.
 Confidence: High. Evidence basis: approval-bound capability record.
 
 RESEARCH TRANSPORT OBSERVATIONS
@@ -5394,12 +5495,14 @@ REPORT
 
 GENERATED-CODE PROVENANCE ASSESSMENT
 Generation assessment: No supporting evidence found
-Model attribution: Indeterminate - no directly bound evidence.
-Effort attribution: Indeterminate - no directly bound evidence.
+Direct model attribution: No direct attribution.
+Heuristic model candidates (not attribution): No candidate identified
+Heuristic model confidence: Not applicable
+Direct effort attribution: No direct attribution.
 REPORT
         if [[ "${MOCK_OMIT_PROVENANCE_FIELD-}" != "1" ]]; then
             printf '%s\n' \
-                'Harness attribution: Indeterminate - no directly bound evidence.'
+                'Direct harness attribution: No direct attribution.'
         fi
         cat <<'REPORT'
 Coverage/window: Exact reviewed commit and approved provenance window.
@@ -5964,7 +6067,9 @@ if (reviewPlan.SchemaVersion !== 3 ||
     reviewPlan.ResearchTransport?.Mode !==
       "dedicated-worker-local-stdio-mcp" ||
     reviewPlan.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
-    reviewPlan.ResearchTransport?.GeneralWebSearch?.Available !== false ||
+    reviewPlan.ResearchTransport?.GeneralWebSearch?.ProviderId !==
+      "duckduckgo-html-v1" ||
+    reviewPlan.ResearchTransport?.GeneralWebSearch?.Available !== true ||
     reviewPlan.ResearchTransport?.AnonymousGitHub?.Authentication !== "none" ||
     reviewPlan.ResearchTransport?.ResourceProfile?.RequestBudget !== 1000 ||
     !/^[0-9a-f]{64}$/.test(
@@ -6020,7 +6125,9 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("Raw Set-Cookie:") ||
     !reviewPlanText.includes("private per-repository ledger") ||
     !reviewPlanText.includes("General web search:") ||
-    !reviewPlanText.includes("none (provider disabled)") ||
+    !reviewPlanText.includes(
+      "duckduckgo-html-v1 (available; anonymous fixed HTTPS adapter)",
+    ) ||
     !reviewPlanText.includes("Requested commit:") ||
     !reviewPlanText.includes("7fd1a60b01f91b314f59955a4e4d4e80d8edf11d")) {
   throw new Error("run-level review plan text is incomplete");
@@ -7027,7 +7134,7 @@ for report_contract_case in \
         missing-provenance-field)
             report_contract_scope=3
             report_contract_flag='MOCK_OMIT_PROVENANCE_FIELD=1'
-            report_contract_detail='Harness attribution:'
+            report_contract_detail='Direct harness attribution:'
             ;;
     esac
     report_contract_output="${fixture_dir}/${report_contract_case}-output"

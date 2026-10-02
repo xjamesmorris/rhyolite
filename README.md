@@ -39,9 +39,10 @@ The plugin supports anonymously readable public HTTPS Git repositories on
 GitHub and other public DNS hosts. It does not review authenticated,
 private, or internal repositories, execute target code, modify target
 repositories, or use shared service credentials. Scope 2/3 research uses only
-the bundled local broker's public-HTTPS direct-fetch and anonymous GitHub
-providers. The stable general-web-search interface is provider-disabled by
-default in version `0.4.1`.
+the bundled local broker's public-HTTPS direct-fetch, anonymous GitHub, and
+fixed anonymous `duckduckgo-html-v1` general-web-search providers. Advanced
+direct-runner use may select explicit `none` to opt out; no other web-search
+provider or endpoint is configurable.
 
 **Platform support:** Fedora Linux 44 is the sole development and
 validation baseline for this release. Runtime support is Linux-only.
@@ -439,6 +440,14 @@ untrusted evidence. Unsupported bodies are retained privately as
 content-addressed `.bin` files and are never parsed, rendered, indexed,
 linked individually, or exposed to a model.
 
+General web search uses a closed in-code `duckduckgo-html-v1` adapter with a
+fixed HTTPS endpoint, fixed headers, no credentials, no caller-supplied
+headers, no request body, no inherited proxy, no CAPTCHA/challenge bypass, and
+no fallback provider. Provider redirect URLs are decoded, every result URL is
+revalidated through the same public-HTTPS policy, duplicates are removed, and
+only bounded URL/title/summary records are returned. Explicit `none` remains a
+fail-closed opt-out.
+
 The dedicated worker builds a source landscape for the repository's
 subject areas. It extends mailing-list archives, blogs, conferences,
 standards, academic sources, forums, ecosystem sources, and commercial
@@ -470,15 +479,23 @@ inert text. Resource URLs are not activated merely to test tracking behavior,
 and normalized external pages can limit sensor detection.
 
 Scope `3` also requires an exact
-`GENERATED-CODE PROVENANCE ASSESSMENT` with generation, model, effort,
-harness, coverage/window, alternative-explanation, confidence, and
-evidence-basis fields. Generation verdicts are limited to `Confirmed`,
+`GENERATED-CODE PROVENANCE ASSESSMENT` with generation, direct model,
+non-attributive heuristic model candidates, heuristic confidence, direct
+effort, direct harness, coverage/window, alternative-explanation, confidence,
+and evidence-basis fields. Generation verdicts are limited to `Confirmed`,
 `Evidence supports assisted generation`, `Indeterminate`, or
 `No supporting evidence found`. An absence of evidence never establishes
-human generation. Exact model, family, effort, or harness attribution requires
-directly bound commit-specific evidence such as an attestation, transcript,
-provenance record, or explicit disclosure. Tool configuration, style, quality,
-verbosity, test density, bulk commits, and generic fingerprints are not proof.
+human generation. Direct model, effort, or harness attribution requires
+commit-bound evidence such as an attestation, transcript, provenance record,
+or explicit disclosure.
+
+Heuristic model candidates concern repository assets, never people, and are
+not attribution. They prefer family-level identification, cite exact paths,
+commits, or dated public evidence, preserve counterevidence and alternatives,
+and use only `Not applicable`, `Low`, or `Medium` confidence, never `High`.
+`No candidate identified` and `Not appropriate` are the controlled
+no-candidate values. Tool configuration, style, quality, verbosity, test
+density, bulk commits, and generic fingerprints alone are not proof.
 
 Substantive findings and assessment points include High, Medium, or Low
 confidence with a concise evidence basis. Low-confidence possibilities
@@ -524,9 +541,9 @@ Exact `Change scope` is still accepted as a shortcut into editing `Scope`.
 Scope 2/3 plans also surface and hash `ResearchTransport`:
 dedicated-worker mode, broker and policy schema versions, provider IDs,
 effective policy digest and resource profile, exact tools, anonymous
-GitHub/no-auth behavior, disabled general-web search, cookie replay
-choice, private raw Set-Cookie retention, private unsupported-body
-retention, and network-log policy.
+GitHub/no-auth behavior, selected general-web-search provider and
+availability, cookie replay choice, private raw Set-Cookie retention,
+private unsupported-body retention, and network-log policy.
 
 If the runner reports a plan-hash mismatch, the agent
 preserves the answers, explains that the approved effective plan
@@ -608,7 +625,7 @@ Advanced direct-runner options are:
 ```text
 --research-provider local-broker
 --research-policy default|<trusted-policy.json>
---research-web-search-provider none
+--research-web-search-provider duckduckgo-html-v1|none
 --research-cookies off|ephemeral
 ```
 
@@ -743,13 +760,17 @@ Important defaults:
 - Scope 2/3 research never imports credentials, cookies, proxies, netrc
   state, browser state, client certificates, or target-provided provider
   settings.
+- Scope 2/3 general web search defaults to the fixed anonymous
+  `duckduckgo-html-v1` provider. Explicit `none` disables that interface
+  fail-closed.
 - Raw Set-Cookie values and unsupported bodies are private local evidence
   and never appear in model inputs or rendered reports.
 - Scope 3 provenance review for agentically generated code is disabled
   unless explicitly requested.
 - Every scope validates the required agent-targeting/review-manipulation
   section. Scope 3 additionally fails closed if the generated-code provenance
-  section or any required field is missing.
+  section or any required field is missing, or if heuristic model confidence
+  is `High` or inconsistent with the controlled no-candidate values.
 - Reports omit author email addresses and avoid unsupported attribution.
 - Isolated child review homes still set `disableAllHooks`, so nested
   review sessions do not inherit the onboarding hook.

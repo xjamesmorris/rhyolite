@@ -65,6 +65,12 @@ The supported runner path:
 - Revalidates and bounds redirects; applies fixed safe headers, per-host
   pacing, request/concurrency/time/header/body/normalized-output limits, and
   never accepts model-supplied headers or request bodies.
+- Implements general web search only through the closed in-code, fixed-endpoint
+  anonymous `duckduckgo-html-v1` adapter. It unwraps provider redirect URLs,
+  revalidates every result through the public-HTTPS floor, deduplicates and
+  bounds URL/title/summary output, returns structured provider failures, and
+  never configures credentials, caller headers, request bodies, proxies,
+  challenge bypass, or fallback providers. Explicit `none` remains fail-closed.
 - Keeps TLS verification mandatory. After verification failure, a second
   metadata-only diagnostic handshake may fingerprint and describe the
   presented leaf certificate, but sends no HTTP request and never converts the
@@ -151,11 +157,15 @@ The supported runner path:
   `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` contract. Scope 3 also
   requires the exact `GENERATED-CODE PROVENANCE ASSESSMENT`, its required
   fields, and a bounded generation verdict.
-- Restricts exact model/family/effort/harness provenance attribution to
+- Restricts direct model, effort, and harness provenance attribution to
   directly bound commit-specific attestations, transcripts, provenance
-  records, or explicit disclosures. Configuration files, style, quality,
-  verbosity, test density, bulk commits, and generic fingerprints are not
-  proof, and absent evidence never proves human generation.
+  records, or explicit disclosures. Heuristic model candidates are separate,
+  explicitly non-attributive, limited to repository assets rather than people,
+  preferably family-level, and require path/commit/public evidence,
+  counterevidence, alternatives, and `Not applicable`, `Low`, or `Medium`
+  confidence, never `High`. Configuration files, style, quality, verbosity,
+  test density, bulk commits, and generic fingerprints alone are not proof, and
+  absent evidence never proves human generation.
 - Performs network activity only for user-requested anonymous clones and,
   when enabled, the approval-bound local research broker.
 - Does not perform background network requests or telemetry uploads.
@@ -189,11 +199,12 @@ plaintext-token mode. Plaintext tokens exist only in the temporary
 runtime home and are not retained with review artifacts.
 
 Research policy/provider selection is an advanced trusted runner surface, not
-a guided picker. Version 1 accepts only the bundled `local-broker`, direct
-HTTPS adapter, anonymous GitHub adapter, and provider-disabled general-web
-search interface. A custom policy is reduced to an effective digest and cannot
-enable plaintext, private destinations, authentication, arbitrary executables
-or remote MCPs, TLS bypass, imported cookies, proxies, or cross-run state.
+a guided picker. Policy schema 1 accepts only the bundled `local-broker`,
+direct HTTPS adapter, anonymous GitHub adapter, fixed anonymous
+`duckduckgo-html-v1` adapter, and explicit `none`. A custom policy is reduced
+to an effective digest and cannot enable plaintext, private destinations,
+authentication, arbitrary executables or remote MCPs, TLS bypass, imported
+cookies, proxies, configurable endpoints, or cross-run state.
 
 ## Reporting a vulnerability
 

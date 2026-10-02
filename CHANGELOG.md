@@ -36,10 +36,14 @@
   basis. Git metadata collection/wrapping is trusted, while ref names and
   commit subjects remain attacker-controlled evidence.
 - Added the scope-3 `GENERATED-CODE PROVENANCE ASSESSMENT` with exact
-  generation/model/effort/harness/coverage/alternative/confidence/evidence
-  fields, bounded verdicts, directly bound attribution requirements, and
-  fail-closed omission validation. Absence of evidence no longer permits an
-  inference of human generation.
+  generation, direct model, non-attributive heuristic model candidate,
+  heuristic confidence, direct effort, direct harness, coverage, alternative,
+  confidence, and evidence fields. Direct attribution remains commit-bound;
+  heuristic candidates concern repository assets rather than people, prefer
+  family-level identification, require counterevidence and alternatives, and
+  can be only Not applicable/Low/Medium confidence. Fail-closed validation
+  rejects omissions, High heuristic confidence, inconsistent no-candidate
+  values, and human-generation inference from absent evidence.
 - Hardened report/output validation so delimited confidence explanations count
   as inline evidence, generation verdicts require an exact allowed value or a
   punctuation-delimited explanation, tracker suppression canonicalizes host,
@@ -54,7 +58,12 @@
   standard-library broker with immutable HTTPS/public-DNS/DNS-pinning/
   verified-TLS/no-auth/no-proxy controls, bounded redirects and resources,
   safe HTML/text/JSON/XML/RSS/Atom normalization, anonymous GitHub search,
-  and a provider-disabled general-web-search interface.
+  and a fixed anonymous `duckduckgo-html-v1` general-web-search provider with
+  explicit `none`. The provider uses a closed fixed-endpoint GET adapter,
+  unwraps and revalidates result URLs, deduplicates bounded URL/title/summary
+  output, and fails structurally on challenges or malformed responses without
+  bypass or fallback. Broker version is now `1.1` and the default policy ID is
+  `rhyolite-public-research-v2`.
 - Added explicit scope 2/3 cookie consent. Replay defaults off; optional
   ephemeral replay uses a fresh bounded exact-host Secure jar per repository
   and run. Raw Set-Cookie values are retained only in a mode-0600 private
@@ -74,10 +83,12 @@
   fail-closed validation requiring exact tools, capability evidence, a valid
   dossier, and at least one successful public response before main analysis.
 - Added offline broker protocol/policy/DNS/TLS/cookie/body/provider/budget
-  tests and deterministic runner assertions for scope 1 isolation, exact MCP
-  arguments, two-phase ordering, source-level failures, system-wide transport
-  failure, private-evidence non-disclosure, permissions, cleanup, approval-hash
-  changes, and multi-repository cookie isolation.
+  tests, including fixed web-search parsing/challenge fixtures, plus
+  deterministic runner assertions for scope 1 isolation, exact MCP arguments,
+  provider opt-out plan/hash binding, two-phase ordering, source-level
+  failures, system-wide transport failure, private-evidence non-disclosure,
+  permissions, cleanup, approval-hash changes, heuristic provenance
+  validation, and multi-repository cookie isolation.
 - Finalized the `xjamesmorris/rhyolite` public repository metadata,
   public-preview status, CODEOWNERS, private vulnerability reporting
   route, and conduct contact while preserving a fail-closed local-link

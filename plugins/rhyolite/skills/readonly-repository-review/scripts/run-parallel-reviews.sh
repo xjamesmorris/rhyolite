@@ -58,7 +58,7 @@ APPROVAL_HASH=""
 RESEARCH_PROVIDER="local-broker"
 RESEARCH_POLICY_INPUT="default"
 RESEARCH_POLICY_PATH=""
-RESEARCH_WEB_SEARCH_PROVIDER="none"
+RESEARCH_WEB_SEARCH_PROVIDER="duckduckgo-html-v1"
 RESEARCH_COOKIES="off"
 RESEARCH_COOKIES_SPECIFIED=0
 RESEARCH_BROKER_VERSION=""
@@ -68,8 +68,8 @@ RESEARCH_POLICY_DIGEST=""
 RESEARCH_RESOURCE_PROFILE_JSON="null"
 RESEARCH_DIRECT_PROVIDER_ID=""
 RESEARCH_GITHUB_PROVIDER_ID=""
-RESEARCH_WEB_PROVIDER_ID="none"
-RESEARCH_WEB_AVAILABLE="false"
+RESEARCH_WEB_PROVIDER_ID="duckduckgo-html-v1"
+RESEARCH_WEB_AVAILABLE="true"
 RESEARCH_TOOLS_JSON='[]'
 RESEARCH_TOOL_NAMES='research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary'
 RESEARCH_RUNTIME_TOOL_NAMES='rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary'
@@ -107,7 +107,7 @@ Options:
   --research-provider ID           Research transport provider (default: local-broker)
   --research-policy PROFILE|FILE   Bundled default or trusted policy JSON
   --research-web-search-provider ID
-                                   General-web-search provider (default: none)
+                                   duckduckgo-html-v1 (default) or none
   --research-cookies MODE          off or ephemeral (default: off)
   --non-interactive                Use defaults without terminal prompts
   --open-html                      Open the HTML run index after completion
@@ -607,6 +607,14 @@ status_word() {
     fi
 }
 
+research_web_search_status() {
+    if [[ "${RESEARCH_WEB_AVAILABLE}" == 'true' ]]; then
+        printf 'available; anonymous fixed HTTPS adapter'
+    else
+        printf 'provider disabled'
+    fi
+}
+
 review_plan_open_html_policy() {
     if ((OPEN_HTML)); then
         printf 'always'
@@ -848,7 +856,7 @@ research_transport_text() {
             "Provider: ${RESEARCH_PROVIDER}" \
             "Direct HTTPS provider: ${RESEARCH_DIRECT_PROVIDER_ID}" \
             "Anonymous GitHub provider: ${RESEARCH_GITHUB_PROVIDER_ID} (no authentication)" \
-            "General web search: ${RESEARCH_WEB_PROVIDER_ID} (provider disabled)" \
+            "General web search: ${RESEARCH_WEB_PROVIDER_ID} ($(research_web_search_status))" \
             "Cookie replay: ${RESEARCH_COOKIES}" \
             'Raw Set-Cookie retention: private per-repository ledger' \
             'Unsupported bodies: private content-addressed retention' \
@@ -973,7 +981,7 @@ write_review_plan_text() {
         printf '%-20s %s\n' 'Raw Set-Cookie:' 'retained in private per-repository ledger'
         printf '%-20s %s\n' 'Unsupported bodies:' 'private content-addressed retention'
         printf '%-20s %s\n' 'General web search:' \
-            "${RESEARCH_WEB_PROVIDER_ID} (provider disabled)"
+            "${RESEARCH_WEB_PROVIDER_ID} ($(research_web_search_status))"
         printf '%-20s %s\n' 'Anonymous GitHub:' \
             "${RESEARCH_GITHUB_PROVIDER_ID} (no authentication)"
         printf '%-20s %s\n' 'Resource profile:' \
@@ -1181,11 +1189,14 @@ if [[ "${RESEARCH_PROVIDER}" != 'local-broker' ]]; then
         "${RESEARCH_PROVIDER}" >&2
     exit 2
 fi
-if [[ "${RESEARCH_WEB_SEARCH_PROVIDER}" != 'none' ]]; then
-    printf 'General web search provider is not registered: %s\n' \
-        "${RESEARCH_WEB_SEARCH_PROVIDER}" >&2
-    exit 2
-fi
+case "${RESEARCH_WEB_SEARCH_PROVIDER}" in
+    duckduckgo-html-v1|none) ;;
+    *)
+        printf 'General web search provider is not registered: %s\n' \
+            "${RESEARCH_WEB_SEARCH_PROVIDER}" >&2
+        exit 2
+        ;;
+esac
 case "${RESEARCH_COOKIES}" in
     off|ephemeral) ;;
     *)
@@ -1633,9 +1644,14 @@ if ((ENABLE_PUBLIC_RESEARCH)); then
     RESEARCH_WEB_PROVIDER_ID="${research_policy_fields[7]}"
     RESEARCH_WEB_AVAILABLE="${research_policy_fields[8]}"
     RESEARCH_TOOLS_JSON="${research_policy_fields[9]}"
+    expected_web_available='true'
+    if [[ "${RESEARCH_WEB_SEARCH_PROVIDER}" == 'none' ]]; then
+        expected_web_available='false'
+    fi
     if ! [[ "${RESEARCH_POLICY_DIGEST}" =~ ^[0-9a-f]{64}$ ]] ||
         ! [[ "${RESEARCH_POLICY_SCHEMA_VERSION}" =~ ^[0-9]+$ ]] ||
-        [[ "${RESEARCH_WEB_AVAILABLE}" != 'false' ]]; then
+        [[ "${RESEARCH_WEB_PROVIDER_ID}" != "${RESEARCH_WEB_SEARCH_PROVIDER}" ]] ||
+        [[ "${RESEARCH_WEB_AVAILABLE}" != "${expected_web_available}" ]]; then
         printf '%s\n' 'Research policy description is invalid.' >&2
         exit 2
     fi
@@ -1689,9 +1705,11 @@ required_report_contract=(
     'Tracking pixels/callback beacons/trackers/sensors:'
     'Limitations of available evidence:'
     'Generation assessment:'
-    'Model attribution:'
-    'Effort attribution:'
-    'Harness attribution:'
+    'Direct model attribution:'
+    'Heuristic model candidates (not attribution):'
+    'Heuristic model confidence:'
+    'Direct effort attribution:'
+    'Direct harness attribution:'
     'Coverage/window:'
     'Alternative explanations:'
     'Confidence:'
@@ -1953,8 +1971,8 @@ else
 fi
 
 if ((ENABLE_PROVENANCE_RESEARCH)); then
-    PROVENANCE_INSTRUCTIONS=$'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section for\nthe whole repository at the exact commit and stated window. Use only Confirmed,\nEvidence supports assisted generation, Indeterminate, or No supporting evidence\nfound. Never infer human generation from absent evidence. Exact model, family,\neffort, or harness attribution requires directly bound commit-specific\nattestation, transcript, provenance record, or explicit disclosure. Tool\nconfiguration shows configuration, not generation; style, quality, verbosity,\ntest density, bulk commits, generic fingerprints, and similarity are not proof.\nRequire chronology, source lineage, alternatives, confidence, evidence basis,\nand human review.'
-    RESEARCH_PROVENANCE_INSTRUCTIONS=$'ENABLED. Gather whole-repository exact-commit public provenance evidence for\nthe stated window within the existing research dossier headings only. Preserve\ncommit-specific attestations, transcripts, provenance records, explicit\ndisclosures, chronology, source lineage, alternatives, confidence, evidence\nbasis, and coverage gaps. Exact model, family, effort, or harness attribution\nrequires evidence directly bound to the reviewed code or commit. Never infer\nhuman generation from absent evidence, and do not add a main-report-only\nprovenance section to the research dossier.'
+    PROVENANCE_INSTRUCTIONS=$'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section for\nthe whole repository at the exact commit and stated window. Use only Confirmed,\nEvidence supports assisted generation, Indeterminate, or No supporting evidence\nfound. Never infer human generation from absent evidence. Keep direct model,\neffort, and harness attribution direct-evidence-only; use No direct attribution\nwhen no commit-bound attestation, transcript, provenance record, or explicit\ndisclosure exists. Separately identify only non-attributive heuristic model\ncandidates for repository assets, never people; prefer family-level candidates,\ncite path/commit/public evidence, preserve counterevidence and alternatives,\nand never present a candidate as verified attribution. Heuristic confidence is\nexactly Not applicable, Low, or Medium, never High. Use No candidate identified\nor Not appropriate with Not applicable when needed. Tool configuration shows\nconfiguration, not generation; style, quality, verbosity, test density, bulk\ncommits, generic fingerprints, and similarity alone are not proof. Require\nchronology, source lineage, alternatives, confidence, evidence basis, and human\nreview.'
+    RESEARCH_PROVENANCE_INSTRUCTIONS=$'ENABLED. Gather whole-repository exact-commit public provenance evidence for\nthe stated window within the existing research dossier headings only. Preserve\ncommit-specific attestations, transcripts, provenance records, explicit\ndisclosures, chronology, source lineage, alternatives, confidence, evidence\nbasis, counterevidence, and coverage gaps. Direct model, effort, or harness\nattribution requires evidence directly bound to the reviewed code or commit.\nSeparately gather evidence for explicitly non-attributive, preferably\nfamily-level heuristic model candidates concerning repository assets, never\npeople, and never give such heuristics High confidence. Never infer human\ngeneration from absent evidence, and do not add a main-report-only provenance\nsection to the research dossier.'
 else
     PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not analyze whether the repository contains agentically\ngenerated code or make unsupported claims about copying, plagiarism,\nintent, or misconduct.'
     RESEARCH_PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not gather or assess generated-code provenance evidence, and do\nnot add any provenance-specific dossier section.'
@@ -2015,8 +2033,8 @@ if ((VALIDATE_ONLY)); then
         printf 'Research policy ID:   %s\n' "${RESEARCH_POLICY_ID}"
         printf 'Research policy hash: %s\n' "${RESEARCH_POLICY_DIGEST}"
         printf 'Research cookies:     %s\n' "${RESEARCH_COOKIES}"
-        printf 'General web search:   %s (provider disabled)\n' \
-            "${RESEARCH_WEB_PROVIDER_ID}"
+        printf 'General web search:   %s (%s)\n' \
+            "${RESEARCH_WEB_PROVIDER_ID}" "$(research_web_search_status)"
     else
         printf 'Research transport:   disabled\n'
         printf 'Research cookies:     off\n'
@@ -2891,7 +2909,11 @@ ensure_research_failure_artifacts() {
     "Total": 0,
     "Capabilities": 0,
     "NetworkSummary": 0,
-    "Providers": {}
+    "Providers": {
+      "$(json_escape "${RESEARCH_DIRECT_PROVIDER_ID}")": 0,
+      "$(json_escape "${RESEARCH_GITHUB_PROVIDER_ID}")": 0,
+      "$(json_escape "${RESEARCH_WEB_PROVIDER_ID}")": 0
+    }
   },
   "Cookies": {
     "Observed": 0,
@@ -2905,7 +2927,7 @@ ensure_research_failure_artifacts() {
   "ProjectControlledEndpointObservations": [],
   "GeneralWebSearch": {
     "ProviderId": "$(json_escape "${RESEARCH_WEB_PROVIDER_ID}")",
-    "Available": false
+    "Available": ${RESEARCH_WEB_AVAILABLE}
   },
   "AnonymousGitHub": {
     "ProviderId": "$(json_escape "${RESEARCH_GITHUB_PROVIDER_ID}")",
@@ -2990,7 +3012,9 @@ validate_research_bundle() {
         "${private_root}" \
         "${RESEARCH_POLICY_DIGEST}" \
         "${RESEARCH_COOKIES}" \
-        "${RESEARCH_BROKER_VERSION}" <<'PY'
+        "${RESEARCH_BROKER_VERSION}" \
+        "${RESEARCH_WEB_PROVIDER_ID}" \
+        "${RESEARCH_WEB_AVAILABLE}" <<'PY'
 import http.cookies
 import hashlib
 import json
@@ -3005,6 +3029,8 @@ private_root = pathlib.Path(sys.argv[4])
 expected_digest = sys.argv[5]
 expected_cookie_mode = sys.argv[6]
 expected_broker_version = sys.argv[7]
+expected_web_provider = sys.argv[8]
+expected_web_available = sys.argv[9] == "true"
 
 required_sections = [
     "RESEARCH CAPABILITY RECORD",
@@ -3042,19 +3068,24 @@ for required_value in [
     expected_digest,
     expected_cookie_mode,
     expected_broker_version,
+    expected_web_provider,
     "research_capabilities",
     "fetch_public_url",
     "search_public_github",
     "search_public_web",
     "research_network_summary",
-    "provider_disabled",
 ]:
     if required_value not in dossier:
         raise SystemExit(
             f"research capability record is missing approved value: {required_value}"
         )
+if not expected_web_available and "provider_disabled" not in dossier:
+    raise SystemExit(
+        "research capability record is missing the disabled-provider limitation"
+    )
 
 summary = json.loads(summary_path.read_text(encoding="utf-8"))
+general_web_search = summary.get("GeneralWebSearch", {})
 if (
     summary.get("SchemaVersion") != 1
     or summary.get("BrokerVersion") != expected_broker_version
@@ -3063,6 +3094,8 @@ if (
     or summary.get("CookieMode") != expected_cookie_mode
     or summary.get("RawSetCookieRetention") != "private-ledger"
     or summary.get("UnsupportedBodyRetention") != "private-content-addressed"
+    or general_web_search.get("ProviderId") != expected_web_provider
+    or general_web_search.get("Available") is not expected_web_available
 ):
     raise SystemExit("research network summary contract is invalid")
 requests = summary.get("Requests", {})

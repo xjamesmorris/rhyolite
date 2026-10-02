@@ -39,28 +39,35 @@ search_public_web
 research_network_summary
 
 The direct fetch provider accepts only GET or HEAD for public HTTPS URLs. The
-GitHub provider is anonymous and sends no Authorization header. Version 1's
-general-web-search provider is disabled unless the approved transport says
-otherwise; record `provider_disabled` as a limitation and never substitute an
-arbitrary provider.
+GitHub provider is anonymous and sends no Authorization header. The approved
+general-web-search provider is either the fixed anonymous
+`duckduckgo-html-v1` adapter or explicit `none`. Use only the provider named in
+the approved transport. `none` returns `provider_disabled` and remains
+fail-closed. Do not substitute another provider, configure an endpoint, add
+headers or credentials, send a request body, use a proxy, bypass a provider
+challenge, or silently fall back.
 
-Perform at least one successful public response through `fetch_public_url` or
-`search_public_github`. Individual inaccessible sources are normal evidence,
-but a phase with no successful public response is incomplete. Use the
-repository URL and snapshot terminology to find fresh, subject-specific
-community, research, standards, ecosystem, and commercial evidence. For scope
-3, perform the source-assessment skill's thorough two-pass provenance process
-within the stated window.
+Perform at least one successful public response through `fetch_public_url`,
+`search_public_github`, or an enabled `search_public_web` provider. Individual
+inaccessible sources are normal evidence, but a phase with no successful
+public response is incomplete. Use the repository URL and snapshot terminology
+to find fresh, subject-specific community, research, standards, ecosystem, and
+commercial evidence. For scope 3, perform the source-assessment skill's
+thorough two-pass provenance process within the stated window.
 
 For scope 3, prioritize directly bound generation evidence: commit-specific
 attestations, transcripts, provenance records, and explicit disclosures tied
-to the reviewed code or commit. Exact model, family, effort, or harness
-attribution requires that direct binding. Tool configuration and instruction
-files show configuration only. Style, quality, verbosity, test density, bulk
-commits, generic fingerprints, and similarity are not proof of generation.
-Record alternative explanations and coverage gaps, and never infer human
-generation from an absence of evidence. Keep all provenance evidence within
-the exact dossier headings below; do not add a main-report-only section.
+to the reviewed code or commit. Direct model, effort, or harness attribution
+requires that binding. Separately gather public evidence that could support
+explicitly non-attributive, family-level heuristic model candidates for
+repository assets, never people. Cite paths, commits, and dated public
+evidence; preserve counterevidence, chronology, source lineage, alternatives,
+and coverage gaps. Tool configuration and instruction files show
+configuration only. Style, quality, verbosity, test density, bulk commits,
+generic fingerprints, and similarity alone are not proof of generation or
+human authorship. Never present heuristic candidates as verified attribution,
+and never assign them High confidence. Keep all provenance evidence within the
+exact dossier headings below; do not add a main-report-only section.
 
 The wrapper metadata includes at most the latest 100 commits, author and
 committer names, subjects, and sanitized values for a bounded allowlist of
@@ -111,9 +118,10 @@ RESEARCH LIMITATIONS
 RESEARCH TRANSPORT OBSERVATIONS
 
 The capability record must state the broker health, policy digest, exact tools,
-enabled providers, disabled-provider limitations, cookie replay mode, private
-raw Set-Cookie retention, private unsupported-body retention, request budget,
-and successful public response count. The source landscape must include exact
+enabled providers, the selected general-web-search provider and availability,
+any `provider_disabled` limitation, cookie replay mode, private raw Set-Cookie
+retention, private unsupported-body retention, request budget, and successful
+public response count. The source landscape must include exact
 URLs, check dates, latest reliably observed activity where available,
 freshness, ownership, and relevance. The inaccessible register must preserve
 specific failure reasons and alternatives checked. The transport observations

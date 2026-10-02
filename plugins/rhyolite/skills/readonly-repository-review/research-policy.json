@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
-  "policyId": "rhyolite-public-research-v1",
+  "policyId": "rhyolite-public-research-v2",
   "providers": {
     "directHttps": true,
     "anonymousGitHub": true,
     "generalWebSearch": [
+      "duckduckgo-html-v1",
       "none"
     ]
   },

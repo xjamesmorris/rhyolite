@@ -21,11 +21,14 @@ already intentionally public.
 
 Call `research_capabilities` first and verify the approved broker version,
 policy digest, exact tool list, providers, cookie mode, limits, and health.
-Perform at least one successful public response through direct HTTPS fetch or
-anonymous GitHub search, then call `research_network_summary` before returning.
-Version 1's provider-neutral general-web-search interface normally returns
+Perform at least one successful public response through direct HTTPS fetch,
+anonymous GitHub search, or the enabled general-web-search provider, then call
+`research_network_summary` before returning. The selected general-web-search
+provider is either the fixed anonymous `duckduckgo-html-v1` adapter or explicit
+`none`. Use only the approval-bound selection. `none` returns
 `provider_disabled`; preserve that limitation instead of substituting another
-search path.
+search path. Never configure an endpoint, credential, caller header, request
+body, proxy, challenge bypass, or fallback provider.
 
 Raw Set-Cookie values are retained only in a private per-repository ledger,
 whether replay is off or ephemeral. Unsupported bodies are retained only as
@@ -126,11 +129,17 @@ style-based attribution claims.
 
 Prioritize directly bound provenance evidence: commit-specific attestations,
 transcripts, provenance records, and explicit disclosures tied to the reviewed
-code or exact commit. Exact model, family, effort, or harness attribution
-requires that direct binding. Tool configuration and instruction files prove
+code or exact commit. Direct model, effort, or harness attribution requires
+that binding. Separately gather evidence that may support explicitly
+non-attributive heuristic model candidates for repository assets, never people.
+Prefer family-level candidates and cite exact paths, commits, or dated public
+evidence. Preserve counterevidence, chronology, source lineage, alternative
+explanations, and coverage gaps. Tool configuration and instruction files prove
 configuration only. Style, quality, verbosity, test density, bulk commits,
-generic fingerprints, and similarity are not proof of generation. Never infer
-human generation from an absence of evidence.
+generic fingerprints, and similarity alone are not proof of generation or
+human authorship. Never present a heuristic candidate as verified attribution
+or assign it High confidence. Never infer human generation from an absence of
+evidence.
 
 Wrapper-collected Git evidence is limited to at most the latest 100 commits,
 author and committer names, subjects, and sanitized values for selected

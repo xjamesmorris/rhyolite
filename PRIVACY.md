@@ -24,9 +24,17 @@ information.
 The broker sends only fixed unauthenticated GET/HEAD requests to
 validated public HTTPS destinations. It does not import authentication,
 proxy settings, netrc files, browser state, client certificates, or
-preexisting cookies. Anonymous GitHub REST/search is enabled; the stable
-general-web-search interface is provider-disabled by default in version
-`0.4.1`.
+preexisting cookies. Anonymous GitHub REST/search is enabled. Scope 2/3
+defaults to the fixed anonymous `duckduckgo-html-v1` general-web-search
+provider; advanced direct-runner use may select explicit `none`. Search terms
+and public result requests are sent only through the approval-bound broker and
+must contain public project terminology, not private data.
+
+The web-search adapter has a fixed HTTPS endpoint and fixed headers. It accepts
+no credentials, configurable endpoint, caller headers, request body, proxy,
+browser state, challenge bypass, or fallback provider. It returns only bounded
+normalized public result URLs, titles, and summaries after redirect unwrapping,
+public-HTTPS revalidation, and deduplication.
 
 Guided scope 2/3 setup explicitly asks whether research cookie replay is
 off or uses a fresh per-repository ephemeral jar. Off is recommended
@@ -50,6 +58,10 @@ separately disabled by default. When enabled, it must:
 - Use public, verifiable evidence.
 - Avoid inferring intent or misconduct from style, sparse activity, or
   similarity alone.
+- Keep direct model, effort, and harness attribution direct-evidence-only.
+- Limit heuristic model candidates to repository assets, never people; label
+  them as non-attribution, cite path/commit/public evidence, preserve
+  counterevidence and alternatives, and never assign High confidence.
 - Present alternative explanations and missing evidence.
 - Receive human review before distribution.
 

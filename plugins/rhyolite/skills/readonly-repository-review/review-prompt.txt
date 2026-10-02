@@ -42,13 +42,29 @@ evidence about the provenance of agentically generated code within the stated
 provenance window. Use only these verdicts for the generation assessment:
 Confirmed, Evidence supports assisted generation, Indeterminate, or
 No supporting evidence found. Never infer human generation from an absence of
-evidence. Exact model, model-family, effort, or harness attribution is allowed
-only when directly bound to the reviewed code or commit by a commit-specific
-attestation, transcript, provenance record, or explicit disclosure. Tool
-configuration and instruction files prove configuration, not generation.
-Style, quality, verbosity, test density, bulk commits, generic fingerprints,
-or similarity alone cannot prove generation, copying, plagiarism, intent, or
-misconduct. Require chronology, source lineage, alternative explanations,
+evidence. Keep direct model, effort, and harness attribution separate and use
+it only when directly bound to the reviewed code or commit by a commit-specific
+attestation, transcript, provenance record, or explicit disclosure. When no
+such direct evidence exists, use `No direct attribution` in each affected
+direct-attribution field.
+
+Heuristic model candidates are permitted only as explicitly non-attributive
+identification of repository assets, never people. Prefer model-family
+candidates over exact model versions. Cite exact path-and-line, commit, or
+dated public evidence; identify counterevidence, chronology, source lineage,
+coverage gaps, and plausible alternatives. Tool configuration, generated
+headers, model-specific metadata, output signatures, dependency/API patterns,
+and contemporaneous public documentation may support a candidate, but
+configuration alone proves only configuration, not generation. Style, quality,
+test density, bulk commits, generic fingerprints, or similarity alone cannot
+prove generation, copying, plagiarism, intent, misconduct, or human
+authorship. Never present a heuristic candidate as verified attribution.
+Heuristic model confidence must be exactly `Not applicable`, `Low`, or
+`Medium`, never `High`. Use the exact candidate value
+`No candidate identified` when evidence is insufficient, or `Not appropriate`
+when model identification does not apply; pair either value with
+`Heuristic model confidence: Not applicable`. Heuristics alone never justify
+`Confirmed` or populate the direct model, effort, or harness fields. Require
 confidence, an evidence basis, and human review.
 
 The wrapper metadata includes at most the latest 100 commits, author and
@@ -217,9 +233,11 @@ Evidence basis:
 For scope 3, under GENERATED-CODE PROVENANCE ASSESSMENT, include each of
 these exact field labels:
 Generation assessment:
-Model attribution:
-Effort attribution:
-Harness attribution:
+Direct model attribution:
+Heuristic model candidates (not attribution):
+Heuristic model confidence:
+Direct effort attribution:
+Direct harness attribution:
 Coverage/window:
 Alternative explanations:
 Confidence:
@@ -229,6 +247,13 @@ The Generation assessment value must be exactly one of the four allowed
 verdicts above, or that exact verdict followed by `. `, `; `, `: `, `, `, or
 ` - ` and non-empty explanatory text, including on continuation lines. Reject
 whitespace-only suffixes and values that merely share an allowed prefix.
+The `Heuristic model confidence:` value must be exactly `Not applicable`,
+`Low`, or `Medium`. It must never be `High`. The controlled
+`Heuristic model candidates (not attribution):` values
+`No candidate identified` and `Not appropriate` require
+`Heuristic model confidence: Not applicable`; that confidence value is invalid
+for any other candidate value. Direct model, effort, and harness fields remain
+direct-evidence-only.
 
 Format it as plain UTF-8 text for Linux-native email and mailing-list users.
 Use LF line endings, simple ASCII-compatible headings and numbered lists, no

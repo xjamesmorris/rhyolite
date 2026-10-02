@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 
@@ -89,7 +90,16 @@ class BrokerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.temporary.name)
-        self.policy = broker_module.load_effective_policy(POLICY_PATH, 2, "none")
+        self.policy = broker_module.load_effective_policy(
+            POLICY_PATH,
+            2,
+            broker_module.WEB_PROVIDER_ID,
+        )
+        self.none_policy = broker_module.load_effective_policy(
+            POLICY_PATH,
+            2,
+            broker_module.WEB_PROVIDER_NONE,
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -99,10 +109,11 @@ class BrokerTests(unittest.TestCase):
         responses: list[object],
         *,
         cookie_mode: str = "off",
+        policy=None,
     ):
         transport = QueueTransport(responses)
         instance = broker_module.ResearchBroker(
-            self.policy,
+            policy or self.policy,
             self.root / f"network-{len(list(self.root.iterdir()))}",
             "https://github.com/octocat/Hello-World",
             cookie_mode,
@@ -121,8 +132,24 @@ class BrokerTests(unittest.TestCase):
         unsafe = self.root / "unsafe.json"
         unsafe.write_text(json.dumps(raw), encoding="utf-8")
         with self.assertRaises(broker_module.BrokerError) as context:
-            broker_module.load_effective_policy(unsafe, 2, "none")
+            broker_module.load_effective_policy(
+                unsafe,
+                2,
+                broker_module.WEB_PROVIDER_ID,
+            )
         self.assertEqual(context.exception.code, "unsafe_policy")
+        self.assertEqual(
+            self.policy.web_search_provider,
+            broker_module.WEB_PROVIDER_ID,
+        )
+        self.assertNotEqual(self.policy.digest, self.none_policy.digest)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_effective_policy(
+                POLICY_PATH,
+                2,
+                "unregistered-provider",
+            )
+        self.assertEqual(context.exception.code, "provider_disabled")
 
     def test_url_floor_and_sanitized_query(self) -> None:
         valid = broker_module.validate_public_https_url(
@@ -337,12 +364,263 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["Title"], "octocat/Hello-World")
         self.assertNotIn("Authorization", transport.requests[0]["headers"])
 
-    def test_web_search_interface_is_stably_disabled(self) -> None:
-        instance, _ = self.make_broker([])
+    def test_web_search_normalizes_redirects_revalidates_and_deduplicates(
+        self,
+    ) -> None:
+        primary = urllib.parse.quote(
+            "https://example.org/docs?token=secret&topic=public",
+            safe="",
+        )
+        secondary = urllib.parse.quote(
+            "https://second.example.net/article",
+            safe="",
+        )
+        invalid_http = urllib.parse.quote("http://unsafe.example.org/", safe="")
+        invalid_private = urllib.parse.quote("https://127.0.0.1/", safe="")
+        fixture = f"""
+        <html><body><form>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={primary}">
+            Example documentation
+          </a>
+          <a class="result__url" href="//duckduckgo.com/l/?uddg={primary}">
+            example.org/docs
+          </a>
+          <a class="result__snippet" href="//duckduckgo.com/l/?uddg={primary}">
+            Public summary for the first result.
+          </a>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={primary}">
+            Duplicate result
+          </a>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={invalid_http}">
+            Plaintext result
+          </a>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={invalid_private}">
+            Private result
+          </a>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={secondary}">
+            Second result
+          </a>
+          <a class="result__snippet" href="//duckduckgo.com/l/?uddg={secondary}">
+            Second public summary.
+          </a>
+        </form></body></html>
+        """.encode()
+        instance, transport = self.make_broker(
+            [response(fixture, headers=[("Content-Type", "text/html; charset=utf-8")])]
+        )
+        result = instance.search_web("public research", 10)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["providerId"], broker_module.WEB_PROVIDER_ID)
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(
+            result["results"][0],
+            {
+                "Url": (
+                    "https://example.org/docs?"
+                    "token=%5Bredacted%5D&topic=public"
+                ),
+                "Title": "Example documentation",
+                "Summary": "Public summary for the first result.",
+            },
+        )
+        self.assertEqual(
+            result["results"][1]["Url"],
+            "https://second.example.net/article",
+        )
+        self.assertEqual(len(transport.requests), 1)
+        requested = transport.requests[0]
+        self.assertEqual(requested["url"].host, "html.duckduckgo.com")
+        self.assertEqual(requested["url"].target.split("?", 1)[0], "/html/")
+        query = urllib.parse.parse_qs(
+            requested["url"].target.split("?", 1)[1]
+        )
+        self.assertEqual(query, {"q": ["public research"]})
+        self.assertEqual(requested["method"], "GET")
+        self.assertNotIn("Authorization", requested["headers"])
+
+    def test_web_search_provider_challenge_is_structured_without_fallback(
+        self,
+    ) -> None:
+        instance, transport = self.make_broker(
+            [
+                response(
+                    (
+                        b"<html><body>Unfortunately, bots use DuckDuckGo too. "
+                        b"DuckDuckGo Search Challenge.</body></html>"
+                    ),
+                    headers=[("Content-Type", "text/html")],
+                )
+            ]
+        )
+        result = instance.search_web("public research", 10)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["providerId"], broker_module.WEB_PROVIDER_ID)
+        self.assertEqual(result["error"]["code"], "provider_challenge")
+        self.assertEqual(result["results"], [])
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_web_search_rejects_oversized_wrapper_query_per_candidate(
+        self,
+    ) -> None:
+        oversized_query = urllib.parse.urlencode(
+            [(f"field{index}", str(index)) for index in range(21)]
+            + [("uddg", "https://ignored.example.net/")]
+        )
+        valid = urllib.parse.quote(
+            "https://example.org/retained",
+            safe="",
+        )
+        fixture = f"""
+        <html><body>
+          <a class="result__a"
+             href="//duckduckgo.com/l/?{oversized_query}">
+            Rejected oversized wrapper
+          </a>
+          <a class="result__a" href="//duckduckgo.com/l/?uddg={valid}">
+            Retained result
+          </a>
+        </body></html>
+        """.encode()
+        instance, transport = self.make_broker(
+            [response(fixture, headers=[("Content-Type", "text/html")])]
+        )
+        reply = broker_module.McpServer(instance).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_public_web",
+                    "arguments": {"query": "fixture", "limit": 10},
+                },
+            }
+        )
+        assert reply is not None
+        self.assertNotIn("error", reply)
+        result = reply["result"]["structuredContent"]
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["results"],
+            [
+                {
+                    "Url": "https://example.org/retained",
+                    "Title": "Retained result",
+                    "Summary": "",
+                }
+            ],
+        )
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_web_search_rejects_redirect_outside_provider_hosts(self) -> None:
+        attacker_fixture = b"""
+        <html><body>
+          <a class="result__a" href="https://example.org/attacker">
+            Attacker-controlled result
+          </a>
+        </body></html>
+        """
+        instance, transport = self.make_broker(
+            [
+                response(
+                    b"",
+                    status=302,
+                    headers=[("Location", "https://example.net/results")],
+                ),
+                response(
+                    attacker_fixture,
+                    headers=[("Content-Type", "text/html")],
+                ),
+            ]
+        )
+        result = instance.search_web("public research", 10)
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["error"]["code"],
+            "provider_host_forbidden",
+        )
+        self.assertEqual(result["providerId"], broker_module.WEB_PROVIDER_ID)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(transport.requests[0]["url"].host, "html.duckduckgo.com")
+        self.assertEqual(len(transport.responses), 1)
+
+    def test_web_search_rejected_anchor_cannot_claim_no_results(self) -> None:
+        fixture = (
+            b"<html><body><a class='result__snippet' "
+            b"href='http://unsafe.example.org/'>"
+            b"No results found.</a></body></html>"
+        )
+        instance, transport = self.make_broker(
+            [response(fixture, headers=[("Content-Type", "text/html")])]
+        )
+        result = instance.search_web("malformed fixture", 10)
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["error"]["code"],
+            "provider_malformed_response",
+        )
+        self.assertEqual(result["results"], [])
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_web_search_empty_and_malformed_results_are_distinct(self) -> None:
+        invalid = urllib.parse.quote("https://127.0.0.1/private", safe="")
+        instance, transport = self.make_broker(
+            [
+                response(
+                    b"<html><body>No results found.</body></html>",
+                    headers=[("Content-Type", "text/html")],
+                ),
+                response(
+                    (
+                        b"<html><body><a class='result__a' "
+                        b"href='//duckduckgo.com/l/?uddg="
+                        + invalid.encode()
+                        + b"'>Invalid result</a></body></html>"
+                    ),
+                    headers=[("Content-Type", "text/html")],
+                ),
+            ]
+        )
+        empty = instance.search_web("no fixture matches", 10)
+        self.assertTrue(empty["ok"])
+        self.assertEqual(empty["results"], [])
+        malformed = instance.search_web("invalid fixture", 10)
+        self.assertFalse(malformed["ok"])
+        self.assertEqual(
+            malformed["error"]["code"],
+            "provider_malformed_response",
+        )
+        self.assertEqual(malformed["results"], [])
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_web_search_none_is_stably_disabled(self) -> None:
+        instance, transport = self.make_broker([], policy=self.none_policy)
         result = instance.search_web("public research", 10)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "provider_disabled")
-        self.assertEqual(result["providerId"], "none")
+        self.assertEqual(result["providerId"], broker_module.WEB_PROVIDER_NONE)
+        self.assertEqual(transport.requests, [])
+
+    def test_web_search_capabilities_reflect_selected_provider(self) -> None:
+        instance, _ = self.make_broker([])
+        capabilities = instance.capabilities()
+        self.assertEqual(capabilities["brokerVersion"], "1.1")
+        self.assertEqual(
+            capabilities["providers"]["generalWebSearch"],
+            {
+                "id": broker_module.WEB_PROVIDER_ID,
+                "enabled": True,
+                "status": "ready",
+                "authentication": "none",
+            },
+        )
+        self.assertEqual(
+            instance.summary()["GeneralWebSearch"],
+            {
+                "ProviderId": broker_module.WEB_PROVIDER_ID,
+                "Available": True,
+            },
+        )
 
     def test_tls_failure_is_structured_source_evidence(self) -> None:
         error = broker_module.BrokerError(
@@ -386,7 +664,7 @@ class BrokerTests(unittest.TestCase):
                 "--runtime-root",
                 str(runtime),
                 "--expected-policy-digest",
-                self.policy.digest,
+                self.none_policy.digest,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -476,7 +754,7 @@ class BrokerTests(unittest.TestCase):
                 "--runtime-root",
                 str(runtime),
                 "--expected-policy-digest",
-                self.policy.digest,
+                self.none_policy.digest,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

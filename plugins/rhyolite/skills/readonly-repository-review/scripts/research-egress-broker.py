@@ -26,14 +26,21 @@ from http.cookies import SimpleCookie
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-BROKER_VERSION = "1.0"
+BROKER_VERSION = "1.1"
 POLICY_SCHEMA_VERSION = 1
 NETWORK_SCHEMA_VERSION = 1
 MCP_PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "rhyolite-research-egress"
 DIRECT_PROVIDER_ID = "direct-public-https-v1"
 GITHUB_PROVIDER_ID = "anonymous-github-rest-v1"
-WEB_PROVIDER_ID = "none"
+WEB_PROVIDER_ID = "duckduckgo-html-v1"
+WEB_PROVIDER_NONE = "none"
+WEB_PROVIDER_IDS = (WEB_PROVIDER_ID, WEB_PROVIDER_NONE)
+DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"
+DUCKDUCKGO_HOSTS = frozenset({"duckduckgo.com", "html.duckduckgo.com"})
+MAX_WEB_SEARCH_CANDIDATES = 60
+MAX_WEB_SEARCH_TITLE_BYTES = 512
+MAX_WEB_SEARCH_SUMMARY_BYTES = 2048
 TOOL_NAMES = (
     "research_capabilities",
     "fetch_public_url",
@@ -386,15 +393,12 @@ def load_effective_policy(
             "The anonymous GitHub provider cannot be disabled in policy schema 1",
         )
     provider_names = providers["generalWebSearch"]
-    if (
-        not isinstance(provider_names, list)
-        or not provider_names
-        or any(not isinstance(item, str) for item in provider_names)
-        or provider_names != ["none"]
+    if not isinstance(provider_names, list) or provider_names != list(
+        WEB_PROVIDER_IDS
     ):
         raise BrokerError(
             "invalid_policy",
-            "Version 1 permits only the disabled general-web-search provider",
+            "The policy must register only the shipped general-web-search providers",
         )
     if web_search_provider not in provider_names:
         raise BrokerError(
@@ -955,6 +959,121 @@ class EvidenceHtmlParser(html.parser.HTMLParser):
                 self.links[-1]["Text"] = value[:256]
 
 
+class DuckDuckGoHtmlParser(html.parser.HTMLParser):
+    RESULT_CLASS_KIND = {
+        "result__a": "title",
+        "result__snippet": "snippet",
+        "result__url": "display",
+    }
+    SKIPPED_ELEMENTS = {
+        "script",
+        "style",
+        "noscript",
+        "template",
+        "svg",
+        "canvas",
+        "iframe",
+        "object",
+        "applet",
+    }
+
+    def __init__(self, base_url: str, policy: EffectivePolicy) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.policy = policy
+        self.skip_depth = 0
+        self.current_anchor: dict[str, Any] | None = None
+        self.entries: list[dict[str, str]] = []
+        self.candidate_anchor_count = 0
+        self.page_text: list[str] = []
+        self.page_text_bytes = 0
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        lower_tag = tag.lower()
+        if self.skip_depth:
+            self.skip_depth += 1
+            return
+        if lower_tag in self.SKIPPED_ELEMENTS:
+            self.skip_depth = 1
+            return
+        if lower_tag != "a" or self.candidate_anchor_count >= min(
+            self.policy.max_links,
+            MAX_WEB_SEARCH_CANDIDATES,
+        ):
+            return
+        values = {
+            name.lower(): value
+            for name, value in attrs
+            if value is not None
+        }
+        classes = set((values.get("class") or "").split())
+        kind = next(
+            (
+                candidate_kind
+                for class_name, candidate_kind in self.RESULT_CLASS_KIND.items()
+                if class_name in classes
+            ),
+            None,
+        )
+        href = values.get("href")
+        if kind is None:
+            return
+        self.candidate_anchor_count += 1
+        if not href:
+            return
+        try:
+            validated = validate_public_https_url(
+                urllib.parse.urljoin(self.base_url, href),
+                self.policy,
+            )
+        except BrokerError:
+            return
+        self.current_anchor = {
+            "Kind": kind,
+            "Url": validated.sanitized_url,
+            "TextParts": [],
+        }
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.skip_depth:
+            self.skip_depth -= 1
+            return
+        if tag.lower() == "a":
+            self._finish_anchor()
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth:
+            return
+        value = re.sub(r"\s+", " ", data).strip()
+        if not value:
+            return
+        if self.page_text_bytes < 32768:
+            page_value, _ = truncate_utf8(value, 1024)
+            self.page_text.append(page_value)
+            self.page_text_bytes += len(page_value.encode("utf-8"))
+        if self.current_anchor is not None:
+            self.current_anchor["TextParts"].append(value)
+
+    def close(self) -> None:
+        super().close()
+        self._finish_anchor()
+
+    def _finish_anchor(self) -> None:
+        if self.current_anchor is None:
+            return
+        text = re.sub(
+            r"\s+",
+            " ",
+            " ".join(self.current_anchor.pop("TextParts")),
+        ).strip()
+        bounded_text, _ = truncate_utf8(text, MAX_WEB_SEARCH_SUMMARY_BYTES)
+        self.current_anchor["Text"] = bounded_text
+        self.entries.append(self.current_anchor)
+        self.current_anchor = None
+
+
 def content_type_parts(value: str | None) -> tuple[str, str]:
     if not value:
         return "", "utf-8"
@@ -1091,6 +1210,107 @@ def normalize_supported_body(
     }
 
 
+def normalize_duckduckgo_search_body(
+    body: bytes,
+    content_type: str | None,
+    base_url: str,
+    policy: EffectivePolicy,
+) -> dict[str, Any]:
+    media_type, charset = content_type_parts(content_type)
+    if media_type not in {"text/html", "application/xhtml+xml"}:
+        raise BrokerError(
+            "provider_malformed_response",
+            "DuckDuckGo HTML provider returned a non-HTML response",
+            details={"mediaType": media_type},
+        )
+    parser = DuckDuckGoHtmlParser(base_url, policy)
+    parser.feed(decode_text(body, charset))
+    parser.close()
+    page_text = " ".join(parser.page_text)
+    lower_page_text = page_text.lower()
+    if (
+        "bots use duckduckgo too" in lower_page_text
+        or "duckduckgo search challenge" in lower_page_text
+    ):
+        raise BrokerError(
+            "provider_challenge",
+            "DuckDuckGo HTML provider returned an automated-access challenge",
+            retryable=True,
+        )
+    no_results = parser.candidate_anchor_count == 0 and (
+        "no results." in lower_page_text
+        or "no results found" in lower_page_text
+    )
+    entries: list[dict[str, str]] = []
+    normalized_bytes = 2
+    truncated = False
+    for entry in parser.entries:
+        encoded = canonical_json(entry).encode("utf-8")
+        if normalized_bytes + len(encoded) + 1 > policy.max_normalized_bytes:
+            truncated = True
+            break
+        entries.append(entry)
+        normalized_bytes += len(encoded) + 1
+    normalized_text = "\n".join(
+        entry["Text"] for entry in entries if entry.get("Text")
+    )
+    if no_results and not normalized_text:
+        normalized_text = "No results found."
+    normalized_text, text_truncated = truncate_utf8(
+        normalized_text,
+        max(0, policy.max_normalized_bytes - normalized_bytes),
+    )
+    truncated = truncated or text_truncated
+    return {
+        "Format": "html",
+        "MediaType": media_type,
+        "Text": normalized_text,
+        "Links": [],
+        "Truncated": truncated,
+        "NormalizedBytes": normalized_bytes + len(
+            normalized_text.encode("utf-8")
+        ),
+        "SearchEntries": entries,
+        "NoResults": no_results,
+    }
+
+
+def unwrap_duckduckgo_result_url(
+    value: str,
+    policy: EffectivePolicy,
+) -> ValidatedUrl | None:
+    provider_url = validate_public_https_url(value, policy)
+    parsed = urllib.parse.urlsplit(provider_url.url)
+    if provider_url.host in DUCKDUCKGO_HOSTS:
+        if parsed.path.rstrip("/") != "/l":
+            return None
+        try:
+            values = urllib.parse.parse_qs(
+                parsed.query,
+                keep_blank_values=True,
+                max_num_fields=20,
+            )
+        except ValueError:
+            return None
+        targets = values.get("uddg", [])
+        if len(targets) != 1 or not targets[0]:
+            return None
+        target = urllib.parse.urljoin(DUCKDUCKGO_HTML_ENDPOINT, targets[0])
+    else:
+        target = provider_url.url
+    validated = validate_public_https_url(target, policy)
+    if validated.host in DUCKDUCKGO_HOSTS:
+        return None
+    return validated
+
+
+def normalize_search_text(value: Any, maximum_bytes: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = re.sub(r"\s+", " ", value).strip()
+    return truncate_utf8(normalized, maximum_bytes)[0]
+
+
 def atomic_write_json(path: pathlib.Path, value: Any) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     data = (json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode(
@@ -1155,6 +1375,7 @@ class ResearchBroker:
             DIRECT_PROVIDER_ID: 0,
             GITHUB_PROVIDER_ID: 0,
             WEB_PROVIDER_ID: 0,
+            WEB_PROVIDER_NONE: 0,
         }
         self.error_counts: dict[str, int] = {}
         self.cookie_counts = {
@@ -1275,7 +1496,7 @@ class ResearchBroker:
             ),
             "GeneralWebSearch": {
                 "ProviderId": self.policy.web_search_provider,
-                "Available": False,
+                "Available": self.policy.web_search_provider != WEB_PROVIDER_NONE,
             },
             "AnonymousGitHub": {
                 "ProviderId": GITHUB_PROVIDER_ID,
@@ -1613,6 +1834,11 @@ class ResearchBroker:
             "text/html, application/json, application/xml, text/plain, "
             "application/rss+xml, application/atom+xml;q=0.9, */*;q=0.1"
         ),
+        allowed_hosts: frozenset[str] | None = None,
+        body_normalizer: Callable[
+            [bytes, str | None, str, EffectivePolicy],
+            dict[str, Any] | None,
+        ] = normalize_supported_body,
     ) -> dict[str, Any]:
         request_id = self.next_request_id()
         self.tool_calls += 1
@@ -1628,6 +1854,16 @@ class ResearchBroker:
             current = validate_public_https_url(url_value, self.policy)
         except BrokerError as error:
             return self.record_failure(request_id, None, error)
+        if allowed_hosts is not None and current.host not in allowed_hosts:
+            return self.record_failure(
+                request_id,
+                current,
+                BrokerError(
+                    "provider_host_forbidden",
+                    "Provider request target is outside its approved host allowlist",
+                    details={"host": current.host, "providerId": provider},
+                ),
+            )
         redirect_chain: list[dict[str, Any]] = []
         visited: set[str] = set()
         for hop in range(self.policy.max_redirects + 1):
@@ -1721,6 +1957,22 @@ class ResearchBroker:
                     )
                 except BrokerError as error:
                     return self.record_failure(request_id, current, error)
+                if allowed_hosts is not None and target.host not in allowed_hosts:
+                    return self.record_failure(
+                        request_id,
+                        current,
+                        BrokerError(
+                            "provider_host_forbidden",
+                            (
+                                "Provider redirect target is outside its "
+                                "approved host allowlist"
+                            ),
+                            details={
+                                "host": target.host,
+                                "providerId": provider,
+                            },
+                        ),
+                    )
                 redirect = {
                     "Status": response.status,
                     "From": current.sanitized_url,
@@ -1852,7 +2104,7 @@ class ResearchBroker:
                     ),
                 )
             try:
-                normalized = normalize_supported_body(
+                normalized = body_normalizer(
                     response.body,
                     response.header("content-type"),
                     current.url,
@@ -1931,8 +2183,14 @@ class ResearchBroker:
                 },
                 "generalWebSearch": {
                     "id": self.policy.web_search_provider,
-                    "enabled": False,
-                    "status": "provider_disabled",
+                    "enabled": self.policy.web_search_provider
+                    != WEB_PROVIDER_NONE,
+                    "status": (
+                        "ready"
+                        if self.policy.web_search_provider != WEB_PROVIDER_NONE
+                        else "provider_disabled"
+                    ),
+                    "authentication": "none",
                 },
             },
             "cookieMode": self.cookie_mode,
@@ -2062,8 +2320,6 @@ class ResearchBroker:
         }
 
     def search_web(self, query: str, limit: int) -> dict[str, Any]:
-        self.tool_calls += 1
-        self.provider_calls[WEB_PROVIDER_ID] += 1
         if not isinstance(query, str) or not query.strip() or len(query) > 1024:
             return BrokerError(
                 "invalid_query", "Web search query must contain 1-1024 characters"
@@ -2072,27 +2328,180 @@ class ResearchBroker:
             return BrokerError(
                 "invalid_query", "Web search limit must be from 1 through 20"
             ).result()
-        self.record_event(
-            "provider_disabled",
-            {
-                "ProviderId": self.policy.web_search_provider,
-                "Interface": "search_public_web",
-            },
+        provider = self.policy.web_search_provider
+        if provider == WEB_PROVIDER_NONE:
+            self.tool_calls += 1
+            self.provider_calls[WEB_PROVIDER_NONE] += 1
+            self.record_event(
+                "provider_disabled",
+                {
+                    "ProviderId": provider,
+                    "Interface": "search_public_web",
+                },
+            )
+            return {
+                "ok": False,
+                "providerId": provider,
+                "query": query,
+                "results": [],
+                "error": {
+                    "code": "provider_disabled",
+                    "message": (
+                        "General web search is disabled by the approved plan"
+                    ),
+                    "retryable": False,
+                    "details": {},
+                },
+            }
+        if provider != WEB_PROVIDER_ID:
+            self.tool_calls += 1
+            self.provider_calls[provider] = self.provider_calls.get(provider, 0) + 1
+            return {
+                **BrokerError(
+                    "provider_unavailable",
+                    "The approved general-web-search provider has no shipped adapter",
+                ).result(),
+                "providerId": provider,
+                "query": query,
+                "results": [],
+            }
+
+        normalized_query = query.strip()
+        search_url = DUCKDUCKGO_HTML_ENDPOINT + "?" + urllib.parse.urlencode(
+            {"q": normalized_query}
         )
+        fetched = self.fetch(
+            search_url,
+            "GET",
+            provider=WEB_PROVIDER_ID,
+            accept="text/html, application/xhtml+xml;q=0.9",
+            allowed_hosts=DUCKDUCKGO_HOSTS,
+            body_normalizer=normalize_duckduckgo_search_body,
+        )
+        if not fetched.get("ok"):
+            fetched["providerId"] = WEB_PROVIDER_ID
+            fetched["query"] = query
+            fetched["results"] = []
+            return fetched
+
+        content = fetched.get("content")
+        entries = content.get("SearchEntries") if isinstance(content, dict) else None
+        if not isinstance(entries, list):
+            return {
+                **BrokerError(
+                    "provider_malformed_response",
+                    "DuckDuckGo HTML provider omitted normalized search entries",
+                ).result(fetched.get("requestId")),
+                "providerId": WEB_PROVIDER_ID,
+                "query": query,
+                "results": [],
+            }
+
+        grouped: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        rejected = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                rejected += 1
+                continue
+            try:
+                target = unwrap_duckduckgo_result_url(
+                    entry.get("Url", ""),
+                    self.policy,
+                )
+            except BrokerError:
+                rejected += 1
+                continue
+            if target is None:
+                rejected += 1
+                continue
+            key = target.sanitized_url
+            if key not in grouped:
+                grouped[key] = {
+                    "Url": target.sanitized_url,
+                    "Titles": [],
+                    "Summaries": [],
+                    "Displays": [],
+                }
+                order.append(key)
+            text = normalize_search_text(
+                entry.get("Text"),
+                MAX_WEB_SEARCH_SUMMARY_BYTES,
+            )
+            if not text:
+                continue
+            kind = entry.get("Kind")
+            bucket = (
+                "Titles"
+                if kind == "title"
+                else "Summaries"
+                if kind == "snippet"
+                else "Displays"
+            )
+            if text not in grouped[key][bucket]:
+                grouped[key][bucket].append(text)
+
+        results: list[dict[str, str]] = []
+        for key in order:
+            record = grouped[key]
+            title = (
+                record["Titles"][0]
+                if record["Titles"]
+                else record["Displays"][0]
+                if record["Displays"]
+                else urllib.parse.urlsplit(record["Url"]).hostname or record["Url"]
+            )
+            summary = " ".join(record["Summaries"])
+            results.append(
+                {
+                    "Url": record["Url"],
+                    "Title": normalize_search_text(
+                        title,
+                        MAX_WEB_SEARCH_TITLE_BYTES,
+                    ),
+                    "Summary": normalize_search_text(
+                        summary,
+                        MAX_WEB_SEARCH_SUMMARY_BYTES,
+                    ),
+                }
+            )
+            if len(results) >= limit:
+                break
+
+        no_results = bool(
+            isinstance(content, dict) and content.get("NoResults") is True
+        )
+        if not results and not no_results:
+            self.record_event(
+                "provider_failed",
+                {
+                    "ProviderId": WEB_PROVIDER_ID,
+                    "Code": "provider_malformed_response",
+                    "CandidateEntries": len(entries),
+                    "RejectedEntries": rejected,
+                },
+                fetched.get("requestId"),
+            )
+            return {
+                **BrokerError(
+                    "provider_malformed_response",
+                    "DuckDuckGo HTML provider returned no usable public HTTPS results",
+                    details={
+                        "candidateEntries": len(entries),
+                        "rejectedEntries": rejected,
+                    },
+                ).result(fetched.get("requestId")),
+                "providerId": WEB_PROVIDER_ID,
+                "query": query,
+                "results": [],
+            }
         return {
-            "ok": False,
-            "providerId": self.policy.web_search_provider,
+            "ok": True,
+            "requestId": fetched.get("requestId"),
+            "providerId": WEB_PROVIDER_ID,
             "query": query,
-            "results": [],
-            "error": {
-                "code": "provider_disabled",
-                "message": (
-                    "No trusted general-web-search provider is enabled by the "
-                    "approved plan"
-                ),
-                "retryable": False,
-                "details": {},
-            },
+            "results": results,
+            "citation": fetched.get("citation"),
         }
 
     def network_summary(self) -> dict[str, Any]:
@@ -2165,9 +2574,8 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "search_public_web",
             "description": (
-                "Use the provider-neutral general-web-search schema. Version 1 "
-                "returns provider_disabled unless an approved shipped provider "
-                "is enabled."
+                "Search the public web through the approval-bound shipped "
+                "anonymous provider and return bounded URL/title/summary results."
             ),
             "inputSchema": {
                 "type": "object",
@@ -2365,7 +2773,8 @@ def describe_policy(policy: EffectivePolicy, output_format: str) -> None:
         "DirectProviderId": DIRECT_PROVIDER_ID,
         "AnonymousGitHubProviderId": GITHUB_PROVIDER_ID,
         "GeneralWebSearchProviderId": policy.web_search_provider,
-        "GeneralWebSearchAvailable": False,
+        "GeneralWebSearchAvailable": policy.web_search_provider
+        != WEB_PROVIDER_NONE,
         "Tools": list(TOOL_NAMES),
     }
     if output_format == "json":
@@ -2390,7 +2799,7 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rhyolite research egress broker")
     parser.add_argument("--policy", required=True)
     parser.add_argument("--scope", required=True, type=int, choices=(2, 3))
-    parser.add_argument("--web-search-provider", default="none")
+    parser.add_argument("--web-search-provider", default=WEB_PROVIDER_ID)
     parser.add_argument("--cookies", choices=("off", "ephemeral"), default="off")
     parser.add_argument("--network-root")
     parser.add_argument("--repository-url")

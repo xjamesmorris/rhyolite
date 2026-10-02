@@ -616,9 +616,11 @@ if scope == 3:
         provenance_section,
         [
             "Generation assessment:",
-            "Model attribution:",
-            "Effort attribution:",
-            "Harness attribution:",
+            "Direct model attribution:",
+            "Heuristic model candidates (not attribution):",
+            "Heuristic model confidence:",
+            "Direct effort attribution:",
+            "Direct harness attribution:",
             "Coverage/window:",
             "Alternative explanations:",
         ],
@@ -646,6 +648,35 @@ if scope == 3:
     if not valid_verdict:
         raise SystemExit(
             "GENERATED-CODE PROVENANCE ASSESSMENT has an invalid generation verdict"
+        )
+    heuristic_candidates = provenance[
+        "Heuristic model candidates (not attribution):"
+    ]
+    heuristic_confidence = provenance["Heuristic model confidence:"]
+    allowed_heuristic_confidence = {
+        "Not applicable",
+        "Low",
+        "Medium",
+    }
+    if heuristic_confidence not in allowed_heuristic_confidence:
+        raise SystemExit(
+            "GENERATED-CODE PROVENANCE ASSESSMENT has an invalid heuristic "
+            "model confidence"
+        )
+    controlled_absence_values = {
+        "No candidate identified",
+        "Not appropriate",
+    }
+    if heuristic_candidates in controlled_absence_values:
+        if heuristic_confidence != "Not applicable":
+            raise SystemExit(
+                "A controlled no-candidate value requires heuristic model "
+                "confidence Not applicable"
+            )
+    elif heuristic_confidence == "Not applicable":
+        raise SystemExit(
+            "Heuristic model confidence Not applicable requires a controlled "
+            "no-candidate value"
         )
 PY
 }

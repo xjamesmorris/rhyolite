@@ -18,7 +18,8 @@
 - Public web pages, mailing-list posts, social media, and search
   results.
 - Broker-normalized HTTP bodies, redirect targets, TLS certificates,
-  response headers, cookies, and anonymous GitHub search results.
+  response headers, cookies, anonymous GitHub search results, and fixed-provider
+  general-web-search results.
 - Repository URLs supplied to the runner.
 - User-selected trusted research policy files and advanced provider/cookie
   settings.
@@ -82,11 +83,12 @@
 27. A missing/broken MCP tool, zero-success research phase, malformed dossier,
     or orphaned broker process is mistaken for completed live research.
 28. A custom policy/provider path selects target-derived configuration,
-    arbitrary executables, remote MCP endpoints, TLS bypass, or a weaker
-    transport floor.
-29. A report attributes generated code, a model, effort level, or harness from
-    style, quality, configuration, or other unbound signals, or infers human
-    generation from absent evidence.
+    arbitrary executables, remote MCP endpoints, configurable search endpoints,
+    credentials, TLS bypass, or a weaker transport floor.
+29. A report conflates direct model/effort/harness attribution with heuristic
+    model identification, presents a heuristic as verified attribution,
+    identifies a person rather than repository assets, assigns High heuristic
+    confidence, or infers human generation from absent evidence.
 30. Prompt injection, reviewer-directed instructions, poisoned source/docs/
     commit/ref metadata, poisoned datasets or benchmarks, encoded instructions,
     tool-call bait, resource-exhaustion tarpits, or tracking sensors manipulate
@@ -209,6 +211,13 @@
 - Fixed safe headers exclude Referer and Authorization. Model-supplied headers,
   request bodies, authentication, inherited proxies/netrc/cookies/client
   certificates, arbitrary executables, and remote MCP endpoints are forbidden.
+- General web search uses only the closed in-code fixed-endpoint anonymous
+  `duckduckgo-html-v1` adapter or explicit `none`. Search requests use GET
+  through the same fetch boundary. Provider redirect URLs are decoded, every
+  result is revalidated against the public-HTTPS floor, duplicate results are
+  removed, and bounded URL/title/summary records are returned. Provider
+  challenges and malformed responses are structured failures; there is no
+  bypass or silent fallback.
 - A failed verified TLS handshake can trigger only a metadata-only diagnostic
   handshake. It sends no HTTP request and cannot turn failure into success.
 - HTML active elements are stripped. Supported text/JSON/XML/RSS/Atom is
@@ -228,8 +237,8 @@
   missing transport, zero-success research, malformed output, or cleanup
   failures from becoming a completed review.
 - Custom research policy files must be trusted and outside Git worktrees and
-  target/output roots. Version 1 accepts only bundled adapters; the effective
-  policy digest, providers, limits, and cookie mode are part of
+  target/output roots. Policy schema 1 accepts only bundled adapters; the
+  effective policy digest, providers, limits, and cookie mode are part of
   `ApprovalHash`.
 - Child file access is rooted at the checkout and automatic
   temporary-directory access is disabled.
@@ -273,12 +282,14 @@
   limitations, confidence, and evidence basis. The source remains inert
   evidence.
 - Scope 3 additionally requires an exact
-  `GENERATED-CODE PROVENANCE ASSESSMENT` with generation, model, effort,
-  harness, coverage/window, alternative-explanation, confidence, and
-  evidence-basis fields. Validation fails closed on omission. Generation
-  verdicts are bounded; absent evidence never proves human generation, and
-  exact model/family/effort/harness attribution requires directly bound
-  commit-specific evidence.
+  `GENERATED-CODE PROVENANCE ASSESSMENT` with generation, direct model,
+  non-attributive heuristic model candidates, heuristic confidence, direct
+  effort, direct harness, coverage/window, alternative-explanation,
+  confidence, and evidence-basis fields. Validation fails closed on omission
+  and rejects High heuristic confidence or inconsistent controlled
+  no-candidate values. Direct model/effort/harness attribution requires
+  commit-bound evidence; heuristics concern repository assets, never people,
+  and remain explicitly non-attributive.
 - Text artifacts strip terminal control sequences and redact email
   addresses.
 - Markdown and HTML promote only exact allowlisted report headings into
@@ -318,8 +329,10 @@
 - Raw private cookie/body evidence may contain tracking identifiers,
   copyrighted material, misleading content, or hostile bytes until the user
   deletes the local run bundle.
-- Version 1 intentionally has no enabled general-web-search provider. Direct
-  HTTPS and anonymous GitHub retrieval can leave coverage gaps.
+- The fixed anonymous general-web-search provider can rate-limit, change HTML
+  structure, return an automated-access challenge, or omit relevant sources.
+  Rhyolite fails that provider call without bypass or fallback, so coverage
+  gaps remain possible.
 - Broker normalization can remove active-resource details, so public-page
   tracking-pixel, callback, tracker, and sensor detection can be incomplete.
   Checked-in source and documentation remain inspectable as inert evidence.
