@@ -71,7 +71,10 @@ The supported runner path:
 - Supports normalized HTML, text, JSON, XML, RSS, and Atom evidence. Active
   HTML elements are stripped. Unsupported or binary bodies are retained only
   as private content-addressed `.bin` evidence and are never rendered, parsed,
-  indexed, linked individually, or exposed to a model.
+  indexed, linked individually, or exposed to a model. Because normalization
+  can omit active-resource details, sensor detection from external pages is
+  explicitly limited; Rhyolite does not activate resource URLs merely to test
+  tracking behavior.
 - Keeps research cookie replay off by default. Optional replay uses a fresh
   empty per-repository/per-run jar and only bounded exact-host Secure cookies.
   Wider Domain cookies and insecure/oversized/expired cookies are rejected.
@@ -85,7 +88,15 @@ The supported runner path:
 - Fails closed with distinct `ResearchCapabilityFailed` and `ResearchFailed`
   states when the transport/tool contract is unavailable, the phase has no
   successful public response, the dossier is malformed, or cleanup is unsafe.
-- Supplies bounded, sanitized Git metadata from the trusted wrapper.
+- Supplies a bounded, sanitized, exact-commit collection of Git metadata from
+  the trusted wrapper. The collection and wrapping are trusted; ref names,
+  paths, author and committer names, commit subjects, selected sanitized
+  commit trailer values, and other metadata content remain attacker-controlled
+  untrusted evidence. The history is limited to the latest 100 commits and
+  excludes email addresses and full commit bodies. Each logical field is
+  sanitized before its rendered-line bound is applied; the 64 KiB aggregate
+  keeps whole newest-first commit records and emits an inert marker when older
+  records are omitted.
 - Pre-approves only checkout-contained file reads/searches and disables
   automatic access to the system temporary directory.
 - Removes inherited `COPILOT_ALLOW_ALL` from child review processes.
@@ -123,7 +134,27 @@ The supported runner path:
 - Accepts only anonymously readable public HTTPS Git repository URLs and
   rejects local paths before any Git, DNS, or network access.
 - Escapes all untrusted report and metadata content before writing HTML.
+- Keeps canonical report bodies inert in Markdown and HTML. Only exact
+  allowlisted report headings become trusted generated TOCs/anchors.
+- Generates external-reference links only from the already-sanitized canonical
+  report and only after conservative syntax validation. Non-HTTPS URLs,
+  userinfo, IP literals, localhost/internal suffixes, malformed escapes,
+  controls/whitespace, unsafe delimiters, and credential-like query
+  keys/values remain inert. Rendering performs no DNS or network access and
+  emits no remote images, scripts, or styles.
+- Applies a restrictive CSP and no-referrer policy. Generated external HTML
+  links use `noopener noreferrer nofollow external` and
+  `referrerpolicy="no-referrer"`.
 - Wraps transcripts and handoff values as inert Markdown code text.
+- Fails closed unless every report contains the exact all-scope
+  `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` contract. Scope 3 also
+  requires the exact `GENERATED-CODE PROVENANCE ASSESSMENT`, its required
+  fields, and a bounded generation verdict.
+- Restricts exact model/family/effort/harness provenance attribution to
+  directly bound commit-specific attestations, transcripts, provenance
+  records, or explicit disclosures. Configuration files, style, quality,
+  verbosity, test density, bulk commits, and generic fingerprints are not
+  proof, and absent evidence never proves human generation.
 - Performs network activity only for user-requested anonymous clones and,
   when enabled, the approval-bound local research broker.
 - Does not perform background network requests or telemetry uploads.
@@ -134,6 +165,11 @@ permission boundary. Users still approve the wrapper command and
 writable output location unless they intentionally use allow-all/YOLO
 mode. The onboarding hook is display-only and does not auto-select a
 source, output path, scope, or any unrelated session workflow.
+
+The Rhyolite launcher rejects the retired `--autopilot` option with exit
+code `2`; guided setup and effective-plan approval remain interactive. A user
+can independently enable Copilot's own in-session autonomy mode after startup,
+but that does not relax child restrictions or plan approval.
 
 The user-facing orchestrator must itself be started from a clean non-Git
 directory. Starting Copilot inside an untrusted target can execute

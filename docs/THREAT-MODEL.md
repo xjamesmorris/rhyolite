@@ -66,8 +66,9 @@
     to all permissions for that launch. Its allow-all state also makes the
     runner open the local HTML report index without confirmation unless
     that behavior is disabled.
-22. An explicit `--autopilot` launch permits autonomous continuation;
-    combining it with `--yolo` combines both outer-session risks.
+22. The retired launcher `--autopilot` spelling is mistaken for an initial
+    request, or user-enabled in-session Copilot autopilot is assumed to bypass
+    Rhyolite's interactive setup and effective-plan approval.
 23. A research URL or redirect reaches loopback, private, link-local,
     reserved, or rebinding-controlled infrastructure.
 24. Research transport inherits authentication, proxies, netrc, browser
@@ -81,6 +82,16 @@
 28. A custom policy/provider path selects target-derived configuration,
     arbitrary executables, remote MCP endpoints, TLS bypass, or a weaker
     transport floor.
+29. A report attributes generated code, a model, effort level, or harness from
+    style, quality, configuration, or other unbound signals, or infers human
+    generation from absent evidence.
+30. Prompt injection, reviewer-directed instructions, poisoned source/docs/
+    commit/ref metadata, poisoned datasets or benchmarks, encoded instructions,
+    tool-call bait, resource-exhaustion tarpits, or tracking sensors manipulate
+    review behavior or conclusions.
+31. Trusted Markdown/HTML navigation accidentally promotes arbitrary report
+    text or unsafe URLs into active markup, leaks credentials/referrers, or
+    causes rendering-time network access.
 
 ## Controls
 
@@ -120,14 +131,17 @@
   starts. The trusted launcher setup block contains only canonical
   source URLs plus constrained fleet/model/remember fields; sources
   remain untrusted data rather than prompt instructions.
-- `--yolo` and `--autopilot` are disabled by default and are ephemeral
-  per-launch outer-orchestrator switches. `--yolo` opts the outer
-  Copilot orchestrator into all permissions, `--autopilot` enables
-  autonomous continuation, and selecting both combines the behaviors.
-  Neither is persisted in launcher context, copied into the trusted
-  launcher setup block, or remembered as a preference. The runner still
-  reads allow-all state to decide whether to open the local HTML report
+- `--yolo` is disabled by default and is an ephemeral per-launch
+  outer-orchestrator switch. It opts the outer Copilot orchestrator into all
+  permissions but is not persisted in launcher context, copied into the
+  trusted launcher setup block, or remembered as a preference. The runner
+  reads allow-all state only to decide whether to open the local HTML report
   index automatically; `--no-open-html` disables that behavior.
+- The launcher has an explicit retired-option parser branch for
+  `--autopilot`; it renders `RHYOLITE ERROR` and exits `2` before Copilot
+  starts. Guided setup and effective-plan approval remain interactive. A user
+  may independently enable Copilot's own in-session autopilot behavior after
+  startup, but it is not a launcher flag and does not bypass approval.
 - Per-repository fleet/model preferences are keyed by a SHA-256 hash of
   the canonical public URL, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
@@ -155,7 +169,15 @@
 - Repository custom instructions disabled in child sessions.
 - Custom agent tools exclude editing.
 - Runner denies write and shell tools globally, removes direct Git tools,
-  and supplies bounded Git metadata from the trusted wrapper.
+  and supplies a bounded, sanitized, exact-commit collection of Git metadata
+  from the trusted wrapper. Collection and wrapping are trusted; ref names,
+  paths, author and committer names, commit subjects, selected sanitized
+  commit trailer values, and all other metadata content remain
+  attacker-controlled untrusted evidence. Only the latest 100 commits are
+  represented; email addresses and full commit bodies are omitted. Logical
+  fields are sanitized before line bounds, and the 64 KiB aggregate retains
+  whole newest-first commit records with an inert marker for omitted older
+  records.
 - Scope 1 creates no broker process, MCP config, cookie jar, or research log.
 - Scope 2/3 launches a dedicated research worker before the main reviewer.
   The research worker receives snapshot reads/searches and exactly
@@ -181,6 +203,9 @@
 - HTML active elements are stripped. Supported text/JSON/XML/RSS/Atom is
   normalized as untrusted evidence. Unsupported or binary bodies are stored
   privately by SHA-256 without original/executable extensions.
+- Research does not activate or fetch resource URLs merely to test pixels,
+  callbacks, trackers, or sensors. Normalized external pages may omit
+  active-resource details, and reports preserve that evidence limitation.
 - Cookie replay defaults off. Optional replay starts with a fresh empty
   per-repository/per-run jar and permits only bounded exact-host Secure cookies
   under path/expiry constraints. Raw Set-Cookie values remain only in a private
@@ -197,10 +222,10 @@
   `ApprovalHash`.
 - Child file access is rooted at the checkout and automatic
   temporary-directory access is disabled.
-- Outer `--yolo` or `--autopilot` state does not relax child review
-  restrictions. Runner-enforced tool isolation remains in place, and the
-  runner removes inherited `COPILOT_ALLOW_ALL` state from child process
-  environments after applying its own report-opening policy.
+- Outer `--yolo` or user-enabled in-session Copilot autopilot state does not
+  relax child review restrictions. Runner-enforced tool isolation remains in
+  place, and the runner removes inherited `COPILOT_ALLOW_ALL` state from child
+  process environments after applying its own report-opening policy.
 - Child remote export is disabled.
 - Installed hook changes load only in new outer sessions; child review
   homes still set `disableAllHooks` and do not inherit the onboarding
@@ -229,12 +254,37 @@
 - Scope-based default timeouts match the published planning ranges.
 - Reports require exact source references and evidence/confidence
   separation.
+- Every scope requires an exact
+  `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` with explicit coverage
+  of prompt injection, reviewer-directed instructions, metadata/dataset/
+  benchmark poisoning, encoded instructions/tool-call bait, recursive or
+  resource-exhaustion tarpits, tracking/callback mechanisms, evidence
+  limitations, confidence, and evidence basis. The source remains inert
+  evidence.
+- Scope 3 additionally requires an exact
+  `GENERATED-CODE PROVENANCE ASSESSMENT` with generation, model, effort,
+  harness, coverage/window, alternative-explanation, confidence, and
+  evidence-basis fields. Validation fails closed on omission. Generation
+  verdicts are bounded; absent evidence never proves human generation, and
+  exact model/family/effort/harness attribution requires directly bound
+  commit-specific evidence.
 - Text artifacts strip terminal control sequences and redact email
   addresses.
-- Markdown uses a fidelity-first indented code block.
+- Markdown and HTML promote only exact allowlisted report headings into
+  trusted generated TOCs/anchors. All canonical report-body chunks remain
+  inert code/preformatted text.
+- Trusted external-reference blocks are deduplicated from the already
+  sanitized canonical report and accept only conservatively validated HTTPS
+  URLs. Userinfo, IP literals, localhost/internal suffixes, controls/
+  whitespace, malformed escapes, unsafe delimiters, credential-like query
+  keys/values, and non-HTTPS schemes remain inert.
 - Transcripts and handoff values also use inert Markdown code text.
 - HTML escapes all report and metadata content, has no scripts or remote
-  assets, and applies a restrictive content security policy.
+  assets, applies a restrictive content security policy and no-referrer
+  policy, and marks generated external links
+  `noopener noreferrer nofollow external` with
+  `referrerpolicy="no-referrer"`. Rendering performs no DNS or network
+  access.
 - Handoffs save session IDs but require continuation through the trusted
   runner instead of advertising an unrestricted direct resume.
 - Recovered reports without the mandatory closing delimiter are retained
@@ -259,6 +309,9 @@
   deletes the local run bundle.
 - Version 1 intentionally has no enabled general-web-search provider. Direct
   HTTPS and anonymous GitHub retrieval can leave coverage gaps.
+- Broker normalization can remove active-resource details, so public-page
+  tracking-pixel, callback, tracker, and sensor detection can be incomplete.
+  Checked-in source and documentation remain inspectable as inert evidence.
 - A local user can intentionally override the runner or plugin
   safeguards.
 - Public DNS classification and pinning reduce, but cannot eliminate,

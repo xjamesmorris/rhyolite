@@ -2,6 +2,38 @@
 
 ## 0.4.1 - Unreleased
 
+- Retired the Rhyolite launcher `--autopilot` option. The parser now rejects
+  the legacy spelling with a `RHYOLITE ERROR` diagnostic and exit code `2`;
+  guided setup and effective-plan approval remain interactive. Users can still
+  independently enable Copilot's own in-session autonomy mode after startup.
+- Standardized the initial and edited model pickers on ordered
+  `gpt-5.6-sol` (recommended) and `claude-fable-5` choices while preserving
+  syntax-validated custom model IDs and per-repository preference round trips.
+  Launcher and direct-runner help now list both known IDs and custom-ID
+  support.
+- Added deterministic trusted navigation to `review.md` and `review.html`
+  using only exact allowlisted report headings. Canonical report body chunks
+  remain inert, fixed sibling/run-index links are generated locally, and a
+  deduplicated external-reference block accepts only conservatively validated
+  HTTPS URLs. HTML retains a restrictive CSP, adds a no-referrer policy, and
+  performs no rendering-time network access.
+- Added a required all-scope `AGENT-TARGETING AND REVIEW MANIPULATION
+  ASSESSMENT` covering prompt injection, reviewer-directed instructions,
+  metadata/dataset/benchmark poisoning, encoded instructions/tool-call bait,
+  tarpits, trackers/sensors, evidence limitations, confidence, and evidence
+  basis. Git metadata collection/wrapping is trusted, while ref names and
+  commit subjects remain attacker-controlled evidence.
+- Added the scope-3 `GENERATED-CODE PROVENANCE ASSESSMENT` with exact
+  generation/model/effort/harness/coverage/alternative/confidence/evidence
+  fields, bounded verdicts, directly bound attribution requirements, and
+  fail-closed omission validation. Absence of evidence no longer permits an
+  inference of human generation.
+- Hardened report/output validation so delimited confidence explanations count
+  as inline evidence, generation verdicts require an exact allowed value or a
+  punctuation-delimited explanation, tracker suppression canonicalizes host,
+  default-port, query, fragment, and trailing-slash variants, and bounded Git
+  metadata redacts complete logical fields before whole-record 64 KiB
+  aggregation with deterministic omission markers.
 - Replaced child `web_fetch`/`--allow-all-urls` research with a dedicated
   write-disabled research worker and deterministic local stdio MCP egress
   broker. The main review worker now receives only a validated read-only
@@ -57,13 +89,12 @@
   moves Copilot orchestration outside Git worktrees, preselects the
   restricted agent, collects public source/fleet/model settings, and
   preserves a sanitized initial request without persisting that request
-  or source in launch context. Neither `--yolo` nor `--autopilot` is
-  enabled by default. Explicit per-launch `--yolo` gives the outer
-  Copilot orchestrator all permissions, `--autopilot` enables autonomous
-  continuation, and they can be combined. These switches are not persisted
-  in launcher context, copied into trusted setup, or remembered as
-  preferences; child restrictions stay unchanged, including runner-enforced
-  tool isolation and removal of inherited `COPILOT_ALLOW_ALL`.
+  or source in launch context. `--yolo` is not enabled by default; an
+  explicit per-launch selection gives the outer Copilot orchestrator all
+  permissions without persisting that choice in launcher context, copying it
+  into trusted setup, or remembering it as a preference. Child restrictions
+  stay unchanged, including runner-enforced tool isolation and removal of
+  inherited `COPILOT_ALLOW_ALL`.
 - Added native launcher `--fleet`/`--model` selection and versioned,
   user-only per-repository fleet/model preferences. Approved settings
   are included in the plan hash and are saved atomically only after plan

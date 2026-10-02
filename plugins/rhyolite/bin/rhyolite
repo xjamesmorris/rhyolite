@@ -364,9 +364,9 @@ prompt_for_model() {
         if [[ -n "${remembered_model}" ]]; then
             printf '  1. Keep previously used (%s)\n' \
                 "${remembered_model}" >&2
-            printf '  2. GPT-5.6 Sol (%s)\n' \
+            printf '  2. GPT-5.6 Sol (Recommended) - %s\n' \
                 "${RHYOLITE_DEFAULT_MODEL}" >&2
-            printf '  3. Claude Fable 5 (%s)\n' \
+            printf '  3. Claude Fable 5 - %s\n' \
                 "${RHYOLITE_ALTERNATE_MODEL}" >&2
             printf '  4. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
@@ -379,9 +379,9 @@ prompt_for_model() {
                 *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
             esac
         else
-            printf '  1. GPT-5.6 Sol (%s)\n' \
+            printf '  1. GPT-5.6 Sol (Recommended) - %s\n' \
                 "${RHYOLITE_DEFAULT_MODEL}" >&2
-            printf '  2. Claude Fable 5 (%s)\n' \
+            printf '  2. Claude Fable 5 - %s\n' \
                 "${RHYOLITE_ALTERNATE_MODEL}" >&2
             printf '  3. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
@@ -459,12 +459,13 @@ Usage:
   rhyolite [--help]
   rhyolite [--version]
   rhyolite [--repo URL ...] [--fleet-mode native|standard]
-           [--model MODEL] [--yolo] [--autopilot]
+           [--model MODEL] [--yolo]
            [--] [initial review request...]
 
 Options:
-  --yolo       Start Copilot in YOLO mode for this launch.
-  --autopilot  Start Copilot in autopilot mode for this launch.
+  --model MODEL  Use gpt-5.6-sol (recommended), claude-fable-5, or a
+                 syntactically valid custom model ID.
+  --yolo         Start Copilot in YOLO mode for this launch.
 
 Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
 collects launcher settings, selects ${RHYOLITE_AGENT}, and begins guided setup
@@ -488,7 +489,6 @@ main() {
     local fleet_mode=''
     local model=''
     local yolo=0
-    local autopilot=0
     local remembered_fleet_mode=''
     local remembered_model=''
     local remembered_consistent=1
@@ -634,8 +634,12 @@ main() {
                 shift
                 ;;
             --autopilot)
-                autopilot=1
-                shift
+                fail \
+                    'launcher argument validation' \
+                    'The launcher --autopilot option has been retired.' \
+                    'Rhyolite no longer forwards --autopilot because guided setup and effective-plan approval must remain interactive.' \
+                    "Remove --autopilot and retry. After Rhyolite starts, you may independently enable Copilot's in-session autonomy mode." \
+                    2
                 ;;
             --)
                 shift
@@ -806,9 +810,6 @@ main() {
         --no-custom-instructions
         -i "${initial_prompt}"
     )
-    if ((autopilot)); then
-        copilot_arguments=(--autopilot "${copilot_arguments[@]}")
-    fi
     if ((yolo)); then
         copilot_arguments=(--yolo "${copilot_arguments[@]}")
     fi

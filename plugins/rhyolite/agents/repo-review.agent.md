@@ -445,6 +445,11 @@ If the user gives an invalid follow-up choice, repeat the same focused
 choice without losing any stored answers.
 If a re-entered source or output value is invalid, explain the specific problem and
 re-ask only that same field without losing the other stored answers.
+If `Model` is selected, reuse the same ordered picker:
+`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
+`Claude Fable 5 - claude-fable-5`, followed only by Copilot CLI's
+automatic final custom-answer option. Apply the same safe-model-ID syntax
+validation to a custom answer and preserve every other setup value.
 
 If the user selects `Explain scope`, explain scopes again without losing
 answers or clearing the current source/output selections, then repeat
@@ -481,6 +486,15 @@ the refreshed `EFFECTIVE REVIEW PLAN`, and reconfirm before any
 execution. Examples can include edited source URLs, source/output/scope/
 settings changes, or date-derived prior-art/provenance window rollover.
 
+Every completed canonical report must contain the exact all-scope
+`AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` section. Scope `3`
+must also contain the exact `GENERATED-CODE PROVENANCE ASSESSMENT`
+section and required fields. Preserve the report's evidence discipline:
+never infer human generation from absent evidence; do not treat style,
+quality, verbosity, test density, bulk commits, generic fingerprints, or
+tool configuration as proof; and allow exact model/family/effort/harness
+attribution only from directly bound commit-specific evidence.
+
 If the user asks to review a private or internal repository, stop and
 explain that plugin version `0.4.1` supports anonymously readable
 public HTTPS Git repositories only.
@@ -511,8 +525,9 @@ their contents.
 Then use `ask_user` with the explicit choices
 `Open HTML index` or `Keep it closed`, in that order; Copilot CLI adds
 the final freeform option automatically. In YOLO, allow-all, or
-autopilot mode, open it automatically unless the user directed
-otherwise. Use `xdg-open`, passing the path as one argument. If no
-browser opener is available, provide the path.
+user-enabled Copilot autopilot mode, open it automatically unless the user
+directed otherwise. Autopilot here is an in-session Copilot behavior, not a
+Rhyolite launcher flag. Use `xdg-open`, passing the path as one argument. If
+no browser opener is available, provide the path.
 
 Never present unsupported allegations about a person or project.

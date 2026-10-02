@@ -91,7 +91,9 @@ statements, source excerpts, vulnerability analysis, local filesystem
 paths, and Copilot session names and IDs.
 
 Scope 2/3 additionally creates a `research/` bundle. The sanitized
-dossier, network summary, and event ledger contain public URLs, response
+dossier remains canonical plain text; Rhyolite does not create Markdown or
+HTML dossier variants. The dossier, network summary, and event ledger contain
+public URLs, response
 metadata, cookie names/attributes/value hashes, TLS certificate
 metadata, rate-limit information, access failures, and ownership-aware
 anomaly summaries. `research/network/private/` is mode 0700; its files
@@ -133,10 +135,20 @@ bodies when they are no longer needed; Rhyolite does not automatically
 reuse or expire them.
 
 HTML reports contain no scripts or remote assets and escape untrusted
-content. Markdown reports, transcripts, and handoffs render untrusted
-text as inert code rather than active links or images. Opening HTML uses
-the operating system's local browser association and does not upload the
-report.
+content. Markdown and HTML report bodies remain inert; only exact allowlisted
+headings become trusted generated navigation. Each report also has a trusted
+generated external-reference block built from conservatively validated HTTPS
+URLs extracted from the already-sanitized canonical report. URLs with
+userinfo, IP literals, localhost/internal suffixes, controls/whitespace,
+malformed escapes, unsafe delimiters, or credential-like query data remain
+inert. Rendering performs no DNS or network access. HTML uses a restrictive
+CSP and no-referrer policy, and external links suppress referrer data.
+
+Opening a local HTML report uses the operating system's browser association
+and does not itself upload the report. Following a generated external
+reference is an explicit user navigation and can contact that public site;
+Rhyolite does not prefetch it. Transcripts and handoffs continue to render
+untrusted text as inert code rather than active links or images.
 
 No telemetry, report upload, background network requests, or reusable
 cross-run research cookie store is implemented by this plugin.

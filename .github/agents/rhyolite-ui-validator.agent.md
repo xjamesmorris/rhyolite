@@ -89,6 +89,20 @@ ephemeral explanation to state that the jar starts empty, is isolated to one
 repository/run, accepts only bounded exact-host Secure cookies, and is never
 imported or reused. Scope 1 must skip this picker and clear the stored choice.
 
+For the model interaction, require exactly these explicit choices in this
+order:
+
+```text
+GPT-5.6 Sol (Recommended) - gpt-5.6-sol
+Claude Fable 5 - claude-fable-5
+```
+
+The automatic final custom-answer option accepts a syntactically valid custom
+model ID containing only letters, numbers, dots, underscores, and hyphens.
+The initial setup model picker and `Edit setup` -> `Model` must reuse this
+same choice order, validation, and custom-answer behavior without resetting
+other setup values.
+
 Return exactly one of these forms:
 
 ```text

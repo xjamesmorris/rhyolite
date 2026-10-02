@@ -40,6 +40,115 @@ strip_terminal_controls() {
     '
 }
 
+bound_repository_metadata() {
+    awk '{
+        print substr($0, 1, 512)
+    }' |
+        LC_ALL=C awk '
+            BEGIN {
+                total_limit = 65536
+                section_limit = 12288
+                section_marker_reserve = 160
+                commit_marker_reserve = 192
+                mode = "normal"
+            }
+            function line_bytes(value) {
+                return length(value) + 1
+            }
+            function emit_line(value) {
+                print value
+                total_bytes += line_bytes(value)
+            }
+            function finish_bounded_section(kind, omitted, marker) {
+                if (omitted == 0) {
+                    return
+                }
+                marker = "[RHYOLITE metadata truncation: " omitted \
+                    " additional " kind \
+                    " records omitted after field sanitization and section bounds]"
+                emit_line(marker)
+            }
+            $0 == "__RHYOLITE_TRACKED_METADATA_START__" {
+                mode = "tracked"
+                next
+            }
+            $0 == "__RHYOLITE_TRACKED_METADATA_END__" {
+                finish_bounded_section("tracked-entry", tracked_omitted)
+                mode = "normal"
+                next
+            }
+            $0 == "__RHYOLITE_REF_METADATA_START__" {
+                mode = "refs"
+                next
+            }
+            $0 == "__RHYOLITE_REF_METADATA_END__" {
+                finish_bounded_section("ref", refs_omitted)
+                mode = "normal"
+                next
+            }
+            $0 == "__RHYOLITE_COMMIT_RECORD_START__" {
+                mode = "commit"
+                commit_record = ""
+                commit_record_bytes = 0
+                next
+            }
+            $0 == "__RHYOLITE_COMMIT_RECORD_END__" {
+                commit_records_seen++
+                if (!commit_omission_started &&
+                    total_bytes + commit_record_bytes + commit_marker_reserve <= total_limit) {
+                    printf "%s", commit_record
+                    total_bytes += commit_record_bytes
+                } else {
+                    commit_omission_started = 1
+                    commit_records_omitted++
+                }
+                mode = "normal"
+                next
+            }
+            mode == "tracked" {
+                bytes = line_bytes($0)
+                if (tracked_bytes + bytes + section_marker_reserve <= section_limit) {
+                    emit_line($0)
+                    tracked_bytes += bytes
+                } else {
+                    tracked_omitted++
+                }
+                next
+            }
+            mode == "refs" {
+                bytes = line_bytes($0)
+                if (refs_bytes + bytes + section_marker_reserve <= section_limit) {
+                    emit_line($0)
+                    refs_bytes += bytes
+                } else {
+                    refs_omitted++
+                }
+                next
+            }
+            mode == "commit" {
+                commit_record = commit_record $0 "\n"
+                commit_record_bytes += line_bytes($0)
+                next
+            }
+            {
+                emit_line($0)
+            }
+            END {
+                if (commit_records_omitted > 0) {
+                    marker = "[RHYOLITE metadata truncation: " \
+                        commit_records_omitted \
+                        " older commit records omitted after field sanitization " \
+                        "and whole-record bounds]"
+                    if (total_bytes + line_bytes(marker) <= total_limit) {
+                        emit_line(marker)
+                    } else {
+                        print "[RHYOLITE metadata truncation: older commit records omitted]"
+                    }
+                }
+            }
+        '
+}
+
 extract_report() {
     local timeline="$1"
     local report="$2"
@@ -224,13 +333,685 @@ report_has_closing_delimiter() {
     ' "${report}"
 }
 
+review_section_navigation_map() {
+    cat <<'EOF'
+REVIEW CONTEXT	review-context
+EXECUTIVE SUMMARY	executive-summary
+FINDINGS	findings
+AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT	agent-targeting-and-review-manipulation-assessment
+RESEARCH SOURCE LANDSCAPE	research-source-landscape
+INACCESSIBLE RESOURCE REGISTER	inaccessible-resource-register
+TOP USER RETRIEVAL PRIORITIES	top-user-retrieval-priorities
+RESEARCH TRANSPORT OBSERVATIONS	research-transport-observations
+GENERATED-CODE PROVENANCE ASSESSMENT	generated-code-provenance-assessment
+AREAS REVIEWED WITHOUT QUALIFYING FINDINGS	areas-reviewed-without-qualifying-findings
+PRIORITIZED REMEDIATION	prioritized-remediation
+OVERALL ASSESSMENT	overall-assessment
+EOF
+}
+
+normalize_report_utf8_for_finalization() {
+    local report="$1"
+
+    python3 - "${report}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    data = path.read_bytes()
+except OSError as error:
+    raise SystemExit(f"could not read the report: {error}")
+
+try:
+    data.decode("utf-8")
+except UnicodeDecodeError as error:
+    normalized = data.decode("utf-8", errors="replace").encode("utf-8")
+    try:
+        path.write_bytes(normalized)
+    except OSError as write_error:
+        raise SystemExit(
+            f"could not replace invalid UTF-8 in the report: {write_error}"
+        )
+    print(
+        f"invalid UTF-8 at byte offset {error.start}; "
+        "invalid byte sequences were replaced with U+FFFD"
+    )
+    raise SystemExit(42)
+PY
+}
+
+validate_review_report_contract() {
+    local report="$1"
+    local scope="$2"
+
+    python3 - "${report}" "${scope}" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+scope = int(sys.argv[2])
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except OSError as error:
+    raise SystemExit(f"report could not be read: {error}")
+except UnicodeDecodeError as error:
+    raise SystemExit(
+        f"report is not valid UTF-8 at byte offset {error.start}"
+    )
+
+ordered_sections = [
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+]
+base_sections = [
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+]
+research_sections = [
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+]
+provenance_section = "GENERATED-CODE PROVENANCE ASSESSMENT"
+
+if (
+    len(lines) < 4
+    or len(lines[0].strip()) < 80
+    or set(lines[0].strip()) != {"="}
+    or lines[1].strip() != "REPOSITORY REVIEW REPORT"
+    or len(lines[-1].strip()) < 80
+    or set(lines[-1].strip()) != {"="}
+):
+    raise SystemExit("report delimiters or heading are invalid")
+
+required = list(base_sections)
+if scope >= 2:
+    required.extend(research_sections)
+if scope == 3:
+    required.append(provenance_section)
+
+for section in ordered_sections:
+    count = lines.count(section)
+    if section in required and count != 1:
+        raise SystemExit(
+            f"required report section is missing or duplicated: {section}"
+        )
+    if section not in required and count != 0:
+        raise SystemExit(
+            f"scope {scope} report contains an unexpected section: {section}"
+        )
+
+positions = [lines.index(section) for section in ordered_sections if section in required]
+if positions != sorted(positions):
+    raise SystemExit("report sections are out of order")
+
+
+def section_lines(name):
+    start = lines.index(name) + 1
+    later = [
+        lines.index(section)
+        for section in ordered_sections
+        if section in required and lines.index(section) > start - 1
+    ]
+    end = min(later) if later else len(lines) - 1
+    return lines[start:end]
+
+
+list_marker = re.compile(r"^(?:(?:[-*+])|(?:\d+[.)]))[ \t]+")
+
+
+def normalized_section_lines(section):
+    return [
+        list_marker.sub("", line.strip(), count=1)
+        for line in section_lines(section)
+    ]
+
+
+def field_value(normalized, position, field, stop_fields):
+    value_parts = [normalized[position][len(field):].strip()]
+    for line in normalized[position + 1:]:
+        if any(line.startswith(other_field) for other_field in stop_fields):
+            break
+        if not line:
+            if any(value_parts):
+                break
+            continue
+        value_parts.append(line)
+    return " ".join(part for part in value_parts if part).strip()
+
+
+def require_unique_fields(section, normalized, fields, stop_fields):
+    values = {}
+    for field in fields:
+        positions = [
+            index
+            for index, line in enumerate(normalized)
+            if line.startswith(field)
+        ]
+        if len(positions) != 1:
+            raise SystemExit(
+                f"{section} is missing or duplicates required field: {field}"
+            )
+        position = positions[0]
+        value = field_value(normalized, position, field, stop_fields)
+        if not value:
+            raise SystemExit(
+                f"{section} has an empty required field: {field}"
+            )
+        values[field] = value
+    return values
+
+
+def require_assessment_fields(section, fields):
+    normalized = normalized_section_lines(section)
+    assessment_fields = ("Confidence:", "Evidence basis:")
+    stop_fields = tuple(fields) + assessment_fields
+    values = require_unique_fields(
+        section,
+        normalized,
+        fields,
+        stop_fields,
+    )
+
+    confidence_positions = [
+        index
+        for index, line in enumerate(normalized)
+        if line.startswith("Confidence:")
+    ]
+    evidence_positions = [
+        index
+        for index, line in enumerate(normalized)
+        if line.startswith("Evidence basis:")
+    ]
+    if not confidence_positions:
+        raise SystemExit(
+            f"{section} is missing required assessment field: Confidence:"
+        )
+
+    inline_evidence_count = 0
+    confidence_pattern = re.compile(r"^(High|Medium|Low)(.*)$")
+    delimited_suffix_pattern = re.compile(
+        r"^(?:[.,:;][ \t]+|[ \t]+-[ \t]+)(.+)$"
+    )
+    for position in confidence_positions:
+        value = field_value(
+            normalized,
+            position,
+            "Confidence:",
+            stop_fields,
+        )
+        match = confidence_pattern.fullmatch(value)
+        if match is None:
+            raise SystemExit(
+                f"{section} has an invalid confidence level: {value or '<empty>'}"
+            )
+        remainder = match.group(2)
+        if remainder in ("", ".", ";"):
+            continue
+        suffix_match = delimited_suffix_pattern.fullmatch(remainder)
+        if suffix_match is None:
+            raise SystemExit(
+                f"{section} has an invalid confidence level: {value or '<empty>'}"
+            )
+        inline_evidence = suffix_match.group(1).strip()
+        if inline_evidence.startswith("Evidence basis:"):
+            inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
+            if not inline_evidence:
+                raise SystemExit(
+                    f"{section} has an empty required field: Evidence basis:"
+                )
+        inline_evidence_count += 1
+
+    for position in evidence_positions:
+        value = field_value(
+            normalized,
+            position,
+            "Evidence basis:",
+            stop_fields,
+        )
+        if not value:
+            raise SystemExit(
+                f"{section} has an empty required field: Evidence basis:"
+            )
+
+    if not evidence_positions and inline_evidence_count == 0:
+        raise SystemExit(
+            f"{section} is missing required assessment field: Evidence basis:"
+        )
+    return values
+
+
+require_assessment_fields(
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    [
+        "Prompt injection and reviewer-directed instructions:",
+        "Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:",
+        "Encoded/invisible instructions and tool-call bait:",
+        "Recursive/resource-exhaustion tarpits:",
+        "Tracking pixels/callback beacons/trackers/sensors:",
+        "Limitations of available evidence:",
+    ],
+)
+
+if scope == 3:
+    provenance = require_assessment_fields(
+        provenance_section,
+        [
+            "Generation assessment:",
+            "Model attribution:",
+            "Effort attribution:",
+            "Harness attribution:",
+            "Coverage/window:",
+            "Alternative explanations:",
+        ],
+    )
+    assessment = provenance["Generation assessment:"]
+    verdicts = (
+        "Confirmed",
+        "Evidence supports assisted generation",
+        "Indeterminate",
+        "No supporting evidence found",
+    )
+    valid_verdict = False
+    verdict_suffix_pattern = re.compile(
+        r"^(?:[.,:;][ \t]+|[ \t]+-[ \t]+)\S(?:.*\S)?$"
+    )
+    for verdict in verdicts:
+        if assessment == verdict:
+            valid_verdict = True
+            break
+        if assessment.startswith(verdict):
+            suffix = assessment[len(verdict):]
+            if verdict_suffix_pattern.fullmatch(suffix):
+                valid_verdict = True
+                break
+    if not valid_verdict:
+        raise SystemExit(
+            "GENERATED-CODE PROVENANCE ASSESSMENT has an invalid generation verdict"
+        )
+PY
+}
+
+extract_safe_https_references() {
+    local report="$1"
+    local scope="${2:-}"
+    local contract_error=""
+
+    [[ "${scope}" =~ ^[123]$ ]] || return 0
+    if ! contract_error="$(
+        validate_review_report_contract "${report}" "${scope}" 2>&1
+    )"; then
+        if [[ "${contract_error}" == \
+            report\ is\ not\ valid\ UTF-8\ at\ byte\ offset* ]]; then
+            printf '%s\n' \
+                "URL extraction requires a valid UTF-8 report; ${contract_error}" \
+                >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    python3 - "${report}" <<'PY'
+import ipaddress
+import pathlib
+import re
+import sys
+from urllib.parse import unquote_to_bytes, urlsplit
+
+path = pathlib.Path(sys.argv[1])
+try:
+    text = path.read_bytes().decode("utf-8")
+except OSError as error:
+    raise SystemExit(f"URL extraction could not read the report: {error}")
+except UnicodeDecodeError as error:
+    raise SystemExit(
+        "URL extraction requires a valid UTF-8 report; "
+        f"invalid byte sequence at byte offset {error.start}"
+    )
+
+ordered_sections = {
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+}
+excluded_section = "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT"
+reference_lines = []
+excluded_lines = []
+inside_excluded_section = False
+for line in text.splitlines():
+    if line == excluded_section:
+        inside_excluded_section = True
+        continue
+    if inside_excluded_section and line in ordered_sections:
+        inside_excluded_section = False
+    if inside_excluded_section:
+        excluded_lines.append(line)
+    else:
+        reference_lines.append(line)
+text = "\n".join(reference_lines)
+excluded_text = "\n".join(excluded_lines)
+
+candidate_pattern = re.compile(
+    r'''(?i)(?<![A-Za-z0-9])(?P<candidate>[<(\[{`"']*https://[^\s]+)'''
+)
+malformed_escape = re.compile(r"%(?![0-9A-Fa-f]{2})")
+host_label = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+unsafe_delimiters = set("<>\"'`{}|\\^[]")
+sensitive_key = re.compile(
+    r"(?:token|secret|password|passwd|api.?key|access.?key|auth|"
+    r"authorization|credential|signature|session|cookie|jwt|code)",
+    re.IGNORECASE,
+)
+credential_value = re.compile(
+    r"(?i)(?:"
+    r"^(?:bearer|basic)[ +]|"
+    r"^(?:github_pat_|gh[pousr]_|sk-|rk-|AKIA|ASIA|AIza)|"
+    r"^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$|"
+    r"-----BEGIN[ +][A-Z0-9 ]+PRIVATE[ +]KEY-----"
+    r")"
+)
+blocked_exact = {
+    "localhost",
+    "localhost.localdomain",
+}
+blocked_helper_domains = ("localtest.me", "lvh.me", "nip.io", "sslip.io")
+blocked_suffixes = (
+    ".localhost",
+    ".local",
+    ".internal",
+    ".localdomain",
+    ".lan",
+    ".home",
+    ".home.arpa",
+    ".corp",
+    ".intranet",
+    ".invalid",
+    ".test",
+    ".onion",
+)
+
+
+def normalize_candidate(candidate):
+    value = candidate.lstrip("<([{`\"'")
+    trailing_punctuation = ".,:;!?"
+    closing_pairs = {")": "(", "]": "[", "}": "{", ">": "<"}
+    quote_delimiters = {'"', "'", "`"}
+
+    while value:
+        normalized = value.rstrip(trailing_punctuation)
+        if normalized != value:
+            value = normalized
+            continue
+        final = value[-1]
+        if (
+            final in closing_pairs
+            and value.count(final) > value.count(closing_pairs[final])
+        ):
+            value = value[:-1]
+            continue
+        if final in quote_delimiters and value.count(final) % 2:
+            value = value[:-1]
+            continue
+        break
+    return value
+
+
+def has_balanced_parentheses(value):
+    depth = 0
+    for character in value:
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                return False
+            depth -= 1
+    return depth == 0
+
+
+def decoded_ascii(value):
+    try:
+        decoded = unquote_to_bytes(value)
+    except Exception:
+        return None
+    if any(byte < 0x21 or byte > 0x7E for byte in decoded):
+        return None
+    decoded_text = decoded.decode("ascii")
+    if any(character in unsafe_delimiters for character in decoded_text):
+        return None
+    return decoded_text
+
+
+def looks_credential_like(value):
+    if credential_value.search(value):
+        return True
+    if (
+        len(value) >= 32
+        and re.fullmatch(r"[A-Za-z0-9_.~+/=-]+", value)
+        and not re.fullmatch(r"[0-9A-Fa-f]+", value)
+        and re.search(r"[A-Za-z]", value)
+        and re.search(r"[0-9]", value)
+    ):
+        return True
+    return False
+
+
+def safe_reference(candidate):
+    if (
+        len(candidate) > 2048
+        or not candidate.isascii()
+        or any(character.isspace() or ord(character) < 0x20 for character in candidate)
+        or any(character in unsafe_delimiters for character in candidate)
+        or malformed_escape.search(candidate)
+        or not has_balanced_parentheses(candidate)
+    ):
+        return False
+
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or "@" in parsed.netloc
+        or "%" in parsed.netloc
+    ):
+        return False
+    if port is not None and not 1 <= port <= 65535:
+        return False
+
+    host = parsed.hostname
+    if not host:
+        return False
+    host = host.lower()
+    if (
+        host.endswith(".")
+        or host in blocked_exact
+        or host.endswith(blocked_suffixes)
+        or any(
+            host == domain or host.endswith("." + domain)
+            for domain in blocked_helper_domains
+        )
+    ):
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+
+    labels = host.split(".")
+    if len(labels) < 2 or any(not host_label.fullmatch(label) for label in labels):
+        return False
+    if labels[-1].isdigit() or len(labels[-1]) < 2:
+        return False
+
+    decoded_path = decoded_ascii(parsed.path)
+    decoded_query = decoded_ascii(parsed.query)
+    decoded_fragment = decoded_ascii(parsed.fragment)
+    if decoded_path is None or decoded_query is None or decoded_fragment is None:
+        return False
+    if not all(
+        has_balanced_parentheses(value)
+        for value in (decoded_path, decoded_query, decoded_fragment)
+    ):
+        return False
+
+    if parsed.query:
+        fields = re.split(r"[&;]", parsed.query)
+        if len(fields) > 50:
+            return False
+        for field in fields:
+            key, separator, value = field.partition("=")
+            decoded_key = decoded_ascii(key)
+            decoded_value = decoded_ascii(value if separator else "")
+            if decoded_key is None or decoded_value is None:
+                return False
+            normalized_key = re.sub(r"[^a-z0-9]", "", decoded_key.lower())
+            if sensitive_key.search(normalized_key) or looks_credential_like(decoded_value):
+                return False
+    if looks_credential_like(decoded_fragment):
+        return False
+    return True
+
+
+def suppression_key(candidate):
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or "@" in parsed.netloc
+    ):
+        return None
+    host = parsed.hostname
+    if not host:
+        return None
+    host = host.lower()
+    normalized_port = None if port in (None, 443) else port
+    normalized_path = parsed.path or "/"
+    if normalized_path != "/":
+        normalized_path = normalized_path.rstrip("/") or "/"
+    return host, normalized_port, normalized_path
+
+
+excluded_endpoint_keys = set()
+for match in candidate_pattern.finditer(excluded_text):
+    candidate = normalize_candidate(match.group("candidate"))
+    endpoint_key = suppression_key(candidate)
+    if endpoint_key is not None:
+        excluded_endpoint_keys.add(endpoint_key)
+
+seen = set()
+for match in candidate_pattern.finditer(text):
+    candidate = normalize_candidate(match.group("candidate"))
+    endpoint_key = suppression_key(candidate)
+    if (
+        endpoint_key in excluded_endpoint_keys
+        or candidate in seen
+        or not safe_reference(candidate)
+    ):
+        continue
+    seen.add(candidate)
+    print(candidate)
+    if len(seen) >= 200:
+        break
+PY
+}
+
+write_markdown_navigation() {
+    local report="$1"
+    local heading anchor
+
+    printf '## Navigation\n\n'
+    while IFS=$'\t' read -r heading anchor; do
+        if grep -Fxq -- "${heading}" "${report}"; then
+            printf -- '- [%s](#%s)\n' "${heading}" "${anchor}"
+        fi
+    done < <(review_section_navigation_map)
+    printf '\n'
+}
+
+write_markdown_external_references() {
+    local report="$1"
+    local scope="$2"
+    local references reference
+
+    references="$(extract_safe_https_references "${report}" "${scope}")"
+    printf '## External references\n\n'
+    if [[ -z "${references}" ]]; then
+        printf 'None identified.\n\n'
+        return
+    fi
+    while IFS= read -r reference || [[ -n "${reference}" ]]; do
+        printf -- '- [%s](%s)\n' "${reference}" "${reference}"
+    done <<< "${references}"
+    printf '\n'
+}
+
 write_markdown_report() {
     local report="$1"
     local markdown="$2"
+    local scope="${3:-}"
 
     {
         printf '# Repository Review Report\n\n'
-        sed 's/^/    /' "${report}"
+        printf '[Plain text](review.txt) | [HTML](review.html) | '
+        printf '[Run index](../index.html)\n\n'
+        write_markdown_navigation "${report}"
+        write_markdown_external_references "${report}" "${scope}"
+        printf '## Canonical report\n\n'
+        awk '
+            NR == FNR {
+                separator = index($0, "\t")
+                heading = substr($0, 1, separator - 1)
+                anchors[heading] = substr($0, separator + 1)
+                next
+            }
+            {
+                if ($0 in anchors) {
+                    printf "\n<a id=\"%s\"></a>\n## %s\n\n", \
+                        anchors[$0], $0
+                    next
+                }
+                print "    " $0
+            }
+        ' <(review_section_navigation_map) "${report}"
     } > "${markdown}"
 }
 
@@ -273,7 +1054,9 @@ write_html_report() {
     local repository="$3"
     local commit="$4"
     local status="$5"
+    local scope="${6:-}"
     local encoded_repository encoded_commit encoded_status
+    local heading anchor references reference encoded_reference
 
     encoded_repository="$(html_escape_value "${repository}")"
     encoded_commit="$(html_escape_value "${commit}")"
@@ -286,13 +1069,17 @@ write_html_report() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'none'; media-src 'none'; connect-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Repository Review Report</title>
 <style>
 :root { color-scheme: light dark; }
 body { margin: 0; font-family: system-ui, sans-serif; line-height: 1.45; }
 main { max-width: 1000px; margin: 0 auto; padding: 2rem; }
 h1 { margin-top: 0; }
+nav, section { margin-block: 1.5rem; }
+ul { padding-inline-start: 1.5rem; }
+a { color: inherit; overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }
 dt { font-weight: 700; }
 dd { margin: 0; overflow-wrap: anywhere; }
@@ -303,12 +1090,72 @@ pre { padding: 1rem; border: 1px solid currentColor; overflow: auto; white-space
 <main>
 <h1>Repository Review Report</h1>
 EOF
+        printf '%s\n' \
+            '<nav aria-label="Report formats"><a href="review.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Plain text</a> | <a href="review.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Markdown</a> | <a href="../index.html" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run index</a></nav>'
         printf '<dl><dt>Repository</dt><dd>%s</dd>' "${encoded_repository}"
         printf '<dt>Commit</dt><dd>%s</dd>' "${encoded_commit}"
         printf '<dt>Status</dt><dd>%s</dd></dl>\n' "${encoded_status}"
-        printf '<pre>'
-        html_escape_file "${report}"
-        printf '</pre>\n</main>\n</body>\n</html>\n'
+        printf '<nav aria-label="Report sections"><h2>Navigation</h2><ul>\n'
+        while IFS=$'\t' read -r heading anchor; do
+            if grep -Fxq -- "${heading}" "${report}"; then
+                printf '<li><a href="#%s" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">%s</a></li>\n' \
+                    "${anchor}" "$(html_escape_value "${heading}")"
+            fi
+        done < <(review_section_navigation_map)
+        printf '</ul></nav>\n'
+        printf '<section aria-labelledby="external-references"><h2 id="external-references">External references</h2>\n'
+        references="$(extract_safe_https_references "${report}" "${scope}")"
+        if [[ -z "${references}" ]]; then
+            printf '<p>None identified.</p>\n'
+        else
+            printf '<ul>\n'
+            while IFS= read -r reference || [[ -n "${reference}" ]]; do
+                encoded_reference="$(html_escape_value "${reference}")"
+                printf '<li><a href="%s" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">%s</a></li>\n' \
+                    "${encoded_reference}" "${encoded_reference}"
+            done <<< "${references}"
+            printf '</ul>\n'
+        fi
+        printf '</section>\n'
+        printf '<div aria-label="Canonical report body"><pre>'
+        awk '
+            function escape_html(value) {
+                gsub(/&/, "\\&amp;", value)
+                gsub(/</, "\\&lt;", value)
+                gsub(/>/, "\\&gt;", value)
+                gsub(/"/, "\\&quot;", value)
+                gsub(/\047/, "\\&#39;", value)
+                return value
+            }
+            NR == FNR {
+                separator = index($0, "\t")
+                heading = substr($0, 1, separator - 1)
+                anchors[heading] = substr($0, separator + 1)
+                next
+            }
+            {
+                if ($0 in anchors) {
+                    if (in_section) {
+                        print "</pre></section>"
+                    } else {
+                        print "</pre>"
+                    }
+                    printf "<section id=\"%s\"><h2>%s</h2><pre>", \
+                        anchors[$0], escape_html($0)
+                    in_section = 1
+                    next
+                }
+                print escape_html($0)
+            }
+            END {
+                if (in_section) {
+                    print "</pre></section>"
+                } else {
+                    print "</pre>"
+                }
+            }
+        ' <(review_section_navigation_map) "${report}"
+        printf '</div>\n</main>\n</body>\n</html>\n'
     } > "${html}"
 }
 

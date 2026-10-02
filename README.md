@@ -81,25 +81,28 @@ wrapper on Fedora Linux 44:
 ./rhyolite --repo https://github.com/owner/repository
 ```
 
-Optional switches change the outer Copilot session for that launch.
-`--yolo` also affects report handling:
+The optional `--yolo` switch changes the outer Copilot session for that
+launch and also affects report handling:
 
 ```bash
 ./rhyolite --repo https://github.com/owner/repository --yolo
-./rhyolite --repo https://github.com/owner/repository --autopilot
-./rhyolite --repo https://github.com/owner/repository --yolo --autopilot
 ```
 
-Neither switch is enabled by default. `--yolo` explicitly opts the outer
-Copilot orchestrator into all permissions for that launch;
-`--autopilot` enables autonomous continuation; they can be combined.
-Both are ephemeral per-launch switches: neither is persisted in launcher
-context, copied into trusted setup, or remembered as a preference.
+`--yolo` is disabled by default. It explicitly opts the outer Copilot
+orchestrator into all permissions for that launch and is not persisted in
+launcher context, copied into trusted setup, or remembered as a preference.
 Because `--yolo` sets allow-all mode, a completed review opens the local
 HTML report index automatically instead of prompting unless the runner's
 `--no-open-html` option is selected. Restricted child review sessions
 retain runner-enforced tool isolation and remove inherited
 `COPILOT_ALLOW_ALL` state.
+
+The former launcher `--autopilot` option is retired. The packaged launcher
+rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
+be mistaken for initial request text. Rhyolite setup and effective-plan
+approval remain interactive. After Rhyolite starts, a user may independently
+enable Copilot's own in-session autonomy mode; that is not a launcher flag and
+does not bypass plan approval or child isolation.
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
@@ -113,7 +116,9 @@ outside every Git worktree, pass `--plugin-dir`, preselect
 preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs, ask whether to use native
-Copilot fleet mode, and confirm the review model. Native mode adds the
+Copilot fleet mode, and confirm the review model. Known choices are
+`gpt-5.6-sol` (recommended) and `claude-fable-5`; a syntactically valid
+custom model ID is also accepted and preserved. Native mode adds the
 process-level `--fleet` flag, and every launch passes the selected
 `--model`. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
@@ -341,6 +346,19 @@ display wording (current versions show `Other (type your answer)`).
 Freeform follow-ups are used only for values such as repository URLs,
 custom output paths, or instructions describing what to do differently.
 
+The initial model picker and `Edit setup` -> `Model` use the same ordered
+choices:
+
+```text
+1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
+2. Claude Fable 5 - claude-fable-5
+3. Other (wording supplied by Copilot CLI)
+```
+
+The final custom-answer option accepts a model ID containing only letters,
+numbers, dots, underscores, and hyphens. Rhyolite does not hard-allowlist
+models or silently replace a selected custom ID.
+
 The output picker resolves and displays these full paths:
 
 ```text
@@ -428,7 +446,28 @@ Reports preserve `RESEARCH SOURCE LANDSCAPE`,
 paywalls, authentication, robots restrictions, removals, or network
 policy. It brings inaccessible high-priority sources to the user's
 attention and offers a picker to display the ranked sources most useful
-for the user to retrieve.
+to retrieve.
+
+Every scope includes an exact
+`AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`. It covers prompt
+injection and reviewer-directed instructions; source, documentation,
+commit/ref metadata, dataset, and benchmark poisoning; encoded or invisible
+instructions and tool-call bait; recursive/resource-exhaustion tarpits;
+tracking pixels, callback beacons, trackers, and sensors; and limitations of
+the available evidence. Checked-in source and documentation are inspected as
+inert text. Resource URLs are not activated merely to test tracking behavior,
+and normalized external pages can limit sensor detection.
+
+Scope `3` also requires an exact
+`GENERATED-CODE PROVENANCE ASSESSMENT` with generation, model, effort,
+harness, coverage/window, alternative-explanation, confidence, and
+evidence-basis fields. Generation verdicts are limited to `Confirmed`,
+`Evidence supports assisted generation`, `Indeterminate`, or
+`No supporting evidence found`. An absence of evidence never establishes
+human generation. Exact model, family, effort, or harness attribution requires
+directly bound commit-specific evidence such as an attestation, transcript,
+provenance record, or explicit disclosure. Tool configuration, style, quality,
+verbosity, test density, bulk commits, and generic fingerprints are not proof.
 
 Substantive findings and assessment points include High, Medium, or Low
 confidence with a concise evidence basis. Low-confidence possibilities
@@ -575,7 +614,9 @@ is shared.
 At the end of an interactive run, the runner asks whether to open the
 local HTML index. Use `--open-html` to open it automatically or
 `--no-open-html` to disable opening. Allow-all/YOLO
-sessions also open it automatically unless disabled.
+sessions and user-enabled Copilot autopilot sessions also open it
+automatically unless disabled. Autopilot here is an in-session Copilot
+behavior, not a Rhyolite launcher option.
 
 ## Output
 
@@ -591,9 +632,18 @@ Run-level index, manifest, state, and handoff files live under
 
 Each repository output directory creates:
 
-- `review.txt`: final UTF-8, LF-only report for Linux inline email.
-- `review.md`: safe, fidelity-first Markdown.
-- `review.html`: escaped local HTML with no scripts or remote assets.
+- `review.txt`: final UTF-8, LF-only canonical report for Linux inline
+  email; it remains simple plain text.
+- `review.md`: safe Markdown with trusted generated navigation for exact
+  allowlisted report headings, fixed links to sibling formats and the run
+  index, inert indented-code report chunks, and a deduplicated external
+  references block containing only conservatively validated public HTTPS
+  URLs.
+- `review.html`: escaped local HTML with the same trusted generated
+  navigation/reference surfaces, fixed sibling/run-index links, no scripts or
+  remote assets, a restrictive CSP, and a no-referrer policy. External links
+  use `noopener`, `noreferrer`, `nofollow`, `external`, and
+  `referrerpolicy="no-referrer"`.
 - `analysis-timeline.txt`: complete sanitized agent progress output.
 - `session.md`: Copilot session transcript wrapped as inert Markdown text.
 - `request.txt`: exact rendered request.
@@ -605,7 +655,8 @@ Each repository output directory creates:
   warning, and artifact inventory.
 - `agent-state/`: isolated Copilot home and persisted session state.
 - `research/` for scope `2`/`3`:
-  - `research.txt`, `research-timeline.txt`, `research-session.md`,
+  - canonical plain-text `research.txt`, plus `research-timeline.txt`,
+    `research-session.md`,
     `research-errors.txt`, and `research-state.json`.
   - `network/summary.json` and `network/events.jsonl`, the sanitized
     transport evidence available to synthesis.
@@ -631,13 +682,23 @@ worker receives only snapshot-contained reads/searches and the exact
 broker tools; the main worker receives snapshot reads/searches plus the
 sanitized dossier and network summary. Automatic
 temporary-directory access and remote export are disabled; the trusted
-wrapper supplies bounded Git metadata in the request.
+wrapper supplies a bounded, sanitized, exact-commit collection of Git
+metadata in the request. The collection and wrapping are trusted; ref names,
+paths, author and committer names, commit subjects, and selected sanitized
+commit trailer values remain attacker-controlled evidence. The history is
+limited to the latest 100 commits and excludes email addresses and full commit
+bodies. Each logical field is sanitized before its rendered-line bound is
+applied; the 64 KiB aggregate keeps whole newest-first commit records and emits
+an inert marker when older records are omitted.
 
 The workspace root itself must not be inside a Git worktree. The trusted
 runner alone writes the artifact workspace, which must be physically
 disjoint from the clone workspace. Text artifacts remove terminal controls
 and redact email addresses; Markdown treats untrusted content as code
-text, and HTML escapes all report and metadata content.
+text except for the fixed trusted navigation and syntax-validated HTTPS
+reference block. HTML escapes all report and metadata content. Rendering does
+not perform DNS or network access and never emits remote images, scripts, or
+styles.
 
 Saved session IDs are evidence for handoff, not an invitation to run
 `copilot --resume` directly. A direct resume may omit the original path,
@@ -677,6 +738,9 @@ Important defaults:
   and never appear in model inputs or rendered reports.
 - Scope 3 provenance review for agentically generated code is disabled
   unless explicitly requested.
+- Every scope validates the required agent-targeting/review-manipulation
+  section. Scope 3 additionally fails closed if the generated-code provenance
+  section or any required field is missing.
 - Reports omit author email addresses and avoid unsupported attribution.
 - Isolated child review homes still set `disableAllHooks`, so nested
   review sessions do not inherit the onboarding hook.
