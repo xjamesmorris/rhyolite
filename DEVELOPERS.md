@@ -3,6 +3,8 @@
 Rhyolite is developed, validated, and released on **Fedora Linux 44**.
 Other operating systems and Linux distributions are outside the current
 validation matrix. See [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
+Read [AGENTS.md](AGENTS.md) first; it is the canonical repository-wide
+development contract for human contributors and coding agents.
 
 ## Development model
 
@@ -11,8 +13,7 @@ package build step. Bash is the canonical implementation language for
 launchers, helpers, review orchestration, artifact rendering, and
 validation.
 
-As of October 1, 2026, the bundled
-`research-egress-broker.py` is the explicitly approved constrained
+The bundled `research-egress-broker.py` is the explicitly approved constrained
 exception to the Bash-first rule. Python 3's standard library provides
 the TLS, HTTP, DNS, cookie, HTML, JSON, XML, hashing, and stdio MCP
 primitives needed for deterministic transport enforcement without a
@@ -124,10 +125,12 @@ Run the narrowest relevant check first:
 The authoritative release validation command is:
 
 ```bash
-bash ./tests/validate-plugin.sh
+bash ./tests/validate-all.sh
 ```
 
-Run it locally on Fedora Linux 44. There is no hosted CI requirement.
+The fail-fast aggregate runs `tests/validate-harness-contract.sh` before the
+legacy `tests/validate-plugin.sh` stage. Run it locally on Fedora Linux 44.
+There is no hosted CI requirement.
 
 ## Architecture contracts
 
@@ -135,6 +138,12 @@ Changes to these surfaces normally move together:
 
 - `VERSION`, `plugins/rhyolite/plugin.json`,
   `.github/plugin/marketplace.json`, and `CHANGELOG.md` for releases.
+- `AGENTS.md`, tool-specific bootstrap pointers, `DEVELOPERS.md`, and
+  contributor checklists when the canonical development contract changes.
+- `plugins/rhyolite/lib/harness/common.sh`, the selected adapter,
+  `run-parallel-reviews.sh`, `tests/validate-harness-contract.sh`,
+  `docs/HARNESS-ARCHITECTURE.md`, and
+  `docs/ADDING-A-HARNESS.md` for harness contract changes.
 - `branding/banner.txt`, `scripts/show-welcome-panel.sh`, the embedded
   prompt-native panel, `tests/validate-tui-runtime.mjs`, and
   `tests/validate-plugin.sh` for onboarding changes.
@@ -159,6 +168,13 @@ Changes to these surfaces normally move together:
 Repository-only validator agents must never be packaged under
 `plugins/rhyolite/agents/`.
 
+GitHub Copilot is the only production harness. A planned no-op adapter belongs
+only under `tests/fixtures` and may be loaded only through test-owned fixed
+fixture wiring. It must never be added to the production registry, plugin
+assets, launcher choices, marketplace metadata, or public support claims.
+Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v2
+work and any future adapter.
+
 Scope 1 must remain transport-free: no research worker, MCP config,
 broker process, cookie jar, or research/network artifact. Scope 2/3 must
 complete dedicated research first and pass only the validated sanitized
@@ -174,7 +190,7 @@ Before release:
    `CHANGELOG.md`.
 2. Run `git diff --check`.
 3. Run `node tests/validate-tui-runtime.mjs --self-check`.
-4. Run `bash ./tests/validate-plugin.sh`.
+4. Run `bash ./tests/validate-all.sh`.
 5. Run `bash ./tools/public-release/test-public-release.sh`.
 6. Run `bash ./tests/test-install.sh`.
 7. Verify plugin discovery.

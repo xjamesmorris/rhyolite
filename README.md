@@ -50,13 +50,23 @@ Other operating systems and Linux distributions are not currently
 validated or supported. See
 [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
 
+**Review harness support:** GitHub Copilot is the only production runtime
+harness. The harness abstraction is a fixed, fail-closed internal seam; it
+does not make other CLIs supported. Contributor and coding-agent guidance is
+canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
+[docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
+Contract-v2 implementation playbook in
+[docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The planned no-op
+harness is a development-only fixture under `tests/fixtures`; it is not
+registered, packaged, selectable, or exposed in production.
+
 Rhyolite is licensed under the GNU General Public License version 2
 only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 ## Quick notes
 
 - Recommended model: use a current frontier reasoning model at the
-  maximum available reasoning effort and context (as of October 1, 2026,
+  maximum available reasoning effort and context (as of October 3, 2026,
   examples include Sol 5.6 and Fable 5). Use maximum available reasoning
   effort by default for every repository development task. This policy
   persists across sessions, and development handoffs must carry it
@@ -67,8 +77,9 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   review.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
   for questions and feature requests.
-- See [DEVELOPERS.md](DEVELOPERS.md) for environment setup, architecture
-  contracts, and the development validation matrix.
+- Read [AGENTS.md](AGENTS.md) before contributing, then see
+  [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
+  matrix.
 - Scope `3` is evidence-based provenance review for agentically generated
   code. It is separately opt-in and requires human review before sharing.
 - **Strongly recommended:** select `1 - Core repository review` for the
@@ -792,6 +803,10 @@ anonymous preflight and clone arguments, source-aware state, prompt
 placeholders, split picker/TUI runtime validation, Bash syntax, line
 endings, and forbidden permission defaults. They do not execute code
 from a reviewed repository.
+
+`AGENTS.md` is the canonical development contract. Harness changes must also
+follow `docs/ADDING-A-HARNESS.md`; production support remains Copilot-only
+until a separately approved adapter satisfies that playbook in full.
 
 ## Name
 
