@@ -3054,6 +3054,12 @@ fixture_userinfo_url="$(
 fixture_loopback_url="$(join_fragments 'https://127' '.0.0.1/private')"
 fixture_localhost_url="$(join_fragments 'https://local' 'host/private')"
 fixture_internal_url="$(join_fragments 'https://service' '.internal/private')"
+fixture_github_token="$(join_fragments 'ghp_' '123456789012345678901234567890')"
+fixture_credential_query_url="$(
+    join_fragments \
+        'https://docs.example.org/private?access_' \
+        'token=fixture-value'
+)"
 printf '%s\n' \
     'progress' \
     '================================================================================' \
@@ -3096,7 +3102,7 @@ Internal suffix: ${fixture_internal_url}
 Malformed escape: https://docs.example.org/path%ZZ
 Encoded whitespace: https://docs.example.org/path%20space
 Credential-like query: https://docs.example.org/?authcode=public-value
-Credential-like value: https://docs.example.org/?id=ghp_123456789012345678901234567890
+Credential-like value: https://docs.example.org/?id=${fixture_github_token}
 Unsafe delimiter: https://docs.example.org/path|unsafe
 Contact: ${fixture_public_email}
     'Authorization: Bearer github_pat_123456789012345678901234567890' \
@@ -3193,12 +3199,14 @@ grep -Fq 'URL extraction requires a valid UTF-8 report' \
     fail 'Bash URL extraction did not fail explicitly for invalid UTF-8.'
 
 unredacted_reference_report="${fixture_dir}/unredacted-reference-report.txt"
-awk -v direct_userinfo="${fixture_userinfo_url}" '
+awk \
+    -v direct_userinfo="${fixture_userinfo_url}" \
+    -v direct_credential="${fixture_credential_query_url}" '
     { print }
     $0 == "REVIEW CONTEXT" {
         print "Direct safe reference: https://docs.example.org/direct-safe"
         print "Direct userinfo rejection: " direct_userinfo
-        print "Direct credential query rejection: https://docs.example.org/private?access_token=fixture-value"
+        print "Direct credential query rejection: " direct_credential
     }
 ' "${fixture_report}" > "${unredacted_reference_report}"
 unredacted_references="$(
@@ -5207,6 +5215,8 @@ case "${command_name}" in
         trailer_boundary_email="$(
             printf '%s%s' 'trailer-boundary' '@example.org'
         )"
+        committer_secret="$(printf '%s%s' 'api_' 'key=committer-boundary-secret')"
+        metadata_secret="$(printf '%s%s' 'api_' 'key=metadata-fixture-secret')"
         printf '%s\n' \
             '__RHYOLITE_COMMIT_RECORD_START__' \
             'Commit object ID (attacker-controlled evidence): 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
@@ -5218,11 +5228,11 @@ case "${command_name}" in
         printf '%s%s%s\n' \
             'Committer name (attacker-controlled evidence): Example Committer Long hostile committer ' \
             "${long_identity_filler}" \
-            ' api_key=committer-boundary-secret'
+            " ${committer_secret}"
         printf '%s\n' \
             'Subject (attacker-controlled evidence): Initial & exact commit'
         printf '%s\n' \
-            "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <${collaborator_email}> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); api_key=metadata-fixture-secret; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <${trailer_boundary_email}>" \
+            "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <${collaborator_email}> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); ${metadata_secret}; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <${trailer_boundary_email}>" \
             '' \
             '__RHYOLITE_COMMIT_RECORD_END__'
         commit_index=2
