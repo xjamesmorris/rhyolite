@@ -513,18 +513,18 @@ Requirements:
 
 ## Preference implications
 
-Current launcher preference schema 1 is Copilot-specific: it stores a
-canonical repository, fleet mode, model, and update time. Contract v2 may keep
-reading and writing that schema while production remains Copilot-only, but its
-meaning must stay explicitly Copilot-only.
+Current launcher preference schema 2 stores a canonical repository, harness,
+fleet mode, model, and update time. Schema 1 remains readable only as a
+Copilot preference, and schema-2 values are reused only when the stored
+harness matches the selected harness.
 
 Before any second production harness can remember settings:
 
-- make preference identity harness-aware or disable remembering for that
+- keep preference identity harness-aware or disable remembering for that
   harness;
 - never reuse a Copilot model/fleet preference for another harness;
-- include the canonical harness ID in the stored and validated record;
-- bump the preference schema if its on-disk meaning or fields change;
+- preserve the canonical harness ID in the stored and validated record;
+- bump the preference schema again if its on-disk meaning or fields change;
 - define migration or rejection behavior for old files;
 - scope preference lookup so two harnesses cannot collide for one repository;
 - keep `RememberPreferences` and all resulting behavior approval-bound;

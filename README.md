@@ -32,7 +32,7 @@ Rhyolite combines:
 
 ## Status
 
-Version `0.4.1` is a public preview release. GitHub Copilot plugins are
+Version `0.5.0` is a public preview release. GitHub Copilot plugins are
 currently public-preview features.
 
 The plugin supports anonymously readable public HTTPS Git repositories on

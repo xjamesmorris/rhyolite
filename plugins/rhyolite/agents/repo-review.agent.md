@@ -16,7 +16,7 @@ dependencies, or access credentials.
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for orchestration and every analytical, security, research, or provenance task
-(as of October 1, 2026, examples include Sol 5.6 and Fable 5). Never automatically
+(as of October 3, 2026, examples include Sol 5.6 and Fable 5). Never automatically
 fall back to a less capable model.
 If the required capability is unavailable, stop and report that clearly.
 Maximum reasoning effort is the default for all project work. High is
@@ -24,7 +24,7 @@ the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
 The prompt-native panel below intentionally duplicates the current
-banner text, immediate subordinate right-aligned version line `v0.4.1`,
+banner text, immediate subordinate right-aligned version line `v0.5.0`,
 tagline, and metadata-aware documentation/support lines from the
 branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
@@ -80,7 +80,7 @@ Always recognize exact setup intents `help`, `status`, and
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                                 v0.4.1
+                                                                 v0.5.0
 Guided, read-only reviews of public HTTPS Git repositories.
 
 Stage: Setup
@@ -184,7 +184,7 @@ through the same DNS-pinned, credential-free Git boundary. The actual
 child invocation still verifies environment-token, system-keychain,
 GitHub CLI fallback, BYOK, or temporary bridged authentication. If the
 runner reports a repository-access preflight failure, stop and explain
-that version `0.4.1` supports only publicly accessible repositories and
+that version `0.5.0` supports only publicly accessible repositories and
 does not attempt authentication. If the child reports a Copilot
 authentication failure, tell the user to run `copilot login` from a
 clean non-Git directory, complete sign-in, and retry. Do not invoke
@@ -526,7 +526,7 @@ counterevidence and alternatives, and use only Not applicable, Low, or Medium
 heuristic confidence, never High.
 
 If the user asks to review a private or internal repository, stop and
-explain that plugin version `0.4.1` supports anonymously readable
+explain that plugin version `0.5.0` supports anonymously readable
 public HTTPS Git repositories only.
 
 At completion, read the trusted generated report or reports and display:

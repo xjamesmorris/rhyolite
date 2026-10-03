@@ -102,7 +102,7 @@ supported and must not drive new work.
   incidental compatibility does not make macOS or BSD a supported platform.
   It creates user-only launcher state and does not persist the initial review
   request or source in launch context.
-- The trusted runner saves approved fleet/model preferences per canonical
+- The trusted runner saves approved harness/fleet/model preferences per canonical
   repository under user-only launcher state. `/rhyolite:start` remains the
   in-session compatibility path.
 - `plugins/rhyolite/lib/harness/common.sh` owns safe harness selection,
@@ -110,8 +110,8 @@ supported and must not drive new work.
   function checks, guarded calls, and sanitized failures.
   `plugins/rhyolite/lib/harness/copilot.sh` is the only production adapter.
   Production runtime support remains Copilot-only.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented seam and the target
-  Contract-v2 delta. `docs/ADDING-A-HARNESS.md` is the canonical
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v2 seam.
+  `docs/ADDING-A-HARNESS.md` is the canonical
   implementation playbook. A planned no-op harness is development-only under
   `tests/fixtures`; it must never be entered in the production registry,
   packaged, exposed through the launcher, or documented as runtime support.
@@ -212,9 +212,10 @@ supported and must not drive new work.
   path/commit/public evidence, preserve counterevidence and alternatives, and
   use only Not applicable/Low/Medium confidence, never High.
 - `review-output.sh` extracts and sanitizes the canonical report and research
-  dossier, then produces plain-text, inert Markdown, escaped HTML, state, and
-  handoff artifacts. Per-repository artifacts, research/network warnings, and
-  transport state roll up into a run manifest, state, handoff, and HTML index.
+  dossier, then produces review-plan artifacts, plain-text, inert Markdown,
+  escaped HTML, state, and handoff artifacts. Per-repository artifacts,
+  research/network warnings, and transport state roll up into a run manifest,
+  state, handoff, and HTML index.
 - Release validation is local only on Fedora Linux 44. Do not add or require
   hosted CI workflows for the current release.
 
@@ -314,8 +315,8 @@ supported and must not drive new work.
   cookie replay, private raw Set-Cookie retention, private unsupported-body
   retention, and network-log policy. Scope 1 fixes the object to disabled and
   clears stale cookie consent.
-- Harness Contract v2 is the next contract target. It changes the current
-  research-aware plan schema from 3 to 4 and state schema from 4 to 5, makes
+- Harness Contract v2 is implemented. It uses plan schema 4 and state schema
+  5, makes
   `Harness`, validated `Provider`, and `ReasoningEffort` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
   `ForwardedEnvVarNames`. Follow `docs/ADDING-A-HARNESS.md`; do not claim v2

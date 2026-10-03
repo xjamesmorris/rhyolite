@@ -50,13 +50,12 @@ preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v1 seam and the next Contract-v2 target.
+  Contract-v2 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
   playbook for Contract v2 and any future production adapter.
-- Contract v2 promotes harness execution identity into approval-bound data,
-  changing the current research-aware plan schema from 3 to 4 and state
-  schema from 4 to 5. Its provider summary is a validated object with `Id`,
-  `Host`, and `ForwardedEnvVarNames`.
+- Contract v2 promotes harness execution identity into approval-bound data
+  using plan schema 4 and state schema 5. Its provider summary is a validated
+  object with `Id`, `Host`, and `ForwardedEnvVarNames`.
 - The planned no-op harness is development-only under `tests/fixtures`. It is
   never registered by production code, packaged, exposed through launcher or
   runner choices, or described as supported runtime behavior.

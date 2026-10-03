@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.4.1 - Unreleased
+## 0.5.0 - Unreleased
+
+- Added a fixed, fail-closed Contract-v2 review-harness boundary while
+  retaining GitHub Copilot as the only production runtime. Harness identity,
+  resolved reasoning effort, strict provider metadata, and adapter-owned
+  resume policy are now recorded across approved plans and review artifacts.
+- Advanced the approval-bound plan schema to 4 and state schema to 5. Approval
+  hashes now bind the harness and provider identity, preventing an approval
+  generated for one harness or earlier schema from authorizing another.
+- Advanced launcher preferences to schema 2 with harness identity. Legacy
+  schema-1 preferences remain readable as Copilot-only, and saved-state reads
+  now reject unsafe ownership, symlink, and directory-permission chains.
+- Added canonical coding-agent guidance in `AGENTS.md`, a contributor pointer
+  in `CLAUDE.md`, and an executable harness-porting playbook in
+  `docs/ADDING-A-HARNESS.md`.
 
 - Fixed launcher sessions that could render the Rhyolite plaque again during a
   `Shift+Tab` mode transition. Launcher startup now owns one `sessionStart`
@@ -76,8 +90,8 @@
   bodies, with mode-0700 private directories, mode-0600 files, no executable
   extensions, and no model/render/index links.
 - Added `ResearchTransport` to plan JSON/text, approval hashes, repository/run
-  state, manifests, handoffs, and HTML summaries; bumped plan schema to 3,
-  state schema to 4, and the release version to `0.4.1`.
+  state, manifests, handoffs, and HTML summaries; this established plan
+  schema 3 and state schema 4 before the Contract-v2 harness migration.
 - Added distinct `ResearchCapabilityFailed` and `ResearchFailed` boundaries,
   two-phase progress reporting, broker/MCP/runtime cleanup enforcement, and
   fail-closed validation requiring exact tools, capability evidence, a valid

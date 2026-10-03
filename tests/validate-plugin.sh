@@ -42,6 +42,8 @@ LAUNCHER_PREFERENCES_BASH="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 MARKETPLACE="${ROOT}/.github/plugin/marketplace.json"
 VERSION_FILE="${ROOT}/VERSION"
 README="${ROOT}/README.md"
+AGENTS_GUIDANCE="${ROOT}/AGENTS.md"
+CLAUDE_GUIDANCE="${ROOT}/CLAUDE.md"
 DEVELOPERS="${ROOT}/DEVELOPERS.md"
 CONTRIBUTING="${ROOT}/CONTRIBUTING.md"
 SECURITY="${ROOT}/SECURITY.md"
@@ -53,6 +55,7 @@ THREAT_MODEL="${ROOT}/docs/THREAT-MODEL.md"
 PUBLISHING_DOC="${ROOT}/docs/PUBLISHING.md"
 PLATFORM_POR="${ROOT}/docs/PLAN-OF-RECORD.md"
 HARNESS_ARCHITECTURE="${ROOT}/docs/HARNESS-ARCHITECTURE.md"
+HARNESS_PLAYBOOK="${ROOT}/docs/ADDING-A-HARNESS.md"
 PR_TEMPLATE="${ROOT}/.github/PULL_REQUEST_TEMPLATE.md"
 COPILOT_INSTRUCTIONS="${ROOT}/.github/copilot-instructions.md"
 ISSUE_TEMPLATE_CONFIG="${ROOT}/.github/ISSUE_TEMPLATE/config.yml"
@@ -176,6 +179,7 @@ required_files=(
     "${COPILOT_HARNESS}"
     "${PLATFORM_POR}"
     "${HARNESS_ARCHITECTURE}"
+    "${HARNESS_PLAYBOOK}"
     "${PR_TEMPLATE}"
     "${COPILOT_INSTRUCTIONS}"
     "${ISSUE_TEMPLATE_BUG}"
@@ -183,6 +187,8 @@ required_files=(
     "${ISSUE_TEMPLATE_QUESTION}"
     "${ISSUE_TEMPLATE_CONFIG}"
     "${README}"
+    "${AGENTS_GUIDANCE}"
+    "${CLAUDE_GUIDANCE}"
     "${DEVELOPERS}"
     "${CONTRIBUTING}"
     "${CHANGELOG}"
@@ -220,6 +226,17 @@ legacy_validation_line="$(
 grep -Fq 'bash ./tests/validate-all.sh' "${COPILOT_INSTRUCTIONS}" &&
     grep -Fq 'bash ./tests/validate-all.sh' "${PR_TEMPLATE}" ||
     fail 'Repository instructions and pull-request validation do not use validate-all.sh.'
+grep -Fq '[AGENTS.md](../AGENTS.md)' "${COPILOT_INSTRUCTIONS}" &&
+    grep -Fq 'canonical repository-wide' "${COPILOT_INSTRUCTIONS}" ||
+    fail 'Copilot bootstrap does not point to canonical AGENTS.md guidance.'
+grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
+    grep -Fq 'does not define, advertise, or' "${CLAUDE_GUIDANCE}" &&
+    grep -Fq 'supported Claude Code runtime harness' "${CLAUDE_GUIDANCE}" ||
+    fail 'Claude contributor pointer does not preserve the Copilot-only runtime claim.'
+grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
+    grep -Fq 'Contract-v2' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
+    fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
     "${README}" \
     "${PUBLISHING_DOC}" \
@@ -593,7 +610,7 @@ for quality_file in \
         grep -Fq 'Fable 5' <<< "${normalized_quality}" ||
         fail "Dated model examples are missing: ${quality_file}"
 done
-grep -Fq 'as of October 1, 2026' "${README}" &&
+grep -Fq 'as of October 3, 2026' "${README}" &&
     grep -Fq 'Sol 5.6 and Fable 5' "${README}" ||
     fail 'README does not provide the dated model examples.'
 grep -Fq 'rhyolite_harness_capture MODEL harness_default_model' "${RUNNER}" &&
@@ -1334,54 +1351,55 @@ grep -Fq 'date-derived' "${README}" ||
     fail 'README does not mention date-derived prior-art/provenance rollover.'
 grep -Fq 'prior-art/provenance window rollover' "${README}" ||
     fail 'README does not mention date-derived prior-art/provenance rollover.'
+normalized_agent_guidance="$(
+    tr '\r\n\t' '   ' < "${AGENTS_GUIDANCE}" |
+        sed -E 's/[[:space:]]+/ /g'
+)"
 grep -Fq 'userPromptSubmitted' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe the command plaque hook.'
-grep -Fq 'bin/rhyolite' "${COPILOT_INSTRUCTIONS}" &&
-    grep -Fq 'Fedora Linux 44' "${COPILOT_INSTRUCTIONS}" &&
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe the command plaque hook.'
+grep -Fq 'bin/rhyolite' <<< "${normalized_agent_guidance}" &&
+    grep -Fq 'Fedora Linux 44' <<< "${normalized_agent_guidance}" &&
     grep -Fq 'rhyolite-tui-runtime-validator.agent.md' \
-        "${COPILOT_INSTRUCTIONS}" &&
-    grep -Fq 'tests/validate-tui-runtime.mjs' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe launcher and split TUI validation architecture.'
-grep -Fq 'reserves its embedded prompt-native' "${COPILOT_INSTRUCTIONS}" &&
-    grep -Fq 'panel for exact `help`' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe the help panel lifecycle.'
-grep -Fq 'review-plan artifacts' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe review-plan artifacts.'
-grep -Fq 'CURRENT SETUP STATUS' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe CURRENT SETUP STATUS.'
+        <<< "${normalized_agent_guidance}" &&
+    grep -Fq 'tests/validate-tui-runtime.mjs' <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe launcher and split TUI validation architecture.'
+grep -Fq 'reserves its embedded prompt-native panel for exact' \
+    <<< "${normalized_agent_guidance}" &&
+    grep -Fq '`help`' <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe the help panel lifecycle.'
+grep -Fq 'review-plan artifacts' <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe review-plan artifacts.'
+grep -Fq 'CURRENT SETUP STATUS' <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe CURRENT SETUP STATUS.'
 grep -Fq '`Run review`, `Edit setup`, and `Explain scope`' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe the final confirmation choices.'
-grep -Fq 'exact `Change scope` as a shortcut into editing `Scope`' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe the Change scope shortcut.'
-grep -Fq 'Plan-only output now includes `ApprovalHash`.' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe ApprovalHash.'
-grep -Fq 'Label `ReviewDate`, `PriorArtWindow`, and' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe local-calendar plan labels.'
-grep -Fq '`ProvenanceWindow` as local-session calendar dates, and label' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe local-calendar plan labels.'
-grep -Fq '`GeneratedAt` as UTC.' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe UTC GeneratedAt labeling.'
-grep -Fq 'scope `1` prior-art as disabled' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe scope 1 prior-art as disabled.'
-grep -Fq '`2`/`3` prior-art start/end dates from the plan' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not describe scope 2/3 prior-art dates.'
-grep -Fq 'mismatch, preserve answers, explain that the approved effective plan' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not use the generalized mismatch wording.'
-grep -Fq 'date-derived' "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not mention date-derived prior-art/provenance rollover.'
-grep -Fq 'prior-art/provenance window rollover' \
-    "${COPILOT_INSTRUCTIONS}" ||
-    fail 'Copilot instructions do not mention date-derived prior-art/provenance rollover.'
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe the final confirmation choices.'
+grep -Fq '`Change scope` as a shortcut into editing `Scope`' \
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe the Change scope shortcut.'
+grep -Fq 'Plan-only output includes `ApprovalHash`' \
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe ApprovalHash.'
+grep -Fq '`EFFECTIVE REVIEW PLAN` surfaces `ReviewDate`, `PriorArtWindow`' \
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe local-calendar plan labels.'
+grep -Fq '`ProvenanceWindow`, and `GeneratedAt`' \
+    <<< "${normalized_agent_guidance}" &&
+    grep -Fq 'local-session calendar dates and `GeneratedAt` as UTC' \
+        <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe plan date labeling.'
+grep -Fq 'Scope 1 prior art is' <<< "${normalized_agent_guidance}" &&
+    grep -Fq 'Scope 2/3 uses authoritative plan dates' \
+        <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not describe scope-specific prior-art dates.'
+grep -Fq 'On plan mismatch, preserve answers' <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not use the generalized mismatch wording.'
+grep -Fq 'date-derived prior-art/provenance window' \
+    <<< "${normalized_agent_guidance}" ||
+    fail 'Canonical agent guidance does not mention date-derived window rollover.'
 for development_policy_file in \
-    "${COPILOT_INSTRUCTIONS}" "${DEVELOPERS}" "${CONTRIBUTING}" "${README}"; do
+    "${AGENTS_GUIDANCE}" "${DEVELOPERS}" "${CONTRIBUTING}" "${README}"; do
     normalized_development_policy="$(
         tr '\r\n\t' '   ' < "${development_policy_file}" |
             sed -E 's/[[:space:]]+/ /g'
@@ -1403,8 +1421,10 @@ for development_policy_file in \
     grep -Fqi 'only to high' \
         <<< "${normalized_development_policy}" ||
         fail "High reasoning-effort downgrade floor is missing: ${development_policy_file}"
-    grep -Fqi 'analytical or open-ended work' \
+    { grep -Fqi 'analytical or open-ended work' \
         <<< "${normalized_development_policy}" ||
+        { grep -Fqi 'analytical' <<< "${normalized_development_policy}" &&
+            grep -Fqi 'open-ended work' <<< "${normalized_development_policy}"; }; } ||
         fail "Maximum-effort analytical rule is missing: ${development_policy_file}"
 done
 
