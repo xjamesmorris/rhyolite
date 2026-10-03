@@ -168,7 +168,7 @@ Changes to these surfaces normally move together:
 Repository-only validator agents must never be packaged under
 `plugins/rhyolite/agents/`.
 
-GitHub Copilot is the only production harness. A planned no-op adapter belongs
+GitHub Copilot is the only production harness. The no-op adapter belongs
 only under `tests/fixtures` and may be loaded only through test-owned fixed
 fixture wiring. It must never be added to the production registry, plugin
 assets, launcher choices, marketplace metadata, or public support claims.

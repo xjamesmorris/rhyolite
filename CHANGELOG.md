@@ -15,6 +15,10 @@
 - Added canonical coding-agent guidance in `AGENTS.md`, a contributor pointer
   in `CLAUDE.md`, and an executable harness-porting playbook in
   `docs/ADDING-A-HARNESS.md`.
+- Added a deterministic development-only no-op adapter and worker fixture that
+  proves the full harness contract, approval-hash separation, artifact
+  identity, isolation, cleanup, and production rejection without advertising
+  or packaging another supported runtime.
 
 - Fixed launcher sessions that could render the Rhyolite plaque again during a
   `Shift+Tab` mode transition. Launcher startup now owns one `sessionStart`

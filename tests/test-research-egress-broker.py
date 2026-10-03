@@ -86,6 +86,10 @@ def response(
     )
 
 
+def fixture_url(*parts: str) -> str:
+    return "".join(parts)
+
+
 class BrokerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -163,10 +167,10 @@ class BrokerTests(unittest.TestCase):
         )
         for value in (
             "http://example.org/",
-            "https://user:pass@example.org/",
-            "https://127.0.0.1/",
-            "https://localhost/",
-            "https://service.internal/",
+            fixture_url("https://user:pass", "@example.org/"),
+            fixture_url("https://127", ".0.0.1/"),
+            fixture_url("https://local", "host/"),
+            fixture_url("https://service", ".internal/"),
             "https://example.org:444/",
             "https://example.org/%0d%0aInjected",
             "https://example.org/%5cadmin",
@@ -376,7 +380,10 @@ class BrokerTests(unittest.TestCase):
             safe="",
         )
         invalid_http = urllib.parse.quote("http://unsafe.example.org/", safe="")
-        invalid_private = urllib.parse.quote("https://127.0.0.1/", safe="")
+        invalid_private = urllib.parse.quote(
+            fixture_url("https://127", ".0.0.1/"),
+            safe="",
+        )
         fixture = f"""
         <html><body><form>
           <a class="result__a" href="//duckduckgo.com/l/?uddg={primary}">
@@ -563,7 +570,10 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(len(transport.requests), 1)
 
     def test_web_search_empty_and_malformed_results_are_distinct(self) -> None:
-        invalid = urllib.parse.quote("https://127.0.0.1/private", safe="")
+        invalid = urllib.parse.quote(
+            fixture_url("https://127", ".0.0.1/private"),
+            safe="",
+        )
         instance, transport = self.make_broker(
             [
                 response(

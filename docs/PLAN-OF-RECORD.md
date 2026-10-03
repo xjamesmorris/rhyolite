@@ -56,7 +56,7 @@ preserved speculatively.
 - Contract v2 promotes harness execution identity into approval-bound data
   using plan schema 4 and state schema 5. Its provider summary is a validated
   object with `Id`, `Host`, and `ForwardedEnvVarNames`.
-- The planned no-op harness is development-only under `tests/fixtures`. It is
+- The no-op harness is development-only under `tests/fixtures`. It is
   never registered by production code, packaged, exposed through launcher or
   runner choices, or described as supported runtime behavior.
 - A second production harness requires a separate explicit support decision,
