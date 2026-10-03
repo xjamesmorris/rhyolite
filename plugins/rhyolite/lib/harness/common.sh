@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=1
+RHYOLITE_HARNESS_CONTRACT_VERSION=2
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LOADED_ID=''
 RHYOLITE_HARNESS_LOADED_PATH=''
@@ -17,6 +17,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_auth_secret_env_vars
     harness_login_remediation
     harness_provider_summary
+    harness_resume_policy
     harness_prepare_run
     harness_prepare_worker_home
     harness_worker_argv

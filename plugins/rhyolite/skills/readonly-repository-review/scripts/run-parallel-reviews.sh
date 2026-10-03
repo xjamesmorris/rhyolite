@@ -33,7 +33,7 @@ MAX_REPOSITORIES=5
 SESSION_TIMEOUT_MINUTES=0
 WORKSPACE_ROOT="${HOME}/.cache/rhyolite/repo-review/workspaces"
 OUTPUT_ROOT=""
-PLAN_SCHEMA_VERSION=3
+PLAN_SCHEMA_VERSION=4
 SCOPE=0
 SCOPE_SPECIFIED=0
 MODEL=""
@@ -43,6 +43,10 @@ HARNESS=""
 HARNESS_DISPLAY_NAME=""
 HARNESS_CLI_NAME=""
 HARNESS_LOGIN_REMEDIATION=""
+HARNESS_PROVIDER_JSON=""
+HARNESS_PROVIDER_ID=""
+HARNESS_PROVIDER_HOST=""
+HARNESS_RESUME_POLICY=""
 MODEL_FROM_HARNESS=0
 FLEET_MODE="standard"
 REMEMBER_PREFERENCES=0
@@ -53,7 +57,7 @@ DEFAULT_PROVENANCE_LOOKBACK_MONTHS=6
 PROVENANCE_LOOKBACK_MONTHS=""
 PROVENANCE_START_DATE=""
 PROVENANCE_LOOKBACK_SPECIFIED=0
-STATE_SCHEMA_VERSION=4
+STATE_SCHEMA_VERSION=5
 NON_INTERACTIVE=0
 OPEN_HTML=0
 NO_OPEN_HTML=0
@@ -85,6 +89,8 @@ RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 
 repositories=()
 repository_file=""
+declare -a authentication_variables=()
+declare -a HARNESS_PROVIDER_FORWARDED_ENV_VAR_NAMES=()
 
 usage() {
     cat <<'EOF'
@@ -696,6 +702,82 @@ json_string_or_null() {
     fi
 }
 
+validate_harness_provider_summary() {
+    local summary="$1"
+
+    ((${#summary} <= 16384)) || return 1
+    python3 - "${summary}" <<'PY'
+import json
+import re
+import sys
+
+try:
+    value = json.loads(sys.argv[1])
+except (json.JSONDecodeError, UnicodeError):
+    raise SystemExit(1)
+
+expected_keys = {"Id", "Host", "ForwardedEnvVarNames"}
+if type(value) is not dict or set(value) != expected_keys:
+    raise SystemExit(1)
+
+provider_id = value["Id"]
+host = value["Host"]
+forwarded_names = value["ForwardedEnvVarNames"]
+if (
+    type(provider_id) is not str
+    or re.fullmatch(r"[a-z][a-z0-9-]{0,63}", provider_id) is None
+    or type(host) is not str
+    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", host) is None
+    or type(forwarded_names) is not list
+    or len(forwarded_names) > 128
+):
+    raise SystemExit(1)
+
+seen = set()
+for name in forwarded_names:
+    if (
+        type(name) is not str
+        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+        or name in seen
+    ):
+        raise SystemExit(1)
+    seen.add(name)
+
+canonical = {
+    "Id": provider_id,
+    "Host": host,
+    "ForwardedEnvVarNames": forwarded_names,
+}
+print(json.dumps(canonical, ensure_ascii=True, separators=(",", ":")))
+print(provider_id)
+print(host)
+for name in forwarded_names:
+    print(name)
+PY
+}
+
+provider_forwarded_env_var_names_text() {
+    local joined=''
+    local variable_name
+
+    for variable_name in \
+        "${HARNESS_PROVIDER_FORWARDED_ENV_VAR_NAMES[@]}"; do
+        if [[ -n "${joined}" ]]; then
+            joined+=", ${variable_name}"
+        else
+            joined="${variable_name}"
+        fi
+    done
+    printf '%s' "${joined:-(none)}"
+}
+
+provider_summary_text() {
+    printf '%s\n' \
+        "ID: ${HARNESS_PROVIDER_ID}" \
+        "Host: ${HARNESS_PROVIDER_HOST}" \
+        "Forwarded environment variable names: $(provider_forwarded_env_var_names_text)"
+}
+
 status_word() {
     local enabled="${1:-0}"
     if ((enabled)); then
@@ -761,6 +843,12 @@ approval_hash_string_or_null() {
 write_approval_hash_material() {
     local index
 
+    printf 'PlanSchemaVersion=%s\n' "${PLAN_SCHEMA_VERSION}"
+    printf 'Harness=%s\n' "$(approval_hash_string "${HARNESS}")"
+    printf 'ReasoningEffort=%s\n' \
+        "$(approval_hash_string "${REASONING_EFFORT}")"
+    printf 'Provider=%s\n' \
+        "$(approval_hash_string "${HARNESS_PROVIDER_JSON}")"
     for index in "${!canonical_urls[@]}"; do
         printf 'Source[%s].Kind=%s\n' \
             "${index}" "$(approval_hash_string "${source_kinds[index]}")"
@@ -980,6 +1068,10 @@ write_review_plan_json() {
     printf '  "GeneratedAt": "%s",\n' "$(json_escape "${PLAN_GENERATED_AT}")"
     printf '  "ReviewDate": "%s",\n' "$(json_escape "${REVIEW_DATE}")"
     printf '  "ApprovalHash": "%s",\n' "$(json_escape "${APPROVAL_HASH}")"
+    printf '  "Harness": "%s",\n' "$(json_escape "${HARNESS}")"
+    printf '  "ReasoningEffort": "%s",\n' \
+        "$(json_escape "${REASONING_EFFORT}")"
+    printf '  "Provider": %s,\n' "${HARNESS_PROVIDER_JSON}"
     if [[ -n "${run_id}" ]]; then
         printf '  "RunId": "%s",\n' "$(json_escape "${run_id}")"
         printf '  "StartedAt": "%s",\n' "$(json_escape "${started_at}")"
@@ -1039,6 +1131,13 @@ write_review_plan_text() {
     printf '%-30s %s\n' 'Generated at (UTC):' "${PLAN_GENERATED_AT}"
     printf '%-30s %s\n' 'Review date (local calendar):' "${REVIEW_DATE}"
     printf '%-20s %s\n' 'Approval hash:' "${APPROVAL_HASH}"
+    printf '%-20s %s (%s)\n' \
+        'Harness:' "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
+    printf '%-20s %s\n' 'Reasoning effort:' "${REASONING_EFFORT}"
+    printf '%-20s %s\n' 'Provider ID:' "${HARNESS_PROVIDER_ID}"
+    printf '%-20s %s\n' 'Provider host:' "${HARNESS_PROVIDER_HOST}"
+    printf '%-20s %s\n' \
+        'Provider env vars:' "$(provider_forwarded_env_var_names_text)"
     if [[ -n "${run_id}" ]]; then
         printf '%-20s %s\n' 'Run ID:' "${run_id}"
         printf '%-20s %s\n' 'Started at:' "${started_at}"
@@ -1333,6 +1432,131 @@ if ! rhyolite_harness_capture \
         'Restore the complete harness adapter and retry.'
     exit 2
 fi
+initialize_harness_data_contract() {
+    local provider_summary_raw=''
+    local provider_summary_validation=''
+    local authentication_variables_output=''
+    local authentication_variable
+    local authentication_variable_index
+    local -a provider_summary_fields=()
+    local -A authentication_variable_seen=()
+
+    if ! rhyolite_harness_capture \
+        provider_summary_raw harness_provider_summary; then
+        print_runner_error \
+            'The selected review harness could not report provider metadata.' \
+            "harness ${HARNESS} harness_provider_summary" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness provider-summary resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        RHYOLITE_HARNESS_ERROR_DETAIL='Python 3 is required to validate harness provider metadata.'
+    elif ! provider_summary_validation="$(
+        validate_harness_provider_summary "${provider_summary_raw}"
+    )"; then
+        RHYOLITE_HARNESS_ERROR_DETAIL='Harness provider metadata must be a JSON object with exactly Id, Host, and ForwardedEnvVarNames using safe values.'
+    fi
+    if [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]]; then
+        print_runner_error \
+            'The selected review harness returned invalid provider metadata.' \
+            "harness ${HARNESS} harness_provider_summary" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+
+    mapfile -t provider_summary_fields <<< "${provider_summary_validation}"
+    if ((${#provider_summary_fields[@]} < 3)); then
+        print_runner_error \
+            'The selected review harness returned incomplete provider metadata.' \
+            "harness ${HARNESS} harness_provider_summary" \
+            "Harness ${HARNESS}" \
+            'Harness provider metadata validation returned an incomplete normalized result.' \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    HARNESS_PROVIDER_JSON="${provider_summary_fields[0]}"
+    HARNESS_PROVIDER_ID="${provider_summary_fields[1]}"
+    HARNESS_PROVIDER_HOST="${provider_summary_fields[2]}"
+    HARNESS_PROVIDER_FORWARDED_ENV_VAR_NAMES=(
+        "${provider_summary_fields[@]:3}"
+    )
+
+    if ! rhyolite_harness_capture \
+        HARNESS_RESUME_POLICY harness_resume_policy ||
+        [[ -z "${HARNESS_RESUME_POLICY}" ||
+            "${HARNESS_RESUME_POLICY}" == *[[:cntrl:]]* ||
+            ${#HARNESS_RESUME_POLICY} -gt 2048 ]]; then
+        [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]] ||
+            RHYOLITE_HARNESS_ERROR_DETAIL='Harness resume policy is empty, too long, or contains unsupported characters.'
+        print_runner_error \
+            'The selected review harness could not report a safe resume policy.' \
+            "harness ${HARNESS} harness_resume_policy" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+
+    if ! rhyolite_harness_capture \
+        authentication_variables_output harness_auth_secret_env_vars; then
+        print_runner_error \
+            'The selected review harness could not report protected authentication variables.' \
+            "harness ${HARNESS} harness_auth_secret_env_vars" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness authentication-variable resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    mapfile -t authentication_variables <<< "${authentication_variables_output}"
+    for authentication_variable in "${authentication_variables[@]}"; do
+        if [[ ! "${authentication_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+            [[ -n "${authentication_variable_seen[${authentication_variable}]+x}" ]]; then
+            print_runner_error \
+                'The selected review harness returned an invalid protected authentication-variable list.' \
+                "harness ${HARNESS} harness_auth_secret_env_vars" \
+                "Harness ${HARNESS}" \
+                'Harness authentication-variable names must be nonempty, unique shell identifiers.' \
+                'Review planning and execution did not start.' \
+                'Restore the complete harness adapter and retry.'
+            exit 2
+        fi
+        authentication_variable_seen["${authentication_variable}"]=1
+    done
+
+    if ((${#authentication_variables[@]} !=
+        ${#HARNESS_PROVIDER_FORWARDED_ENV_VAR_NAMES[@]})); then
+        RHYOLITE_HARNESS_ERROR_DETAIL='Harness provider metadata does not match the worker authentication environment allowlist.'
+    else
+        for authentication_variable_index in \
+            "${!authentication_variables[@]}"; do
+            if [[ "${authentication_variables[authentication_variable_index]}" != \
+                "${HARNESS_PROVIDER_FORWARDED_ENV_VAR_NAMES[authentication_variable_index]}" ]]; then
+                RHYOLITE_HARNESS_ERROR_DETAIL='Harness provider metadata does not match the worker authentication environment allowlist.'
+                break
+            fi
+        done
+    fi
+    if [[ -n "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]]; then
+        print_runner_error \
+            'The selected review harness returned inconsistent provider metadata.' \
+            "harness ${HARNESS} harness_provider_summary" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            'Review planning and execution did not start.' \
+            'Keep Provider.ForwardedEnvVarNames identical to harness_auth_secret_env_vars and retry.'
+        exit 2
+    fi
+}
 if [[ -z "${MODEL}" ]]; then
     if ! rhyolite_harness_capture MODEL harness_default_model; then
         print_runner_error \
@@ -2191,6 +2415,7 @@ clear_inherited_git_environment() {
 for repository in "${repositories[@]}"; do
     canonicalize_repository "${repository}"
 done
+initialize_harness_data_contract
 
 if ((ENABLE_PUBLIC_RESEARCH)); then
     PUBLIC_RESEARCH_INSTRUCTIONS=$'ENABLED. Dedicated research completed before this review. Consume only the\nvalidated sanitized dossier and network summary supplied by the trusted\nwrapper. Do not invoke a research specialist or use any direct network tool.'
@@ -2267,6 +2492,13 @@ if ((VALIDATE_ONLY)); then
         printf 'Research transport:   disabled\n'
         printf 'Research cookies:     off\n'
     fi
+    printf 'Harness:              %s (%s)\n' \
+        "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
+    printf 'Reasoning effort:     %s\n' "${REASONING_EFFORT}"
+    printf 'Provider ID:          %s\n' "${HARNESS_PROVIDER_ID}"
+    printf 'Provider host:        %s\n' "${HARNESS_PROVIDER_HOST}"
+    printf 'Provider env vars:    %s\n' \
+        "$(provider_forwarded_env_var_names_text)"
     printf 'Model:                %s\n' "${MODEL}"
     printf 'Fleet mode:           %s\n' "${FLEET_MODE}"
     printf 'Remember settings:    %s\n' "${REMEMBER_PREFERENCES}"
@@ -2310,6 +2542,7 @@ if ((REMEMBER_PREFERENCES)); then
     for repository in "${canonical_urls[@]}"; do
         rhyolite_write_preference \
             "${repository}" \
+            "${HARNESS}" \
             "${FLEET_MODE}" \
             "${MODEL}" \
             "${launcher_preference_home}" ||
@@ -2325,35 +2558,6 @@ if ((REMEMBER_PREFERENCES)); then
         "${#canonical_urls[@]}"
 fi
 
-declare -a authentication_variables=()
-authentication_variables_output=''
-if ! rhyolite_harness_capture \
-    authentication_variables_output harness_auth_secret_env_vars; then
-    print_runner_error \
-        'The selected review harness could not report protected authentication variables.' \
-        "harness ${HARNESS} harness_auth_secret_env_vars" \
-        "Harness ${HARNESS}" \
-        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness authentication-variable resolution failed.}" \
-        'Repository review execution did not start.' \
-        'Restore the complete harness adapter and retry.'
-    exit 2
-fi
-mapfile -t authentication_variables <<< "${authentication_variables_output}"
-declare -A authentication_variable_seen=()
-for authentication_variable in "${authentication_variables[@]}"; do
-    if [[ ! "${authentication_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
-        [[ -n "${authentication_variable_seen[${authentication_variable}]+x}" ]]; then
-        print_runner_error \
-            'The selected review harness returned an invalid protected authentication-variable list.' \
-            "harness ${HARNESS} harness_auth_secret_env_vars" \
-            "Harness ${HARNESS}" \
-            'Harness authentication-variable names must be nonempty, unique shell identifiers.' \
-            'Repository review execution did not start.' \
-            'Restore the complete harness adapter and retry.'
-        exit 2
-    fi
-    authentication_variable_seen["${authentication_variable}"]=1
-done
 if ! rhyolite_harness_invoke harness_prepare_run 2>/dev/null; then
     print_runner_error \
         'The selected review harness could not prepare its run context.' \
@@ -2562,6 +2766,9 @@ write_result() {
     cat > "${path}" <<EOF
 {
   "SchemaVersion": ${STATE_SCHEMA_VERSION},
+  "Harness": "$(json_escape "${HARNESS}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "Provider": ${HARNESS_PROVIDER_JSON},
   "Slug": "$(json_escape "${slug}")",
   "Repository": "$(json_escape "${repository}")",
   "Source": {
@@ -2596,7 +2803,7 @@ write_result() {
   "Session": {
     "Id": "$(json_escape "${session_id}")",
     "Name": "$(json_escape "${session}")",
-    "ResumePolicy": "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly."
+    "ResumePolicy": "$(json_escape "${HARNESS_RESUME_POLICY}")"
   },
   "Paths": {
     "ReadOnlyCheckout": "$(json_escape "${checkout}")",
@@ -2702,7 +2909,11 @@ EOF
         "${RESEARCH_STATUS:-Disabled}" "${RESEARCH_DIRECTORY:-}" \
         "${RESEARCH_DOSSIER_PATH:-}" \
         "${RESEARCH_NETWORK_SUMMARY_PATH:-}" \
-        "${RESEARCH_PRIVATE_DIRECTORY:-}"
+        "${RESEARCH_PRIVATE_DIRECTORY:-}" \
+        "${HARNESS}" "${HARNESS_DISPLAY_NAME}" "${REASONING_EFFORT}" \
+        "${HARNESS_PROVIDER_ID}" "${HARNESS_PROVIDER_HOST}" \
+        "$(provider_forwarded_env_var_names_text)" \
+        "${HARNESS_RESUME_POLICY}"
     write_result \
         "${state_path}" "${slug}" "${repository}" "${session}" "${commit}" \
         "${status}" "${exit_code}" "${checkout}" "${output_directory}" \
@@ -4854,6 +5065,9 @@ INDEX_PATH="${RUN_RESULTS}/index.html"
     cat <<EOF
 {
   "SchemaVersion": ${STATE_SCHEMA_VERSION},
+  "Harness": "$(json_escape "${HARNESS}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "Provider": ${HARNESS_PROVIDER_JSON},
   "RunId": "$(json_escape "${RUN_ID}")",
   "Status": "$(json_escape "${RUN_STATUS}")",
   "StartedAt": "$(json_escape "${RUN_STARTED_AT}")",
@@ -4914,6 +5128,14 @@ EOF
     printf '# Repository review run handoff\n\n'
     printf 'Run ID:\n\n    %s\n\n' "${RUN_ID}"
     printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
+    printf 'Harness:\n\n    %s (%s)\n\n' \
+        "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
+    printf 'Reasoning effort:\n\n    %s\n\n' "${REASONING_EFFORT}"
+    printf 'Provider:\n\n'
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '    %s\n' "${line}"
+    done <<< "$(provider_summary_text)"
+    printf '\n'
     printf 'Scope:\n\n    %s\n\n' "${SCOPE_NAME}"
     printf 'Planning estimate:\n\n    %s\n\n' "${SCOPE_ESTIMATE}"
     printf 'Provenance window:\n\n'
@@ -4929,8 +5151,9 @@ EOF
     printf 'Read-only workspace:\n\n    %s\n\n' "${RUN_WORKSPACE}"
     printf 'Writable output:\n\n    %s\n\n' "${RUN_RESULTS}"
     printf '## Continue safely\n\n'
+    printf '%s\n\n' "${HARNESS_RESUME_POLICY}"
     printf '%s\n\n' \
-        'Open each repository handoff for its saved session identifiers and state. Do not invoke `copilot --resume` directly; continue through the trusted Rhyolite `repo-review` runner so all restrictions are re-established.'
+        'Open each repository handoff for its saved session identifiers and state so the trusted Rhyolite `repo-review` runner can re-establish all restrictions.'
     printf '## Repository sessions\n\n'
     for result_file in "${result_files[@]}"; do
         summary_file="${result_file%/state.json}/.result-summary"

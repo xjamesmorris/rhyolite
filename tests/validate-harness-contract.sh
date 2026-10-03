@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_ROOT="${ROOT}/plugins/rhyolite"
 HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
+PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 RUNNER="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
 PROMPT="${PLUGIN_ROOT}/skills/readonly-repository-review/review-prompt.txt"
 OUTPUT_HELPER="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/review-output.sh"
@@ -25,6 +26,7 @@ required_contract_functions=(
     harness_auth_secret_env_vars
     harness_login_remediation
     harness_provider_summary
+    harness_resume_policy
     harness_prepare_run
     harness_prepare_worker_home
     harness_worker_argv
@@ -85,7 +87,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for path in "${RUNNER}" "${PROMPT}" "${OUTPUT_HELPER}" "${LAUNCHER}"; do
+for path in \
+    "${RUNNER}" \
+    "${PROMPT}" \
+    "${OUTPUT_HELPER}" \
+    "${LAUNCHER}" \
+    "${PREFERENCE_HELPER}"; do
     [[ -f "${path}" ]] || fail "Required production file is missing: ${path}"
 done
 [[ -f "${HARNESS_COMMON}" ]] ||
@@ -158,7 +165,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '1' \
+assert_equal '2' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 load_stdout="${fixture_root}/copilot-load.stdout"
@@ -177,7 +184,7 @@ assert_equal \
 
 for function_name in "${required_contract_functions[@]}"; do
     declare -F "${function_name}" >/dev/null ||
-        fail "Copilot adapter is missing Contract-v1 function: ${function_name}"
+        fail "Copilot adapter is missing Contract-v2 function: ${function_name}"
 done
 [[ "${RHYOLITE_HARNESS_REQUIRED_FUNCTIONS[*]}" == \
     "${required_contract_functions[*]}" ]] ||
@@ -308,10 +315,163 @@ assert_equal \
     'Review the sanitized errors and timeline. If they show Copilot authentication failure, run copilot login from a clean non-Git directory, then retry.' \
     "$(harness_login_remediation)" \
     'Copilot login remediation'
+provider_summary_path="${fixture_root}/provider-summary.json"
+harness_provider_summary > "${provider_summary_path}"
+python3 - \
+    "${provider_summary_path}" \
+    "${expected_auth_secret_env_vars[@]}" <<'PY'
+import json
+import pathlib
+import sys
+
+summary = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if set(summary) != {"Id", "Host", "ForwardedEnvVarNames"}:
+    raise SystemExit("Copilot provider summary keys are invalid")
+if summary["Id"] != "github-copilot":
+    raise SystemExit("Copilot provider summary ID changed")
+if summary["Host"] != "managed-provider":
+    raise SystemExit("Copilot provider host is not the safe managed summary")
+if summary["ForwardedEnvVarNames"] != sys.argv[2:]:
+    raise SystemExit("Copilot provider environment names changed")
+PY
 assert_equal \
-    'github-copilot' \
-    "$(harness_provider_summary)" \
-    'Copilot provider summary'
+    'Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.' \
+    "$(harness_resume_policy)" \
+    'Copilot resume policy'
+
+# shellcheck source=../plugins/rhyolite/scripts/launcher-preferences.sh
+source "${PREFERENCE_HELPER}"
+
+preference_contract_root="${fixture_root}/preference-contract"
+preference_contract_repository='https://github.com/octocat/Hello-World'
+rhyolite_write_preference \
+    "${preference_contract_repository}" \
+    copilot \
+    native \
+    gpt-5.6-sol \
+    "${preference_contract_root}" ||
+    fail 'Contract-v2 preference write failed.'
+preference_contract_path="$(
+    rhyolite_preference_path \
+        "${preference_contract_repository}" \
+        "${preference_contract_root}"
+)"
+python3 - "${preference_contract_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+preference = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if set(preference) != {
+    "schemaVersion",
+    "canonicalRepository",
+    "harness",
+    "fleetMode",
+    "model",
+    "updatedAt",
+}:
+    raise SystemExit("preference schema 2 keys are invalid")
+if (
+    preference["schemaVersion"] != 2
+    or preference["harness"] != "copilot"
+    or preference["fleetMode"] != "native"
+    or preference["model"] != "gpt-5.6-sol"
+):
+    raise SystemExit("preference schema 2 values are invalid")
+PY
+rhyolite_read_preference \
+    "${preference_contract_repository}" \
+    copilot \
+    "${preference_contract_root}" ||
+    fail 'Contract-v2 preference read failed.'
+[[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
+    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
+    fail 'Contract-v2 preference values did not round-trip.'
+if rhyolite_read_preference \
+    "${preference_contract_repository}" \
+    codex \
+    "${preference_contract_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
+    fail 'Harness-mismatched schema 2 preference was reused.'
+fi
+
+legacy_preference_repository='https://github.com/octocat/Spoon-Knife'
+legacy_preference_path="$(
+    rhyolite_preference_path \
+        "${legacy_preference_repository}" \
+        "${preference_contract_root}"
+)"
+cat > "${legacy_preference_path}" <<'EOF'
+{
+  "schemaVersion": 1,
+  "canonicalRepository": "https://github.com/octocat/Spoon-Knife",
+  "fleetMode": "standard",
+  "model": "gpt-5.6-sol",
+  "updatedAt": "2026-10-01T12:00:00Z"
+}
+EOF
+chmod 600 -- "${legacy_preference_path}"
+rhyolite_read_preference \
+    "${legacy_preference_repository}" \
+    copilot \
+    "${preference_contract_root}" ||
+    fail 'Legacy schema 1 Copilot preference was not accepted.'
+[[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot ]] ||
+    fail 'Legacy schema 1 preference was not interpreted as Copilot-only.'
+if rhyolite_read_preference \
+    "${legacy_preference_repository}" \
+    codex \
+    "${preference_contract_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
+    fail 'Legacy schema 1 preference was reused for a non-Copilot harness.'
+fi
+
+chmod 0770 -- "${preference_contract_root}/preferences"
+if rhyolite_read_preference \
+    "${preference_contract_repository}" \
+    copilot \
+    "${preference_contract_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+    fail 'Group-writable preference path was accepted.'
+fi
+chmod 0700 -- "${preference_contract_root}/preferences"
+
+symlink_preference_root="${fixture_root}/preference-symlink-root"
+symlink_preference_target="${fixture_root}/preference-symlink-target"
+mkdir -p -- "${symlink_preference_root}" "${symlink_preference_target}"
+chmod 0700 -- "${symlink_preference_root}" "${symlink_preference_target}"
+ln -s -- "${symlink_preference_target}" \
+    "${symlink_preference_root}/preferences"
+symlink_preference_path="$(
+    rhyolite_preference_path \
+        "${preference_contract_repository}" \
+        "${symlink_preference_root}"
+)"
+cp -- "${preference_contract_path}" \
+    "${symlink_preference_target}/$(basename -- "${symlink_preference_path}")"
+chmod 0600 -- \
+    "${symlink_preference_target}/$(basename -- "${symlink_preference_path}")"
+if rhyolite_read_preference \
+    "${preference_contract_repository}" \
+    copilot \
+    "${symlink_preference_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+    fail 'Symlinked preference path component was accepted.'
+fi
+
+if [[ "$(id -u)" == 0 ]] && command -v chown >/dev/null 2>&1; then
+    chown 65534 -- "${preference_contract_path}"
+    if rhyolite_read_preference \
+        "${preference_contract_repository}" \
+        copilot \
+        "${preference_contract_root}" ||
+        [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+        fail 'Preference owned by another uid was accepted.'
+    fi
+    chown 0 -- "${preference_contract_path}"
+    chmod 0600 -- "${preference_contract_path}"
+fi
 
 mock_cli_bin="${fixture_root}/mock-cli-bin"
 mkdir -p -- "${mock_cli_bin}"
@@ -920,6 +1080,17 @@ plan_arguments=(
     --plan-only
 )
 
+for hash_fragment in \
+    'PlanSchemaVersion=%s' \
+    'Harness=%s' \
+    'ReasoningEffort=%s' \
+    'Provider=%s'; do
+    assert_contains \
+        "${RUNNER}" \
+        "${hash_fragment}" \
+        'Harness identity approval-hash material'
+done
+
 env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     PATH="${plan_mock_bin}:${PATH}" \
     "${RUNNER}" "${plan_arguments[@]}" \
@@ -967,11 +1138,35 @@ import sys
 plans = [json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
          for path in sys.argv[1:]]
 for index, plan in enumerate(plans):
-    if plan.get("SchemaVersion") != 3:
-        raise SystemExit(f"plan {index} did not preserve research-aware schema 3")
-    for forbidden in ("Harness", "Provider", "ReasoningEffort"):
-        if forbidden in plan:
-            raise SystemExit(f"plan {index} unexpectedly added {forbidden}")
+    if plan.get("SchemaVersion") != 4:
+        raise SystemExit(f"plan {index} did not use harness-aware schema 4")
+    if plan.get("Harness") != "copilot":
+        raise SystemExit(f"plan {index} lost the selected harness")
+    if plan.get("ReasoningEffort") != "max":
+        raise SystemExit(f"plan {index} lost resolved reasoning effort")
+    provider = plan.get("Provider")
+    if not isinstance(provider, dict) or set(provider) != {
+        "Id", "Host", "ForwardedEnvVarNames"
+    }:
+        raise SystemExit(f"plan {index} has invalid provider metadata")
+    if (
+        provider["Id"] != "github-copilot"
+        or provider["Host"] != "managed-provider"
+        or provider["ForwardedEnvVarNames"] != [
+            "COPILOT_GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "COPILOT_PROVIDER_API_KEY",
+            "COPILOT_PROVIDER_BEARER_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "OPENAI_API_KEY",
+            "CAPI_HMAC_KEY",
+            "COPILOT_HMAC_KEY",
+            "GITHUB_COPILOT_API_TOKEN",
+        ]
+    ):
+        raise SystemExit(f"plan {index} changed Copilot provider metadata")
     approval_hash = plan.get("ApprovalHash")
     if not isinstance(approval_hash, str) or len(approval_hash) != 64:
         raise SystemExit(f"plan {index} has an invalid ApprovalHash")
@@ -979,6 +1174,127 @@ hashes = {plan["ApprovalHash"] for plan in plans}
 if len(hashes) != 1:
     raise SystemExit("default, environment, explicit, and overriding Copilot plans changed ApprovalHash")
 PY
+
+copy_identity_fixture() {
+    local name="$1"
+    local fixture_plugin="${fixture_root}/${name}-identity-plugin"
+    local fixture_skill="${fixture_plugin}/skills/readonly-repository-review"
+    local fixture_scripts="${fixture_skill}/scripts"
+
+    mkdir -p -- \
+        "${fixture_plugin}/lib/harness" \
+        "${fixture_plugin}/scripts" \
+        "${fixture_scripts}"
+    cp -- "${HARNESS_COMMON}" "${fixture_plugin}/lib/harness/common.sh"
+    cp -- "${PLUGIN_ROOT}/lib/harness/copilot.sh" \
+        "${fixture_plugin}/lib/harness/copilot.sh"
+    cp -- "${PREFERENCE_HELPER}" \
+        "${fixture_plugin}/scripts/launcher-preferences.sh"
+    cp -- "${RUNNER}" "${fixture_scripts}/run-parallel-reviews.sh"
+    cp -- "${OUTPUT_HELPER}" "${fixture_scripts}/review-output.sh"
+    cp -- "${PROMPT}" "${fixture_skill}/review-prompt.txt"
+    chmod +x "${fixture_scripts}/run-parallel-reviews.sh"
+    printf '%s\n' "${fixture_plugin}"
+}
+
+provider_identity_plugin="$(copy_identity_fixture provider)"
+cat >> "${provider_identity_plugin}/lib/harness/copilot.sh" <<'PROVIDER_IDENTITY_OVERRIDE'
+
+harness_provider_summary() {
+    printf '%s\n' '{"Id":"github-copilot","Host":"alternate-managed-provider","ForwardedEnvVarNames":["COPILOT_GITHUB_TOKEN","GH_TOKEN","GITHUB_TOKEN","COPILOT_PROVIDER_API_KEY","COPILOT_PROVIDER_BEARER_TOKEN","ANTHROPIC_API_KEY","AZURE_OPENAI_API_KEY","OPENAI_API_KEY","CAPI_HMAC_KEY","COPILOT_HMAC_KEY","GITHUB_COPILOT_API_TOKEN"]}'
+}
+PROVIDER_IDENTITY_OVERRIDE
+provider_identity_plan="${fixture_root}/provider-identity-plan.json"
+PATH="${plan_mock_bin}:${PATH}" \
+    "${provider_identity_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
+    "${plan_arguments[@]}" > "${provider_identity_plan}" ||
+    fail 'Provider-identity plan fixture failed.'
+
+reasoning_identity_plugin="$(copy_identity_fixture reasoning)"
+cat >> "${reasoning_identity_plugin}/lib/harness/copilot.sh" <<'REASONING_IDENTITY_OVERRIDE'
+
+harness_max_reasoning_effort() {
+    harness_validate_model_id "$1" || return 1
+    printf '%s\n' 'high'
+}
+REASONING_IDENTITY_OVERRIDE
+reasoning_identity_plan="${fixture_root}/reasoning-identity-plan.json"
+PATH="${plan_mock_bin}:${PATH}" \
+    "${reasoning_identity_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
+    "${plan_arguments[@]}" > "${reasoning_identity_plan}" ||
+    fail 'Reasoning-identity plan fixture failed.'
+
+python3 - \
+    "${plan_default}" \
+    "${provider_identity_plan}" \
+    "${reasoning_identity_plan}" <<'PY'
+import json
+import pathlib
+import sys
+
+plans = [
+    json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    for path in sys.argv[1:]
+]
+if len({plan["ApprovalHash"] for plan in plans}) != 3:
+    raise SystemExit("provider or reasoning identity did not change ApprovalHash")
+if plans[1]["Provider"]["Host"] != "alternate-managed-provider":
+    raise SystemExit("provider identity fixture did not reach the plan")
+if plans[2]["ReasoningEffort"] != "high":
+    raise SystemExit("reasoning identity fixture did not reach the plan")
+PY
+
+legacy_identity_hash="$(
+    python3 - "${plan_default}" <<'PY'
+import json
+import pathlib
+import sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["ApprovalHash"])
+PY
+)"
+identity_mismatch_stderr="${fixture_root}/identity-mismatch.stderr"
+set +e
+PATH="${plan_mock_bin}:${PATH}" \
+    "${provider_identity_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_workspace}" \
+    --output-root "${plan_output}" \
+    --non-interactive \
+    --no-open-html \
+    --expected-plan-hash "${legacy_identity_hash}" \
+    >"${fixture_root}/identity-mismatch.stdout" \
+    2>"${identity_mismatch_stderr}"
+identity_mismatch_status=$?
+set -e
+((identity_mismatch_status == 2)) ||
+    fail 'A plan hash from different provider identity authorized execution.'
+assert_contains \
+    "${identity_mismatch_stderr}" \
+    'approved plan changed; regenerate and reconfirm' \
+    'Identity-bound approval mismatch'
+
+invalid_provider_plugin="$(copy_identity_fixture invalid-provider)"
+cat >> "${invalid_provider_plugin}/lib/harness/copilot.sh" <<'INVALID_PROVIDER_OVERRIDE'
+
+harness_provider_summary() {
+    printf '%s\n' '{"Id":"github-copilot","Host":"managed-provider","ForwardedEnvVarNames":[],"Extra":"forbidden"}'
+}
+INVALID_PROVIDER_OVERRIDE
+invalid_provider_stderr="${fixture_root}/invalid-provider.stderr"
+set +e
+PATH="${plan_mock_bin}:${PATH}" \
+    "${invalid_provider_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
+    "${plan_arguments[@]}" >"${fixture_root}/invalid-provider.stdout" \
+    2>"${invalid_provider_stderr}"
+invalid_provider_status=$?
+set -e
+((invalid_provider_status == 2)) ||
+    fail 'Provider summary with an extra key was accepted.'
+assert_contains \
+    "${invalid_provider_stderr}" \
+    'Stage: harness copilot harness_provider_summary' \
+    'Strict provider summary validation'
 [[ ! -e "${plan_workspace}" && ! -e "${plan_output}" ]] ||
     fail 'Plan-only harness validation created workspace or output roots.'
 
@@ -1209,7 +1525,7 @@ env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     fail 'Plan-only mode invoked the failing harness CLI check.'
 assert_contains \
     "${function_failure_plan_stdout}" \
-    '"SchemaVersion": 3' \
+    '"SchemaVersion": 4' \
     'Plan-only mode without harness CLI'
 [[ ! -e "${function_failure_plan_workspace}" &&
     ! -e "${function_failure_plan_output}" ]] ||
@@ -1598,6 +1914,28 @@ contract_assert_worker_contract() {
         node - "${state_path}" <<'JS'
 const fs = require("fs");
 const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (state.SchemaVersion !== 5 ||
+    state.Harness !== "copilot" ||
+    state.ReasoningEffort !== "max" ||
+    state.Provider?.Id !== "github-copilot" ||
+    state.Provider?.Host !== "managed-provider" ||
+    JSON.stringify(state.Provider?.ForwardedEnvVarNames) !== JSON.stringify([
+      "COPILOT_GITHUB_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "COPILOT_PROVIDER_API_KEY",
+      "COPILOT_PROVIDER_BEARER_TOKEN",
+      "ANTHROPIC_API_KEY",
+      "AZURE_OPENAI_API_KEY",
+      "OPENAI_API_KEY",
+      "CAPI_HMAC_KEY",
+      "COPILOT_HMAC_KEY",
+      "GITHUB_COPILOT_API_TOKEN",
+    ]) ||
+    state.Session.ResumePolicy !==
+      "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.") {
+  throw new Error("runner seam state lost harness contract-v2 identity");
+}
 for (const value of [
   state.Session.Name,
   state.Session.Id,
@@ -1760,16 +2098,18 @@ const fs = require("fs");
 const plans = process.argv.slice(2).map((planPath) =>
   JSON.parse(fs.readFileSync(planPath, "utf8")));
 for (const [index, plan] of plans.entries()) {
-  if (plan.SchemaVersion !== 3) {
+  if (plan.SchemaVersion !== 4) {
     throw new Error(`runner seam plan ${index} changed schema`);
   }
   if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)) {
     throw new Error(`runner seam plan ${index} has invalid hash`);
   }
-  for (const forbidden of ["Harness", "Provider", "ReasoningEffort"]) {
-    if (forbidden in plan) {
-      throw new Error(`runner seam plan ${index} added ${forbidden}`);
-    }
+  if (plan.Harness !== "copilot" ||
+      plan.ReasoningEffort !== "max" ||
+      plan.Provider?.Id !== "github-copilot" ||
+      plan.Provider?.Host !== "managed-provider" ||
+      !Array.isArray(plan.Provider?.ForwardedEnvVarNames)) {
+    throw new Error(`runner seam plan ${index} lost harness identity`);
   }
 }
 if (new Set(plans.map((plan) => plan.ApprovalHash)).size !== 1) {
@@ -2103,7 +2443,12 @@ const fs = require("fs");
 const [statePath, expectedStatus, workerStartedText] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
 const workerStarted = workerStartedText === "1";
-if (state.Status !== expectedStatus || state.ExitCode === 0) {
+if (state.SchemaVersion !== 5 ||
+    state.Harness !== "copilot" ||
+    state.ReasoningEffort !== "max" ||
+    state.Provider?.Id !== "github-copilot" ||
+    state.Status !== expectedStatus ||
+    state.ExitCode === 0) {
   throw new Error("lifecycle failure state is not truthful");
 }
 if (workerStarted) {
@@ -2288,6 +2633,7 @@ mkdir -p -- \
     "${launcher_caller}" \
     "${launcher_default_state}" \
     "${launcher_explicit_state}"
+chmod 0700 -- "${launcher_default_state}" "${launcher_explicit_state}"
 cat > "${launcher_mock_bin}/copilot" <<'MOCK_LAUNCHER_COPILOT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -2410,6 +2756,67 @@ assert_launcher_pre_activity_failure \
     'The launcher harness marker is empty or contains unsupported characters.' \
     'unsetting RHYOLITE_LAUNCHER_HARNESS' \
     --harness copilot
+
+assert_launcher_state_path_failure() {
+    local name="$1"
+    local state_path="$2"
+    local capture_path="${fixture_root}/${name}.launcher.capture"
+    local stdout_path="${fixture_root}/${name}.launcher.stdout"
+    local stderr_path="${fixture_root}/${name}.launcher.stderr"
+    local status
+
+    rm -f -- "${capture_path}"
+    set +e
+    (
+        cd "${launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            NO_COLOR=1 \
+            XDG_STATE_HOME="${state_path}" \
+            RHYOLITE_LAUNCHER_CAPTURE="${capture_path}" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "${LAUNCHER}" \
+                --repo https://example.com/owner/repository \
+                --fleet-mode standard \
+                --model gpt-5.6-sol
+    ) >"${stdout_path}" 2>"${stderr_path}"
+    status=$?
+    set -e
+
+    ((status == 2)) ||
+        fail "${name}: unsafe launcher state returned ${status}, expected 2"
+    [[ ! -s "${stdout_path}" ]] ||
+        fail "${name}: unsafe launcher state wrote stdout"
+    assert_contains \
+        "${stderr_path}" \
+        'Stage: launcher state creation' \
+        "${name} stage"
+    assert_contains \
+        "${stderr_path}" \
+        'must be owned by the current user, contain no symlink components, and have no group/world-writable components' \
+        "${name} detail"
+    [[ ! -e "${capture_path}" ]] ||
+        fail "${name}: unsafe launcher state invoked Copilot"
+}
+
+launcher_writable_state="${fixture_root}/launcher-writable-state"
+mkdir -p -- "${launcher_writable_state}"
+chmod 0770 -- "${launcher_writable_state}"
+assert_launcher_state_path_failure \
+    launcher-writable-state \
+    "${launcher_writable_state}"
+[[ ! -e "${launcher_writable_state}/rhyolite" ]] ||
+    fail 'Writable launcher state was modified before rejection.'
+
+launcher_symlink_state_target="${fixture_root}/launcher-symlink-state-target"
+launcher_symlink_state="${fixture_root}/launcher-symlink-state"
+mkdir -p -- "${launcher_symlink_state_target}"
+chmod 0700 -- "${launcher_symlink_state_target}"
+ln -s -- "${launcher_symlink_state_target}" "${launcher_symlink_state}"
+assert_launcher_state_path_failure \
+    launcher-symlink-state \
+    "${launcher_symlink_state}"
+[[ ! -e "${launcher_symlink_state_target}/rhyolite" ]] ||
+    fail 'Symlinked launcher state target was modified before rejection.'
 
 (
     cd "${launcher_caller}"

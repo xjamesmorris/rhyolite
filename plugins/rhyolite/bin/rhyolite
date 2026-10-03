@@ -237,12 +237,25 @@ assert_control_free_path() {
 
 create_session_dir() {
     local base_dir="$1"
+    local state_anchor
     local timestamp
     local attempt=0
     local session_id
     local session_dir
 
-    mkdir -p "${base_dir}/sessions"
+    state_anchor="$(rhyolite_launcher_state_anchor)"
+    if ! rhyolite_prepare_secure_user_directory \
+        "${state_anchor}" "${base_dir}" ||
+        ! rhyolite_prepare_secure_user_directory \
+            "${state_anchor}" "${base_dir}/sessions"; then
+        fail \
+            'launcher state creation' \
+            'Launcher state failed secure-path validation.' \
+            "Launcher state under ${base_dir} must be owned by the current user, contain no symlink components, and have no group/world-writable components." \
+            'Choose a private user-owned state directory with ordinary directories only, then retry.' \
+            2 \
+            "${base_dir}"
+    fi
     chmod 700 "${base_dir}" "${base_dir}/sessions" ||
         fail \
             'launcher state creation' \
@@ -793,7 +806,8 @@ main() {
             2
 
     for repository in "${repositories[@]}"; do
-        if rhyolite_read_preference "${repository}" "${launcher_home}"; then
+        if rhyolite_read_preference \
+            "${repository}" "${harness}" "${launcher_home}"; then
             if [[ -z "${remembered_fleet_mode}" ]]; then
                 remembered_fleet_mode="${RHYOLITE_PREFERENCE_FLEET_MODE}"
                 remembered_model="${RHYOLITE_PREFERENCE_MODEL}"

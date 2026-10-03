@@ -1175,12 +1175,19 @@ write_review_handoff() {
     local research_dossier="${17:-}"
     local research_network_summary="${18:-}"
     local research_private_directory="${19:-}"
+    local harness="${20:-}"
+    local harness_display_name="${21:-}"
+    local reasoning_effort="${22:-}"
+    local provider_id="${23:-}"
+    local provider_host="${24:-}"
+    local provider_env_names="${25:-(none)}"
+    local resume_policy="${26:-}"
     local continuation
 
     if [[ -n "${session_id}" ]]; then
-        continuation="The saved Copilot session ID is \`${session_id}\`. Do not invoke \`copilot --resume\` directly: a direct resume does not reliably restore this review's path, tool, network, and environment restrictions. Start the \`repository-review\` agent and provide this handoff path so a trusted runner can establish a restricted continuation."
+        continuation="The saved ${harness_display_name} session ID is \`${session_id}\`. ${resume_policy} Start the \`repository-review\` agent and provide this handoff path so a trusted runner can establish a restricted continuation."
     else
-        continuation='Setup did not reach a child Copilot session. Rerun `repository-review` using the repository URL, requested commit, scope, and output choices recorded in `state.json`. Do not analyze the verification clone directly.'
+        continuation="Setup did not reach a child ${harness_display_name} session. Rerun \`repository-review\` using the repository URL, requested commit, scope, and output choices recorded in \`state.json\`. Do not analyze the verification clone directly."
     fi
 
     {
@@ -1190,6 +1197,14 @@ write_review_handoff() {
         printf 'Selected source path:\n\n    %s\n\n' "${source_path}"
         printf 'Commit:\n\n    %s\n\n' "${commit}"
         printf 'Status:\n\n    %s\n\n' "${status}"
+        printf 'Harness:\n\n    %s (%s)\n\n' \
+            "${harness_display_name}" "${harness}"
+        printf 'Reasoning effort:\n\n    %s\n\n' "${reasoning_effort}"
+        printf 'Provider:\n\n'
+        printf '    ID: %s\n' "${provider_id}"
+        printf '    Host: %s\n' "${provider_host}"
+        printf '    Forwarded environment variable names: %s\n\n' \
+            "${provider_env_names}"
         printf 'Scope:\n\n    %s\n\n' "${scope}"
         printf 'Planning estimate:\n\n    %s\n\n' "${scope_estimate}"
         printf 'Provenance window:\n\n'
@@ -1211,8 +1226,9 @@ write_review_handoff() {
         fi
         printf 'Read-only checkout:\n\n    %s\n\n' "${checkout}"
         printf 'Writable output directory:\n\n    %s\n\n' "${output_directory}"
-        printf 'Copilot session:\n\n    %s\n\n' "${session}"
-        printf 'Copilot session ID:\n\n    %s\n\n' "${session_id}"
+        printf 'Harness session:\n\n    %s\n\n' "${session}"
+        printf 'Harness session ID:\n\n    %s\n\n' "${session_id}"
+        printf 'Resume policy:\n\n    %s\n\n' "${resume_policy}"
         printf '## Continue safely\n\n%s\n\n' "${continuation}"
         printf '%s\n%s\n\n' \
             'Read `state.json`, `request.txt`, and `errors.txt` before continuing.' \

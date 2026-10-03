@@ -5,6 +5,21 @@ COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT=0
 COPILOT_AUTH_BRIDGE_JSON='{}'
 COPILOT_RUNTIME_HOME=''
 
+copilot_forwarded_env_var_names() {
+    printf '%s\n' \
+        COPILOT_GITHUB_TOKEN \
+        GH_TOKEN \
+        GITHUB_TOKEN \
+        COPILOT_PROVIDER_API_KEY \
+        COPILOT_PROVIDER_BEARER_TOKEN \
+        ANTHROPIC_API_KEY \
+        AZURE_OPENAI_API_KEY \
+        OPENAI_API_KEY \
+        CAPI_HMAC_KEY \
+        COPILOT_HMAC_KEY \
+        GITHUB_COPILOT_API_TOKEN
+}
+
 copilot_write_settings() {
     local settings_path="$1"
     local store_token_plaintext="$2"
@@ -109,18 +124,7 @@ harness_max_reasoning_effort() {
 }
 
 harness_auth_secret_env_vars() {
-    printf '%s\n' \
-        COPILOT_GITHUB_TOKEN \
-        GH_TOKEN \
-        GITHUB_TOKEN \
-        COPILOT_PROVIDER_API_KEY \
-        COPILOT_PROVIDER_BEARER_TOKEN \
-        ANTHROPIC_API_KEY \
-        AZURE_OPENAI_API_KEY \
-        OPENAI_API_KEY \
-        CAPI_HMAC_KEY \
-        COPILOT_HMAC_KEY \
-        GITHUB_COPILOT_API_TOKEN
+    copilot_forwarded_env_var_names
 }
 
 harness_login_remediation() {
@@ -129,7 +133,21 @@ harness_login_remediation() {
 }
 
 harness_provider_summary() {
-    printf '%s\n' 'github-copilot'
+    local variable_name
+    local separator=''
+
+    printf '%s' \
+        '{"Id":"github-copilot","Host":"managed-provider","ForwardedEnvVarNames":['
+    while IFS= read -r variable_name; do
+        printf '%s"%s"' "${separator}" "${variable_name}"
+        separator=','
+    done < <(copilot_forwarded_env_var_names)
+    printf ']}\n'
+}
+
+harness_resume_policy() {
+    printf '%s\n' \
+        'Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.'
 }
 
 harness_prepare_run() {

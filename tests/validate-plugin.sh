@@ -1686,10 +1686,26 @@ grep -Fq 'PreflightBlocked' "${RUNNER}" ||
     fail 'Fail-closed multi-repository preflight blocking is not reported explicitly.'
 grep -Fq 'Local repository paths are not supported.' "${RUNNER}" ||
     fail 'Runner does not reject local repository paths explicitly.'
-grep -Fq 'PLAN_SCHEMA_VERSION=3' "${RUNNER}" ||
-    fail 'Bash runner does not emit research-aware plan schema version 3.'
-grep -Fq 'STATE_SCHEMA_VERSION=4' "${RUNNER}" ||
-    fail 'Bash runner does not emit research-aware state schema version 4.'
+grep -Fq 'PLAN_SCHEMA_VERSION=4' "${RUNNER}" ||
+    fail 'Bash runner does not emit harness-aware plan schema version 4.'
+grep -Fq 'STATE_SCHEMA_VERSION=5' "${RUNNER}" ||
+    fail 'Bash runner does not emit harness-aware state schema version 5.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=2' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 2.'
+grep -Fq 'harness_resume_policy' "${HARNESS_COMMON}" &&
+    grep -Fq 'harness_resume_policy() {' "${COPILOT_HARNESS}" ||
+    fail 'Harness contract-v2 resume policy is incomplete.'
+grep -Fq '"ForwardedEnvVarNames"' "${COPILOT_HARNESS}" &&
+    grep -Fq '"Host":"managed-provider"' "${COPILOT_HARNESS}" ||
+    fail 'Copilot provider summary does not expose safe contract-v2 metadata.'
+for hash_fragment in \
+    'PlanSchemaVersion=%s' \
+    'Harness=%s' \
+    'ReasoningEffort=%s' \
+    'Provider=%s'; do
+    grep -Fq "${hash_fragment}" "${RUNNER}" ||
+        fail "Approval hash material is missing ${hash_fragment}."
+done
 grep -Fq '"ResearchTransport": $(research_transport_json' "${RUNNER}" ||
     fail 'Bash runner does not emit ResearchTransport state.'
 grep -Fq '"ProvenanceWindow": $(provenance_window_json' "${RUNNER}" ||
@@ -1952,6 +1968,7 @@ rhyolite_canonicalize_repository \
 preference_helper_root="${fixture_dir}/preference-helper-state"
 rhyolite_write_preference \
     'https://github.com/octocat/Hello-World' \
+    copilot \
     native \
     gpt-5.6-sol \
     "${preference_helper_root}" ||
@@ -1961,10 +1978,76 @@ preference_helper_path="$(
         'https://github.com/octocat/Hello-World' \
         "${preference_helper_root}"
 )"
-cat > "${preference_helper_path}" <<'EOF'
+node - "${preference_helper_path}" <<'JS'
+const fs = require("fs");
+const preference = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const expectedKeys = [
+  "canonicalRepository",
+  "fleetMode",
+  "harness",
+  "model",
+  "schemaVersion",
+  "updatedAt",
+].sort().join(",");
+if (Object.keys(preference).sort().join(",") !== expectedKeys ||
+    preference.schemaVersion !== 2 ||
+    preference.harness !== "copilot" ||
+    preference.fleetMode !== "native" ||
+    preference.model !== "gpt-5.6-sol") {
+  throw new Error("launcher preference schema 2 is invalid");
+}
+JS
+if ! rhyolite_read_preference \
+    'https://github.com/octocat/Hello-World' \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_HARNESS}" != copilot ]]; then
+    fail 'Bash preference helper could not read schema 2 for Copilot.'
+fi
+if rhyolite_read_preference \
+    'https://github.com/octocat/Hello-World' \
+    codex \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
+    fail 'Bash preference helper reused schema 2 across harnesses.'
+fi
+
+legacy_preference_repository='https://github.com/octocat/legacy-preference'
+legacy_preference_path="$(
+    rhyolite_preference_path \
+        "${legacy_preference_repository}" \
+        "${preference_helper_root}"
+)"
+cat > "${legacy_preference_path}" <<'EOF'
 {
   "schemaVersion": 1,
+  "canonicalRepository": "https://github.com/octocat/legacy-preference",
+  "fleetMode": "standard",
+  "model": "gpt-5.6-sol",
+  "updatedAt": "2026-09-30T12:00:00Z"
+}
+EOF
+chmod 600 -- "${legacy_preference_path}"
+if ! rhyolite_read_preference \
+    "${legacy_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_HARNESS}" != copilot ]]; then
+    fail 'Bash preference helper did not read schema 1 as Copilot-only.'
+fi
+if rhyolite_read_preference \
+    "${legacy_preference_repository}" \
+    codex \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
+    fail 'Bash preference helper reused schema 1 for a non-Copilot harness.'
+fi
+
+cat > "${preference_helper_path}" <<'EOF'
+{
+  "schemaVersion": 2,
   "canonicalRepository": "https://github.com/octocat/Hello-World",
+  "harness": "copilot",
   "fleetMode": "native",
   "model": "gpt-5.6-sol",
   "updatedAt": "2026-09-30T12:00:00Z"
@@ -1973,6 +2056,7 @@ BROKEN
 EOF
 if rhyolite_read_preference \
     'https://github.com/octocat/Hello-World' \
+    copilot \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
     fail 'Bash preference helper accepted malformed JSON.'
@@ -1986,6 +2070,7 @@ directory_preference_path="$(
 mkdir -p -- "${directory_preference_path}"
 if rhyolite_write_preference \
     "${directory_preference_repository}" \
+    copilot \
     standard \
     gpt-5.6-sol \
     "${preference_helper_root}"; then
@@ -2451,6 +2536,7 @@ launcher_stub_log="${fixture_dir}/launcher-stub.bin"
 launcher_link="${launcher_link_dir}/rhyolite"
 mkdir -p -- "${launcher_mock_bin}" "${launcher_link_dir}" \
     "${launcher_state_home}"
+chmod 0700 -- "${launcher_state_home}"
 ln -s "${RHYOLITE_LAUNCHER}" "${launcher_link}"
 cat > "${launcher_mock_bin}/copilot" <<'SH'
 #!/usr/bin/env bash
@@ -2524,6 +2610,59 @@ set -e
     fail 'Retired launcher --autopilot did not fail with exit 2 and guidance.'
 [[ ! -e "${launcher_stub_log}" ]] ||
     fail 'Retired launcher --autopilot unexpectedly invoked Copilot.'
+
+assert_unsafe_launcher_state_rejected() {
+    local name="$1"
+    local state_home="$2"
+    local stdout_path="${fixture_dir}/${name}.stdout"
+    local stderr_path="${fixture_dir}/${name}.stderr"
+    local status
+
+    rm -f -- "${launcher_stub_log}"
+    set +e
+    (
+        cd "${ROOT}"
+        XDG_STATE_HOME="${state_home}" \
+            RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+            PATH="${launcher_mock_bin}:${PATH}" \
+            "${launcher_link}" \
+                --repo https://example.com/owner/repository \
+                --fleet-mode standard \
+                --model gpt-5.6-sol
+    ) >"${stdout_path}" 2>"${stderr_path}"
+    status=$?
+    set -e
+
+    [[ "${status}" -eq 2 ]] &&
+        [[ ! -s "${stdout_path}" ]] &&
+        grep -Fq 'Stage: launcher state creation' "${stderr_path}" &&
+        grep -Fq \
+            'must be owned by the current user, contain no symlink components, and have no group/world-writable components' \
+            "${stderr_path}" &&
+        [[ ! -e "${launcher_stub_log}" ]] ||
+        fail "${name}: launcher did not reject unsafe state before Copilot."
+}
+
+launcher_writable_state_home="${fixture_dir}/launcher writable state"
+mkdir -p -- "${launcher_writable_state_home}"
+chmod 0770 -- "${launcher_writable_state_home}"
+assert_unsafe_launcher_state_rejected \
+    launcher-writable-state \
+    "${launcher_writable_state_home}"
+[[ ! -e "${launcher_writable_state_home}/rhyolite" ]] ||
+    fail 'Launcher modified group-writable state before rejecting it.'
+
+launcher_symlink_state_target="${fixture_dir}/launcher symlink target"
+launcher_symlink_state_home="${fixture_dir}/launcher symlink state"
+mkdir -p -- "${launcher_symlink_state_target}"
+chmod 0700 -- "${launcher_symlink_state_target}"
+ln -s -- "${launcher_symlink_state_target}" \
+    "${launcher_symlink_state_home}"
+assert_unsafe_launcher_state_rejected \
+    launcher-symlink-state \
+    "${launcher_symlink_state_home}"
+[[ ! -e "${launcher_symlink_state_target}/rhyolite" ]] ||
+    fail 'Launcher modified a symlinked state target before rejecting it.'
 
 (
     cd "${ROOT}"
@@ -2685,6 +2824,7 @@ JS
 launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
 rhyolite_write_preference \
     'https://example.com/owner/custom-preference' \
+    copilot \
     standard \
     vendor.custom-1 \
     "${launcher_preference_home}" ||
@@ -2715,6 +2855,7 @@ JS
 
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
+    copilot \
     native \
     claude-fable-5 \
     "${launcher_preference_home}" ||
@@ -2745,6 +2886,39 @@ if (!args.includes("--fleet") ||
 }
 JS
 
+rhyolite_write_preference \
+    'https://example.com/owner/repository' \
+    codex \
+    native \
+    claude-fable-5 \
+    "${launcher_preference_home}" ||
+    fail 'Could not create mismatched-harness launcher preference fixture.'
+launcher_mismatched_preference_stderr="${fixture_dir}/launcher-mismatched-preference.stderr"
+rm -f -- "${launcher_stub_log}"
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository
+) 2>"${launcher_mismatched_preference_stderr}"
+[[ ! -s "${launcher_mismatched_preference_stderr}" ]] ||
+    fail 'Harness-mismatched launcher preference changed user-facing output.'
+node - "${launcher_stub_log}" <<'JS'
+const fs = require("fs");
+const fields = fs.readFileSync(process.argv[2], "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const argsIndex = fields.indexOf("ARGS");
+const args = fields.slice(argsIndex + 1);
+const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (args.includes("--fleet") ||
+    valueAfter("--model") !== "gpt-5.6-sol" ||
+    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+  throw new Error("launcher reused a preference for a different harness");
+}
+JS
+
 launcher_preference_path="$(
     rhyolite_preference_path \
         'https://example.com/owner/repository' \
@@ -2752,8 +2926,9 @@ launcher_preference_path="$(
 )"
 cat > "${launcher_preference_path}" <<'EOF'
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "canonicalRepository": "https://example.com/owner/repository",
+  "harness": "copilot",
   "fleetMode": "native",
   "model": "claude-fable-5",
   "updatedAt": "2026-09-30T12:00:00Z"
@@ -4164,14 +4339,17 @@ function assertCommonPlan(
 ) {
   assertKeys(plan, [
     "ApprovalHash",
-    "GeneratedAt",
     "FleetMode",
+    "GeneratedAt",
+    "Harness",
     "MaxRepositories",
     "Model",
     "OpenHtmlPolicy",
     "OutputRoot",
     "PriorArtWindow",
+    "Provider",
     "ProvenanceWindow",
+    "ReasoningEffort",
     "ResearchTransport",
     "ReviewDate",
     "RememberPreferences",
@@ -4182,7 +4360,12 @@ function assertCommonPlan(
     "ThrottleLimit",
     "WorkspaceRoot",
   ], `${label} top-level`);
-  if (plan.SchemaVersion !== 3 ||
+  assertKeys(plan.Provider, [
+    "ForwardedEnvVarNames",
+    "Host",
+    "Id",
+  ], `${label} provider`);
+  if (plan.SchemaVersion !== 4 ||
       !/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(plan.ReviewDate) ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(plan.GeneratedAt) ||
@@ -4190,6 +4373,23 @@ function assertCommonPlan(
       plan.OutputRoot !== expectedOutput ||
       plan.ThrottleLimit !== 2 ||
       plan.MaxRepositories !== 5 ||
+      plan.Harness !== "copilot" ||
+      plan.ReasoningEffort !== "max" ||
+      plan.Provider?.Id !== "github-copilot" ||
+      plan.Provider?.Host !== "managed-provider" ||
+      JSON.stringify(plan.Provider?.ForwardedEnvVarNames) !== JSON.stringify([
+        "COPILOT_GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "COPILOT_PROVIDER_API_KEY",
+        "COPILOT_PROVIDER_BEARER_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "OPENAI_API_KEY",
+        "CAPI_HMAC_KEY",
+        "COPILOT_HMAC_KEY",
+        "GITHUB_COPILOT_API_TOKEN",
+      ]) ||
       plan.Model !== "gpt-5.6-sol" ||
       plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
@@ -5909,10 +6109,12 @@ grep -Fq 'Remembered approved fleet/model settings for 1 repositories.' \
     fail 'Mock Bash run did not report saved launcher preferences.'
 if ! rhyolite_read_preference \
     'https://github.com/octocat/Hello-World' \
+    copilot \
     "${mock_preference_state}/rhyolite/launcher"; then
     fail 'Mock Bash run did not persist readable launcher preferences.'
 fi
-[[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
+[[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
+    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
     fail 'Mock Bash run persisted incorrect launcher preferences.'
 grep -Fxq \
@@ -6021,7 +6223,8 @@ function assertKeys(object, expectedKeys, label) {
 }
 
 for (const key of [
-  "Scope", "Session", "Paths", "Artifacts", "Research", "ResearchTransport",
+  "Provider", "Scope", "Session", "Paths", "Artifacts", "Research",
+  "ResearchTransport",
 ]) {
   if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
     throw new Error(`repository state ${key} is not an object`);
@@ -6033,7 +6236,8 @@ for (const key of [
   }
 }
 if (!/^[0-9a-f-]{36}$/.test(state.Session.Id) ||
-    state.Session.ResumePolicy.includes('resume="')) {
+    state.Session.ResumePolicy !==
+      "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.") {
   throw new Error("repository session state is unsafe or incomplete");
 }
 if (state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
@@ -6041,7 +6245,12 @@ if (state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
     state.Status !== "Completed") {
   throw new Error("repository state lost the exact commit or status");
 }
-if (state.SchemaVersion !== 4 ||
+if (state.SchemaVersion !== 5 ||
+    state.Harness !== "copilot" ||
+    state.ReasoningEffort !== "max" ||
+    state.Provider?.Id !== "github-copilot" ||
+    state.Provider?.Host !== "managed-provider" ||
+    !Array.isArray(state.Provider?.ForwardedEnvVarNames) ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.Source?.LocalPath !== "" ||
     state.Source?.RemoteUrl !== state.Repository ||
@@ -6082,12 +6291,15 @@ assertKeys(reviewPlan, [
   "ApprovalHash",
   "FleetMode",
   "GeneratedAt",
+  "Harness",
   "MaxRepositories",
   "Model",
   "OpenHtmlPolicy",
   "OutputRoot",
   "PriorArtWindow",
+  "Provider",
   "ProvenanceWindow",
+  "ReasoningEffort",
   "ResearchTransport",
   "ReviewDate",
   "RememberPreferences",
@@ -6100,6 +6312,11 @@ assertKeys(reviewPlan, [
   "ThrottleLimit",
   "WorkspaceRoot",
 ], "review plan");
+assertKeys(reviewPlan.Provider, [
+  "ForwardedEnvVarNames",
+  "Host",
+  "Id",
+], "review plan provider");
 assertKeys(reviewPlan.Scope, [
   "Name",
   "Number",
@@ -6120,9 +6337,15 @@ assertKeys(reviewPlan.PriorArtWindow, [
   "LookbackMonths",
   "StartDate",
 ], "review plan prior-art window");
-if (reviewPlan.SchemaVersion !== 3 ||
+if (reviewPlan.SchemaVersion !== 4 ||
     reviewPlan.ApprovalHash !== expectedApprovalHash ||
     reviewPlan.RunId !== runId ||
+    reviewPlan.Harness !== "copilot" ||
+    reviewPlan.ReasoningEffort !== "max" ||
+    reviewPlan.Provider?.Id !== "github-copilot" ||
+    reviewPlan.Provider?.Host !== "managed-provider" ||
+    JSON.stringify(reviewPlan.Provider?.ForwardedEnvVarNames) !==
+      JSON.stringify(state.Provider?.ForwardedEnvVarNames) ||
     reviewPlan.WorkspaceRoot !== expectedWorkspaceRoot ||
     reviewPlan.OutputRoot !== expectedOutputRoot ||
     reviewPlan.Scope?.Number !== 3 ||
@@ -6174,6 +6397,15 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("Review date (local calendar):") ||
     !reviewPlanText.includes("Approval hash:") ||
     !reviewPlanText.includes(expectedApprovalHash) ||
+    !reviewPlanText.includes("Harness:") ||
+    !reviewPlanText.includes("Copilot (copilot)") ||
+    !reviewPlanText.includes("Reasoning effort:") ||
+    !reviewPlanText.includes("Provider ID:") ||
+    !reviewPlanText.includes("github-copilot") ||
+    !reviewPlanText.includes("Provider host:") ||
+    !reviewPlanText.includes("managed-provider") ||
+    !reviewPlanText.includes("Provider env vars:") ||
+    !reviewPlanText.includes("COPILOT_GITHUB_TOKEN") ||
     !reviewPlanText.includes("Run ID:") ||
     !reviewPlanText.includes(runId) ||
     !reviewPlanText.includes("Workspace root:") ||
@@ -6208,6 +6440,10 @@ if (!stdout.includes("Generated at (UTC):") ||
     !stdout.includes("Review date (local calendar):") ||
     !stdout.includes("Approval hash:") ||
     !stdout.includes(expectedApprovalHash) ||
+    !stdout.includes("Harness:") ||
+    !stdout.includes("Reasoning effort:") ||
+    !stdout.includes("Provider ID:") ||
+    !stdout.includes("Provider host:") ||
     !stdout.includes("Prior-art window (local calendar):") ||
     !stdout.includes("Provenance window (local calendar):") ||
     !stdout.includes("Research transport:") ||
@@ -6235,9 +6471,12 @@ if (!Array.isArray(manifest) || manifest.length !== 1 ||
     manifest[0].Session.Id !== state.Session.Id) {
   throw new Error("manifest does not use the repository state schema");
 }
-if (manifest[0].SchemaVersion !== 4 ||
+if (manifest[0].SchemaVersion !== 5 ||
+    manifest[0].Harness !== state.Harness ||
+    manifest[0].ReasoningEffort !== state.ReasoningEffort ||
+    manifest[0].Provider?.Id !== state.Provider?.Id ||
     manifest[0].Research?.Status !== "Completed") {
-  throw new Error("manifest entry lost schema version 4 research state");
+  throw new Error("manifest entry lost schema version 5 research state");
 }
 assertProvenanceWindow(
   manifest[0].ProvenanceWindow,
@@ -6245,7 +6484,9 @@ assertProvenanceWindow(
   expectedProvenanceStartDate,
   reviewDate,
 );
-for (const key of ["Scope", "Paths", "Artifacts", "ResearchTransport"]) {
+for (const key of [
+  "Provider", "Scope", "Paths", "Artifacts", "ResearchTransport",
+]) {
   if (!runState[key] || typeof runState[key] !== "object") {
     throw new Error(`run state ${key} is not an object`);
   }
@@ -6254,7 +6495,11 @@ if (!Array.isArray(runState.Repositories) ||
     runState.Repositories.length !== 1) {
   throw new Error("run state repository summary is invalid");
 }
-if (runState.SchemaVersion !== 4 ||
+if (runState.SchemaVersion !== 5 ||
+    runState.Harness !== state.Harness ||
+    runState.ReasoningEffort !== state.ReasoningEffort ||
+    runState.Provider?.Id !== state.Provider?.Id ||
+    runState.Provider?.Host !== state.Provider?.Host ||
     runState.Scope?.PublicResearch !== true ||
     runState.Scope?.ProvenanceResearch !== true ||
     runState.ResearchTransport?.Enabled !== true ||
@@ -6452,6 +6697,18 @@ if (!handoff.includes("Repository:\n\n    https://github.com")) {
 if (!handoff.includes("Source kind:\n\n    RemoteUrl")) {
   throw new Error("handoff omits repository source metadata");
 }
+for (const fragment of [
+  "Harness:\n\n    Copilot (copilot)",
+  "Reasoning effort:\n\n    max",
+  "Provider:\n\n    ID: github-copilot",
+  "    Host: managed-provider",
+  "    Forwarded environment variable names: COPILOT_GITHUB_TOKEN",
+  "Resume policy:\n\n    Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.",
+]) {
+  if (!handoff.includes(fragment)) {
+    throw new Error(`repository handoff lost harness identity: ${fragment}`);
+  }
+}
 if (!handoff.includes(`Html:\n\n    ${repository}/review.html`) ||
     !handoff.includes(`State:\n\n    ${repository}/state.json`) ||
     !handoff.includes(`ResearchDossier:\n\n    ${researchDossierPath}`) ||
@@ -6477,6 +6734,18 @@ assertHandoffWindow(
   expectedProvenanceStartDate,
   reviewDate,
 );
+for (const fragment of [
+  "Harness:\n\n    Copilot (copilot)",
+  "Reasoning effort:\n\n    max",
+  "Provider:\n\n    ID: github-copilot",
+  "    Host: managed-provider",
+  "    Forwarded environment variable names: COPILOT_GITHUB_TOKEN",
+  "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.",
+]) {
+  if (!runHandoff.includes(fragment)) {
+    throw new Error(`run handoff lost harness identity: ${fragment}`);
+  }
+}
 for (const fragment of [
   `Review plan JSON:\n\n    ${reviewPlanJsonPath}`,
   `Review plan text:\n\n    ${reviewPlanTextPath}`,
@@ -6692,7 +6961,7 @@ const summary = JSON.parse(fs.readFileSync(
   "utf8",
 ));
 if (state.Status !== expectedStatus ||
-    state.SchemaVersion !== 4 ||
+    state.SchemaVersion !== 5 ||
     state.Research?.Status !== expectedStatus ||
     researchState.Status !== expectedStatus ||
     runState.Status !== "Failed" ||
@@ -6981,7 +7250,7 @@ const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
 if (state.Status !== "AccessPreflightFailed" ||
     state.ExitCode !== 128 ||
-    state.SchemaVersion !== 4 ||
+    state.SchemaVersion !== 5 ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
@@ -7116,7 +7385,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
 if (state.Status !== "CloneFailed" ||
     state.ExitCode !== 42 ||
-    state.SchemaVersion !== 4 ||
+    state.SchemaVersion !== 5 ||
     state.ProvenanceWindow !== null ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
@@ -7177,7 +7446,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "Completed" ||
-    state.SchemaVersion !== 4 ||
+    state.SchemaVersion !== 5 ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
     fs.existsSync(path.join(repository, "research")) ||
@@ -7396,7 +7665,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "ReviewFailed" ||
-    state.SchemaVersion !== 4 ||
+    state.SchemaVersion !== 5 ||
     state.ProvenanceWindow !== null ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
