@@ -408,14 +408,25 @@ bash ./tests/validate-harness-contract.sh
 ```
 
 It exercises the common loader and Copilot adapter directly, then runs the real
-runner with hermetic Git, Python, and Copilot fixtures. The runner-level checks
-compare the captured worker argv and relevant environment exactly against the
-golden contract, compare default and explicit Copilot selection, cover public
-research, preserve plan/hash/schema invariants, validate strict provider and
-resume metadata, exercise schema-1/schema-2 preferences and unsafe state-path
-rejection, inject adapter lifecycle failures, exercise production cleanup
-through a scoped failing `rm`, and prove the launcher rejects equals-form and
-inconsistent inherited harness context before state or CLI activity.
+runner with hermetic Git, Python, and Copilot fixtures. It also copies the
+plugin into an isolated temporary tree, replaces only that copy's explicit
+fixed-registry helper with a `copilot`/`noop` map, and runs the development
+fixtures from `tests/fixtures/harnesses/` end to end. The no-op proof covers
+distinct approval hashes, cross-harness approval rejection in both directions,
+empty authentication, adapter-owned argv/environment/runtime-home/persistence/
+cleanup/extraction, diagnostic non-review output, state/manifest/handoff
+identity, Copilot-specific research rejection, and injected lifecycle failure
+stages. Production `common.sh`, manifests, help, and plugin assets remain
+Copilot-only.
+
+The Copilot runner-level checks compare captured worker argv and relevant
+environment exactly against the golden contract, compare default and explicit
+selection, cover public research, preserve plan/hash/schema invariants,
+validate strict provider and resume metadata, exercise schema-1/schema-2
+preferences and unsafe state-path rejection, inject adapter lifecycle
+failures, exercise production cleanup through a scoped failing `rm`, and prove
+the launcher rejects equals-form and inconsistent inherited harness context
+before state or CLI activity.
 
 A started-worker sanitization fixture injects raw authorization, URL userinfo,
 email, CR, BS, VT, FF, SO, DEL, and ANSI bytes into worker stdout, stderr,

@@ -111,10 +111,11 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` is the only production adapter.
   Production runtime support remains Copilot-only.
 - `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v2 seam.
-  `docs/ADDING-A-HARNESS.md` is the canonical
-  implementation playbook. A planned no-op harness is development-only under
-  `tests/fixtures`; it must never be entered in the production registry,
-  packaged, exposed through the launcher, or documented as runtime support.
+  `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
+  no-op adapter and worker under `tests/fixtures/harnesses/` are
+  development-only contract fixtures; they must never be entered in the
+  production registry, packaged, exposed through the launcher, or documented
+  as runtime support.
 - `plugins/rhyolite/agents/repo-review.agent.md` is the user-facing command
   orchestrator. It reserves its embedded prompt-native panel for exact
   `help`, follows that panel with a live `CURRENT SETUP STATUS` block,

@@ -1517,7 +1517,11 @@ initialize_harness_data_contract() {
             'Restore the complete harness adapter and retry.'
         exit 2
     fi
-    mapfile -t authentication_variables <<< "${authentication_variables_output}"
+    authentication_variables=()
+    if [[ -n "${authentication_variables_output}" ]]; then
+        mapfile -t authentication_variables <<< \
+            "${authentication_variables_output}"
+    fi
     for authentication_variable in "${authentication_variables[@]}"; do
         if [[ ! "${authentication_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
             [[ -n "${authentication_variable_seen[${authentication_variable}]+x}" ]]; then
@@ -2000,6 +2004,34 @@ if [[ -z "${OUTPUT_ROOT}" ]]; then
         printf 'the read-only checkout.\n'
         read -r -p "Output root [${OUTPUT_ROOT}]: " output_input
         OUTPUT_ROOT="${output_input:-${OUTPUT_ROOT}}"
+    fi
+fi
+
+if ((ENABLE_PUBLIC_RESEARCH)); then
+    harness_web_research_capability=''
+    if ! rhyolite_harness_capture \
+        harness_web_research_capability \
+        harness_capability \
+        web_research; then
+        print_runner_error \
+            'The selected review harness could not report its public-research capability.' \
+            "harness ${HARNESS} harness_capability" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness public-research capability resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+    if [[ "${HARNESS}" != copilot ||
+        "${harness_web_research_capability}" != yes ]]; then
+        print_runner_error \
+            'The selected review harness cannot run Rhyolite public research.' \
+            "harness ${HARNESS} harness_capability" \
+            "Harness ${HARNESS}" \
+            'The dedicated public-research worker remains runner-owned and Copilot-specific.' \
+            'Review planning and execution did not start.' \
+            'Use scope 1 with this development fixture or select the supported Copilot harness for scope 2 or 3.'
+        exit 2
     fi
 fi
 
@@ -2855,7 +2887,8 @@ finalize_repository_artifacts() {
     mkdir -p -- "${output_directory}/agent-state"
     [[ -f "${timeline}" ]] || : > "${timeline}"
     if [[ ! -f "${transcript}" ]]; then
-        printf '# Copilot session transcript\n\n%s\n' \
+        printf '# %s session transcript\n\n%s\n' \
+            "${HARNESS_DISPLAY_NAME}" \
             'No completed session transcript is available.' > "${transcript}"
     fi
     if [[ ! -f "${request}" ]]; then
@@ -4790,7 +4823,7 @@ EOF
 
     if [[ -f "${transcript_path}" ]]; then
         write_safe_markdown_document \
-            'Copilot Session Transcript' \
+            "${HARNESS_DISPLAY_NAME} Session Transcript" \
             "${transcript_plain_path}" \
             "${transcript_path}.tmp"
         mv -- "${transcript_path}.tmp" "${transcript_path}"

@@ -10,18 +10,15 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v1 until the coordinated v2
-  runtime and validation change lands.
-- Contract v2 is the next target.
-- The current research-aware review plan is schema 3 and repository/run state
-  is schema 4.
-- Contract v2 changes the plan to schema 4 and state to schema 5.
+- The implemented production seam is Contract v2.
+- The current review plan is schema 4 and repository/run state is schema 5.
 - Production remains GitHub Copilot-only. A contract refactor does not itself
   add another supported harness.
-- The planned no-op harness is a development fixture under `tests/fixtures`.
-  It is never registered by production `common.sh`, copied into the plugin,
-  selectable through the launcher or runner in a production checkout,
-  advertised to users, or included in release artifacts.
+- The no-op adapter and worker under `tests/fixtures/harnesses/` are
+  development-only contract fixtures. They are never registered by production
+  `common.sh`, copied into the plugin, selectable through the launcher or
+  runner in a production checkout, advertised to users, or included in release
+  artifacts.
 
 Do not begin by adding a production registry entry. Implement and prove the
 complete adapter contract first. Registration is the final enablement step
@@ -537,9 +534,14 @@ The development no-op fixture never reads or writes user preferences.
 ## Development-only no-op fixture
 
 The no-op harness exists to prove that runner orchestration is generic without
-claiming another production integration. Keep it under `tests/fixtures`, for
-example `tests/fixtures/harness/noop.sh`, with any fake executable beside the
-test fixture.
+claiming another production integration. Its adapter is
+`tests/fixtures/harnesses/noop.sh`, and its deterministic worker is
+`tests/fixtures/harnesses/noop-worker.sh`.
+
+The focused validator copies the production plugin surfaces into an isolated
+temporary tree, explicitly replaces only that copied tree's fixed registry
+helper with a two-entry `copilot`/`noop` map, and invokes the copied runner
+directly. Production `common.sh` continues to map exactly `copilot`.
 
 The fixture should:
 

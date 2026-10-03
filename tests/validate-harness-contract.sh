@@ -12,6 +12,11 @@ OUTPUT_HELPER="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/review-o
 LAUNCHER="${PLUGIN_ROOT}/bin/rhyolite"
 AGENT_ROOT="${PLUGIN_ROOT}/agents"
 SKILL_ROOT="${PLUGIN_ROOT}/skills"
+PLUGIN_MANIFEST="${PLUGIN_ROOT}/plugin.json"
+MARKETPLACE_MANIFEST="${ROOT}/.github/plugin/marketplace.json"
+NOOP_FIXTURE_ROOT="${ROOT}/tests/fixtures/harnesses"
+NOOP_ADAPTER_FIXTURE="${NOOP_FIXTURE_ROOT}/noop.sh"
+NOOP_WORKER_FIXTURE="${NOOP_FIXTURE_ROOT}/noop-worker.sh"
 
 required_contract_functions=(
     harness_id
@@ -92,11 +97,25 @@ for path in \
     "${PROMPT}" \
     "${OUTPUT_HELPER}" \
     "${LAUNCHER}" \
-    "${PREFERENCE_HELPER}"; do
+    "${PREFERENCE_HELPER}" \
+    "${PLUGIN_MANIFEST}" \
+    "${MARKETPLACE_MANIFEST}" \
+    "${NOOP_ADAPTER_FIXTURE}" \
+    "${NOOP_WORKER_FIXTURE}"; do
     [[ -f "${path}" ]] || fail "Required production file is missing: ${path}"
 done
 [[ -f "${HARNESS_COMMON}" ]] ||
     fail "Harness common module is missing: ${HARNESS_COMMON}"
+[[ ! -e "${PLUGIN_ROOT}/lib/harness/noop.sh" ]] ||
+    fail 'The development-only no-op adapter entered the production plugin tree.'
+assert_not_contains \
+    "${PLUGIN_MANIFEST}" \
+    'noop' \
+    'Production plugin manifest'
+assert_not_contains \
+    "${MARKETPLACE_MANIFEST}" \
+    'noop' \
+    'Production marketplace manifest'
 assert_not_contains \
     "${RUNNER}" \
     'validate-plugin.sh still locates these Copilot safeguards' \
@@ -168,6 +187,22 @@ source "${HARNESS_COMMON}"
 assert_equal '2' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
+production_registry_path=''
+rhyolite_harness_registry_lookup \
+    production_registry_path "${PLUGIN_ROOT}" copilot ||
+    fail 'Production fixed registry did not resolve Copilot.'
+assert_equal \
+    "${PLUGIN_ROOT}/lib/harness/copilot.sh" \
+    "${production_registry_path}" \
+    'Production fixed Copilot registry path'
+if rhyolite_harness_registry_lookup \
+    production_registry_path "${PLUGIN_ROOT}" noop; then
+    fail 'Production fixed registry unexpectedly mapped the no-op fixture.'
+fi
+assert_equal \
+    "Harness 'noop' is not supported by this Rhyolite installation." \
+    "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+    'Production no-op registry rejection'
 load_stdout="${fixture_root}/copilot-load.stdout"
 rhyolite_harness_load "${PLUGIN_ROOT}" copilot > "${load_stdout}" ||
     fail 'Copilot harness adapter did not load.'
@@ -213,7 +248,7 @@ if bash -c '
     fail 'Incomplete Copilot adapter unexpectedly loaded.'
 fi
 
-for unsupported_id in bogus codex claude; do
+for unsupported_id in noop bogus codex claude; do
     if bash -c '
         set -euo pipefail
         unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
@@ -1403,6 +1438,12 @@ assert_pre_activity_failure() {
 }
 
 assert_pre_activity_failure \
+    noop-load \
+    'harness noop load' \
+    explicit \
+    noop \
+    unset
+assert_pre_activity_failure \
     bogus-load \
     'harness bogus load' \
     explicit \
@@ -1686,7 +1727,9 @@ case "${command_name}" in
     clone)
         destination="${@: -1}"
         mkdir -p -- "${destination}/.git"
-        printf '# mock repository\n' > "${destination}/README.md"
+        printf '%s\n' \
+            "${RHYOLITE_MOCK_REPOSITORY_CONTENT:-# mock repository}" \
+            > "${destination}/README.md"
         ;;
     fetch|cat-file|checkout|status|diff)
         ;;
@@ -2116,6 +2159,797 @@ if (new Set(plans.map((plan) => plan.ApprovalHash)).size !== 1) {
   throw new Error("runner seam default/explicit approval hashes differ");
 }
 JS
+
+noop_test_plugin="${fixture_root}/noop-test-plugin"
+noop_test_skill="${noop_test_plugin}/skills/readonly-repository-review"
+noop_test_scripts="${noop_test_skill}/scripts"
+noop_worker_bin="${fixture_root}/noop-worker-bin"
+mkdir -p -- \
+    "${noop_test_plugin}/lib/harness" \
+    "${noop_test_plugin}/scripts" \
+    "${noop_test_plugin}/branding" \
+    "${noop_test_scripts}" \
+    "${noop_worker_bin}"
+cp -- "${HARNESS_COMMON}" \
+    "${noop_test_plugin}/lib/harness/common.sh"
+cp -- "${PLUGIN_ROOT}/lib/harness/copilot.sh" \
+    "${noop_test_plugin}/lib/harness/copilot.sh"
+cp -- "${NOOP_ADAPTER_FIXTURE}" \
+    "${noop_test_plugin}/lib/harness/noop.sh"
+cp -- "${PREFERENCE_HELPER}" \
+    "${noop_test_plugin}/scripts/launcher-preferences.sh"
+cp -- "${PLUGIN_ROOT}/branding/welcome-metadata.json" \
+    "${noop_test_plugin}/branding/welcome-metadata.json"
+cp -- "${RUNNER}" \
+    "${noop_test_scripts}/run-parallel-reviews.sh"
+cp -- "${OUTPUT_HELPER}" \
+    "${noop_test_scripts}/review-output.sh"
+cp -- "${PROMPT}" "${noop_test_skill}/review-prompt.txt"
+cp -- "${NOOP_WORKER_FIXTURE}" "${noop_worker_bin}/noop-worker"
+chmod +x \
+    "${noop_test_scripts}/run-parallel-reviews.sh" \
+    "${noop_worker_bin}/noop-worker"
+cat >> "${noop_test_plugin}/lib/harness/common.sh" <<'NOOP_TEST_REGISTRY'
+
+rhyolite_harness_registry_lookup() {
+    local output_variable="$1"
+    local plugin_root="$2"
+    local selected_harness="$3"
+
+    if [[ ! "${output_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        rhyolite_harness_set_error \
+            'The harness registry output variable is invalid.'
+        return 1
+    fi
+
+    case "${selected_harness}" in
+        copilot)
+            printf -v "${output_variable}" '%s' \
+                "${plugin_root%/}/lib/harness/copilot.sh"
+            ;;
+        noop)
+            printf -v "${output_variable}" '%s' \
+                "${plugin_root%/}/lib/harness/noop.sh"
+            ;;
+        *)
+            rhyolite_harness_set_error \
+                "Harness '${selected_harness}' is not supported by this focused test registry."
+            return 1
+            ;;
+    esac
+}
+NOOP_TEST_REGISTRY
+
+for fixture_harness in copilot noop; do
+    (
+        unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+        # shellcheck source=/dev/null
+        source "${noop_test_plugin}/lib/harness/common.sh"
+        rhyolite_harness_load \
+            "${noop_test_plugin}" "${fixture_harness}" ||
+            fail "Copied fixed registry could not load ${fixture_harness}."
+        assert_equal \
+            "${fixture_harness}" \
+            "${RHYOLITE_HARNESS_LOADED_ID}" \
+            "Copied fixed registry loaded ID ${fixture_harness}"
+        assert_equal \
+            "${noop_test_plugin}/lib/harness/${fixture_harness}.sh" \
+            "${RHYOLITE_HARNESS_LOADED_PATH}" \
+            "Copied fixed registry loaded path ${fixture_harness}"
+        for function_name in "${required_contract_functions[@]}"; do
+            declare -F "${function_name}" >/dev/null ||
+                fail "Copied ${fixture_harness} adapter is missing ${function_name}."
+        done
+    )
+done
+
+(
+    PATH="${noop_worker_bin}:/usr/bin:/bin"
+    export PATH
+    unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+    # shellcheck source=/dev/null
+    source "${noop_test_plugin}/lib/harness/common.sh"
+    rhyolite_harness_load "${noop_test_plugin}" noop ||
+        fail 'Development no-op adapter did not load.'
+    assert_equal 'noop' "$(harness_id)" 'No-op harness ID'
+    assert_equal \
+        'Development No-op Fixture' \
+        "$(harness_display_name)" \
+        'No-op display name'
+    assert_equal 'noop-worker' "$(harness_cli_name)" 'No-op CLI name'
+    harness_require_cli ||
+        fail 'No-op adapter did not accept its fixture worker.'
+    assert_equal \
+        'noop-fixture-model' \
+        "$(harness_default_model)" \
+        'No-op default model'
+    harness_validate_model_id noop-fixture-model ||
+        fail 'No-op adapter rejected its fixture model.'
+    if harness_validate_model_id gpt-5.6-sol; then
+        fail 'No-op adapter accepted the Copilot model.'
+    fi
+    assert_equal \
+        'max' \
+        "$(harness_max_reasoning_effort noop-fixture-model)" \
+        'No-op maximum reasoning effort'
+    mapfile -t noop_model_choices < <(harness_model_choices)
+    [[ ${#noop_model_choices[@]} -eq 1 &&
+        "${noop_model_choices[0]}" == \
+            'Development no-op fixture (diagnostic only) - noop-fixture-model' ]] ||
+        fail 'No-op model choices are not deterministic.'
+
+    declare -A noop_expected_capabilities=(
+        [fleet]=no
+        [structured_questions]=no
+        [subagents]=no
+        [builtin_security_specialist]=no
+        [builtin_research_specialist]=no
+        [web_research]=no
+        [shell_denial]=yes
+        [final_message_file]=yes
+    )
+    for capability in "${!noop_expected_capabilities[@]}"; do
+        assert_equal \
+            "${noop_expected_capabilities[${capability}]}" \
+            "$(harness_capability "${capability}")" \
+            "No-op capability ${capability}"
+    done
+    assert_equal \
+        'unverified' \
+        "$(harness_capability future_unknown_capability)" \
+        'No-op unknown capability'
+    [[ -z "$(harness_auth_secret_env_vars)" ]] ||
+        fail 'No-op adapter exposed an authentication-variable name.'
+    assert_equal \
+        'This development-only no-op fixture requires no authentication and must never be used for a real review.' \
+        "$(harness_login_remediation)" \
+        'No-op login remediation'
+    assert_equal \
+        'Do not resume this development-only no-op fixture; rerun the focused harness contract validator.' \
+        "$(harness_resume_policy)" \
+        'No-op resume policy'
+    noop_provider_path="${fixture_root}/noop-provider-summary.json"
+    harness_provider_summary > "${noop_provider_path}"
+    python3 - "${noop_provider_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+summary = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if summary != {
+    "Id": "fixture-noop",
+    "Host": "fixture.invalid",
+    "ForwardedEnvVarNames": [],
+}:
+    raise SystemExit("development no-op provider summary is invalid")
+PY
+    if harness_allow_all_detected; then
+        fail 'No-op adapter reported inherited allow-all state.'
+    fi
+)
+
+noop_runner="${noop_test_scripts}/run-parallel-reviews.sh"
+copied_copilot_plan="${fixture_root}/copied-copilot-plan.json"
+noop_plan="${fixture_root}/noop-plan.json"
+noop_plan_stderr="${fixture_root}/noop-plan.stderr"
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${noop_worker_bin}:${plan_mock_bin}:${PATH}" \
+    "${noop_runner}" --harness copilot "${plan_arguments[@]}" \
+    > "${copied_copilot_plan}" 2> "${noop_plan_stderr}" ||
+    fail 'Copied-tree Copilot plan failed.'
+[[ ! -s "${noop_plan_stderr}" ]] ||
+    fail 'Copied-tree Copilot plan wrote stderr.'
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${noop_worker_bin}:${plan_mock_bin}:${PATH}" \
+    "${noop_runner}" --harness noop "${plan_arguments[@]}" \
+    > "${noop_plan}" 2> "${noop_plan_stderr}" ||
+    fail 'Copied-tree no-op plan failed.'
+[[ ! -s "${noop_plan_stderr}" ]] ||
+    fail 'Copied-tree no-op plan wrote stderr.'
+
+python3 - \
+    "${plan_default}" \
+    "${copied_copilot_plan}" \
+    "${noop_plan}" <<'PY'
+import json
+import pathlib
+import sys
+
+production_copilot, copied_copilot, noop = [
+    json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    for path in sys.argv[1:]
+]
+if production_copilot["ApprovalHash"] != copied_copilot["ApprovalHash"]:
+    raise SystemExit("copied fixed registry changed the Copilot approval hash")
+if noop.get("SchemaVersion") != 4:
+    raise SystemExit("no-op plan did not use schema 4")
+if noop.get("Harness") != "noop":
+    raise SystemExit("no-op plan lost harness identity")
+if noop.get("Model") != "noop-fixture-model":
+    raise SystemExit("no-op plan lost adapter-owned model identity")
+if noop.get("ReasoningEffort") != "max":
+    raise SystemExit("no-op plan lost adapter-owned reasoning effort")
+if noop.get("Provider") != {
+    "Id": "fixture-noop",
+    "Host": "fixture.invalid",
+    "ForwardedEnvVarNames": [],
+}:
+    raise SystemExit("no-op plan lost adapter-owned provider identity")
+if noop["ApprovalHash"] == copied_copilot["ApprovalHash"]:
+    raise SystemExit("Copilot and no-op plans shared an approval hash")
+PY
+
+copied_copilot_plan_hash="$(contract_plan_hash "${copied_copilot_plan}")"
+noop_plan_hash="$(contract_plan_hash "${noop_plan}")"
+noop_execution_arguments=(
+    --repo https://github.com/octocat/Hello-World
+    --scope 1
+    --workspace-root "${plan_workspace}"
+    --output-root "${plan_output}"
+    --non-interactive
+    --no-open-html
+)
+
+noop_research_workspace="${fixture_root}/noop-research-workspace"
+noop_research_output="${fixture_root}/noop-research-output"
+noop_research_stdout="${fixture_root}/noop-research.stdout"
+noop_research_stderr="${fixture_root}/noop-research.stderr"
+set +e
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${noop_worker_bin}:${plan_mock_bin}:/usr/bin:/bin" \
+    "${noop_runner}" \
+    --harness noop \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --workspace-root "${noop_research_workspace}" \
+    --output-root "${noop_research_output}" \
+    --non-interactive \
+    --no-open-html \
+    --plan-only > "${noop_research_stdout}" 2> "${noop_research_stderr}"
+noop_research_status=$?
+set -e
+((noop_research_status == 2)) ||
+    fail 'No-op fixture unexpectedly reached Copilot-specific public research.'
+assert_contains \
+    "${noop_research_stderr}" \
+    'Stage: harness noop harness_capability' \
+    'No-op public-research rejection stage'
+assert_contains \
+    "${noop_research_stderr}" \
+    'The dedicated public-research worker remains runner-owned and Copilot-specific.' \
+    'No-op public-research rejection detail'
+[[ ! -e "${noop_research_workspace}" &&
+    ! -e "${noop_research_output}" ]] ||
+    fail 'No-op public-research rejection created workspace or output roots.'
+
+contract_output_run_count() {
+    local output_root="$1"
+
+    if [[ ! -d "${output_root}" ]]; then
+        printf '0\n'
+        return
+    fi
+    find "${output_root}" -mindepth 1 -maxdepth 1 -type d |
+        wc -l | tr -d '[:space:]'
+}
+
+assert_cross_harness_mismatch() {
+    local name="$1"
+    local harness="$2"
+    local expected_hash="$3"
+    local stdout_path="${fixture_root}/${name}.stdout"
+    local stderr_path="${fixture_root}/${name}.stderr"
+    local copilot_capture="${fixture_root}/${name}-copilot-capture"
+    local noop_capture="${fixture_root}/${name}-noop-capture"
+    local before_count
+    local after_count
+    local status
+
+    before_count="$(contract_output_run_count "${plan_output}")"
+    set +e
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        COPILOT_HOME="${runner_source_home}" \
+        RHYOLITE_WORKER_CAPTURE="${copilot_capture}" \
+        RHYOLITE_NOOP_CAPTURE_ROOT="${noop_capture}" \
+        TMPDIR="${runner_tmp_root}" \
+        PATH="${noop_worker_bin}:${runner_mock_bin}:/usr/bin:/bin" \
+        "${noop_runner}" \
+        --harness "${harness}" \
+        "${noop_execution_arguments[@]}" \
+        --expected-plan-hash "${expected_hash}" \
+        > "${stdout_path}" 2> "${stderr_path}"
+    status=$?
+    set -e
+    after_count="$(contract_output_run_count "${plan_output}")"
+
+    ((status == 2)) ||
+        fail "${name}: cross-harness approval mismatch returned ${status}"
+    assert_contains \
+        "${stderr_path}" \
+        'approved plan changed; regenerate and reconfirm' \
+        "${name} approval mismatch"
+    assert_equal \
+        "${before_count}" \
+        "${after_count}" \
+        "${name} output run count"
+    [[ ! -e "${copilot_capture}" && ! -e "${noop_capture}" ]] ||
+        fail "${name}: cross-harness mismatch started a worker"
+}
+
+assert_cross_harness_mismatch \
+    noop-with-copilot-approval \
+    noop \
+    "${copied_copilot_plan_hash}"
+assert_cross_harness_mismatch \
+    copilot-with-noop-approval \
+    copilot \
+    "${noop_plan_hash}"
+
+noop_capture="${runner_capture_root}/noop"
+noop_tmp_root="${fixture_root}/noop-runner-tmp"
+noop_stdout="${fixture_root}/noop-runner.stdout"
+noop_stderr="${fixture_root}/noop-runner.stderr"
+noop_snapshot_marker='NOOP_SNAPSHOT_CONTENT_MUST_NOT_BE_OBSERVED'
+noop_parent_secret='noop-parent-secret-must-not-cross'
+mkdir -p -- "${noop_capture}" "${noop_tmp_root}"
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    COPILOT_GITHUB_TOKEN="${noop_parent_secret}" \
+    GH_TOKEN="${noop_parent_secret}" \
+    OPENAI_API_KEY="${noop_parent_secret}" \
+    RHYOLITE_MOCK_REPOSITORY_CONTENT="${noop_snapshot_marker}" \
+    RHYOLITE_NOOP_CAPTURE_ROOT="${noop_capture}" \
+    RHYOLITE_NOOP_FORBIDDEN_TEXT="${noop_snapshot_marker}" \
+    TMPDIR="${noop_tmp_root}" \
+    PATH="${noop_worker_bin}:${runner_mock_bin}:/usr/bin:/bin" \
+    "${noop_runner}" \
+    --harness noop \
+    "${noop_execution_arguments[@]}" \
+    --expected-plan-hash "${noop_plan_hash}" \
+    > "${noop_stdout}" 2> "${noop_stderr}" ||
+    fail 'Development no-op runner seam execution failed.'
+[[ ! -s "${noop_stderr}" ]] ||
+    fail 'Development no-op runner seam execution wrote stderr.'
+
+noop_run="$(contract_run_path "${noop_stdout}")"
+[[ -d "${noop_run}" ]] ||
+    fail 'Development no-op execution did not create an output bundle.'
+noop_repository="${noop_run}/github--octocat--hello-world"
+noop_state="${noop_repository}/state.json"
+noop_run_state="${noop_run}/state.json"
+noop_manifest="${noop_run}/manifest.json"
+noop_report="${noop_repository}/review.txt"
+noop_timeline="${noop_repository}/analysis-timeline.txt"
+noop_transcript="${noop_repository}/session.md"
+noop_request="${noop_repository}/request.txt"
+noop_agent_state="${noop_repository}/agent-state"
+noop_repo_handoff="${noop_repository}/handoff.md"
+noop_run_handoff="${noop_run}/handoff.md"
+noop_run_plan="${noop_run}/review-plan.json"
+noop_run_plan_text="${noop_run}/review-plan.txt"
+for path in \
+    "${noop_state}" \
+    "${noop_run_state}" \
+    "${noop_manifest}" \
+    "${noop_report}" \
+    "${noop_timeline}" \
+    "${noop_transcript}" \
+    "${noop_request}" \
+    "${noop_repo_handoff}" \
+    "${noop_run_handoff}" \
+    "${noop_run_plan}" \
+    "${noop_run_plan_text}" \
+    "${noop_capture}/argv" \
+    "${noop_capture}/environment.txt" \
+    "${noop_capture}/cwd.txt" \
+    "${noop_capture}/runtime-home.txt" \
+    "${noop_capture}/runtime-inventory.txt" \
+    "${noop_capture}/started"; do
+    [[ -f "${path}" ]] || fail "No-op contract artifact is missing: ${path}"
+done
+
+mapfile -d '' -t noop_state_values < <(
+    node - "${noop_state}" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+for (const value of [
+  state.Session.Name,
+  state.Session.Id,
+  state.Paths.ReadOnlyCheckout,
+  state.Artifacts.Transcript,
+  state.Artifacts.Request,
+]) {
+  process.stdout.write(`${value}\0`);
+}
+JS
+)
+[[ ${#noop_state_values[@]} -eq 5 ]] ||
+    fail 'No-op state did not expose expected worker contract fields.'
+noop_expected_arguments=(
+    --fixture-contract 2
+    --session-name "${noop_state_values[0]}"
+    --session-id "${noop_state_values[1]}"
+    --model noop-fixture-model
+    --reasoning-effort max
+    --transcript "${noop_state_values[3]}"
+)
+noop_expected_vector="${noop_capture}/expected-argv"
+printf '%s\0' "${noop_expected_arguments[@]}" > "${noop_expected_vector}"
+cmp -s "${noop_expected_vector}" "${noop_capture}/argv" ||
+    fail 'No-op adapter worker argv changed from its deterministic contract.'
+
+noop_runtime_home="$(
+    tr -d '\r\n' < "${noop_capture}/runtime-home.txt"
+)"
+[[ "${noop_runtime_home}" == \
+    "${noop_tmp_root}/rhyolite-repo-review-noop."* ]] ||
+    fail 'No-op adapter used an unexpected runtime-home path.'
+[[ ! -e "${noop_runtime_home}" ]] ||
+    fail 'No-op adapter left its temporary runtime home.'
+assert_contains \
+    "${noop_capture}/runtime-inventory.txt" \
+    $'fixture-runtime.json\t600\tf' \
+    'No-op runtime marker inventory'
+assert_contains \
+    "${noop_capture}/runtime-inventory.txt" \
+    $'session-state/ephemeral/state.json\t600\tf' \
+    'No-op ephemeral state inventory'
+
+python3 - \
+    "${noop_capture}/environment.txt" \
+    "${noop_runtime_home}" \
+    "${noop_capture}" \
+    "${noop_worker_bin}" \
+    "${noop_parent_secret}" \
+    "${noop_snapshot_marker}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+runtime_home = sys.argv[2]
+capture_root = sys.argv[3]
+worker_bin = sys.argv[4]
+secret = sys.argv[5]
+snapshot_marker = sys.argv[6]
+text = path.read_text(encoding="utf-8")
+values = {}
+for line in text.splitlines():
+    name, separator, value = line.partition("=")
+    if not separator:
+        raise SystemExit(f"invalid environment capture line: {line!r}")
+    values[name] = value
+required = {
+    "HOME": runtime_home,
+    "XDG_CONFIG_HOME": runtime_home,
+    "LC_ALL": "C",
+    "NOOP_RUNTIME_HOME": runtime_home,
+    "NOOP_CAPTURE_ROOT": capture_root,
+    "PATH": f"{worker_bin}:/usr/bin:/bin",
+}
+for name, expected in required.items():
+    if values.get(name) != expected:
+        raise SystemExit(f"no-op worker environment changed {name}")
+for forbidden in (
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "COPILOT_ALLOW_ALL",
+    "COPILOT_HOME",
+):
+    if forbidden in values:
+        raise SystemExit(f"no-op worker inherited forbidden variable {forbidden}")
+if secret in text or snapshot_marker in text:
+    raise SystemExit("no-op worker environment exposed parent or repository data")
+PY
+
+noop_worker_cwd="$(tr -d '\r\n' < "${noop_capture}/cwd.txt")"
+case "${noop_worker_cwd}" in
+    "${noop_state_values[2]}"|"${noop_state_values[2]}"/*)
+        fail 'No-op worker ran inside the read-only snapshot.'
+        ;;
+esac
+for worker_facing_path in \
+    "${noop_capture}/argv" \
+    "${noop_capture}/environment.txt" \
+    "${noop_capture}/cwd.txt" \
+    "${noop_request}" \
+    "${noop_timeline}" \
+    "${noop_transcript}" \
+    "${noop_report}"; do
+    if grep -aFq -- "${noop_state_values[2]}" "${worker_facing_path}" ||
+        grep -aFq -- "${noop_snapshot_marker}" "${worker_facing_path}"; then
+        fail "No-op worker-facing artifact exposed snapshot data: ${worker_facing_path}"
+    fi
+done
+for forbidden_repository_value in \
+    'https://github.com/octocat/Hello-World' \
+    '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'; do
+    for worker_facing_path in \
+        "${noop_capture}/argv" \
+        "${noop_capture}/environment.txt" \
+        "${noop_request}" \
+        "${noop_timeline}" \
+        "${noop_transcript}" \
+        "${noop_report}"; do
+        if grep -aFq -- \
+            "${forbidden_repository_value}" "${worker_facing_path}"; then
+            fail "No-op worker received repository identity: ${worker_facing_path}"
+        fi
+    done
+done
+
+assert_contains \
+    "${noop_request}" \
+    'RHYOLITE DEVELOPMENT-ONLY NO-OP HARNESS REQUEST' \
+    'No-op diagnostic request'
+assert_contains \
+    "${noop_timeline}" \
+    'NOOP FIXTURE: repository analysis intentionally skipped.' \
+    'No-op diagnostic timeline'
+assert_not_contains \
+    "${noop_timeline}" \
+    'REPOSITORY REVIEW REPORT' \
+    'No-op transcript-only extraction path'
+assert_contains \
+    "${noop_report}" \
+    'DEVELOPMENT-ONLY NO-OP HARNESS DIAGNOSTIC.' \
+    'No-op diagnostic canonical report'
+assert_contains \
+    "${noop_report}" \
+    'This is not a real repository review.' \
+    'No-op non-review warning'
+assert_contains \
+    "${noop_report}" \
+    'Repository analysis performed: No.' \
+    'No-op analysis denial'
+assert_contains \
+    "${noop_transcript}" \
+    'Development No-op Fixture Session Transcript' \
+    'No-op transcript harness identity'
+assert_not_contains \
+    "${noop_transcript}" \
+    'Copilot Session Transcript' \
+    'No-op transcript masquerade prevention'
+[[ -d "${noop_agent_state}" ]] ||
+    fail 'No-op finalization omitted the empty agent-state directory.'
+[[ -z "$(find "${noop_agent_state}" -mindepth 1 -print -quit)" ]] ||
+    fail 'No-op adapter persisted fixture session state.'
+
+node - \
+    "${noop_run_plan}" \
+    "${noop_state}" \
+    "${noop_run_state}" \
+    "${noop_manifest}" <<'JS'
+const fs = require("fs");
+const [planPath, repositoryStatePath, runStatePath, manifestPath] =
+  process.argv.slice(2);
+const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+const repositoryState = JSON.parse(
+  fs.readFileSync(repositoryStatePath, "utf8"));
+const runState = JSON.parse(fs.readFileSync(runStatePath, "utf8"));
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const provider = {
+  Id: "fixture-noop",
+  Host: "fixture.invalid",
+  ForwardedEnvVarNames: [],
+};
+function assertIdentity(value, label) {
+  if (value.SchemaVersion !== 5 ||
+      value.Harness !== "noop" ||
+      value.ReasoningEffort !== "max" ||
+      JSON.stringify(value.Provider) !== JSON.stringify(provider)) {
+    throw new Error(`${label} lost no-op harness/provider identity`);
+  }
+}
+if (plan.SchemaVersion !== 4 ||
+    plan.Harness !== "noop" ||
+    plan.Model !== "noop-fixture-model" ||
+    plan.ReasoningEffort !== "max" ||
+    JSON.stringify(plan.Provider) !== JSON.stringify(provider)) {
+  throw new Error("executed no-op plan lost adapter-owned identity");
+}
+assertIdentity(repositoryState, "repository state");
+assertIdentity(runState, "run state");
+if (repositoryState.Status !== "Completed" ||
+    repositoryState.Session.ResumePolicy !==
+      "Do not resume this development-only no-op fixture; rerun the focused harness contract validator.") {
+  throw new Error("no-op repository state is not truthful")
+}
+if (!Array.isArray(manifest) || manifest.length !== 1) {
+  throw new Error("no-op manifest shape is invalid");
+}
+assertIdentity(manifest[0], "manifest entry");
+JS
+
+for identity_artifact in \
+    "${noop_repo_handoff}" \
+    "${noop_run_handoff}" \
+    "${noop_run_plan_text}"; do
+    assert_contains \
+        "${identity_artifact}" \
+        'Development No-op Fixture (noop)' \
+        'No-op handoff/plan harness identity'
+    assert_contains \
+        "${identity_artifact}" \
+        'fixture-noop' \
+        'No-op handoff/plan provider identity'
+    assert_contains \
+        "${identity_artifact}" \
+        'fixture.invalid' \
+        'No-op handoff/plan provider host'
+done
+if grep -RFl -- "${noop_parent_secret}" \
+    "${noop_run}" "${noop_capture}" >/dev/null; then
+    fail 'No-op run or capture exposed an inherited credential value.'
+fi
+
+contract_run_noop_failure_case() {
+    local case_name="$1"
+    local failure_function="$2"
+    local worker_started="$3"
+    local expected_terminal_stage="$4"
+    local case_root="${fixture_root}/noop-failure-${case_name}"
+    local case_capture="${case_root}/capture"
+    local case_tmp="${case_root}/tmp"
+    local case_stdout="${case_root}/run.stdout"
+    local case_stderr="${case_root}/run.stderr"
+    local case_combined="${case_root}/run.combined"
+    local case_exit
+    local run_path
+    local state_path
+    local errors_path
+
+    mkdir -p -- "${case_capture}" "${case_tmp}"
+    set +e
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        COPILOT_GITHUB_TOKEN="${noop_parent_secret}" \
+        RHYOLITE_MOCK_REPOSITORY_CONTENT="${noop_snapshot_marker}" \
+        RHYOLITE_NOOP_CAPTURE_ROOT="${case_capture}" \
+        RHYOLITE_NOOP_FAIL_FUNCTION="${failure_function}" \
+        RHYOLITE_NOOP_FORBIDDEN_TEXT="${noop_snapshot_marker}" \
+        TMPDIR="${case_tmp}" \
+        PATH="${noop_worker_bin}:${runner_mock_bin}:/usr/bin:/bin" \
+        "${noop_runner}" \
+        --harness noop \
+        "${noop_execution_arguments[@]}" \
+        --expected-plan-hash "${noop_plan_hash}" \
+        > "${case_stdout}" 2> "${case_stderr}"
+    case_exit=$?
+    set -e
+    cat "${case_stdout}" "${case_stderr}" > "${case_combined}"
+
+    if [[ "${failure_function}" == harness_require_cli ||
+        "${failure_function}" == harness_prepare_run ]]; then
+        ((case_exit == 2)) ||
+            fail "${case_name}: top-level no-op failure returned ${case_exit}"
+        assert_contains \
+            "${case_combined}" \
+            "Stage: harness noop ${failure_function}" \
+            "${case_name} no-op terminal stage"
+        [[ ! -f "${case_capture}/started" ]] ||
+            fail "${case_name}: no-op worker started after top-level failure"
+        assert_not_contains \
+            "${case_combined}" \
+            "${noop_parent_secret}" \
+            "${case_name} no-op credential sanitization"
+        return
+    fi
+
+    ((case_exit != 0)) ||
+        fail "${case_name}: no-op lifecycle failure unexpectedly succeeded"
+    run_path="$(contract_run_path "${case_stdout}")"
+    [[ -d "${run_path}" ]] ||
+        fail "${case_name}: no-op lifecycle failure lost its artifacts"
+    state_path="${run_path}/github--octocat--hello-world/state.json"
+    errors_path="${run_path}/github--octocat--hello-world/errors.txt"
+    assert_contains \
+        "${case_combined}" \
+        "Stage: ${expected_terminal_stage}" \
+        "${case_name} no-op terminal stage"
+    assert_contains \
+        "${errors_path}" \
+        "Harness failure stage: harness noop ${failure_function}" \
+        "${case_name} no-op artifact stage"
+    if ((worker_started)); then
+        [[ -f "${case_capture}/started" ]] ||
+            fail "${case_name}: expected the no-op worker to start"
+    else
+        [[ ! -f "${case_capture}/started" ]] ||
+            fail "${case_name}: no-op worker started before adapter setup completed"
+    fi
+    node - \
+        "${state_path}" \
+        "${worker_started}" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const workerStarted = process.argv[3] === "1";
+if (state.SchemaVersion !== 5 ||
+    state.Harness !== "noop" ||
+    state.Provider?.Id !== "fixture-noop" ||
+    state.Provider?.Host !== "fixture.invalid" ||
+    state.ReasoningEffort !== "max" ||
+    state.Status !== "ReviewFailed" ||
+    state.ExitCode === 0) {
+  throw new Error("no-op lifecycle failure state is not truthful");
+}
+if (workerStarted) {
+  if (!state.Session.Id || !state.Session.Name) {
+    throw new Error("started no-op worker lost session identity");
+  }
+} else if (state.Session.Id !== "" || state.Session.Name !== "") {
+  throw new Error("pre-worker no-op failure retained session identity");
+}
+JS
+    if grep -RFl -- "${noop_parent_secret}" \
+        "${run_path}" "${case_capture}" >/dev/null; then
+        fail "${case_name}: no-op failure exposed an inherited credential"
+    fi
+    if [[ "${failure_function}" == harness_sanitize_runtime_home ]]; then
+        failed_runtime_home="$(
+            tr -d '\r\n' < "${case_capture}/runtime-home.txt"
+        )"
+        [[ -d "${failed_runtime_home}" ]] ||
+            fail 'No-op cleanup failure did not leave verifiable runtime evidence.'
+    elif [[ -f "${case_capture}/runtime-home.txt" ]]; then
+        cleaned_runtime_home="$(
+            tr -d '\r\n' < "${case_capture}/runtime-home.txt"
+        )"
+        [[ ! -e "${cleaned_runtime_home}" ]] ||
+            fail "${case_name}: no-op runtime home survived non-cleanup failure"
+    fi
+}
+
+contract_run_noop_failure_case \
+    noop-require-cli \
+    harness_require_cli \
+    0 \
+    'harness noop harness_require_cli'
+contract_run_noop_failure_case \
+    noop-prepare-run \
+    harness_prepare_run \
+    0 \
+    'harness noop harness_prepare_run'
+contract_run_noop_failure_case \
+    noop-render-request \
+    harness_render_request \
+    0 \
+    'harness noop harness_render_request'
+contract_run_noop_failure_case \
+    noop-worker-argv \
+    harness_worker_argv \
+    0 \
+    'harness noop harness_worker_argv'
+contract_run_noop_failure_case \
+    noop-prepare-worker-home \
+    harness_prepare_worker_home \
+    0 \
+    'harness noop harness_prepare_worker_home'
+contract_run_noop_failure_case \
+    noop-worker-env \
+    harness_worker_env \
+    0 \
+    'harness noop harness_worker_env'
+contract_run_noop_failure_case \
+    noop-persist-state \
+    harness_persist_agent_state \
+    1 \
+    'harness noop harness_persist_agent_state'
+contract_run_noop_failure_case \
+    noop-verify-isolation \
+    harness_verify_isolation \
+    1 \
+    'harness noop harness_verify_isolation'
+contract_run_noop_failure_case \
+    noop-extract-report \
+    harness_extract_final_report \
+    1 \
+    'harness noop harness_extract_final_report'
+contract_run_noop_failure_case \
+    noop-cleanup \
+    harness_sanitize_runtime_home \
+    1 \
+    cleanup
 
 contract_copy_fixture_plugin() {
     local fixture_name="$1"
@@ -2656,8 +3490,13 @@ launcher_help="$(
 [[ "${launcher_help}" == \
     *'--harness ID  Select the review harness (currently: copilot).'* ]] ||
     fail 'Launcher help does not document the I1a Copilot harness selector.'
+[[ "${launcher_help}" != *noop* ]] ||
+    fail 'Launcher help exposed the development-only no-op harness.'
 [[ ! -e "${launcher_default_capture}" ]] ||
     fail 'Launcher help unexpectedly invoked the downstream Copilot CLI.'
+runner_help="$("${RUNNER}" --help)"
+[[ "${runner_help}" != *noop* ]] ||
+    fail 'Production runner help exposed the development-only no-op harness.'
 
 assert_launcher_pre_activity_failure() {
     local name="$1"
@@ -2724,6 +3563,14 @@ assert_launcher_pre_activity_failure() {
         fail "${name}: launcher created state before failing"
 }
 
+assert_launcher_pre_activity_failure \
+    launcher-noop \
+    unset \
+    '' \
+    'launcher harness validation' \
+    "Harness 'noop' is not supported by this Rhyolite installation." \
+    'Use --harness copilot with a complete Rhyolite plugin installation.' \
+    --harness noop
 assert_launcher_pre_activity_failure \
     launcher-equals-codex \
     unset \

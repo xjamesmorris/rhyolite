@@ -227,7 +227,8 @@ grep -Fq 'bash ./tests/validate-all.sh' "${COPILOT_INSTRUCTIONS}" &&
     grep -Fq 'bash ./tests/validate-all.sh' "${PR_TEMPLATE}" ||
     fail 'Repository instructions and pull-request validation do not use validate-all.sh.'
 grep -Fq '[AGENTS.md](../AGENTS.md)' "${COPILOT_INSTRUCTIONS}" &&
-    grep -Fq 'canonical repository-wide' "${COPILOT_INSTRUCTIONS}" ||
+    grep -Fq 'canonical repository-wide' "${COPILOT_INSTRUCTIONS}" &&
+    grep -Fq 'bootstrap pointer' "${COPILOT_INSTRUCTIONS}" ||
     fail 'Copilot bootstrap does not point to canonical AGENTS.md guidance.'
 grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
     grep -Fq 'does not define, advertise, or' "${CLAUDE_GUIDANCE}" &&

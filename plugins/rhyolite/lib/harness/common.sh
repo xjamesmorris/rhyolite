@@ -127,6 +127,30 @@ rhyolite_harness_validate_context() {
     fi
 }
 
+rhyolite_harness_registry_lookup() {
+    local output_variable="$1"
+    local plugin_root="$2"
+    local selected_harness="$3"
+
+    if [[ ! "${output_variable}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        rhyolite_harness_set_error \
+            'The harness registry output variable is invalid.'
+        return 1
+    fi
+
+    case "${selected_harness}" in
+        copilot)
+            printf -v "${output_variable}" '%s' \
+                "${plugin_root%/}/lib/harness/copilot.sh"
+            ;;
+        *)
+            rhyolite_harness_set_error \
+                "Harness '${selected_harness}' is not supported by this Rhyolite installation."
+            return 1
+            ;;
+    esac
+}
+
 rhyolite_harness_load() {
     local plugin_root="$1"
     local selected_harness="$2"
@@ -141,16 +165,8 @@ rhyolite_harness_load() {
     RHYOLITE_HARNESS_LOADED_PATH=''
     rhyolite_harness_validate_context "${selected_harness}" || return 1
 
-    case "${selected_harness}" in
-        copilot)
-            adapter_path="${plugin_root%/}/lib/harness/copilot.sh"
-            ;;
-        *)
-            rhyolite_harness_set_error \
-                "Harness '${selected_harness}' is not supported by this Rhyolite installation."
-            return 1
-            ;;
-    esac
+    rhyolite_harness_registry_lookup \
+        adapter_path "${plugin_root}" "${selected_harness}" || return 1
 
     if [[ ! -f "${adapter_path}" || ! -r "${adapter_path}" ]]; then
         rhyolite_harness_set_error \

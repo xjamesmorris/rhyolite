@@ -56,9 +56,10 @@ does not make other CLIs supported. Contributor and coding-agent guidance is
 canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
 Contract-v2 implementation playbook in
-[docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The planned no-op
-harness is a development-only fixture under `tests/fixtures`; it is not
-registered, packaged, selectable, or exposed in production.
+[docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
+worker under `tests/fixtures/harnesses/` are development-only contract
+fixtures; they are not registered, packaged, selectable, or exposed in
+production.
 
 Rhyolite is licensed under the GNU General Public License version 2
 only (`GPL-2.0-only`). See [LICENSE](LICENSE).
