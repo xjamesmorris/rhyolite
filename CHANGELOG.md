@@ -1,7 +1,94 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - Unreleased
 
+- Fixed launcher sessions that could render the Rhyolite plaque again during a
+  `Shift+Tab` mode transition. Launcher startup now owns one `sessionStart`
+  plaque, while the prompt hook matches only exact manual start commands and
+  ignores internal resumes and marker-bearing continuations.
+- The launcher now passes `--mode interactive` explicitly. Rhyolite treats
+  plan/autopilot transitions as unsupported during guided setup or execution,
+  preserves the approval-bound worker model, and no longer auto-opens reports
+  merely because the outer session entered autopilot.
+- Added exact `stop`/`cancel` control handling and targeted INT/TERM/HUP
+  propagation through repository shells, timeout wrappers, Copilot workers,
+  and research brokers. Interrupted runs now finalize truthful `Interrupted`
+  repository/run state and artifacts instead of leaving detached work alive.
+- Retired the Rhyolite launcher `--autopilot` option. The parser now rejects
+  the legacy spelling with a `RHYOLITE ERROR` diagnostic and exit code `2`;
+  guided setup and effective-plan approval remain interactive. Users can still
+  independently enable Copilot's own in-session autonomy mode after startup.
+- Standardized the initial and edited model pickers on ordered
+  `gpt-5.6-sol` (recommended) and `claude-fable-5` choices while preserving
+  syntax-validated custom model IDs and per-repository preference round trips.
+  Launcher and direct-runner help now list both known IDs and custom-ID
+  support.
+- Added deterministic trusted navigation to `review.md` and `review.html`
+  using only exact allowlisted report headings. Canonical report body chunks
+  remain inert, fixed sibling/run-index links are generated locally, and a
+  deduplicated external-reference block accepts only conservatively validated
+  HTTPS URLs. HTML retains a restrictive CSP, adds a no-referrer policy, and
+  performs no rendering-time network access.
+- Added a required all-scope `AGENT-TARGETING AND REVIEW MANIPULATION
+  ASSESSMENT` covering prompt injection, reviewer-directed instructions,
+  metadata/dataset/benchmark poisoning, encoded instructions/tool-call bait,
+  tarpits, trackers/sensors, evidence limitations, confidence, and evidence
+  basis. Git metadata collection/wrapping is trusted, while ref names and
+  commit subjects remain attacker-controlled evidence.
+- Added the scope-3 `GENERATED-CODE PROVENANCE ASSESSMENT` with exact
+  generation, direct model, non-attributive heuristic model candidate,
+  heuristic confidence, direct effort, direct harness, coverage, alternative,
+  confidence, and evidence fields. Direct attribution remains commit-bound;
+  heuristic candidates concern repository assets rather than people, prefer
+  family-level identification, require counterevidence and alternatives, and
+  can be only Not applicable/Low/Medium confidence. Fail-closed validation
+  rejects omissions, High heuristic confidence, inconsistent no-candidate
+  values, and human-generation inference from absent evidence.
+- Hardened report/output validation so delimited confidence explanations count
+  as inline evidence, generation verdicts require an exact allowed value or a
+  punctuation-delimited explanation, tracker suppression canonicalizes host,
+  default-port, query, fragment, and trailing-slash variants, and bounded Git
+  metadata redacts complete logical fields before whole-record 64 KiB
+  aggregation with deterministic omission markers.
+- Replaced child `web_fetch`/`--allow-all-urls` research with a dedicated
+  write-disabled research worker and deterministic local stdio MCP egress
+  broker. The main review worker now receives only a validated read-only
+  sanitized dossier and network summary.
+- Added the versioned `research-policy.json` contract and Python 3
+  standard-library broker with immutable HTTPS/public-DNS/DNS-pinning/
+  verified-TLS/no-auth/no-proxy controls, bounded redirects and resources,
+  safe HTML/text/JSON/XML/RSS/Atom normalization, anonymous GitHub search,
+  and a fixed anonymous `duckduckgo-html-v1` general-web-search provider with
+  explicit `none`. The provider uses a closed fixed-endpoint GET adapter,
+  unwraps and revalidates result URLs, deduplicates bounded URL/title/summary
+  output, and fails structurally on challenges or malformed responses without
+  bypass or fallback. Broker version is now `1.1` and the default policy ID is
+  `rhyolite-public-research-v2`.
+- Added explicit scope 2/3 cookie consent. Replay defaults off; optional
+  ephemeral replay uses a fresh bounded exact-host Secure jar per repository
+  and run. Raw Set-Cookie values are retained only in a mode-0600 private
+  ledger in either mode and are never exposed to a model or rendered report.
+- Added structured DNS, TLS, HTTP, redirect, rate-limit, cookie, timeout,
+  format, and ownership-aware transport evidence. TLS verification failures
+  may trigger only a metadata-only diagnostic handshake that sends no HTTP
+  request.
+- Added private content-addressed retention for unsupported/binary response
+  bodies, with mode-0700 private directories, mode-0600 files, no executable
+  extensions, and no model/render/index links.
+- Added `ResearchTransport` to plan JSON/text, approval hashes, repository/run
+  state, manifests, handoffs, and HTML summaries; bumped plan schema to 3,
+  state schema to 4, and the release version to `0.4.1`.
+- Added distinct `ResearchCapabilityFailed` and `ResearchFailed` boundaries,
+  two-phase progress reporting, broker/MCP/runtime cleanup enforcement, and
+  fail-closed validation requiring exact tools, capability evidence, a valid
+  dossier, and at least one successful public response before main analysis.
+- Added offline broker protocol/policy/DNS/TLS/cookie/body/provider/budget
+  tests, including fixed web-search parsing/challenge fixtures, plus
+  deterministic runner assertions for scope 1 isolation, exact MCP arguments,
+  provider opt-out plan/hash binding, two-phase ordering, source-level
+  failures, system-wide transport failure, private-evidence non-disclosure,
+  permissions, cleanup, approval-hash changes, heuristic provenance
+  validation, and multi-repository cookie isolation.
 - Finalized the `xjamesmorris/rhyolite` public repository metadata,
   public-preview status, CODEOWNERS, private vulnerability reporting
   route, and conduct contact while preserving a fail-closed local-link
@@ -25,13 +112,12 @@
   moves Copilot orchestration outside Git worktrees, preselects the
   restricted agent, collects public source/fleet/model settings, and
   preserves a sanitized initial request without persisting that request
-  or source in launch context. Neither `--yolo` nor `--autopilot` is
-  enabled by default. Explicit per-launch `--yolo` gives the outer
-  Copilot orchestrator all permissions, `--autopilot` enables autonomous
-  continuation, and they can be combined. These switches are not persisted
-  in launcher context, copied into trusted setup, or remembered as
-  preferences; child restrictions stay unchanged, including runner-enforced
-  tool isolation and removal of inherited `COPILOT_ALLOW_ALL`.
+  or source in launch context. `--yolo` is not enabled by default; an
+  explicit per-launch selection gives the outer Copilot orchestrator all
+  permissions without persisting that choice in launcher context, copying it
+  into trusted setup, or remembering it as a preference. Child restrictions
+  stay unchanged, including runner-enforced tool isolation and removal of
+  inherited `COPILOT_ALLOW_ALL`.
 - Added native launcher `--fleet`/`--model` selection and versioned,
   user-only per-repository fleet/model preferences. Approved settings
   are included in the plan hash and are saved atomically only after plan

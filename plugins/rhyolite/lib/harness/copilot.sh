@@ -5,6 +5,57 @@ COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT=0
 COPILOT_AUTH_BRIDGE_JSON='{}'
 COPILOT_RUNTIME_HOME=''
 
+copilot_write_settings() {
+    local settings_path="$1"
+    local store_token_plaintext="$2"
+
+    {
+        printf '{\n'
+        if ((store_token_plaintext)); then
+            printf '  "storeTokenPlaintext": true,\n'
+        fi
+        cat <<'EOF'
+  "disableAllHooks": true,
+  "customAgents": {
+    "defaultLocalOnly": true
+  },
+  "subagents": {
+    "agents": {
+      "explore": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "task": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "code-review": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "general-purpose": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "research": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "security-review": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      },
+      "rubber-duck": {
+        "effortLevel": "max",
+        "contextTier": "long_context"
+      }
+    }
+  }
+}
+EOF
+    } > "${settings_path}"
+}
+
 harness_id() {
     printf '%s\n' 'copilot'
 }
@@ -160,35 +211,12 @@ harness_prepare_worker_home() {
         return 1
     }
 
-    if ((COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT)); then
-        if ! cat > "${runtime_home}/settings.json" <<'EOF'
-{
-  "storeTokenPlaintext": true,
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-        then
-            rhyolite_harness_set_error \
-                'Could not write temporary Copilot settings.'
-            return 1
-        fi
-    else
-        if ! cat > "${runtime_home}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-        then
-            rhyolite_harness_set_error \
-                'Could not write temporary Copilot settings.'
-            return 1
-        fi
+    if ! copilot_write_settings \
+        "${runtime_home}/settings.json" \
+        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}"; then
+        rhyolite_harness_set_error \
+            'Could not write temporary Copilot settings.'
+        return 1
     fi
     if ! {
         printf '%s\n' \
@@ -246,9 +274,7 @@ harness_worker_argv() {
         --share "${transcript_path}"
         --silent
     )
-    if ((enable_public_research)); then
-        output_arguments+=(--allow-all-urls)
-    fi
+    : "${enable_public_research}"
 }
 
 harness_worker_env() {
@@ -280,6 +306,9 @@ harness_render_request() {
     local repository_metadata="${13}"
     local public_research_instructions="${14}"
     local provenance_instructions="${15}"
+    local research_dossier_path="${16}"
+    local research_network_summary_path="${17}"
+    local research_transport_instructions="${18}"
     local template_line
 
     while IFS= read -r template_line || [[ -n "${template_line}" ]]; do
@@ -331,6 +360,15 @@ harness_render_request() {
                 ;;
             '{{PROVENANCE_INSTRUCTIONS}}')
                 printf '%s\n' "${provenance_instructions}"
+                ;;
+            '{{RESEARCH_DOSSIER_PATH}}')
+                printf '%s\n' "${research_dossier_path}"
+                ;;
+            '{{RESEARCH_NETWORK_SUMMARY_PATH}}')
+                printf '%s\n' "${research_network_summary_path}"
+                ;;
+            '{{RESEARCH_TRANSPORT_INSTRUCTIONS}}')
+                printf '%s\n' "${research_transport_instructions}"
                 ;;
             *)
                 printf '%s\n' "${template_line}"
@@ -401,15 +439,9 @@ harness_persist_agent_state() {
             'Could not restrict the persisted Copilot state directory.'
         return 1
     }
-    if ! cat > "${copilot_home_path}/settings.json" <<'EOF'
-{
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  }
-}
-EOF
-    then
+    if ! copilot_write_settings \
+        "${copilot_home_path}/settings.json" \
+        0; then
         rhyolite_harness_set_error \
             'Could not write persisted Copilot settings.'
         return 1

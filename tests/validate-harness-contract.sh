@@ -348,7 +348,7 @@ authentication_variables_csv="$(
     printf '%s' "${expected_auth_secret_env_vars[*]}"
 )"
 base_available_tools='view,glob,rg,skill,task,list_agents,read_agent'
-research_available_tools="${base_available_tools},web_fetch"
+research_available_tools="${base_available_tools}"
 worker_session_root="${fixture_root}/worker-session"
 worker_transcript="${fixture_root}/worker-result/session.md"
 worker_session_name='review-fixture-run'
@@ -465,14 +465,13 @@ expected_research_worker_arguments=(
     --stream off
     --share "${worker_transcript}"
     --silent
-    --allow-all-urls
 )
 expected_research_worker_vector="${fixture_root}/worker-research-expected.vector"
 printf '%s\0' \
     "${expected_research_worker_arguments[@]}" \
     > "${expected_research_worker_vector}"
 cmp -s "${expected_research_worker_vector}" "${worker_research_vector}" ||
-    fail 'Copilot public-research worker argv changed from the I1a baseline.'
+    fail 'Copilot main worker gained public-network access from the dedicated research phase.'
 
 for worker_vector in \
     "${worker_default_vector}" \
@@ -701,7 +700,10 @@ harness_render_request \
     "${fixture_root}/worker-result" \
     'TRUSTED FIXTURE METADATA' \
     'PUBLIC RESEARCH DISABLED' \
-    'PROVENANCE DISABLED' ||
+    'PROVENANCE DISABLED' \
+    'disabled' \
+    'disabled' \
+    'RESEARCH TRANSPORT DISABLED' ||
     fail 'Copilot adapter could not render the worker request.'
 for expected_request_line in \
     'Repository URL: https://github.com/octocat/Hello-World' \
@@ -714,7 +716,8 @@ for expected_request_line in \
     'Selected scope: 1 - Core repository review' \
     'TRUSTED FIXTURE METADATA' \
     'PUBLIC RESEARCH DISABLED' \
-    'PROVENANCE DISABLED'; do
+    'PROVENANCE DISABLED' \
+    'RESEARCH TRANSPORT DISABLED'; do
     assert_contains \
         "${rendered_request}" \
         "${expected_request_line}" \
@@ -964,8 +967,8 @@ import sys
 plans = [json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
          for path in sys.argv[1:]]
 for index, plan in enumerate(plans):
-    if plan.get("SchemaVersion") != 2:
-        raise SystemExit(f"plan {index} did not preserve schema 2")
+    if plan.get("SchemaVersion") != 3:
+        raise SystemExit(f"plan {index} did not preserve research-aware schema 3")
     for forbidden in ("Harness", "Provider", "ReasoningEffort"):
         if forbidden in plan:
             raise SystemExit(f"plan {index} unexpectedly added {forbidden}")
@@ -1206,7 +1209,7 @@ env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     fail 'Plan-only mode invoked the failing harness CLI check.'
 assert_contains \
     "${function_failure_plan_stdout}" \
-    '"SchemaVersion": 2' \
+    '"SchemaVersion": 3' \
     'Plan-only mode without harness CLI'
 [[ ! -e "${function_failure_plan_workspace}" &&
     ! -e "${function_failure_plan_output}" ]] ||
@@ -1634,9 +1637,6 @@ JS
         --share "${state_values[3]}"
         --silent
     )
-    if ((public_research)); then
-        expected_arguments+=(--allow-all-urls)
-    fi
     printf '%s\0' "${expected_arguments[@]}" > "${expected_vector}"
     cmp -s "${expected_vector}" "${capture_path}/argv" ||
         fail 'Actual runner-to-adapter worker argv changed from the golden contract.'
@@ -1751,53 +1751,6 @@ contract_assert_worker_contract \
 cmp -s "${runner_default_normalized}" "${runner_explicit_normalized}" ||
     fail 'Default and explicit runner worker vectors differ after dynamic-field normalization.'
 
-research_workspace="${fixture_root}/research-workspace"
-research_output="${fixture_root}/research-output"
-research_plan="${fixture_root}/research-plan.json"
-research_plan_stderr="${fixture_root}/research-plan.stderr"
-research_capture="${runner_capture_root}/research"
-research_stdout="${fixture_root}/research-run.stdout"
-research_stderr="${fixture_root}/research-run.stderr"
-mkdir -p -- "${research_capture}"
-env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
-    PATH="${runner_mock_bin}:/usr/bin:/bin" \
-    "${RUNNER}" \
-    --harness copilot \
-    --repo https://github.com/octocat/Hello-World \
-    --scope 2 \
-    --workspace-root "${research_workspace}" \
-    --output-root "${research_output}" \
-    --non-interactive \
-    --no-open-html \
-    --plan-only >"${research_plan}" 2>"${research_plan_stderr}" ||
-    fail 'Public-research runner seam plan failed.'
-[[ ! -s "${research_plan_stderr}" ]] ||
-    fail 'Public-research runner seam plan wrote stderr.'
-research_plan_hash="$(contract_plan_hash "${research_plan}")"
-env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
-    COPILOT_HOME="${runner_source_home}" \
-    RHYOLITE_WORKER_CAPTURE="${research_capture}" \
-    TMPDIR="${runner_tmp_root}" \
-    PATH="${runner_mock_bin}:/usr/bin:/bin" \
-    "${RUNNER}" \
-    --harness copilot \
-    --repo https://github.com/octocat/Hello-World \
-    --scope 2 \
-    --workspace-root "${research_workspace}" \
-    --output-root "${research_output}" \
-    --expected-plan-hash "${research_plan_hash}" \
-    --non-interactive \
-    --no-open-html >"${research_stdout}" 2>"${research_stderr}" ||
-    fail 'Public-research runner seam execution failed.'
-[[ ! -s "${research_stderr}" ]] ||
-    fail 'Public-research runner seam execution wrote stderr.'
-research_run="$(contract_run_path "${research_stdout}")"
-contract_assert_worker_contract \
-    "${research_run}" \
-    "${research_capture}" \
-    1 \
-    "${fixture_root}/research.normalized"
-
 node - \
     "${plan_default}" \
     "${plan_explicit}" \
@@ -1807,7 +1760,7 @@ const fs = require("fs");
 const plans = process.argv.slice(2).map((planPath) =>
   JSON.parse(fs.readFileSync(planPath, "utf8")));
 for (const [index, plan] of plans.entries()) {
-  if (plan.SchemaVersion !== 2) {
+  if (plan.SchemaVersion !== 3) {
     throw new Error(`runner seam plan ${index} changed schema`);
   }
   if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)) {
@@ -2538,9 +2491,11 @@ expected_launcher_args=(
     --experimental
     -C "${launcher_caller}"
     --plugin-dir "${PLUGIN_ROOT}"
+    --mode interactive
     --agent rhyolite:repo-review
     --model gpt-5.6-sol
     --reasoning-effort max
+    --context long_context
     --log-dir '<generated-log-dir>'
     --no-custom-instructions
     -i "${expected_prompt}"

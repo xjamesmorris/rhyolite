@@ -5,7 +5,8 @@ reviewing untrusted public HTTPS Git repositories.
 
 Rhyolite combines:
 
-- The `repo-review` command agent and write-disabled review worker.
+- The `repo-review` command agent, write-disabled main review worker, and
+  dedicated write-disabled research worker.
 - Stable namespaced commands: `/rhyolite:start`,
   `/rhyolite:repo-review`, `/rhyolite:status`, `/rhyolite:version`, and
   `/rhyolite:help`.
@@ -20,21 +21,28 @@ Rhyolite combines:
 - A private `research-source-assessment` skill that maps fresh,
   subject-specific community, research, and commercial sources.
 - A Bash review runner for the supported Linux workflow.
-- Separate security and public-source research passes.
+- A deterministic local stdio MCP research-egress broker implemented with the
+  Python 3 standard library under a fixed immutable transport safety floor.
+- Separate security and dedicated public-source research passes.
 - Centralized welcome branding plus Linux onboarding helpers.
-- A local display-only `sessionStart` availability hook.
+- Local display-only hooks for one load notice or exactly-once launcher
+  plaque plus exact manual review-start plaques.
 - Persisted plain-text, Markdown, HTML, session, state, and handoff
   artifacts.
 
 ## Status
 
-Version `0.4.0` is a public preview release. GitHub Copilot plugins are
+Version `0.4.1` is a public preview release. GitHub Copilot plugins are
 currently public-preview features.
 
 The plugin supports anonymously readable public HTTPS Git repositories on
 GitHub and other public DNS hosts. It does not review authenticated,
 private, or internal repositories, execute target code, modify target
-repositories, or use shared service credentials.
+repositories, or use shared service credentials. Scope 2/3 research uses only
+the bundled local broker's public-HTTPS direct-fetch, anonymous GitHub, and
+fixed anonymous `duckduckgo-html-v1` general-web-search providers. Advanced
+direct-runner use may select explicit `none` to opt out; no other web-search
+provider or endpoint is configurable.
 
 **Platform support:** Fedora Linux 44 is the sole development and
 validation baseline for this release. Runtime support is Linux-only.
@@ -48,7 +56,7 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 ## Quick notes
 
 - Recommended model: use a current frontier reasoning model at the
-  maximum available reasoning effort and context (as of September 30, 2026,
+  maximum available reasoning effort and context (as of October 1, 2026,
   examples include Sol 5.6 and Fable 5). Use maximum available reasoning
   effort by default for every repository development task. This policy
   persists across sessions, and development handoffs must carry it
@@ -75,25 +83,37 @@ wrapper on Fedora Linux 44:
 ./rhyolite --repo https://github.com/owner/repository
 ```
 
-Optional switches change the outer Copilot session for that launch.
-`--yolo` also affects report handling:
+The optional `--yolo` switch changes the outer Copilot session for that
+launch and also affects report handling:
 
 ```bash
 ./rhyolite --repo https://github.com/owner/repository --yolo
-./rhyolite --repo https://github.com/owner/repository --autopilot
-./rhyolite --repo https://github.com/owner/repository --yolo --autopilot
 ```
 
-Neither switch is enabled by default. `--yolo` explicitly opts the outer
-Copilot orchestrator into all permissions for that launch;
-`--autopilot` enables autonomous continuation; they can be combined.
-Both are ephemeral per-launch switches: neither is persisted in launcher
-context, copied into trusted setup, or remembered as a preference.
+`--yolo` is disabled by default. It explicitly opts the outer Copilot
+orchestrator into all permissions for that launch and is not persisted in
+launcher context, copied into trusted setup, or remembered as a preference.
 Because `--yolo` sets allow-all mode, a completed review opens the local
 HTML report index automatically instead of prompting unless the runner's
 `--no-open-html` option is selected. Restricted child review sessions
 retain runner-enforced tool isolation and remove inherited
 `COPILOT_ALLOW_ALL` state.
+
+The former launcher `--autopilot` option is retired. The packaged launcher
+rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
+be mistaken for initial request text. Rhyolite setup and effective-plan
+approval remain interactive, and the launcher now passes
+`--mode interactive` explicitly. Switching the outer session to plan or
+autopilot mode during setup or execution is unsupported: return to
+interactive mode before continuing. A mode-related UI notice does not change
+the model recorded in the approved plan or the explicit model passed to the
+isolated review workers.
+
+Exact `stop` and `cancel` requests are control intents, not review prompts.
+The orchestrator immediately stops the active runner, and the runner
+propagates interruption signals through its tracked repository, timeout,
+Copilot worker, and broker processes before writing truthful `Interrupted`
+artifacts.
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
@@ -107,7 +127,9 @@ outside every Git worktree, pass `--plugin-dir`, preselect
 preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs, ask whether to use native
-Copilot fleet mode, and confirm the review model. Native mode adds the
+Copilot fleet mode, and confirm the review model. Known choices are
+`gpt-5.6-sol` (recommended) and `claude-fable-5`; a syntactically valid
+custom model ID is also accepted and preserved. Native mode adds the
 process-level `--fleet` flag, and every launch passes the selected
 `--model`. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
@@ -137,8 +159,8 @@ copilot plugin install ./plugins/rhyolite
 ```
 
 Installation includes the Bash launcher, Rhyolite agent, skill,
-short-command extension, helpers, and local display-only `sessionStart`
-hook. The repository-only validator agents are not packaged. Current
+short-command extension, helpers, and local display-only onboarding
+hooks. The repository-only validator agents are not packaged. Current
 Copilot CLI releases load extension-provided commands in experimental
 mode.
 
@@ -226,18 +248,19 @@ compatibility agent path is
 | `/rhyolite:version` | Show the installed Rhyolite version. |
 | `/rhyolite:help` | Show Rhyolite command help. |
 
-The installed plugin contributes a local, display-only `sessionStart`
-hook. In a new outer Copilot CLI session it emits one plain line with
-the installed version and `/rhyolite:start`; it performs no network
-access, Git commands, writes, prompt mutation, or environment/auth
-inspection. When extension mode is enabled, the extension emits the same
-plain guidance immediately while the hook remains the non-experimental
-fallback.
+The installed plugin contributes local, display-only onboarding hooks.
+In an ordinary new outer Copilot CLI session, `sessionStart` emits one
+plain line with the installed version and `/rhyolite:start`. Launcher
+startup instead receives the full launcher plaque from `sessionStart`
+exactly once. Neither path performs network access, Git commands,
+writes, prompt mutation, or environment/auth inspection.
 
 After `/rhyolite:start`, compatible `/rhyolite:repo-review`, or the
-`/repo-review` shorthand, a display-only command hook recognizes only
-the trusted start marker/command and emits the large plaque. It does not
-modify the prompt or persist state. The visual treatment is limited to
+`/repo-review` shorthand, a display-only prompt hook recognizes only the
+exact manual start command and emits the large plaque. It ignores
+internal resumes, marker-bearing continuations, launcher prompts, and
+unrelated user text; it does not modify the prompt or persist state. The
+visual treatment is limited to
 the large RHYOLITE wordmark, a smaller right-aligned `v<version>` line
 immediately beneath it, full/half-block contours that approximate
 antialiasing in a terminal cell grid, and the wordmark's blue-family
@@ -289,7 +312,8 @@ stage without resetting collected answers:
   immediately shows a
   `CURRENT SETUP STATUS` block with live `Source`, `Fleet mode`,
   `Model`, `Remember settings`, `Output`, `Scope`, and
-  `Provenance lookback months` values or `NOT SELECTED`.
+  `Provenance lookback months` and `Research cookies` values or
+  `NOT SELECTED`.
 - `status` **without a leading slash** shows the same live
   `CURRENT SETUP STATUS` block.
 - `explain scopes` **without a leading slash** restates the scope `1`/`2`/`3`
@@ -321,7 +345,9 @@ The agent asks one question at a time:
    or a custom location.
 6. Which review scope to use.
 7. For scope `3`, which provenance lookback to use.
-8. After those answers are collected, the agent requests the runner's
+8. For scope `2` or `3`, whether research cookie replay remains off or
+   uses a fresh per-repository ephemeral jar.
+9. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
 
@@ -331,6 +357,19 @@ final `Other` custom-answer option automatically and owns its exact
 display wording (current versions show `Other (type your answer)`).
 Freeform follow-ups are used only for values such as repository URLs,
 custom output paths, or instructions describing what to do differently.
+
+The initial model picker and `Edit setup` -> `Model` use the same ordered
+choices:
+
+```text
+1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
+2. Claude Fable 5 - claude-fable-5
+3. Other (wording supplied by Copilot CLI)
+```
+
+The final custom-answer option accepts a model ID containing only letters,
+numbers, dots, underscores, and hyphens. Rhyolite does not hard-allowlist
+models or silently replace a selected custom ID.
 
 The output picker resolves and displays these full paths:
 
@@ -358,6 +397,20 @@ also a numbered picker: `6 months (Recommended)`, `3 months`, `12
 months`, and `24 months`; use the final custom-answer option for any
 other whole-number value from `1` through `60`.
 
+For scope `2` or `3`, the next picker uses:
+
+```text
+1. Do not replay research cookies (Recommended)
+2. Allow a fresh per-repository research cookie jar
+3. Other (wording supplied by Copilot CLI)
+```
+
+Either mode records raw Set-Cookie values only in a private
+per-repository transport ledger for local analysis. Raw values are never
+shown to a model or rendered report. The optional jar starts empty,
+replays only bounded exact-host Secure cookies, is isolated per
+repository/run, and is never imported or reused.
+
 During development, the repository-only `rhyolite-ui-validator` agent
 checks only finite-picker lead-ins, questions, option order, mappings,
 defaults, and native Other/custom-answer behavior. The separate
@@ -368,21 +421,81 @@ Linux artifact contract used by the Fedora validator.
 Neither development agent is packaged with or invoked by installed
 Rhyolite sessions.
 
-When public research is enabled, Rhyolite first builds a source landscape
-for the repository's subject areas. It extends the baseline mailing-list
-archives, blogs, conferences, standards, academic sources, forums, and
-ecosystem sources with likely current community, research, and
-commercial venues. Each source records its check date, latest observed
-activity, coverage, freshness, and ownership. Scope `3` performs a
-thorough second provenance-focused pass across that map.
+When public research is enabled, the trusted runner launches a dedicated
+research worker before the main reviewer. The worker receives snapshot
+read/search access and exactly five local broker tools:
+`research_capabilities`, `fetch_public_url`, `search_public_github`,
+`search_public_web`, and `research_network_summary`. Built-in MCPs,
+direct `web_fetch`, broad URL approval, shell, and writes remain
+disabled.
+
+The local Python broker is the only research egress path. It permits
+GET/HEAD to validated public HTTPS destinations, resolves and pins every
+initial and redirect host, verifies TLS and hostnames, rejects URL
+userinfo, IP literals, private DNS, plaintext, authentication, inherited
+proxies/netrc/cookies/client certificates, and applies bounded request,
+redirect, timing, header, wire-body, normalized-output, host-rate, and
+cookie policy. It normalizes HTML, text, JSON, XML, RSS, and Atom as
+untrusted evidence. Unsupported bodies are retained privately as
+content-addressed `.bin` files and are never parsed, rendered, indexed,
+linked individually, or exposed to a model.
+
+General web search uses a closed in-code `duckduckgo-html-v1` adapter with a
+fixed HTTPS endpoint, fixed headers, no credentials, no caller-supplied
+headers, no request body, no inherited proxy, no CAPTCHA/challenge bypass, and
+no fallback provider. Provider redirect URLs are decoded, every result URL is
+revalidated through the same public-HTTPS policy, duplicates are removed, and
+only bounded URL/title/summary records are returned. Explicit `none` remains a
+fail-closed opt-out.
+
+The dedicated worker builds a source landscape for the repository's
+subject areas. It extends mailing-list archives, blogs, conferences,
+standards, academic sources, forums, ecosystem sources, and commercial
+venues. Each source records its check date, latest observed activity,
+coverage, freshness, and ownership. Scope `3` performs a thorough second
+provenance-focused pass. The runner validates the dossier, broker
+capability record, event ledger, cleanup, and at least one successful
+public response before the main worker starts. The main worker receives
+only a read-only sanitized dossier and network summary and has no direct
+network tool.
 
 Reports preserve `RESEARCH SOURCE LANDSCAPE`,
 `INACCESSIBLE RESOURCE REGISTER`, and
-`TOP USER RETRIEVAL PRIORITIES` sections. Rhyolite does not bypass
+`TOP USER RETRIEVAL PRIORITIES` sections, plus
+`RESEARCH TRANSPORT OBSERVATIONS`. Rhyolite does not bypass
 paywalls, authentication, robots restrictions, removals, or network
 policy. It brings inaccessible high-priority sources to the user's
 attention and offers a picker to display the ranked sources most useful
-for the user to retrieve.
+to retrieve.
+
+Every scope includes an exact
+`AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`. It covers prompt
+injection and reviewer-directed instructions; source, documentation,
+commit/ref metadata, dataset, and benchmark poisoning; encoded or invisible
+instructions and tool-call bait; recursive/resource-exhaustion tarpits;
+tracking pixels, callback beacons, trackers, and sensors; and limitations of
+the available evidence. Checked-in source and documentation are inspected as
+inert text. Resource URLs are not activated merely to test tracking behavior,
+and normalized external pages can limit sensor detection.
+
+Scope `3` also requires an exact
+`GENERATED-CODE PROVENANCE ASSESSMENT` with generation, direct model,
+non-attributive heuristic model candidates, heuristic confidence, direct
+effort, direct harness, coverage/window, alternative-explanation, confidence,
+and evidence-basis fields. Generation verdicts are limited to `Confirmed`,
+`Evidence supports assisted generation`, `Indeterminate`, or
+`No supporting evidence found`. An absence of evidence never establishes
+human generation. Direct model, effort, or harness attribution requires
+commit-bound evidence such as an attestation, transcript, provenance record,
+or explicit disclosure.
+
+Heuristic model candidates concern repository assets, never people, and are
+not attribution. They prefer family-level identification, cite exact paths,
+commits, or dated public evidence, preserve counterevidence and alternatives,
+and use only `Not applicable`, `Low`, or `Medium` confidence, never `High`.
+`No candidate identified` and `Not appropriate` are the controlled
+no-candidate values. Tool configuration, style, quality, verbosity, test
+density, bulk commits, and generic fingerprints alone are not proof.
 
 Substantive findings and assessment points include High, Medium, or Low
 confidence with a concise evidence basis. Low-confidence possibilities
@@ -419,11 +532,20 @@ dates, while `GeneratedAt` is labeled as UTC. For scope `3`, it shows
 the authoritative provenance start/end window from `ProvenanceWindow`;
 for other scopes, provenance window is shown as disabled. If the user
 selects `Edit setup`, the agent uses another numbered picker for
-`Source`, `Model`, `Output`, or `Scope`, re-asks only that field,
-preserves the others, clears provenance when scope is not `3`, and
-regenerates the plan. Fleet mode cannot change in an already-running
-process. Exact `Change scope` is still accepted as a shortcut into
-editing `Scope`. If the runner reports a plan-hash mismatch, the agent
+`Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks
+only that field, preserves the others, clears provenance when scope is
+not `3`, clears cookies for scope `1`, and regenerates the plan. Fleet
+mode cannot change in an already-running process.
+Exact `Change scope` is still accepted as a shortcut into editing `Scope`.
+
+Scope 2/3 plans also surface and hash `ResearchTransport`:
+dedicated-worker mode, broker and policy schema versions, provider IDs,
+effective policy digest and resource profile, exact tools, anonymous
+GitHub/no-auth behavior, selected general-web-search provider and
+availability, cookie replay choice, private raw Set-Cookie retention,
+private unsupported-body retention, and network-log policy.
+
+If the runner reports a plan-hash mismatch, the agent
 preserves the answers, explains that the approved effective plan
 changed, regenerates the plan, and reconfirms. Examples can include
 edited source URLs, source/output/scope/settings changes, or
@@ -485,30 +607,42 @@ After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
 runtime home.
 
-The Bash runner also requires Python 3 for public DNS classification.
+The Bash runner also requires Python 3 for public DNS classification and
+the bundled stdio research broker. The broker is the explicitly approved
+constrained exception to the Bash-first architecture and uses only the
+Python standard library.
 
-The legacy research switches remain available. Public research is opt-in
-because it permits access to arbitrary public URLs. Originality and
-evidence-based provenance review for agentically generated code is
-separately opt-in:
-
-```text
--EnablePublicResearch -EnableProvenanceResearch
-```
-
-or:
+The legacy Bash research switches remain available. Public research is
+opt-in and uses only the constrained local broker. Evidence-based
+provenance review for agentically generated code is separately opt-in:
 
 ```text
 --enable-public-research --enable-provenance-research
 ```
 
+Advanced direct-runner options are:
+
+```text
+--research-provider local-broker
+--research-policy default|<trusted-policy.json>
+--research-web-search-provider duckduckgo-html-v1|none
+--research-cookies off|ephemeral
+```
+
+Provider and policy selection are not guided pickers. A custom policy
+must be trusted, outside Git worktrees and target/output roots, and can
+only select bundled adapters, tighten bounded behavior, or explicitly
+enumerate additional TLS-only ports under the hard safety floor. It
+cannot enable HTTP, private destinations, authentication, proxies,
+arbitrary executables, TLS bypass, or cross-run state.
+
 Provenance output is evidence-only and must receive human review before it
 is shared.
 
 At the end of an interactive run, the runner asks whether to open the
-local HTML index. Use `-OpenHtml`/`--open-html` to open it automatically
-or `-NoOpenHtml`/`--no-open-html` to disable opening. Allow-all/YOLO
-sessions also open it automatically unless disabled.
+local HTML index. Use `--open-html` to open it automatically or
+`--no-open-html` to disable opening. Allow-all/YOLO sessions also open
+it automatically unless disabled.
 
 ## Output
 
@@ -524,17 +658,37 @@ Run-level index, manifest, state, and handoff files live under
 
 Each repository output directory creates:
 
-- `review.txt`: final UTF-8, LF-only report for Linux inline email.
-- `review.md`: safe, fidelity-first Markdown.
-- `review.html`: escaped local HTML with no scripts or remote assets.
+- `review.txt`: final UTF-8, LF-only canonical report for Linux inline
+  email; it remains simple plain text.
+- `review.md`: safe Markdown with trusted generated navigation for exact
+  allowlisted report headings, fixed links to sibling formats and the run
+  index, inert indented-code report chunks, and a deduplicated external
+  references block containing only conservatively validated public HTTPS
+  URLs.
+- `review.html`: escaped local HTML with the same trusted generated
+  navigation/reference surfaces, fixed sibling/run-index links, no scripts or
+  remote assets, a restrictive CSP, and a no-referrer policy. External links
+  use `noopener`, `noreferrer`, `nofollow`, `external`, and
+  `referrerpolicy="no-referrer"`.
 - `analysis-timeline.txt`: complete sanitized agent progress output.
 - `session.md`: Copilot session transcript wrapped as inert Markdown text.
 - `request.txt`: exact rendered request.
 - `errors.txt`: sanitized standard error output.
 - `state.json`: source kind, public remote URL, requested and resolved
-  commits, status, scope, paths, and saved session IDs.
-- `handoff.md`: safe continuation guidance and artifact inventory.
+  commits, status, scope, `ResearchTransport`, research status/paths, and
+  saved session IDs.
+- `handoff.md`: safe continuation guidance, research/private-evidence
+  warning, and artifact inventory.
 - `agent-state/`: isolated Copilot home and persisted session state.
+- `research/` for scope `2`/`3`:
+  - canonical plain-text `research.txt`, plus `research-timeline.txt`,
+    `research-session.md`,
+    `research-errors.txt`, and `research-state.json`.
+  - `network/summary.json` and `network/events.jsonl`, the sanitized
+    transport evidence available to synthesis.
+  - mode-0700 `network/private/` with mode-0600 `cookies.jsonl`,
+    `body-manifest.jsonl`, and content-addressed
+    `bodies/<sha256>.bin`.
 - `review-plan.json` and companion review-plan artifacts, when produced
   by the installed runner's plan-only mode, containing the authoritative
   pre-run plan shown as `EFFECTIVE REVIEW PLAN`.
@@ -549,16 +703,28 @@ under a clean, non-Git session root. Before that clone, they perform a
 real anonymous accessibility preflight with pinned public DNS, disabled
 credentials/helpers/proxies, and no redirects. Repository hooks, custom
 instructions, and project skills cannot become executable child
-configuration. Child and nested agents deny write and shell tools and
-allow only snapshot-contained file reads/searches. Automatic
+configuration. Child agents deny write and shell tools. The research
+worker receives only snapshot-contained reads/searches and the exact
+broker tools; the main worker receives snapshot reads/searches plus the
+sanitized dossier and network summary. Automatic
 temporary-directory access and remote export are disabled; the trusted
-wrapper supplies bounded Git metadata in the request.
+wrapper supplies a bounded, sanitized, exact-commit collection of Git
+metadata in the request. The collection and wrapping are trusted; ref names,
+paths, author and committer names, commit subjects, and selected sanitized
+commit trailer values remain attacker-controlled evidence. The history is
+limited to the latest 100 commits and excludes email addresses and full commit
+bodies. Each logical field is sanitized before its rendered-line bound is
+applied; the 64 KiB aggregate keeps whole newest-first commit records and emits
+an inert marker when older records are omitted.
 
 The workspace root itself must not be inside a Git worktree. The trusted
 runner alone writes the artifact workspace, which must be physically
 disjoint from the clone workspace. Text artifacts remove terminal controls
 and redact email addresses; Markdown treats untrusted content as code
-text, and HTML escapes all report and metadata content.
+text except for the fixed trusted navigation and syntax-validated HTTPS
+reference block. HTML escapes all report and metadata content. Rendering does
+not perform DNS or network access and never emits remote images, scripts, or
+styles.
 
 Saved session IDs are evidence for handoff, not an invitation to run
 `copilot --resume` directly. A direct resume may omit the original path,
@@ -577,8 +743,8 @@ Important defaults:
 - Target repositories are never modified.
 - Local repository paths are rejected; supply only public HTTPS Git
   repository URLs.
-- The outer `sessionStart` hook is local, display-only, and performs no
-  network access, Git commands, writes, prompt interception, or
+- The outer onboarding hooks are local and display-only. They perform no
+  network access, Git commands, writes, prompt mutation, or
   environment/auth inspection.
 - The full welcome panel appears only when the
   `rhyolite:repo-review` agent handles exact `help`, and it is rendered
@@ -588,9 +754,23 @@ Important defaults:
 - Review artifacts are written only to a separately approved local
   workspace.
 - Checkout and output workspace roots cannot be inside Git worktrees.
-- Public web research is disabled unless explicitly requested.
+- Public research is disabled unless explicitly requested. Scope 1
+  creates no broker process, MCP config, cookie jar, or research/network
+  artifact.
+- Scope 2/3 research never imports credentials, cookies, proxies, netrc
+  state, browser state, client certificates, or target-provided provider
+  settings.
+- Scope 2/3 general web search defaults to the fixed anonymous
+  `duckduckgo-html-v1` provider. Explicit `none` disables that interface
+  fail-closed.
+- Raw Set-Cookie values and unsupported bodies are private local evidence
+  and never appear in model inputs or rendered reports.
 - Scope 3 provenance review for agentically generated code is disabled
   unless explicitly requested.
+- Every scope validates the required agent-targeting/review-manipulation
+  section. Scope 3 additionally fails closed if the generated-code provenance
+  section or any required field is missing, or if heuristic model confidence
+  is `High` or inconsistent with the controlled no-candidate values.
 - Reports omit author email addresses and avoid unsupported attribution.
 - Isolated child review homes still set `disableAllHooks`, so nested
   review sessions do not inherit the onboarding hook.

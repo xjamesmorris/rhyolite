@@ -17,7 +17,12 @@
 - Issues, pull requests, release notes, and commit messages.
 - Public web pages, mailing-list posts, social media, and search
   results.
+- Broker-normalized HTTP bodies, redirect targets, TLS certificates,
+  response headers, cookies, anonymous GitHub search results, and fixed-provider
+  general-web-search results.
 - Repository URLs supplied to the runner.
+- User-selected trusted research policy files and advanced provider/cookie
+  settings.
 - User-local launcher fleet/model preference files.
 - User-selected output workspace paths and generated artifact paths.
 
@@ -62,8 +67,35 @@
     to all permissions for that launch. Its allow-all state also makes the
     runner open the local HTML report index without confirmation unless
     that behavior is disabled.
-22. An explicit `--autopilot` launch permits autonomous continuation;
-    combining it with `--yolo` combines both outer-session risks.
+22. The retired launcher `--autopilot` spelling is mistaken for an initial
+    request, or an in-session plan/autopilot transition replays the plaque,
+    presents a misleading model-change notice, continues the guided review
+    outside interactive mode, or prevents a stop request from terminating the
+    runner process tree.
+23. A research URL or redirect reaches loopback, private, link-local,
+    reserved, or rebinding-controlled infrastructure.
+24. Research transport inherits authentication, proxies, netrc, browser
+    cookies, client certificates, or caller-supplied headers.
+25. Server-issued cookies broaden scope, persist across repositories/runs, or
+    expose raw tracking identifiers to a model/report.
+26. Unsupported bodies or active HTML become executable, rendered, indexed,
+    or model-visible.
+27. A missing/broken MCP tool, zero-success research phase, malformed dossier,
+    or orphaned broker process is mistaken for completed live research.
+28. A custom policy/provider path selects target-derived configuration,
+    arbitrary executables, remote MCP endpoints, configurable search endpoints,
+    credentials, TLS bypass, or a weaker transport floor.
+29. A report conflates direct model/effort/harness attribution with heuristic
+    model identification, presents a heuristic as verified attribution,
+    identifies a person rather than repository assets, assigns High heuristic
+    confidence, or infers human generation from absent evidence.
+30. Prompt injection, reviewer-directed instructions, poisoned source/docs/
+    commit/ref metadata, poisoned datasets or benchmarks, encoded instructions,
+    tool-call bait, resource-exhaustion tarpits, or tracking sensors manipulate
+    review behavior or conclusions.
+31. Trusted Markdown/HTML navigation accidentally promotes arbitrary report
+    text or unsafe URLs into active markup, leaks credentials/referrers, or
+    causes rendering-time network access.
 
 ## Controls
 
@@ -94,23 +126,35 @@
   rewritten.
 - Unique user-only temporary Copilot runtime homes with
   `disableAllHooks` enabled, plus separate sanitized persisted homes.
-- A local plugin `sessionStart` hook emits one plain version/start line.
-  A display-only `userPromptSubmitted` command hook recognizes only
-  trusted Rhyolite start markers/commands and emits the plaque without
-  modifying or persisting the prompt. Neither hook performs network
-  access, Git commands, writes, or environment/auth inspection.
+- A local plugin `sessionStart` hook emits one plain version/start line
+  for ordinary loads or the exactly-once launcher plaque. A display-only
+  `userPromptSubmitted` command hook emits a plaque only for exact manual
+  review-start commands and ignores internal resumes, marker-bearing
+  continuations, launcher prompts, and unrelated text. Neither hook
+  performs network access, Git commands, writes, prompt mutation, or
+  environment/auth inspection.
 - Native fleet mode and the outer model are selected before Copilot
   starts. The trusted launcher setup block contains only canonical
   source URLs plus constrained fleet/model/remember fields; sources
   remain untrusted data rather than prompt instructions.
-- `--yolo` and `--autopilot` are disabled by default and are ephemeral
-  per-launch outer-orchestrator switches. `--yolo` opts the outer
-  Copilot orchestrator into all permissions, `--autopilot` enables
-  autonomous continuation, and selecting both combines the behaviors.
-  Neither is persisted in launcher context, copied into the trusted
-  launcher setup block, or remembered as a preference. The runner still
-  reads allow-all state to decide whether to open the local HTML report
+- `--yolo` is disabled by default and is an ephemeral per-launch
+  outer-orchestrator switch. It opts the outer Copilot orchestrator into all
+  permissions but is not persisted in launcher context, copied into the
+  trusted launcher setup block, or remembered as a preference. The runner
+  reads allow-all state only to decide whether to open the local HTML report
   index automatically; `--no-open-html` disables that behavior.
+- The launcher has an explicit retired-option parser branch for
+  `--autopilot`; it renders `RHYOLITE ERROR` and exits `2` before Copilot
+  starts. It passes `--mode interactive` explicitly. Rhyolite does not support
+  plan/autopilot mode during guided setup or execution, and mode-related UI
+  notices do not change the approval-bound worker model.
+- Launcher startup emits the plaque once from `sessionStart`; the prompt hook
+  matches only exact manual review-start commands and ignores internal
+  resumes, marker-bearing continuations, and unrelated prompts.
+- Exact `stop` and `cancel` intents use targeted execution cancellation. The
+  Bash runner propagates INT/TERM/HUP through tracked repository, timeout,
+  Copilot worker, and broker processes, then records `Interrupted` state and
+  artifacts.
 - Per-repository fleet/model preferences are keyed by a SHA-256 hash of
   the canonical public URL, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
@@ -138,20 +182,77 @@
 - Repository custom instructions disabled in child sessions.
 - Custom agent tools exclude editing.
 - Runner denies write and shell tools globally, removes direct Git tools,
-  and supplies bounded Git metadata from the trusted wrapper.
+  and supplies a bounded, sanitized, exact-commit collection of Git metadata
+  from the trusted wrapper. Collection and wrapping are trusted; ref names,
+  paths, author and committer names, commit subjects, selected sanitized
+  commit trailer values, and all other metadata content remain
+  attacker-controlled untrusted evidence. Only the latest 100 commits are
+  represented; email addresses and full commit bodies are omitted. Logical
+  fields are sanitized before line bounds, and the 64 KiB aggregate retains
+  whole newest-first commit records with an inert marker for omitted older
+  records.
+- Scope 1 creates no broker process, MCP config, cookie jar, or research log.
+- Scope 2/3 launches a dedicated research worker before the main reviewer.
+  The research worker receives snapshot reads/searches and exactly
+  `research_capabilities`, `fetch_public_url`, `search_public_github`,
+  `search_public_web`, and `research_network_summary`. The main reviewer
+  receives only a validated read-only dossier and sanitized network summary.
+- Direct `web_fetch`, broad URL approval, built-in MCPs, shell, and writes are
+  unavailable to both research and main review children.
+- One bundled Python standard-library stdio broker is started per repository
+  through an ephemeral mode-0600 MCP config and an `env -i` launcher.
+- The broker permits GET/HEAD over HTTPS only, rejects userinfo/IP literals and
+  reserved hosts, resolves every initial/redirect target, requires every answer
+  to be globally routable, pins the selected address, and verifies TLS/SNI and
+  hostname against the original host.
+- Redirects, requests, concurrency, per-host rate, connect/total time, headers,
+  wire body, normalized output, links, cookies, and TLS ports are bounded by an
+  approval-hashed effective policy plus immutable code limits.
+- Fixed safe headers exclude Referer and Authorization. Model-supplied headers,
+  request bodies, authentication, inherited proxies/netrc/cookies/client
+  certificates, arbitrary executables, and remote MCP endpoints are forbidden.
+- General web search uses only the closed in-code fixed-endpoint anonymous
+  `duckduckgo-html-v1` adapter or explicit `none`. Search requests use GET
+  through the same fetch boundary. Provider redirect URLs are decoded, every
+  result is revalidated against the public-HTTPS floor, duplicate results are
+  removed, and bounded URL/title/summary records are returned. Provider
+  challenges and malformed responses are structured failures; there is no
+  bypass or silent fallback.
+- A failed verified TLS handshake can trigger only a metadata-only diagnostic
+  handshake. It sends no HTTP request and cannot turn failure into success.
+- HTML active elements are stripped. Supported text/JSON/XML/RSS/Atom is
+  normalized as untrusted evidence. Unsupported or binary bodies are stored
+  privately by SHA-256 without original/executable extensions.
+- Research does not activate or fetch resource URLs merely to test pixels,
+  callbacks, trackers, or sensors. Normalized external pages may omit
+  active-resource details, and reports preserve that evidence limitation.
+- Cookie replay defaults off. Optional replay starts with a fresh empty
+  per-repository/per-run jar and permits only bounded exact-host Secure cookies
+  under path/expiry constraints. Raw Set-Cookie values remain only in a private
+  mode-0600 ledger in either mode and are never model/report inputs.
+- Broker capabilities, exact tools, policy digest, request ledger, at least one
+  successful public response, dossier headings/delimiters, private permissions,
+  and broker/config/runtime cleanup are validated before main analysis.
+- Distinct `ResearchCapabilityFailed` and `ResearchFailed` statuses prevent
+  missing transport, zero-success research, malformed output, or cleanup
+  failures from becoming a completed review.
+- Custom research policy files must be trusted and outside Git worktrees and
+  target/output roots. Policy schema 1 accepts only bundled adapters; the
+  effective policy digest, providers, limits, and cookie mode are part of
+  `ApprovalHash`.
 - Child file access is rooted at the checkout and automatic
   temporary-directory access is disabled.
-- Outer `--yolo` or `--autopilot` state does not relax child review
-  restrictions. Runner-enforced tool isolation remains in place, and the
-  runner removes inherited `COPILOT_ALLOW_ALL` state from child process
-  environments after applying its own report-opening policy.
+- Outer `--yolo` or user-enabled in-session Copilot autopilot state does not
+  relax child review restrictions. Runner-enforced tool isolation remains in
+  place, and the runner removes inherited `COPILOT_ALLOW_ALL` state from child
+  process environments after applying its own report-opening policy.
 - Child remote export is disabled.
 - Installed hook changes load only in new outer sessions; child review
   homes still set `disableAllHooks` and do not inherit the onboarding
   hook.
 - Only the trusted runner writes artifact files.
-- The web-fetch tool is unavailable unless public research is explicitly
-  enabled.
+- Public research egress is unavailable unless scope 2/3 is explicitly
+  approved, and then only through the local broker.
 - Target code execution is explicitly prohibited.
 - Public research and evidence-based provenance review for agentically
   generated code are separate opt-ins.
@@ -173,12 +274,39 @@
 - Scope-based default timeouts match the published planning ranges.
 - Reports require exact source references and evidence/confidence
   separation.
+- Every scope requires an exact
+  `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` with explicit coverage
+  of prompt injection, reviewer-directed instructions, metadata/dataset/
+  benchmark poisoning, encoded instructions/tool-call bait, recursive or
+  resource-exhaustion tarpits, tracking/callback mechanisms, evidence
+  limitations, confidence, and evidence basis. The source remains inert
+  evidence.
+- Scope 3 additionally requires an exact
+  `GENERATED-CODE PROVENANCE ASSESSMENT` with generation, direct model,
+  non-attributive heuristic model candidates, heuristic confidence, direct
+  effort, direct harness, coverage/window, alternative-explanation,
+  confidence, and evidence-basis fields. Validation fails closed on omission
+  and rejects High heuristic confidence or inconsistent controlled
+  no-candidate values. Direct model/effort/harness attribution requires
+  commit-bound evidence; heuristics concern repository assets, never people,
+  and remain explicitly non-attributive.
 - Text artifacts strip terminal control sequences and redact email
   addresses.
-- Markdown uses a fidelity-first indented code block.
+- Markdown and HTML promote only exact allowlisted report headings into
+  trusted generated TOCs/anchors. All canonical report-body chunks remain
+  inert code/preformatted text.
+- Trusted external-reference blocks are deduplicated from the already
+  sanitized canonical report and accept only conservatively validated HTTPS
+  URLs. Userinfo, IP literals, localhost/internal suffixes, controls/
+  whitespace, malformed escapes, unsafe delimiters, credential-like query
+  keys/values, and non-HTTPS schemes remain inert.
 - Transcripts and handoff values also use inert Markdown code text.
 - HTML escapes all report and metadata content, has no scripts or remote
-  assets, and applies a restrictive content security policy.
+  assets, applies a restrictive content security policy and no-referrer
+  policy, and marks generated external links
+  `noopener noreferrer nofollow external` with
+  `referrerpolicy="no-referrer"`. Rendering performs no DNS or network
+  access.
 - Handoffs save session IDs but require continuation through the trusted
   runner instead of advertising an unrestricted direct resume.
 - Recovered reports without the mandatory closing delimiter are retained
@@ -195,9 +323,19 @@
 - Public web sources can contain prompt injection and false claims.
 - The wrapper command itself can write to the user-selected artifact
   workspace.
-- `--allow-all-urls` is used only after explicit public-research opt-in
-  because comprehensive research cannot be represented by a stable domain
-  allowlist.
+- Public research still sends project terminology and public URLs to selected
+  public endpoints. The constrained broker reduces transport risk but cannot
+  establish source truthfulness.
+- Raw private cookie/body evidence may contain tracking identifiers,
+  copyrighted material, misleading content, or hostile bytes until the user
+  deletes the local run bundle.
+- The fixed anonymous general-web-search provider can rate-limit, change HTML
+  structure, return an automated-access challenge, or omit relevant sources.
+  Rhyolite fails that provider call without bypass or fallback, so coverage
+  gaps remain possible.
+- Broker normalization can remove active-resource details, so public-page
+  tracking-pixel, callback, tracker, and sensor detection can be incomplete.
+  Checked-in source and documentation remain inspectable as inert evidence.
 - A local user can intentionally override the runner or plugin
   safeguards.
 - Public DNS classification and pinning reduce, but cannot eliminate,

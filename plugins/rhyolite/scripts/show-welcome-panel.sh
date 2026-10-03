@@ -41,6 +41,33 @@ launcher_started_immediately() {
         'RHYOLITE_LAUNCHER_IMMEDIATE_START_V1' ]]
 }
 
+prompt_requests_review_start() {
+    local hook_input="$1"
+    local hook_prompt
+    local command
+
+    [[ "${hook_input}" != *'--rhyolite-resume'* ]] || return 1
+    hook_prompt="$(
+        printf '%s' "${hook_input}" |
+            sed -nE \
+                's/.*"prompt"[[:space:]]*:[[:space:]]*"([^"]*).*/\1/p' |
+            head -n 1
+    )"
+    hook_prompt="${hook_prompt#"${hook_prompt%%[![:space:]]*}"}"
+
+    for command in \
+        '/rhyolite:start' \
+        '/rhyolite:repo-review' \
+        '/repo-review'; do
+        case "${hook_prompt}" in
+            "${command}"|"${command} "*|"${command}\\n"*|"${command}\\r"*|"${command}\\t"*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 terminal_cell_length() {
     local value="$1"
 
@@ -250,6 +277,8 @@ explain_scopes_phrase="${setup_help_phrases[2]}"
 
 if [[ "${mode}" == "progress" ]]; then
     if launcher_started_immediately; then
+        printf '{"type":"progress","message":"%s"}\n' \
+            "$(json_escape "$(review_plaque)")"
         exit 0
     fi
     progress_message="${display_name} v${version} loaded — type ${start_command} to start."
@@ -260,10 +289,10 @@ fi
 
 if [[ "${mode}" == "prompt-plaque" ]]; then
     hook_input="$(cat)"
-    if [[ "${hook_input}" == *'RHYOLITE_START_COMMAND_V1'* ||
-        "${hook_input}" == *'/rhyolite:start'* ||
-        "${hook_input}" == *'/rhyolite:repo-review'* ||
-        "${hook_input}" == *'/repo-review'* ]]; then
+    if launcher_started_immediately; then
+        exit 0
+    fi
+    if prompt_requests_review_start "${hook_input}"; then
         printf '{"type":"progress","message":"%s"}\n' \
             "$(json_escape "$(review_plaque)")"
     fi

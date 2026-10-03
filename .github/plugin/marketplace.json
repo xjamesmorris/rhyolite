@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Rhyolite tools for evidence-based, read-only reviews of public HTTPS Git sources",
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "plugins": [
     {
       "name": "rhyolite",
       "description": "Rhyolite reviews public HTTPS Git repositories for security, design, quality, public context, and evidence-based provenance signals for agentically generated code without modifying or executing them.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "source": "plugins/rhyolite",
       "author": {
         "name": "Rhyolite maintainers"

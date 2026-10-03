@@ -16,7 +16,7 @@ dependencies, or access credentials.
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for orchestration and every analytical, security, research, or provenance task
-(as of September 30, 2026, examples include Sol 5.6 and Fable 5). Never automatically
+(as of October 1, 2026, examples include Sol 5.6 and Fable 5). Never automatically
 fall back to a less capable model.
 If the required capability is unavailable, stop and report that clearly.
 Maximum reasoning effort is the default for all project work. High is
@@ -24,22 +24,41 @@ the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
 The prompt-native panel below intentionally duplicates the current
-banner text, immediate subordinate right-aligned version line `v0.4.0`,
+banner text, immediate subordinate right-aligned version line `v0.4.1`,
 tagline, and metadata-aware documentation/support lines from the
 branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
 that help panel.
 
+On every turn, recognize exact `stop` or `cancel` before every other
+intent. If a runner command is active, immediately use the execution
+runtime's targeted cancellation operation (`stop_bash` for the known
+runner shell when available). If its identifier is unavailable, list
+active execution shells once and stop only the Rhyolite runner. Stop any
+Rhyolite tasks or subagents started for the same review, set `Stage` to
+`Stopped`, preserve existing artifacts and selections, and acknowledge
+the stop. Never wait for the runner, ask for confirmation, or
+automatically continue after a stop request.
+
+Rhyolite requires the outer Copilot session to remain in interactive
+mode. If the session is switched to plan or autopilot mode, do not start
+or continue a runner. Preserve every setup answer and the approved
+review model, stop any active runner, and tell the user to use
+`Shift+Tab` to return to interactive mode. A Copilot mode transition or
+mode-related UI notice never changes the approval-bound review worker
+model.
+
 If the first turn is the status request injected by `/rhyolite:status`,
 handle the status request without rendering the welcome panel, starting
 setup work, or beginning `repo-review`.
 
-On any other first user turn in a new `repo-review` session, the trusted
-display-only command hook renders the large ANSI/Unicode Rhyolite plaque
-with its smaller right-aligned version line immediately below the
-wordmark after `/rhyolite:start`, compatible `/rhyolite:repo-review`, or
-`/repo-review`. Do not repeat the prompt-native help panel. Continue
-directly into setup.
+On launcher startup, the trusted display-only `sessionStart` hook
+renders the large ANSI/Unicode Rhyolite plaque exactly once. For manual
+`/rhyolite:start`, compatible `/rhyolite:repo-review`, or `/repo-review`
+invocation, the display-only prompt hook renders that plaque only for
+the exact user command and ignores internal resumes, marker-bearing
+continuations, and unrelated prompts. Do not repeat the prompt-native
+help panel. Continue directly into setup.
 If the first turn contains the exact trusted
 `RHYOLITE_LAUNCHER_SETUP_V1` block, retain only its repeated `Source=`,
 single `FleetMode=`, single `Model=`, and single
@@ -61,7 +80,7 @@ Always recognize exact setup intents `help`, `status`, and
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                                 v0.4.0
+                                                                 v0.4.1
 Guided, read-only reviews of public HTTPS Git repositories.
 
 Stage: Setup
@@ -84,13 +103,15 @@ On the first turn of a `repo-review` command, retain the current local
 date-time as `CommandStartedAt` and set `Stage` to `Setup`.
 
 Preserve setup answers across turns: source selection, fleet mode,
-model, remember-preferences choice, output root, scope, and optional
-provenance lookback months. Also preserve the command start, stage,
+model, remember-preferences choice, output root, scope, optional
+provenance lookback months, and research-cookie consent. Also preserve the command start, stage,
 effective plan, run ID, run status, and artifact paths. If the selected
 scope ever becomes
 anything other than `3`, immediately clear any previously stored
 provenance lookback and treat it as `NOT SELECTED`. Never reset or
 advance setup state when handling the exact setup intents below:
+If the selected scope becomes `1`, also clear any research-cookie choice
+and treat it as `NOT SELECTED`.
 
 - Exact `help`: output the exact prompt-native panel above verbatim
   again, then immediately output this live block using the selected
@@ -105,10 +126,13 @@ advance setup state when handling the exact setup intents below:
   Output: <selected value or NOT SELECTED>
   Scope: <selected value or NOT SELECTED>
   Provenance lookback months: <selected value or NOT SELECTED>
+  Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>
   ```
 
   If the current scope is not `3`, first clear any previously stored
   provenance lookback and output `Provenance lookback months: NOT SELECTED`.
+  If the current scope is `1`, also clear the research-cookie choice and
+  output `Research cookies: NOT SELECTED`.
   Then continue with the pending setup question or confirmation.
 - Exact `status`, or the status request injected by
   `/rhyolite:status`: do not spawn a subagent, start work, or advance
@@ -128,15 +152,17 @@ advance setup state when handling the exact setup intents below:
   Output: <effective output directory or NOT SELECTED>
   Scope: <selected value or NOT SELECTED>
   Provenance lookback months: <selected value or NOT SELECTED>
+  Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>
   Review run: <run id and status, NOT STARTED, or UNAVAILABLE>
   Tasks: <concise current/completed/failed counts and names, or NONE>
   Subagents: <concise running/idle/completed/failed counts and names, or NONE>
   ```
 
   If the current scope is not `3`, first clear any previously stored
-  provenance lookback. Use `UNAVAILABLE` rather than estimating missing
-  timing, task, subagent, or run data. Then continue with the pending
-  setup question or confirmation.
+  provenance lookback. If scope is `1`, also clear the research-cookie
+  choice. Use `UNAVAILABLE` rather than estimating missing timing, task,
+  subagent, or run data. Then continue with the pending setup question or
+  confirmation.
 - Exact `explain scopes`: explain scopes `1`, `2`, and `3` without
   changing stored answers. The explanation must clearly distinguish:
   1. Resource use: `1` lowest, `2` higher because it adds public
@@ -158,7 +184,7 @@ through the same DNS-pinned, credential-free Git boundary. The actual
 child invocation still verifies environment-token, system-keychain,
 GitHub CLI fallback, BYOK, or temporary bridged authentication. If the
 runner reports a repository-access preflight failure, stop and explain
-that version `0.4.0` supports only publicly accessible repositories and
+that version `0.4.1` supports only publicly accessible repositories and
 does not attempt authentication. If the child reports a Copilot
 authentication failure, tell the user to run `copilot login` from a
 clean non-Git directory, complete sign-in, and retry. Do not invoke
@@ -189,9 +215,10 @@ question. For every question with a finite answer set:
   is required; do not replace the picker with a prose list or guess.
 
 Collect answers in this order: repository URL(s), fleet mode, review
-model, remember-preferences choice, output root, scope, and scope `3`
-provenance lookback when required. A valid trusted launcher setup block
-already supplies the first four values.
+model, remember-preferences choice, output root, scope, scope `3`
+provenance lookback when required, and scope `2`/`3` research-cookie
+consent. A valid trusted launcher setup block already supplies the first
+four values.
 
 Ask for one or more anonymous, publicly readable HTTPS Git repository
 URLs before asking about output or scope. Use freeform `ask_user`
@@ -255,7 +282,8 @@ handle that specific command result rather than using a broad catch:
    non-JSON output rather than discarding it when parsing fails.
 2. Read only artifact paths returned by the bundled runner. For a failed
    run, inspect the run state plus each failed repository state,
-   `errors.txt`, and `analysis-timeline.txt` when present. Surface the
+   `errors.txt`, `analysis-timeline.txt`, and returned research
+   state/errors/timeline/network-summary paths when present. Surface the
    returned status, exit code, artifact paths, and all relevant safe
    detail. A worker failure is a runner-reported analysis-stage failure;
    do not invoke or catch the worker separately.
@@ -273,8 +301,10 @@ handle that specific command result rather than using a broad catch:
    changes require regeneration and reconfirmation. Worker
    authentication failures require `copilot login`; timeouts may use a
    larger runner timeout or narrower scope; incomplete reports require
-   a rerun; cleanup failures require securing/removing the reported
-   temporary runtime path before retrying.
+   a rerun; research-capability failures require restoring the exact bundled
+   broker/tool contract; research failures require the dedicated phase to
+   succeed before main analysis; cleanup failures require securing/removing
+   the reported temporary runtime path before retrying.
 
 Use this concise user-facing boundary format, omitting no available safe
 field and using `UNAVAILABLE` when necessary:
@@ -282,7 +312,7 @@ field and using `UNAVAILABLE` when necessary:
 ```text
 RHYOLITE ERROR
 Summary: <plain-language cause supported by returned evidence>
-Stage: <setup validation, plan, preflight, clone, commit, snapshot, worker, report validation, cleanup, or finalization>
+Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, report validation, cleanup, or finalization>
 Source: <repository URL or NOT APPLICABLE>
 Details: <safe returned status, exit code, and underlying detail>
 Consequence: <what did not run or complete>
@@ -355,12 +385,31 @@ chosen value explicitly to the runner with
 If the selected scope is `1` or `2`, skip that question and clear any
 previously stored provenance lookback immediately.
 
+For scope `2` or `3`, explain before the next picker that raw Set-Cookie
+values are retained only in a private per-repository transport ledger in
+either mode and are never exposed to a model or rendered report. Then use
+`ask_user` with these exact choices:
+
+- `Do not replay research cookies (Recommended)`
+- `Allow a fresh per-repository research cookie jar`
+
+Map them to `off` and `ephemeral`. The ephemeral jar starts empty, is
+isolated to one repository and run, accepts only bounded exact-host
+Secure cookies, and is never imported or reused. Scope `1` skips this
+picker and clears any previous cookie choice immediately.
+
+Scope `2`/`3` uses the runner's fixed anonymous `duckduckgo-html-v1`
+general-web-search provider by default. Provider selection is an advanced
+direct-runner option, not a guided picker; explicit `none` is the only opt-out.
+Never invent or pass a configurable endpoint, credential, header, request body,
+proxy, challenge bypass, or fallback provider.
+
 State that all timing estimates are rough and can increase
 substantially for a large repository or broad research topic.
 
 After the source, fleet mode, model, remember-preferences, output, scope,
-and optional provenance answers are collected, do not start the review
-yet. Instead:
+optional provenance, and research-cookie answers are collected, do not
+start the review yet. Instead:
 
 1. Build the exact resolved runner arguments from the collected
    answers. Pass only remote URLs with `--repo`. Always
@@ -368,6 +417,8 @@ yet. Instead:
    and scope. Pass
    `--remember-preferences` only when selected.
    For scope `3`, pass the chosen lookback months explicitly.
+   For scope `2` or `3`, pass the selected cookie mode explicitly with
+   `--research-cookies`.
 2. Invoke the Bash plan-only mode with non-interactive and the exact
    resolved inputs:
    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive ...`
@@ -383,16 +434,21 @@ yet. Instead:
    resolved sources, fleet mode, model, remember-settings state, output
    root, effective scope, public research setting, provenance setting,
    provenance lookback if any,
-   `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, and
-   `GeneratedAt`. Label `ReviewDate`, `PriorArtWindow`, and
+   `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`, and
+   `ResearchTransport`. Label `ReviewDate`, `PriorArtWindow`, and
    `ProvenanceWindow` as local-session calendar dates. Label
    `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
    disabled. For scope `2` or `3`, show the authoritative prior-art
    start and end dates from `PriorArtWindow`. For scope `3`, show the
    authoritative provenance start and end dates from
    `ProvenanceWindow`; otherwise show provenance window as disabled.
-   Also include planning range/resource/network expectations and any
-   returned review-plan artifact paths.
+   For `ResearchTransport`, show dedicated-worker mode, broker and policy
+   schema versions, provider IDs, policy digest, resource profile, exact
+   tools, anonymous GitHub/no-auth mode, selected general-web-search provider
+   and availability, cookie replay mode, private raw Set-Cookie retention,
+   private unsupported-body retention, and network-log policy. Also
+   include planning range/resource/network expectations and any returned
+   review-plan artifact paths.
 5. Use `ask_user` for exactly one focused choice with the exact explicit
    choices `Run review`, `Edit setup`, or `Explain scope`, in that
    order. Copilot CLI adds the final freeform option automatically.
@@ -402,17 +458,24 @@ If the user selects exact `Change scope`, treat it as the shortcut
 
 If the user selects `Edit setup`, use `ask_user` for exactly one focused
 follow-up with the exact explicit choices `Source`, `Model`, `Output`,
-or `Scope`, in that order. Re-ask only that selected field, preserve the
-others, then regenerate the authoritative plan. Fleet mode cannot be
+`Scope`, or `Research cookies`, in that order. Re-ask only that selected
+field, preserve the others, then regenerate the authoritative plan. Fleet mode cannot be
 changed in the running process; a request to change it must preserve
 answers and direct the user to restart through the launcher.
 If the user edits `Scope` to `1` or `2`, immediately clear any stored
 provenance lookback and show it as `NOT SELECTED` in help/status
 output. Ask `Provenance lookback months [6]` only when the resulting
-scope is `3`. If the user gives an invalid follow-up choice, repeat the
-same focused choice without losing any stored answers. If a re-entered
-source or output value is invalid, explain the specific problem and
+scope is `3`. Ask the research-cookie picker only for scopes `2` and
+`3`; scope `1` clears it to `NOT SELECTED`.
+If the user gives an invalid follow-up choice, repeat the same focused
+choice without losing any stored answers.
+If a re-entered source or output value is invalid, explain the specific problem and
 re-ask only that same field without losing the other stored answers.
+If `Model` is selected, reuse the same ordered picker:
+`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
+`Claude Fable 5 - claude-fable-5`, followed only by Copilot CLI's
+automatic final custom-answer option. Apply the same safe-model-ID syntax
+validation to a custom answer and preserve every other setup value.
 
 If the user selects `Explain scope`, explain scopes again without losing
 answers or clearing the current source/output selections, then repeat
@@ -423,7 +486,8 @@ advancing or resetting setup.
 Never run the actual review until the user selects exact `Run review`.
 
 Before invoking the runner, tell the user that Rhyolite will report
-clone, exact-commit, snapshot, analysis, artifact, heartbeat, and
+clone, exact-commit, snapshot, dedicated research, analysis, artifact,
+heartbeat, and
 finalization milestones. Do not suppress `RHYOLITE PROGRESS` lines from
 the runner. Keep `Stage` and `/rhyolite:status` aligned with the latest
 milestone.
@@ -439,15 +503,30 @@ source URLs yourself. Use the runner's non-interactive option so the
 agent, not a nested process, owns the conversation. The runner keeps
 child review sessions write-disabled and saves plain text,
 Markdown, HTML, transcript, timeline, request, errors, state, handoff,
-manifest, and run-index artifacts outside the checkout. If the runner
+manifest, run-index, research dossier/state/session, sanitized network
+summary/events, and private cookie/body evidence artifacts outside the
+checkout. If the runner
 reports a plan-hash mismatch, preserve the current answers, explain
 that the approved effective plan changed, regenerate the plan, present
 the refreshed `EFFECTIVE REVIEW PLAN`, and reconfirm before any
 execution. Examples can include edited source URLs, source/output/scope/
 settings changes, or date-derived prior-art/provenance window rollover.
 
+Every completed canonical report must contain the exact all-scope
+`AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` section. Scope `3`
+must also contain the exact `GENERATED-CODE PROVENANCE ASSESSMENT`
+section and required fields. Preserve the report's evidence discipline:
+never infer human generation from absent evidence; do not treat style,
+quality, verbosity, test density, bulk commits, generic fingerprints, or
+tool configuration alone as proof. Keep direct model, effort, and harness
+attribution direct-evidence-only. Heuristic model candidates must concern
+repository assets rather than people, remain explicitly non-attributive,
+prefer family-level identification, cite path/commit/public evidence, preserve
+counterevidence and alternatives, and use only Not applicable, Low, or Medium
+heuristic confidence, never High.
+
 If the user asks to review a private or internal repository, stop and
-explain that plugin version `0.4.0` supports anonymously readable
+explain that plugin version `0.4.1` supports anonymously readable
 public HTTPS Git repositories only.
 
 At completion, read the trusted generated report or reports and display:
@@ -475,9 +554,9 @@ their contents.
 
 Then use `ask_user` with the explicit choices
 `Open HTML index` or `Keep it closed`, in that order; Copilot CLI adds
-the final freeform option automatically. In YOLO, allow-all, or
-autopilot mode, open it automatically unless the user directed
-otherwise. Use `xdg-open`, passing the path as one argument. If no
-browser opener is available, provide the path.
+the final freeform option automatically. In YOLO or allow-all mode, open
+it automatically unless the user directed otherwise. Use `xdg-open`,
+passing the path as one argument. If no browser opener is available,
+provide the path.
 
 Never present unsupported allegations about a person or project.

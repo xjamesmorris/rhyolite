@@ -13,9 +13,15 @@ OUTPUT_HELPER="${SKILL_ROOT}/scripts/review-output.sh"
 HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 COPILOT_HARNESS="${PLUGIN_ROOT}/lib/harness/copilot.sh"
 PROMPT="${SKILL_ROOT}/review-prompt.txt"
+RESEARCH_PROMPT="${SKILL_ROOT}/research-prompt.txt"
+RESEARCH_POLICY="${SKILL_ROOT}/research-policy.json"
+RESEARCH_BROKER="${SKILL_ROOT}/scripts/research-egress-broker.py"
+RESEARCH_BROKER_LAUNCHER="${SKILL_ROOT}/scripts/launch-research-egress-broker.sh"
 SKILL="${SKILL_ROOT}/SKILL.md"
 AGENT="${PLUGIN_ROOT}/agents/repo-review.agent.md"
 WORKER_AGENT="${PLUGIN_ROOT}/agents/repo-review-worker.agent.md"
+RESEARCH_WORKER_AGENT="${PLUGIN_ROOT}/agents/repo-research-worker.agent.md"
+RESEARCH_BROKER_TEST="${ROOT}/tests/test-research-egress-broker.py"
 UI_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-ui-validator.agent.md"
 TUI_RUNTIME_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-tui-runtime-validator.agent.md"
 TUI_RUNTIME_VALIDATOR="${ROOT}/tests/validate-tui-runtime.mjs"
@@ -145,6 +151,7 @@ required_files=(
     "${MARKETPLACE}"
     "${AGENT}"
     "${WORKER_AGENT}"
+    "${RESEARCH_WORKER_AGENT}"
     "${UI_VALIDATOR_AGENT}"
     "${TUI_RUNTIME_VALIDATOR_AGENT}"
     "${TUI_RUNTIME_VALIDATOR}"
@@ -157,6 +164,11 @@ required_files=(
     "${SKILL}"
     "${SOURCE_ASSESSMENT_SKILL}"
     "${PROMPT}"
+    "${RESEARCH_PROMPT}"
+    "${RESEARCH_POLICY}"
+    "${RESEARCH_BROKER}"
+    "${RESEARCH_BROKER_LAUNCHER}"
+    "${RESEARCH_BROKER_TEST}"
     "${RUNNER}"
     "${DISCOVERY}"
     "${OUTPUT_HELPER}"
@@ -520,33 +532,45 @@ grep -Fq \
 grep -Fq 'name: repo-review' "${AGENT}" ||
     fail 'User-facing agent is not named repo-review.'
 grep -Fq 'model: gpt-5.6-sol' "${AGENT}" &&
-    grep -Fq 'model: gpt-5.6-sol' "${WORKER_AGENT}" ||
+    grep -Fq 'model: gpt-5.6-sol' "${WORKER_AGENT}" &&
+    grep -Fq 'model: gpt-5.6-sol' "${RESEARCH_WORKER_AGENT}" ||
     fail 'Analytical Rhyolite agents are not pinned to GPT-5.6 Sol.'
 grep -Fq \
-    'tools: ["read", "search", "agent", "web"]' \
+    'tools: ["read", "search", "agent"]' \
     "${WORKER_AGENT}" || fail 'Worker agent does not use the expected tool set.'
+grep -Fq \
+    'tools: ["read", "search", "rhyolite-research-research_capabilities", "rhyolite-research-fetch_public_url", "rhyolite-research-search_public_github", "rhyolite-research-search_public_web", "rhyolite-research-research_network_summary"]' \
+    "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker does not expose the exact broker tool set.'
 grep -Fq 'name: repo-review-worker' "${WORKER_AGENT}" ||
     fail 'Worker agent does not use the repo-review command namespace.'
+grep -Fq 'name: repo-research-worker' "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker agent is missing.'
 ! grep -Eq 'tools:.*edit' "${AGENT}" ||
     fail 'Agent enables editing tools.'
 ! grep -Eq 'tools:.*edit' "${WORKER_AGENT}" ||
     fail 'Worker agent enables editing tools.'
+! grep -Eq 'tools:.*edit' "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker agent enables editing tools.'
 grep -Fq 'disable-model-invocation: true' "${AGENT}" ||
     fail 'Agent is not explicitly invoked.'
 grep -Fq 'user-invocable: false' "${WORKER_AGENT}" ||
     fail 'Worker agent is user-invocable.'
+grep -Fq 'user-invocable: false' "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker agent is user-invocable.'
 grep -Fq 'Do not edit files' "${WORKER_AGENT}" ||
     fail 'Worker agent does not preserve the write boundary.'
 for confidence_file in \
-    "${WORKER_AGENT}" "${SKILL}" "${SOURCE_ASSESSMENT_SKILL}" "${PROMPT}"; do
+    "${WORKER_AGENT}" "${RESEARCH_WORKER_AGENT}" "${SKILL}" \
+    "${SOURCE_ASSESSMENT_SKILL}" "${PROMPT}" "${RESEARCH_PROMPT}"; do
     grep -Fq 'Confidence' "${confidence_file}" ||
         fail "Assessment confidence contract is missing: ${confidence_file}"
     grep -Fqi 'evidence basis' "${confidence_file}" ||
         fail "Assessment confidence lacks an evidence basis: ${confidence_file}"
 done
 for quality_file in \
-    "${AGENT}" "${WORKER_AGENT}" "${SKILL}" \
-    "${SOURCE_ASSESSMENT_SKILL}" "${PROMPT}"; do
+    "${AGENT}" "${WORKER_AGENT}" "${RESEARCH_WORKER_AGENT}" "${SKILL}" \
+    "${SOURCE_ASSESSMENT_SKILL}" "${PROMPT}" "${RESEARCH_PROMPT}"; do
     normalized_quality="$(
         tr '\r\n\t' '   ' < "${quality_file}" |
             sed -E 's/[[:space:]]+/ /g'
@@ -569,7 +593,7 @@ for quality_file in \
         grep -Fq 'Fable 5' <<< "${normalized_quality}" ||
         fail "Dated model examples are missing: ${quality_file}"
 done
-grep -Fq 'as of September 30, 2026' "${README}" &&
+grep -Fq 'as of October 1, 2026' "${README}" &&
     grep -Fq 'Sol 5.6 and Fable 5' "${README}" ||
     fail 'README does not provide the dated model examples.'
 grep -Fq 'rhyolite_harness_capture MODEL harness_default_model' "${RUNNER}" &&
@@ -590,8 +614,9 @@ grep -Fq \
 grep -Fq "readonly RHYOLITE_REASONING_EFFORT='max'" \
     "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--reasoning-effort "${RHYOLITE_REASONING_EFFORT}"' \
-        "${RHYOLITE_LAUNCHER}" ||
-    fail 'Launcher does not enforce maximum reasoning effort.'
+        "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--context long_context' "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher does not enforce maximum reasoning effort and long context.'
 grep -Fq '"${MODEL} review started; scope ${SCOPE}"' "${RUNNER}" ||
     fail 'Bash progress does not display the selected model.'
 grep -Fq 'name: rhyolite-ui-validator' "${UI_VALIDATOR_AGENT}" ||
@@ -650,21 +675,21 @@ mapfile -t packaged_agents < <(
         -printf '%f\n' | LC_ALL=C sort
 )
 [[ "${packaged_agents[*]}" == \
-    'repo-review-worker.agent.md repo-review.agent.md' ]] ||
+    'repo-research-worker.agent.md repo-review-worker.agent.md repo-review.agent.md' ]] ||
     fail 'Plugin agents directory contains an unexpected packaged agent.'
 ! grep -Eq 'tools:.*(read|search|execute|edit|agent|web|ask_user)' \
     "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent gained a tool capability.'
-grep -Fq 'On any other first user turn in a new `repo-review` session' \
+grep -Fq 'On launcher startup, the trusted display-only `sessionStart` hook' \
     "${AGENT}" ||
     fail 'Agent does not define first-turn plaque/setup behavior.'
 grep -Fq 'BEGIN PROMPT_NATIVE_WELCOME_PANEL' "${AGENT}" ||
     fail 'Agent does not embed the prompt-native welcome panel marker.'
 grep -Fq 'END PROMPT_NATIVE_WELCOME_PANEL' "${AGENT}" ||
     fail 'Agent does not close the prompt-native welcome panel marker.'
-grep -Fq 'display-only command hook renders' "${AGENT}" &&
-    grep -Fq 'Do not repeat the prompt-native help panel.' "${AGENT}" ||
-    fail 'Agent does not rely on the one-time command plaque.'
+grep -Fq 'display-only prompt hook renders that plaque only for' "${AGENT}" &&
+    grep -Fq 'Do not repeat the prompt-native' "${AGENT}" ||
+    fail 'Agent does not rely on the exactly-once launcher/manual plaque boundary.'
 ! grep -Fq 'COPILOT_PLUGIN_ROOT' "${AGENT}" ||
     fail 'Agent still depends on COPILOT_PLUGIN_ROOT.'
 grep -Fq 'Preserve setup answers across turns' "${AGENT}" ||
@@ -692,10 +717,15 @@ grep -Fq 'Scope: <selected value or NOT SELECTED>' "${AGENT}" ||
 grep -Fq 'Provenance lookback months: <selected value or NOT SELECTED>' \
     "${AGENT}" ||
     fail 'Agent help/status block is missing provenance lookback.'
+grep -Fq 'Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>' \
+    "${AGENT}" ||
+    fail 'Agent help/status block is missing research cookies.'
 grep -Fq 'immediately clear any previously' "${AGENT}" ||
     fail 'Agent does not immediately clear stale provenance selections.'
 grep -Fq 'Provenance lookback months: NOT SELECTED' "${AGENT}" ||
     fail 'Agent does not show cleared provenance lookback as NOT SELECTED.'
+grep -Fq 'Research cookies: NOT SELECTED' "${AGENT}" ||
+    fail 'Agent does not show cleared research cookies as NOT SELECTED.'
 grep -Fq 'Exact `status`' "${AGENT}" ||
     fail 'Agent does not define exact status behavior.'
 grep -Fq '/rhyolite:status' "${AGENT}" &&
@@ -745,6 +775,10 @@ grep -Fq 'unresolved public placeholders' "${AGENT}" &&
     fail 'Agent must detect unresolved public metadata without emitting a broken URL.'
 grep -Fq '`PriorArtWindow`' "${AGENT}" ||
     fail 'Agent does not summarize PriorArtWindow.'
+grep -Fq '`ResearchTransport`' "${AGENT}" ||
+    fail 'Agent does not summarize ResearchTransport.'
+grep -Fq 'private raw Set-Cookie retention' "${AGENT}" ||
+    fail 'Agent effective plan omits private raw cookie retention.'
 grep -Fq 'Label `ReviewDate`, `PriorArtWindow`, and' "${AGENT}" ||
     fail 'Agent does not describe local-calendar plan labels.'
 grep -Fq '`ProvenanceWindow` as local-session calendar dates. Label' \
@@ -768,7 +802,7 @@ grep -Fq 'If the user selects `Edit setup`, use `ask_user` for exactly one focus
     "${AGENT}" ||
     fail 'Agent does not describe Edit setup.'
 grep -Fq 'exact explicit choices `Source`, `Model`, `Output`,' "${AGENT}" &&
-    grep -Fq 'or `Scope`, in that order.' "${AGENT}" ||
+    grep -Fq '`Scope`, or `Research cookies`, in that order.' "${AGENT}" ||
     fail 'Agent Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Continue in standard mode`' "${AGENT}" &&
@@ -785,6 +819,10 @@ grep -Fq 'If the user edits `Scope` to `1` or `2`, immediately clear any stored'
 grep -Fq 'Ask `Provenance lookback months [6]` only when the resulting' \
     "${AGENT}" ||
     fail 'Agent does not restrict provenance prompts to scope 3.'
+grep -Fq '`Do not replay research cookies (Recommended)`' "${AGENT}" &&
+    grep -Fq '`Allow a fresh per-repository research cookie jar`' "${AGENT}" &&
+    grep -Fq '`--research-cookies`' "${AGENT}" ||
+    fail 'Agent research-cookie consent contract is incomplete.'
 grep -Fq 'If the user gives an invalid follow-up choice, repeat the' \
     "${AGENT}" ||
     fail 'Agent does not preserve answers on invalid Edit setup choices.'
@@ -916,6 +954,37 @@ for output_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         "${output_ui_file}" ||
         fail "Home-directory output choice drifted: ${output_ui_file}"
 done
+for model_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
+    grep -Fq 'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' \
+        "${model_ui_file}" ||
+        fail "Recommended model picker choice drifted: ${model_ui_file}"
+    grep -Fq 'Claude Fable 5 - claude-fable-5' "${model_ui_file}" ||
+        fail "Alternate model picker choice drifted: ${model_ui_file}"
+done
+node - "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}" <<'JS'
+const fs = require("fs");
+
+const recommended = "GPT-5.6 Sol (Recommended) - gpt-5.6-sol";
+const alternate = "Claude Fable 5 - claude-fable-5";
+for (const file of process.argv.slice(2)) {
+  const text = fs.readFileSync(file, "utf8");
+  const recommendedIndex = text.indexOf(recommended);
+  const alternateIndex = text.indexOf(alternate);
+  if (recommendedIndex < 0 || alternateIndex < 0 ||
+      recommendedIndex >= alternateIndex) {
+    throw new Error(`model picker order drifted: ${file}`);
+  }
+}
+JS
+grep -Fq 'If `Model` is selected, reuse the same ordered' "${AGENT}" &&
+    grep -Fq 'If `Model` is selected, reuse the same ordered' "${SKILL}" ||
+    fail 'Edit setup -> Model does not reuse the initial ordered picker.'
+grep -Fq 'initial setup model picker and `Edit setup` -> `Model`' \
+    "${UI_VALIDATOR_AGENT}" ||
+    fail 'UI validator does not enforce initial/edit model picker reuse.'
+grep -Fq 'GPT-5.6 Sol (Recommended) - %s' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq 'Claude Fable 5 - %s' "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher interactive model picker lost exact known choices.'
 grep -Fq 'agent: rhyolite:repo-review.agent' "${COMMAND_START}" ||
     fail '/rhyolite:start does not route to its command agent.'
 grep -Fq "Enter Rhyolite's guided" "${COMMAND_START}" ||
@@ -974,7 +1043,7 @@ grep -Fq 'three to five concise bullets' "${AGENT}" &&
     fail 'Executive summary length is not bounded.'
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' 'artifacts' \
-    'finalizing' 'completed' 'still running; elapsed'; do
+    'finalizing' 'interrupted' 'completed' 'still running; elapsed'; do
     grep -Fq "${progress_stage}" "${RUNNER}" ||
         fail "Runner progress contract is missing: ${progress_stage}"
 done
@@ -987,9 +1056,18 @@ normalized_skill="$(
     tr '\r\n\t' '   ' < "${SKILL}" |
         sed -E 's/[[:space:]]+/ /g'
 )"
-grep -Fq 'ANSI/Unicode plaque after a review-start command' \
+grep -Fq 'Launcher startup uses the trusted display-only `sessionStart` hook' \
     <<< "${normalized_skill}" ||
-    fail 'Skill does not require the review-start plaque.'
+    fail 'Skill does not require the exactly-once launcher plaque.'
+grep -Fq 'Always recognize exact `stop` and `cancel`' "${SKILL}" &&
+    grep -Fq 'recognize exact `stop` or `cancel`' "${AGENT}" &&
+    grep -Fq '`stop_bash`' "${SKILL}" &&
+    grep -Fq '`stop_bash`' "${AGENT}" ||
+    fail 'Guided workflow does not prioritize exact stop/cancel control.'
+grep -Fq 'Keep the outer Copilot session in interactive mode.' "${SKILL}" &&
+    grep -Fq 'Rhyolite requires the outer Copilot session to remain in interactive' \
+        "${AGENT}" ||
+    fail 'Guided workflow does not enforce the interactive-mode boundary.'
 grep -Fq 'user-invocable: false' "${SKILL}" ||
     fail 'Internal repository-review skill is exposed as a user command.'
 grep -Fq 'user-invocable: false' "${SOURCE_ASSESSMENT_SKILL}" ||
@@ -1010,14 +1088,16 @@ for source_skill_phrase in \
     grep -Fqi "${source_skill_phrase}" "${SOURCE_ASSESSMENT_SKILL}" ||
         fail "Research source-assessment skill is missing: ${source_skill_phrase}"
 done
-grep -Fq '/research-source-assessment' "${SKILL}" &&
-    grep -Fq '/research-source-assessment' "${WORKER_AGENT}" &&
-    grep -Fq '/research-source-assessment' "${PROMPT}" ||
-    fail 'Public research does not consistently invoke source assessment.'
+grep -Fq '/research-source-assessment' "${RESEARCH_WORKER_AGENT}" &&
+    grep -Fq '/research-source-assessment' "${RESEARCH_PROMPT}" &&
+    ! grep -Fq '/research-source-assessment' "${WORKER_AGENT}" &&
+    ! grep -Fq '/research-source-assessment' "${PROMPT}" ||
+    fail 'Source assessment is not isolated to the dedicated research worker.'
 for report_heading in \
     'RESEARCH SOURCE LANDSCAPE' \
     'INACCESSIBLE RESOURCE REGISTER' \
-    'TOP USER RETRIEVAL PRIORITIES'; do
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH TRANSPORT OBSERVATIONS'; do
     grep -Fq "${report_heading}" "${SKILL}" &&
         grep -Fq "${report_heading}" "${SOURCE_ASSESSMENT_SKILL}" &&
         grep -Fq "${report_heading}" "${PROMPT}" ||
@@ -1028,7 +1108,8 @@ grep -Fq 'Show top-priority source retrieval' "${AGENT}" &&
     fail 'Agent does not offer inaccessible-source retrieval priorities.'
 grep -Fq 'embedded prompt-native' "${SKILL}" ||
     fail 'Skill does not describe the prompt-native welcome panel contract.'
-grep -Fq 'display-only command hook renders' <<< "${normalized_skill}" &&
+grep -Fq 'Manual review-start commands use the display-only prompt hook' \
+    <<< "${normalized_skill}" &&
     grep -Fq 'must not repeat the prompt-native panel' \
         <<< "${normalized_skill}" ||
     fail 'Skill does not separate the start plaque from the help panel.'
@@ -1055,11 +1136,16 @@ grep -Fq 'Scope: <selected value or NOT SELECTED>' "${SKILL}" ||
 grep -Fq 'Provenance lookback months: <selected value or NOT SELECTED>' \
     "${SKILL}" ||
     fail 'Skill help/status block is missing provenance lookback.'
+grep -Fq 'Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>' \
+    "${SKILL}" ||
+    fail 'Skill help/status block is missing research cookies.'
 grep -Fq 'immediately clear' "${SKILL}" &&
     grep -Fq 'previously stored provenance lookback' "${SKILL}" ||
     fail 'Skill does not immediately clear stale provenance selections.'
 grep -Fq 'Provenance lookback months: NOT SELECTED' "${SKILL}" ||
     fail 'Skill does not show cleared provenance lookback as NOT SELECTED.'
+grep -Fq 'Research cookies: NOT SELECTED' "${SKILL}" ||
+    fail 'Skill does not show cleared research cookies as NOT SELECTED.'
 grep -Fq '/rhyolite:status' "${SKILL}" &&
     grep -Fq 'RHYOLITE STATUS' "${SKILL}" ||
     fail 'Skill status response does not preserve prior answers.'
@@ -1093,6 +1179,8 @@ grep -Fq 'EFFECTIVE REVIEW PLAN' "${SKILL}" ||
     fail 'Skill does not surface the effective review plan.'
 grep -Fq '`PriorArtWindow`' "${SKILL}" ||
     fail 'Skill does not summarize PriorArtWindow.'
+grep -Fq '`ResearchTransport`' "${SKILL}" ||
+    fail 'Skill does not summarize ResearchTransport.'
 grep -Fq 'Label `ReviewDate`, `PriorArtWindow`, and' "${SKILL}" ||
     fail 'Skill does not describe local-calendar plan labels.'
 grep -Fq '`ProvenanceWindow` as local-session calendar dates. Label' \
@@ -1113,7 +1201,8 @@ grep -Fq 'Accept exact `Change scope` as the shortcut `Edit setup` ->' \
     "${SKILL}" ||
     fail 'Skill does not describe the Change scope shortcut.'
 grep -Fq 'exact explicit choices `Source`, `Model`,' "${SKILL}" &&
-    grep -Fq '`Output`, or `Scope`, in that order.' "${SKILL}" ||
+    grep -Fq '`Output`, `Scope`, or `Research cookies`, in that order.' \
+        "${SKILL}" ||
     fail 'Skill Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
     grep -Fq '`Continue in standard mode`' "${SKILL}" &&
@@ -1130,6 +1219,10 @@ grep -Fq 'clear provenance immediately when the' "${SKILL}" &&
 grep -Fq 'ask `Provenance lookback months [6]`' "${SKILL}" &&
     grep -Fq 'only when the resulting scope is `3`' "${SKILL}" ||
     fail 'Skill does not restrict provenance prompts to scope 3.'
+grep -Fq '`Do not replay research cookies (Recommended)`' "${SKILL}" &&
+    grep -Fq '`Allow a fresh per-repository research cookie jar`' "${SKILL}" &&
+    grep -Fq '`--research-cookies`' "${SKILL}" ||
+    fail 'Skill research-cookie consent contract is incomplete.'
 grep -Fq '`--expected-plan-hash <ApprovalHash>`' "${SKILL}" ||
     fail 'Skill does not pass the expected plan hash flag.'
 grep -Fq 'plan-hash mismatch, preserve answers' "${SKILL}" ||
@@ -1166,8 +1259,8 @@ grep -Fq '/experimental on' "${README}" "${PUBLISHING_DOC}" ||
     fail 'Public docs do not explain the extension-mode requirement.'
 grep -Fq 'without a leading slash' "${README}" ||
     fail 'README does not distinguish Rhyolite prompts from CLI commands.'
-grep -Fq 'one plain line' "${README}" &&
-    grep -Fq 'display-only command hook' "${README}" &&
+grep -Fq 'one plain versioned line' "${README}" &&
+    grep -Fq 'display-only prompt hook' "${README}" &&
     grep -Fq 'blue-family' "${README}" ||
     fail 'README does not describe load status and command plaque.'
 grep -Fq './rhyolite' "${README}" &&
@@ -1212,7 +1305,7 @@ grep -Fq 'prior-art as disabled' "${README}" ||
 grep -Fq 'scope-`2`/`3` prior-art start/end' "${README}" ||
     fail 'README does not describe scope 2/3 prior-art dates.'
 grep -Fq 'numbered picker for' "${README}" &&
-    grep -Fq '`Source`, `Model`, `Output`, or `Scope`, re-asks only that field' \
+    grep -Fq '`Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks' \
         "${README}" ||
     fail 'README does not describe Edit setup follow-up choices.'
 grep -Fq 'process-level `--fleet` flag' "${README}" &&
@@ -1323,7 +1416,7 @@ skill_requirements=(
     'Do not include author email addresses in reports.'
     'Only the bundled runner writes artifacts.'
     'rhyolite-output/repo-review'
-    'Public web research is performed only when the prompt explicitly'
+    'Public research is performed only through the dedicated research worker'
     'Provenance research is performed only when separately and explicitly'
     'Local repository paths are unsupported input. Reject them before any'
     'Do not infer or accuse a person of AI use, copying, plagiarism'
@@ -1347,13 +1440,146 @@ placeholders=(
     '{{REPOSITORY_METADATA}}'
     '{{PUBLIC_RESEARCH_INSTRUCTIONS}}'
     '{{PROVENANCE_INSTRUCTIONS}}'
+    '{{RESEARCH_DOSSIER_PATH}}'
+    '{{RESEARCH_NETWORK_SUMMARY_PATH}}'
+    '{{RESEARCH_TRANSPORT_INSTRUCTIONS}}'
 )
 for placeholder in "${placeholders[@]}"; do
     grep -Fq -- "${placeholder}" "${PROMPT}" ||
         fail "Prompt placeholder is missing: ${placeholder}"
 done
+research_placeholders=(
+    '{{REPOSITORY_URL}}'
+    '{{REPOSITORY_PATH}}'
+    '{{COMMIT}}'
+    '{{REVIEW_DATE}}'
+    '{{PRIOR_ART_START_DATE}}'
+    '{{PROVENANCE_LOOKBACK_MONTHS}}'
+    '{{PROVENANCE_START_DATE}}'
+    '{{SCOPE_NAME}}'
+    '{{REPOSITORY_METADATA}}'
+    '{{RESEARCH_TRANSPORT_JSON}}'
+    '{{RESEARCH_PROVENANCE_INSTRUCTIONS}}'
+)
+for placeholder in "${research_placeholders[@]}"; do
+    grep -Fq -- "${placeholder}" "${RESEARCH_PROMPT}" ||
+        fail "Research prompt placeholder is missing: ${placeholder}"
+done
 grep -Fq 'REPOSITORY REVIEW REPORT' "${PROMPT}" ||
     fail 'Prompt does not define the final report heading.'
+grep -Fq 'REPOSITORY RESEARCH DOSSIER' "${RESEARCH_PROMPT}" ||
+    fail 'Research prompt does not define the dossier heading.'
+for report_heading in \
+    'REVIEW CONTEXT' \
+    'EXECUTIVE SUMMARY' \
+    'FINDINGS' \
+    'AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT' \
+    'RESEARCH SOURCE LANDSCAPE' \
+    'INACCESSIBLE RESOURCE REGISTER' \
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH TRANSPORT OBSERVATIONS' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT' \
+    'AREAS REVIEWED WITHOUT QUALIFYING FINDINGS' \
+    'PRIORITIZED REMEDIATION' \
+    'OVERALL ASSESSMENT'; do
+    grep -Fq "${report_heading}" "${PROMPT}" &&
+        grep -Fq "${report_heading}" "${SKILL}" &&
+        grep -Fq "${report_heading}" "${OUTPUT_HELPER}" ||
+        fail "Canonical report heading contract is missing: ${report_heading}"
+done
+for agent_targeting_field in \
+    'Prompt injection and reviewer-directed instructions:' \
+    'Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:' \
+    'Encoded/invisible instructions and tool-call bait:' \
+    'Recursive/resource-exhaustion tarpits:' \
+    'Tracking pixels/callback beacons/trackers/sensors:' \
+    'Limitations of available evidence:' \
+    'Confidence:' \
+    'Evidence basis:'; do
+    grep -Fq "${agent_targeting_field}" "${PROMPT}" &&
+        grep -Fq "${agent_targeting_field}" "${SKILL}" &&
+        grep -Fq "${agent_targeting_field}" "${OUTPUT_HELPER}" ||
+        fail "Agent-targeting report field is missing: ${agent_targeting_field}"
+done
+for provenance_field in \
+    'Generation assessment:' \
+    'Direct model attribution:' \
+    'Heuristic model candidates (not attribution):' \
+    'Heuristic model confidence:' \
+    'Direct effort attribution:' \
+    'Direct harness attribution:' \
+    'Coverage/window:' \
+    'Alternative explanations:' \
+    'Confidence:' \
+    'Evidence basis:'; do
+    grep -Fq "${provenance_field}" "${PROMPT}" &&
+        grep -Fq "${provenance_field}" "${SKILL}" &&
+        grep -Fq "${provenance_field}" "${OUTPUT_HELPER}" ||
+        fail "Generated-code provenance field is missing: ${provenance_field}"
+done
+grep -Fq 'No supporting evidence found' "${PROMPT}" &&
+    grep -Fq 'Never infer human generation' "${PROMPT}" &&
+    grep -Fq 'configuration, not generation' "${PROMPT}" &&
+    grep -Fq 'direct-evidence-only' "${WORKER_AGENT}" &&
+    grep -Fq 'repository assets, never people' "${PROMPT}" &&
+    grep -Fq 'never `High`' "${PROMPT}" &&
+    grep -Fq 'No candidate identified' "${SKILL}" ||
+    fail 'Generated-code provenance evidence discipline is incomplete.'
+grep -Fq \
+    'For scope 1, do not emit any of those four research headings.' \
+    "${PROMPT}" &&
+    grep -Fq 'do not emit any scope-`2`/`3`' "${SKILL}" ||
+    fail 'Scope 1 report instructions still induce research headings.'
+grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${PROMPT}" &&
+    grep -Fq 'immediately following continuation line or lines' "${PROMPT}" &&
+    grep -Fq 'suffix counts as the inline evidence' "${PROMPT}" &&
+    grep -Fq 'suffix counts as the inline evidence' "${SKILL}" &&
+    grep -Fq 'values that merely share an allowed prefix' "${PROMPT}" &&
+    grep -Fq 'values that merely share an allowed prefix' "${SKILL}" &&
+    grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${SKILL}" ||
+    fail 'Report field formatting contract is not aligned with validation.'
+grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
+    "${PROMPT}" &&
+    grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
+        "${SKILL}" &&
+    grep -Fq 'do not repeat the URL in findings, remediation' "${PROMPT}" &&
+    grep -Fq 'do not repeat the URL in findings, remediation' "${SKILL}" ||
+    fail 'Repeatable assessment fields or inert tracker citation rules are missing.'
+for provenance_instruction_file in \
+    "${PROMPT}" \
+    "${RESEARCH_PROMPT}" \
+    "${SKILL}" \
+    "${SOURCE_ASSESSMENT_SKILL}"; do
+    grep -Fq 'latest 100 commits' "${provenance_instruction_file}" &&
+        grep -Fq 'committer names' "${provenance_instruction_file}" &&
+        grep -Fq 'full commit bodies' "${provenance_instruction_file}" &&
+        grep -Fq 'attacker-controlled' "${provenance_instruction_file}" ||
+        fail "Bounded commit-trailer limitations are missing from ${provenance_instruction_file}."
+done
+grep -Fq '{{RESEARCH_PROVENANCE_INSTRUCTIONS}}' "${RESEARCH_PROMPT}" &&
+    ! grep -Fq '{{PROVENANCE_INSTRUCTIONS}}' "${RESEARCH_PROMPT}" &&
+    ! grep -Fq 'GENERATED-CODE PROVENANCE ASSESSMENT' \
+        "${RESEARCH_PROMPT}" &&
+    grep -Fq 'existing dossier headings' "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research provenance instructions still conflict with dossier headings.'
+grep -Fiq 'normalized pages may hide active-resource details' \
+    "${RESEARCH_WORKER_AGENT}" &&
+    grep -Fq 'Do not activate or fetch a resource merely to' \
+        "${RESEARCH_PROMPT}" &&
+    grep -Fq 'Do not add a dossier heading or broaden broker retrieval behavior.' \
+        "${SOURCE_ASSESSMENT_SKILL}" ||
+    fail 'Research contracts do not preserve safe sensor-detection limitations.'
+for heading in \
+    'RESEARCH CAPABILITY RECORD' \
+    'RESEARCH SOURCE LANDSCAPE' \
+    'INACCESSIBLE RESOURCE REGISTER' \
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH LIMITATIONS' \
+    'RESEARCH TRANSPORT OBSERVATIONS'; do
+    grep -Fq "${heading}" "${RESEARCH_PROMPT}" &&
+        grep -Fq "${heading}" "${SOURCE_ASSESSMENT_SKILL}" ||
+        fail "Research dossier heading is missing: ${heading}"
+done
 grep -Fq 'Core repository review' "${AGENT}" ||
     fail 'Agent does not recommend the first-run core scope.'
 grep -Fq 'rhyolite-output/repo-review' "${AGENT}" ||
@@ -1380,13 +1606,21 @@ grep -Fq 'freeform `ask_user`' "${AGENT}" &&
 grep -Fq 'with the explicit choices' "${AGENT}" &&
     grep -Fq '`Open HTML index` or `Keep it closed`, in that order' "${AGENT}" ||
     fail 'Agent does not ask before opening HTML.'
-grep -Fq 'YOLO, allow-all,' "${AGENT}" ||
+grep -Fq 'YOLO or allow-all mode' "${AGENT}" ||
     fail 'Agent does not define allow-all HTML behavior.'
 grep -Fq 'provenance window specified by the prompt' "${WORKER_AGENT}" ||
     fail 'Worker agent does not preserve the trusted provenance window.'
-grep -Fq 'research specialist only when public' \
-    "${WORKER_AGENT}" ||
-    fail 'Worker agent does not keep Scope 3 specialist use bounded.'
+grep -Fq 'wrapper'\''s collection and exact-commit' "${WORKER_AGENT}" &&
+    grep -Fq 'attacker-controlled untrusted' "${WORKER_AGENT}" ||
+    fail 'Worker agent does not distinguish trusted metadata wrapping from content.'
+grep -Fq 'Do not invoke a research specialist' "${WORKER_AGENT}" &&
+    grep -Fq 'validated sanitized research dossier' "${WORKER_AGENT}" ||
+    fail 'Main worker does not consume the dedicated sanitized dossier.'
+grep -Fq 'Call `research_capabilities` first' "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker does not enforce broker capability validation.'
+grep -Fq 'Perform at least one successful public retrieval' \
+    "${RESEARCH_WORKER_AGENT}" ||
+    fail 'Research worker does not require live broker retrieval.'
 
 for forbidden in \
     '--allow-all-tools' '--allow-all-paths' '--allow-all ' '--yolo'; do
@@ -1394,12 +1628,26 @@ for forbidden in \
         fail "Runner or Copilot harness contains forbidden default or credential: ${forbidden}"
 done
 
-grep -Fq 'if ((enable_public_research)); then' "${COPILOT_HARNESS}" &&
-    grep -Fq 'output_arguments+=(--allow-all-urls)' "${COPILOT_HARNESS}" ||
-    fail 'Bash URL bypass is not gated by public research.'
 grep -Fq -- '--disable-builtin-mcps' "${COPILOT_HARNESS}" ||
-    fail 'Bash runner does not disable built-in MCP servers.'
-grep -Fq -- '--disallow-temp-dir' "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not disable built-in MCP servers.'
+grep -Fq -- '--disable-builtin-mcps' "${RUNNER}" ||
+    fail 'Dedicated research worker does not disable built-in MCP servers.'
+grep -Fq -- '--additional-mcp-config' "${RUNNER}" ||
+    fail 'Bash runner does not configure the local research MCP broker.'
+grep -Fq 'rhyolite:repo-research-worker' "${RUNNER}" ||
+    fail 'Bash runner does not launch the dedicated research worker.'
+grep -Fq 'research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary' \
+    "${RUNNER}" ||
+    fail 'Bash runner does not preserve the exact research tool contract.'
+grep -Fq 'rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary' \
+    "${RUNNER}" ||
+    fail 'Bash runner does not allow the namespaced research MCP tools.'
+! grep -Fq 'web_fetch' "${RUNNER}" ||
+    fail 'Bash runner still exposes raw web_fetch to a child.'
+! grep -Fq -- '--allow-all-urls' "${RUNNER}" "${COPILOT_HARNESS}" ||
+    fail 'Bash runner still grants broad child URL permission.'
+grep -Fq -- '--disallow-temp-dir' "${COPILOT_HARNESS}" &&
+grep -Fq -- '--disallow-temp-dir' "${RUNNER}" ||
     fail 'Bash runner does not disable temporary-directory access.'
 grep -Fq -- '--secret-env-vars' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not protect inherited authentication.'
@@ -1438,8 +1686,12 @@ grep -Fq 'PreflightBlocked' "${RUNNER}" ||
     fail 'Fail-closed multi-repository preflight blocking is not reported explicitly.'
 grep -Fq 'Local repository paths are not supported.' "${RUNNER}" ||
     fail 'Runner does not reject local repository paths explicitly.'
-grep -Fq 'STATE_SCHEMA_VERSION=3' "${RUNNER}" ||
-    fail 'Bash runner does not emit source-aware schema version 3.'
+grep -Fq 'PLAN_SCHEMA_VERSION=3' "${RUNNER}" ||
+    fail 'Bash runner does not emit research-aware plan schema version 3.'
+grep -Fq 'STATE_SCHEMA_VERSION=4' "${RUNNER}" ||
+    fail 'Bash runner does not emit research-aware state schema version 4.'
+grep -Fq '"ResearchTransport": $(research_transport_json' "${RUNNER}" ||
+    fail 'Bash runner does not emit ResearchTransport state.'
 grep -Fq '"ProvenanceWindow": $(provenance_window_json' "${RUNNER}" ||
     fail 'Bash runner does not emit provenance-window state.'
 grep -Fq 'children=(' "${DISCOVERY}" ||
@@ -1474,7 +1726,67 @@ grep -Fq '* -export-ignore -export-subst' "${RUNNER}" ||
     fail 'Bash snapshot does not neutralize archive attributes.'
 grep -Fq 'rhyolite:repo-review-worker' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not use the namespaced worker agent ID.'
-grep -Fq -- '--deny-tool write' "${COPILOT_HARNESS}" ||
+grep -Fq 'exec env -i' "${RESEARCH_BROKER_LAUNCHER}" &&
+    grep -Fq 'PYTHONNOUSERSITE=1' "${RESEARCH_BROKER_LAUNCHER}" &&
+    grep -Fq 'HOME="${runtime_root}"' "${RESEARCH_BROKER_LAUNCHER}" ||
+    fail 'Research broker launcher does not use a minimal isolated environment.'
+! grep -Eq \
+    'COPILOT_GITHUB_TOKEN|GH_TOKEN|GITHUB_TOKEN|AUTHORIZATION|http_proxy|https_proxy|NETRC|SSH_AUTH_SOCK' \
+    "${RESEARCH_BROKER_LAUNCHER}" ||
+    fail 'Research broker launcher imports a forbidden credential or proxy input.'
+node - "${RESEARCH_POLICY}" <<'JS'
+const fs = require("fs");
+const policy = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const expectedTools = {
+  allowedTlsPorts: [443],
+  maxConcurrentRequests: 4,
+  maxConcurrentRequestsPerHost: 2,
+  minHostIntervalMs: 500,
+  connectTimeoutSeconds: 15,
+  totalTimeoutSeconds: 60,
+  maxWireBytes: 10485760,
+  maxNormalizedBytes: 524288,
+  maxRedirects: 8,
+  maxCookies: 100,
+  maxCookieBytes: 4096,
+  maxCookieJarBytes: 65536,
+};
+if (policy.schemaVersion !== 1 ||
+    policy.policyId !== "rhyolite-public-research-v2" ||
+    policy.providers?.directHttps !== true ||
+    policy.providers?.anonymousGitHub !== true ||
+    JSON.stringify(policy.providers?.generalWebSearch) !==
+      JSON.stringify(["duckduckgo-html-v1", "none"]) ||
+    policy.scopeRequestBudgets?.["2"] !== 500 ||
+    policy.scopeRequestBudgets?.["3"] !== 1000) {
+  throw new Error("research policy provider or budget contract is invalid");
+}
+for (const [key, value] of Object.entries(expectedTools)) {
+  if (JSON.stringify(policy.transport?.[key]) !== JSON.stringify(value)) {
+    throw new Error(`research policy transport value is invalid: ${key}`);
+  }
+}
+JS
+grep -Fq \
+    'DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"' \
+    "${RESEARCH_BROKER}" &&
+    grep -Fq 'WEB_PROVIDER_IDS = (WEB_PROVIDER_ID, WEB_PROVIDER_NONE)' \
+        "${RESEARCH_BROKER}" &&
+    grep -Fq 'body_normalizer=normalize_duckduckgo_search_body' \
+        "${RESEARCH_BROKER}" &&
+    grep -Fq 'unwrap_duckduckgo_result_url' "${RESEARCH_BROKER}" &&
+    grep -Fq 'provider_challenge' "${RESEARCH_BROKER}" ||
+    fail 'Fixed anonymous web-search provider dispatch is incomplete.'
+! grep -Eq \
+    -- '--web-search-(endpoint|header|credential)|caller_headers|captcha_bypass|fallback_provider' \
+    "${RESEARCH_BROKER}" ||
+    fail 'Research broker exposes configurable or bypass web-search behavior.'
+grep -Fq 'duckduckgo-html-v1 (default) or none' "${RUNNER}" &&
+    grep -Fq 'duckduckgo-html-v1' "${README}" &&
+    grep -Fq 'repository assets, never people' "${PROMPT}" ||
+    fail 'Provider or heuristic provenance documentation is incomplete.'
+grep -Fq -- '--deny-tool write' "${COPILOT_HARNESS}" &&
+    grep -Fq -- '--deny-tool write' "${RUNNER}" ||
     fail 'Bash runner does not deny write tools.'
 ! grep -Fq 'shell(git' "${RUNNER}" ||
     fail 'A child runner still grants direct Git shell access.'
@@ -1488,12 +1800,16 @@ grep -Fq "read -r -p 'Run this review plan? [y/N] ' confirm_input" \
 grep -Fq -- '-u COPILOT_ALLOW_ALL' "${COPILOT_HARNESS}" ||
     fail 'Bash child process does not remove allow-all mode.'
 for artifact_name in \
-    review.md review.html state.json handoff.md index.html request.txt agent-state; do
+    review.md review.html state.json handoff.md index.html request.txt agent-state \
+    research.txt research-timeline.txt research-session.md research-errors.txt \
+    research-state.json summary.json events.jsonl cookies.jsonl \
+    body-manifest.jsonl; do
     grep -Fq "${artifact_name}" "${RUNNER}" ||
         fail "Bash runner artifact contract is missing: ${artifact_name}"
 done
 
 bash -n "${RUNNER}"
+bash -n "${RESEARCH_BROKER_LAUNCHER}"
 bash -n "${DISCOVERY}"
 bash -n "${WELCOME_HELPER_BASH}"
 bash -n "${LAUNCHER_PREFERENCES_BASH}"
@@ -1505,11 +1821,19 @@ bash -n "${COPILOT_HARNESS}"
 node --check "${RHYOLITE_EXTENSION}"
 node --check "${TUI_RUNTIME_VALIDATOR}"
 node "${TUI_RUNTIME_VALIDATOR}" --self-check >/dev/null
+python3 -m py_compile "${RESEARCH_BROKER}" "${RESEARCH_BROKER_TEST}"
+python3 "${RESEARCH_BROKER_TEST}" >/dev/null
 
 [[ -x "${ROOT_LAUNCHER}" ]] ||
     fail 'Repository-root Rhyolite launcher is not executable.'
 [[ -x "${RHYOLITE_LAUNCHER}" ]] ||
     fail 'Unix Rhyolite launcher is not executable.'
+[[ -x "${RESEARCH_BROKER}" ]] ||
+    fail 'Research egress broker is not executable.'
+[[ -x "${RESEARCH_BROKER_LAUNCHER}" ]] ||
+    fail 'Research broker launcher is not executable.'
+[[ -x "${RESEARCH_BROKER_TEST}" ]] ||
+    fail 'Research broker test is not executable.'
 grep -Fq 'plugins/rhyolite/bin/rhyolite' "${ROOT_LAUNCHER}" &&
     grep -Fq 'exec "${packaged_launcher}" "$@"' "${ROOT_LAUNCHER}" &&
     grep -Fq 'resolve_physical_path' "${ROOT_LAUNCHER}" &&
@@ -1528,11 +1852,14 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
     grep -Fq -- '--plugin-dir "${plugin_root}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--agent "${RHYOLITE_AGENT}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--model "${model}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--mode interactive' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--yolo)' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '--autopilot)' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- 'The launcher --autopilot option has been retired.' \
+        "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- 'copilot_arguments=(--yolo "${copilot_arguments[@]}")' \
         "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq -- 'copilot_arguments=(--autopilot "${copilot_arguments[@]}")' \
+    ! grep -Fq -- 'copilot_arguments=(--autopilot' \
         "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- 'copilot_arguments=(--fleet "${copilot_arguments[@]}")' \
         "${RHYOLITE_LAUNCHER}" &&
@@ -1668,15 +1995,17 @@ fi
     fail 'Bash preference helper left a temporary file inside a directory destination.'
 
 welcome_progress_output="${fixture_dir}/welcome-progress.jsonl"
-welcome_progress_launcher_output="${fixture_dir}/welcome-progress-launcher.txt"
+welcome_progress_launcher_output="${fixture_dir}/welcome-progress-launcher.jsonl"
+welcome_progress_launcher_no_color="${fixture_dir}/welcome-progress-launcher-no-color.jsonl"
 welcome_progress_stderr="${fixture_dir}/welcome-progress.stderr"
 welcome_plaque_output="${fixture_dir}/welcome-plaque.jsonl"
 welcome_plaque_no_color="${fixture_dir}/welcome-plaque-no-color.jsonl"
-welcome_launcher_plaque_output="${fixture_dir}/welcome-launcher-plaque.jsonl"
-welcome_launcher_plaque_no_color="${fixture_dir}/welcome-launcher-plaque-no-color.jsonl"
 welcome_plaque_copilot_no_color="${fixture_dir}/welcome-plaque-copilot-no-color.jsonl"
 welcome_plaque_force_color_zero="${fixture_dir}/welcome-plaque-force-color-zero.jsonl"
 welcome_plaque_term_dumb="${fixture_dir}/welcome-plaque-term-dumb.jsonl"
+welcome_plaque_marker_only="${fixture_dir}/welcome-plaque-marker-only.txt"
+welcome_plaque_internal_resume="${fixture_dir}/welcome-plaque-internal-resume.txt"
+welcome_plaque_launcher_prompt="${fixture_dir}/welcome-plaque-launcher-prompt.txt"
 welcome_plaque_unrelated="${fixture_dir}/welcome-plaque-unrelated.txt"
 welcome_panel_output="${fixture_dir}/welcome-panel.txt"
 welcome_panel_c_locale_output="${fixture_dir}/welcome-panel-c-locale.txt"
@@ -1688,35 +2017,28 @@ env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
     RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
     bash "${WELCOME_HELPER_BASH}" --progress \
     >"${welcome_progress_launcher_output}" 2>>"${welcome_progress_stderr}"
+env NO_COLOR=1 \
+    RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+    bash "${WELCOME_HELPER_BASH}" --progress \
+    >"${welcome_progress_launcher_no_color}" 2>>"${welcome_progress_stderr}"
 [[ ! -s "${welcome_progress_stderr}" ]] ||
     fail 'Bash welcome progress helper wrote unexpected stderr.'
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_output}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_no_color}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-    env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=xterm-truecolor \
-        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
-        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
-        >"${welcome_launcher_plaque_output}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
-    env NO_COLOR=1 \
-        RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
-        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
-        >"${welcome_launcher_plaque_no_color}" \
-        2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR COPILOT_NO_COLOR=1 FORCE_COLOR=1 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_copilot_no_color}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=0 TERM=xterm-truecolor \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_force_color_zero}" 2>>"${welcome_progress_stderr}"
-printf '{"prompt":"RHYOLITE_START_COMMAND_V1"}\n' |
+printf '{"prompt":"/rhyolite:start"}\n' |
     env -u NO_COLOR -u COPILOT_NO_COLOR FORCE_COLOR=1 TERM=dumb \
         bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_term_dumb}" 2>>"${welcome_progress_stderr}"
@@ -1727,11 +2049,27 @@ for no_color_output in \
     cmp -s "${welcome_plaque_no_color}" "${no_color_output}" ||
         fail "No-color signal output differs: ${no_color_output}"
 done
+printf '{"prompt":"RHYOLITE_START_COMMAND_V1 continuation"}\n' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_marker_only}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"/repo-review --rhyolite-resume internal"}\n' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_internal_resume}" 2>>"${welcome_progress_stderr}"
+printf '{"prompt":"/rhyolite:start"}\n' |
+    RHYOLITE_LAUNCHER_IMMEDIATE_START=RHYOLITE_LAUNCHER_IMMEDIATE_START_V1 \
+        bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_launcher_prompt}" 2>>"${welcome_progress_stderr}"
 printf '{"prompt":"ordinary user prompt"}\n' |
     bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_unrelated}" 2>>"${welcome_progress_stderr}"
-[[ ! -s "${welcome_plaque_unrelated}" ]] ||
-    fail 'Unrelated prompts trigger the Rhyolite plaque.'
+for suppressed_plaque_output in \
+    "${welcome_plaque_marker_only}" \
+    "${welcome_plaque_internal_resume}" \
+    "${welcome_plaque_launcher_prompt}" \
+    "${welcome_plaque_unrelated}"; do
+    [[ ! -s "${suppressed_plaque_output}" ]] ||
+        fail "Non-user or unrelated prompt triggers the Rhyolite plaque: ${suppressed_plaque_output}"
+done
 bash "${WELCOME_HELPER_BASH}" --panel >"${welcome_panel_output}" \
     2>"${welcome_panel_stderr}"
 LC_ALL=C bash "${WELCOME_HELPER_BASH}" --panel \
@@ -1760,8 +2098,8 @@ launcher_tui_runtime_result="$(
         --banner "${WELCOME_BANNER}" \
         --progress-json "${welcome_progress_output}" \
         --launcher-progress-output "${welcome_progress_launcher_output}" \
-        --plaque-json "${welcome_launcher_plaque_output}" \
-        --plaque-no-color-json "${welcome_launcher_plaque_no_color}" \
+        --plaque-json "${welcome_progress_launcher_output}" \
+        --plaque-no-color-json "${welcome_progress_launcher_no_color}" \
         --start-command "${COMMAND_START}" \
         --repo-review-command "${COMMAND_REPO_REVIEW}" \
         --extension "${RHYOLITE_EXTENSION}" \
@@ -1778,8 +2116,8 @@ node - \
     "${welcome_progress_launcher_output}" \
     "${welcome_plaque_output}" \
     "${welcome_plaque_no_color}" \
-    "${welcome_launcher_plaque_output}" \
-    "${welcome_launcher_plaque_no_color}" \
+    "${welcome_progress_launcher_output}" \
+    "${welcome_progress_launcher_no_color}" \
     "${welcome_panel_output}" <<'JS'
 const fs = require("fs");
 
@@ -1840,9 +2178,7 @@ const expectedLoadStatus =
 if (progress.message !== expectedLoadStatus || progress.message.includes("\u001b[")) {
   throw new Error("plugin-load status is not exact plain single-line guidance");
 }
-if (launcherProgressText !== "") {
-  throw new Error("launcher-started progress helper must emit no payload or output");
-}
+const launcherProgress = JSON.parse(launcherProgressText.trim());
 const plaque = JSON.parse(plaqueText.trim());
 const expectedPlainPlaque = [
   ...bannerLines,
@@ -1923,6 +2259,10 @@ const expectedPlainLauncherPlaque = [
 if (stripAnsi(launcherPlaque.message) !== expectedPlainLauncherPlaque ||
     launcherPlaque.message.includes("Use /rhyolite:start to begin a review.")) {
   throw new Error("launcher review-start plaque did not switch to automatic guided mode");
+}
+if (launcherProgress.type !== "progress" ||
+    launcherProgress.message !== launcherPlaque.message) {
+  throw new Error("launcher sessionStart output is not the canonical launcher plaque");
 }
 const launcherNoColorPlaque = JSON.parse(
   launcherNoColorPlaqueText.trim(),
@@ -2059,9 +2399,10 @@ rm -f -- "${root_wrapper_log}"
     cd "${ROOT}"
     RHYOLITE_LAUNCHER_TRUSTED_MARKER='trusted-root-wrapper-run' \
         RHYOLITE_ROOT_WRAPPER_LOG="${root_wrapper_log}" \
-        "${root_wrapper_link}" --yolo --autopilot -- \
+        "${root_wrapper_link}" --yolo -- \
             'Review https://example.com/owner/repository' \
             'with spaces' \
+            '--autopilot' \
             $'line\nbreak\tkept?'
 )
 [[ -s "${root_wrapper_log}" ]] ||
@@ -2086,10 +2427,10 @@ if (fields[index] !== "ARGS") {
 const args = fields.slice(index + 1);
 const expectedArgs = [
   "--yolo",
-  "--autopilot",
   "--",
   "Review https://example.com/owner/repository",
   "with spaces",
+  "--autopilot",
   "line\nbreak\tkept?",
 ];
 if (fs.realpathSync(values.get("SELF")) !== fs.realpathSync(expectedLauncher)) {
@@ -2142,13 +2483,47 @@ launcher_version="$("${launcher_link}" --version)"
 [[ "${launcher_help}" == *'Rhyolite launcher v'* &&
     "${launcher_help}" == *'initial review request'* &&
     "${launcher_help}" == *'--yolo'* &&
-    "${launcher_help}" == *'--autopilot'* ]] ||
+    "${launcher_help}" == *'gpt-5.6-sol'* &&
+    "${launcher_help}" == *'claude-fable-5'* &&
+    "${launcher_help}" == *'syntactically valid custom model ID'* &&
+    "${launcher_help}" != *'--autopilot'* ]] ||
     fail 'Unix launcher --help output is incomplete.'
+runner_help="$("${RUNNER}" --help)"
+[[ "${runner_help}" == *'gpt-5.6-sol (recommended)'* &&
+    "${runner_help}" == *'claude-fable-5'* &&
+    "${runner_help}" == *'syntactically valid custom model ID'* ]] ||
+    fail 'Bash runner --model help does not expose known and custom IDs.'
 [[ "${launcher_version}" == \
     "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}")" ]] ||
     fail 'Unix launcher --version does not match VERSION.'
 [[ ! -e "${launcher_stub_log}" ]] ||
     fail 'Unix launcher help/version unexpectedly invoked Copilot.'
+
+launcher_autopilot_stdout="${fixture_dir}/launcher-autopilot.stdout"
+launcher_autopilot_stderr="${fixture_dir}/launcher-autopilot.stderr"
+set +e
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/repository \
+            --autopilot
+) >"${launcher_autopilot_stdout}" 2>"${launcher_autopilot_stderr}"
+launcher_autopilot_exit=$?
+set -e
+[[ "${launcher_autopilot_exit}" -eq 2 ]] &&
+    grep -Fq 'RHYOLITE ERROR' "${launcher_autopilot_stderr}" &&
+    grep -Fq 'Stage: launcher argument validation' \
+        "${launcher_autopilot_stderr}" &&
+    grep -Fq 'The launcher --autopilot option has been retired.' \
+        "${launcher_autopilot_stderr}" &&
+    grep -Fq 'guided setup and effective-plan approval must remain interactive' \
+        "${launcher_autopilot_stderr}" ||
+    fail 'Retired launcher --autopilot did not fail with exit 2 and guidance.'
+[[ ! -e "${launcher_stub_log}" ]] ||
+    fail 'Retired launcher --autopilot unexpectedly invoked Copilot.'
 
 (
     cd "${ROOT}"
@@ -2160,9 +2535,7 @@ launcher_version="$("${launcher_link}" --version)"
             --fleet-mode native \
             --model claude-fable-5 \
             --yolo \
-            --autopilot \
             --yolo \
-            --autopilot \
             -- \
             'Review https://example.com/owner/repository' \
             'with spaces' \
@@ -2224,11 +2597,16 @@ if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
 if (!args.includes("--fleet") ||
-    valueAfter("--model") !== "claude-fable-5") {
-  throw new Error("launcher did not apply fleet/model selections");
+    valueAfter("--mode") !== "interactive" ||
+    valueAfter("--model") !== "claude-fable-5" ||
+    valueAfter("--reasoning-effort") !== "max" ||
+    valueAfter("--context") !== "long_context") {
+  throw new Error(
+    "launcher did not apply fleet/model/reasoning/context selections",
+  );
 }
-if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 1) {
-  throw new Error("launcher did not de-duplicate yolo/autopilot selections");
+if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 0) {
+  throw new Error("launcher did not de-duplicate yolo or retired autopilot");
 }
 if (prompt !== expectedPrompt || /[\x00-\x09\x0B-\x1F\x7F]/u.test(prompt)) {
   throw new Error("launcher did not preserve and sanitize the initial request");
@@ -2277,7 +2655,64 @@ if (context.includes("InitialRequest=") ||
 }
 JS
 
+rm -f -- "${launcher_stub_log}"
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/custom-model \
+            --fleet-mode standard \
+            --model vendor.custom-1
+)
+node - "${launcher_stub_log}" <<'JS'
+const fs = require("fs");
+const fields = fs.readFileSync(process.argv[2], "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const argsIndex = fields.indexOf("ARGS");
+const args = fields.slice(argsIndex + 1);
+const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (valueAfter("--model") !== "vendor.custom-1" ||
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/custom-model\n" +
+      "FleetMode=standard\nModel=vendor.custom-1\n",
+    )) {
+  throw new Error("custom model ID did not round-trip through launcher setup");
+}
+JS
+
 launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
+rhyolite_write_preference \
+    'https://example.com/owner/custom-preference' \
+    standard \
+    vendor.custom-1 \
+    "${launcher_preference_home}" ||
+    fail 'Could not create custom-model launcher preference fixture.'
+rm -f -- "${launcher_stub_log}"
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --repo https://example.com/owner/custom-preference
+)
+node - "${launcher_stub_log}" <<'JS'
+const fs = require("fs");
+const fields = fs.readFileSync(process.argv[2], "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const argsIndex = fields.indexOf("ARGS");
+const args = fields.slice(argsIndex + 1);
+const valueAfter = (flag) => args[args.indexOf(flag) + 1];
+if (valueAfter("--model") !== "vendor.custom-1" ||
+    !valueAfter("-i").includes(
+      "FleetMode=standard\nModel=vendor.custom-1\n",
+    )) {
+  throw new Error("stored custom model ID did not round-trip through launcher");
+}
+JS
+
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
     native \
@@ -2420,17 +2855,98 @@ fixture_report="${fixture_dir}/report.txt"
 printf '%s\n' \
     'progress' \
     '================================================================================' \
-    'Repository Read-Only Review Report' > "${fixture_timeline}"
+    'REPOSITORY REVIEW REPORT' > "${fixture_timeline}"
 printf 'Repository: \033]8;;https://github.com/octocat/Hello-World\a' \
     >> "${fixture_timeline}"
 printf 'https://github.com/octocat/Hello-World\033]8;;\a\r\n' \
     >> "${fixture_timeline}"
-printf '%s\n' \
-    "Contact: ${fixture_public_email}" \
+cat >> "${fixture_timeline}" <<EOF
+REVIEW CONTEXT
+Repository URL: https://github.com/octocat/Hello-World
+Documentation: https://docs.example.org/reference?topic=review
+Duplicate documentation: https://docs.example.org/reference?topic=review
+Valid same-host tracker documentation:
+https://tracker.example.org/documentation
+Tracker host-case variant: https://TRACKER.EXAMPLE.ORG/pixel.png
+Tracker default-port variant: https://tracker.example.org:443/pixel.png
+Tracker query variant: https://tracker.example.org/pixel.png?cache=1
+Tracker fragment variant: https://tracker.example.org/pixel.png#sensor
+Tracker trailing-slash variant: https://tracker.example.org/pixel.png/
+Wrapped documentation: (https://docs.example.org/wrapped)
+Wrapped documentation duplicate: \`https://docs.example.org/wrapped\`
+Wrapped documentation duplicate: <https://docs.example.org/wrapped>
+Punctuated documentation: https://docs.example.org/punctuation.
+Punctuated documentation duplicate: https://docs.example.org/punctuation,
+Punctuated documentation duplicate: https://docs.example.org/punctuation:
+Punctuated documentation duplicate: https://docs.example.org/punctuation;
+Punctuated documentation duplicate: https://docs.example.org/punctuation!
+Punctuated documentation duplicate: https://docs.example.org/punctuation?
+Clean punctuation duplicate: https://docs.example.org/punctuation
+Balanced URL characters: https://docs.example.org/path_(safe)?topic=(review)
+Non-HTTPS: http://docs.example.org/inert
+Userinfo: https://user:password@docs.example.org/private
+IP literal: https://127.0.0.1/private
+Local host: https://localhost/private
+Loopback helper: https://127.0.0.1.nip.io/private
+Loopback helper: https://app.lvh.me/private
+Private helper: https://10.0.0.1.sslip.io/private
+Internal suffix: https://service.internal/private
+Malformed escape: https://docs.example.org/path%ZZ
+Encoded whitespace: https://docs.example.org/path%20space
+Credential-like query: https://docs.example.org/?authcode=public-value
+Credential-like value: https://docs.example.org/?id=ghp_123456789012345678901234567890
+Unsafe delimiter: https://docs.example.org/path|unsafe
+Contact: ${fixture_public_email}
     'Authorization: Bearer github_pat_123456789012345678901234567890' \
-    '<script>alert("unsafe")</script>' \
-    '================================================================================' >> "${fixture_timeline}"
 
+<script>alert("unsafe")</script>
+<img src=x onerror=alert(1)>
+![body image](http://body.example.org/image.png)
+[body link](http://body.example.org/link)
+
+EXECUTIVE SUMMARY
+Renderer safety fixture.
+Confidence: High
+Evidence basis: deterministic fixture text.
+
+FINDINGS
+No qualifying findings. Repeated inert tracker evidence:
+https://tracker.example.org/pixel.png
+Confidence: High
+Evidence basis: deterministic fixture text.
+
+AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT
+Prompt injection and reviewer-directed instructions: No supporting evidence.
+Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning: No
+supporting evidence.
+Encoded/invisible instructions and tool-call bait: No supporting evidence.
+Recursive/resource-exhaustion tarpits: No supporting evidence.
+Tracking pixels/callback beacons/trackers/sensors: Plain tracker URL
+https://tracker.example.org/pixel.png was preserved as inert evidence and was
+not activated.
+Limitations of available evidence: Renderer-only fixture.
+Confidence: High
+Evidence basis: deterministic fixture text.
+
+AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
+Renderer escaping and navigation.
+Confidence: High
+Evidence basis: deterministic fixture text.
+
+PRIORITIZED REMEDIATION
+None.
+Confidence: High
+Evidence basis: no qualifying finding.
+
+OVERALL ASSESSMENT
+Safe renderer fixture.
+Confidence: High
+Evidence basis: deterministic fixture text.
+================================================================================
+EOF
+
+grep -Fxq '<script>alert("unsafe")</script>' "${fixture_timeline}" ||
+    fail 'Renderer fixture does not contain a raw script line.'
 tr -d '\r' < "${fixture_timeline}" |
     strip_terminal_controls |
     redact_credentials |
@@ -2450,6 +2966,66 @@ grep -Fq '[credential omitted]' "${fixture_report}" &&
     ! grep -Fq 'github_pat_123456789012345678901234567890' \
         "${fixture_report}" ||
     fail 'Bash output did not redact credential values.'
+validate_review_report_contract "${fixture_report}" 1 ||
+    fail 'Bash scope 1 report contract rejected a complete report.'
+for unexpected_scope_one_heading in \
+    'RESEARCH SOURCE LANDSCAPE' \
+    'INACCESSIBLE RESOURCE REGISTER' \
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH TRANSPORT OBSERVATIONS' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT'; do
+    ! grep -Fxq "${unexpected_scope_one_heading}" "${fixture_report}" ||
+        fail "Bash scope 1 fixture emitted ${unexpected_scope_one_heading}."
+done
+
+invalid_utf8_reference_report="${fixture_dir}/invalid-utf8-reference.txt"
+printf 'https://docs.example.org/reference\377\n' \
+    > "${invalid_utf8_reference_report}"
+if invalid_utf8_reference_error="$(
+    extract_safe_https_references "${invalid_utf8_reference_report}" 1 2>&1
+)"; then
+    fail 'Bash URL extraction accepted an invalid UTF-8 report.'
+fi
+grep -Fq 'URL extraction requires a valid UTF-8 report' \
+    <<< "${invalid_utf8_reference_error}" ||
+    fail 'Bash URL extraction did not fail explicitly for invalid UTF-8.'
+
+unredacted_reference_report="${fixture_dir}/unredacted-reference-report.txt"
+awk '
+    { print }
+    $0 == "REVIEW CONTEXT" {
+        print "Direct safe reference: https://docs.example.org/direct-safe"
+        print "Direct userinfo rejection: https://fixture-user:fixture-password@docs.example.org/private"
+        print "Direct credential query rejection: https://docs.example.org/private?access_token=fixture-value"
+    }
+' "${fixture_report}" > "${unredacted_reference_report}"
+unredacted_references="$(
+    extract_safe_https_references "${unredacted_reference_report}" 1
+)"
+grep -Fxq 'https://docs.example.org/direct-safe' \
+    <<< "${unredacted_references}" ||
+    fail 'Direct URL extraction rejected a valid non-tracker HTTPS reference.'
+! grep -Fq '@docs.example.org/private' <<< "${unredacted_references}" ||
+    fail 'Direct URL extraction accepted unredacted URL userinfo.'
+! grep -Fq 'access_token=' <<< "${unredacted_references}" ||
+    fail 'Direct URL extraction accepted a credential-like query.'
+
+missing_targeting_heading_report="${fixture_dir}/missing-targeting-heading-reference.txt"
+sed \
+    's/^AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT$/AGENT TARGETING ASSESSMENT/' \
+    "${unredacted_reference_report}" > "${missing_targeting_heading_report}"
+[[ -z "$(
+    extract_safe_https_references "${missing_targeting_heading_report}" 1
+)" ]] ||
+    fail 'Report without the exact agent-targeting heading generated references.'
+
+malformed_reference_report="${fixture_dir}/malformed-reference-report.txt"
+grep -Fv 'Limitations of available evidence:' \
+    "${unredacted_reference_report}" > "${malformed_reference_report}"
+[[ -z "$(
+    extract_safe_https_references "${malformed_reference_report}" 1
+)" ]] ||
+    fail 'Contract-invalid report generated external references.'
 
 unterminated_timeline="${fixture_dir}/unterminated-timeline.txt"
 unterminated_report="${fixture_dir}/unterminated-report.txt"
@@ -2522,15 +3098,129 @@ grep -Fq 'Latest assistant report remains incomplete.' \
     ! report_has_closing_delimiter "${fixture_transcript_report}" ||
     fail 'Transcript fallback accepted an earlier complete assistant report.'
 
+assert_markdown_body_inert() {
+    local markdown="$1"
+    local label="$2"
+    local rendered="${markdown}.cmark.html"
+    local payload
+
+    grep -Fq '## Canonical report' "${markdown}" ||
+        fail "${label} Markdown is missing the trusted canonical-body boundary."
+    for payload in \
+        '<script>alert("unsafe")</script>' \
+        '<img src=x onerror=alert(1)>' \
+        '![body image](http://body.example.org/image.png)' \
+        '[body link](http://body.example.org/link)'; do
+        awk -v payload="${payload}" '
+            index($0, payload) {
+                found = 1
+                if (substr($0, 1, 4) != "    ") {
+                    exit 1
+                }
+            }
+            END {
+                if (!found) {
+                    exit 2
+                }
+            }
+        ' "${markdown}" ||
+            fail "${label} Markdown left body markup outside an indented code block."
+    done
+
+    if command -v cmark >/dev/null 2>&1; then
+        cmark --unsafe "${markdown}" > "${rendered}"
+        ! grep -Fq '<script' "${rendered}" &&
+            ! grep -Fq '<img ' "${rendered}" &&
+            ! grep -Fq 'href="http://body.example.org/link"' "${rendered}" ||
+            fail "${label} Markdown activated canonical-body markup under cmark."
+    else
+        python3 - "${markdown}" "${label}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+label = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+boundary = "## Canonical report\n\n"
+if boundary not in text:
+    raise SystemExit(f"{label}: canonical-body boundary is malformed")
+body = text.split(boundary, 1)[1]
+first_nonempty = next((line for line in body.splitlines() if line), "")
+if not first_nonempty.startswith("    "):
+    raise SystemExit(f"{label}: canonical body does not start as indented code")
+for payload in (
+    '<script>alert("unsafe")</script>',
+    '<img src=x onerror=alert(1)>',
+    '![body image](http://body.example.org/image.png)',
+    '[body link](http://body.example.org/link)',
+):
+    matches = [line for line in body.splitlines() if payload in line]
+    if not matches or any(not line.startswith("    ") for line in matches):
+        raise SystemExit(f"{label}: payload is not indented code: {payload}")
+PY
+    fi
+}
+
 fixture_markdown="${fixture_dir}/report.md"
 fixture_html="${fixture_dir}/report.html"
-write_markdown_report "${fixture_report}" "${fixture_markdown}"
+write_markdown_report "${fixture_report}" "${fixture_markdown}" 1
 write_html_report \
     "${fixture_report}" "${fixture_html}" \
-    '<img src=x onerror=alert(1)>' '<script>commit</script>' Completed
+    '<img src=x onerror=alert(1)>' '<script>commit</script>' Completed 1
 grep -Fq '# Repository Review Report' "${fixture_markdown}" ||
     fail 'Bash Markdown output is missing its heading.'
-grep -Fq '    <script>alert("unsafe")</script>' "${fixture_markdown}" ||
+grep -Fq \
+    '[Plain text](review.txt) | [HTML](review.html) | [Run index](../index.html)' \
+    "${fixture_markdown}" ||
+    fail 'Bash Markdown output is missing fixed sibling/index navigation.'
+grep -Fq -- '- [REVIEW CONTEXT](#review-context)' "${fixture_markdown}" &&
+    grep -Fq '<a id="review-context"></a>' "${fixture_markdown}" &&
+    grep -Fq '## REVIEW CONTEXT' "${fixture_markdown}" ||
+    fail 'Bash Markdown output is missing trusted allowlisted navigation.'
+assert_markdown_body_inert "${fixture_markdown}" 'Canonical report'
+[[ "$(grep -Fc \
+    '[https://docs.example.org/reference?topic=review](https://docs.example.org/reference?topic=review)' \
+    "${fixture_markdown}")" -eq 1 ]] ||
+    fail 'Bash Markdown external references are not deduplicated.'
+for normalized_reference in \
+    'https://docs.example.org/wrapped' \
+    'https://docs.example.org/punctuation' \
+    'https://docs.example.org/path_(safe)?topic=(review)'; do
+    [[ "$(grep -Fc \
+        "[${normalized_reference}](${normalized_reference})" \
+        "${fixture_markdown}")" -eq 1 ]] ||
+        fail "Bash Markdown did not normalize and deduplicate ${normalized_reference}."
+done
+grep -Fq \
+    '[https://github.com/octocat/Hello-World](https://github.com/octocat/Hello-World)' \
+    "${fixture_markdown}" ||
+    fail 'Bash Markdown output omitted a safe HTTPS reference.'
+grep -Fq \
+    '[https://tracker.example.org/documentation](https://tracker.example.org/documentation)' \
+    "${fixture_markdown}" ||
+    fail 'Bash Markdown suppression removed a valid non-tracker reference.'
+for unsafe_markdown_reference in \
+    'https://127.0.0.1/private' \
+    'https://localhost/private' \
+    'https://127.0.0.1.nip.io/private' \
+    'https://app.lvh.me/private' \
+    'https://10.0.0.1.sslip.io/private' \
+    'https://service.internal/private' \
+    'https://docs.example.org/path%ZZ' \
+    'https://docs.example.org/path%20space' \
+    'https://docs.example.org/?authcode=public-value' \
+    'https://docs.example.org/path|unsafe' \
+    'https://tracker.example.org/pixel.png' \
+    'https://TRACKER.EXAMPLE.ORG/pixel.png' \
+    'https://tracker.example.org:443/pixel.png' \
+    'https://tracker.example.org/pixel.png?cache=1' \
+    'https://tracker.example.org/pixel.png#sensor' \
+    'https://tracker.example.org/pixel.png/'; do
+    ! grep -Fq "](${unsafe_markdown_reference})" "${fixture_markdown}" ||
+        fail "Bash Markdown activated an unsafe reference: ${unsafe_markdown_reference}"
+done
+grep -Eq '^    .*<script>alert\("unsafe"\)</script>$' \
+    "${fixture_markdown}" ||
     fail 'Bash Markdown output is not fidelity-first code text.'
 grep -Fq '&lt;script&gt;alert(&quot;unsafe&quot;)&lt;/script&gt;' \
     "${fixture_html}" ||
@@ -2541,6 +3231,407 @@ grep -Fq '&lt;img src=x onerror=alert(1)&gt;' "${fixture_html}" ||
     fail 'Bash HTML output retained executable script markup.'
 grep -Fq 'Content-Security-Policy' "${fixture_html}" ||
     fail 'Bash HTML output lacks a content security policy.'
+grep -Fq '<meta name="referrer" content="no-referrer">' "${fixture_html}" ||
+    fail 'Bash HTML output lacks the no-referrer policy.'
+grep -Fq 'href="#review-context"' "${fixture_html}" &&
+    grep -Fq '>REVIEW CONTEXT</a>' "${fixture_html}" &&
+    grep -Fq '<section id="review-context"><h2>REVIEW CONTEXT</h2><pre>' \
+        "${fixture_html}" ||
+    fail 'Bash HTML output is missing trusted allowlisted navigation.'
+grep -Fq '<nav aria-label="Report formats">' "${fixture_html}" &&
+    grep -Fq 'href="review.txt"' "${fixture_html}" &&
+    grep -Fq 'href="review.md"' "${fixture_html}" &&
+    grep -Fq 'href="../index.html"' "${fixture_html}" ||
+    fail 'Bash HTML output is missing fixed sibling/index navigation.'
+grep -Fq \
+    'rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer"' \
+    "${fixture_html}" ||
+    fail 'Bash HTML external links lack safe relationship/referrer attributes.'
+[[ "$(grep -Fc \
+    'href="https://docs.example.org/reference?topic=review"' \
+    "${fixture_html}")" -eq 1 ]] ||
+    fail 'Bash HTML external references are not deduplicated.'
+for normalized_href in \
+    'https://docs.example.org/wrapped' \
+    'https://docs.example.org/punctuation'; do
+    [[ "$(grep -Fc "href=\"${normalized_href}\"" "${fixture_html}")" -eq 1 ]] ||
+        fail "Bash HTML did not normalize and deduplicate ${normalized_href}."
+done
+grep -Fq \
+    'href="https://docs.example.org/path_(safe)?topic=(review)"' \
+    "${fixture_html}" ||
+    fail 'Bash HTML omitted a safe URL with balanced parentheses.'
+grep -Fq \
+    'href="https://tracker.example.org/documentation"' \
+    "${fixture_html}" ||
+    fail 'Bash HTML suppression removed a valid non-tracker reference.'
+for unsafe_href in \
+    'http://docs.example.org/inert' \
+    'https://127.0.0.1/private' \
+    'https://localhost/private' \
+    'https://127.0.0.1.nip.io/private' \
+    'https://app.lvh.me/private' \
+    'https://10.0.0.1.sslip.io/private' \
+    'https://service.internal/private' \
+    'https://docs.example.org/path%ZZ' \
+    'https://docs.example.org/path%20space' \
+    'https://docs.example.org/?authcode=public-value' \
+    'https://docs.example.org/path|unsafe' \
+    'https://tracker.example.org/pixel.png' \
+    'https://TRACKER.EXAMPLE.ORG/pixel.png' \
+    'https://tracker.example.org:443/pixel.png' \
+    'https://tracker.example.org/pixel.png?cache=1' \
+    'https://tracker.example.org/pixel.png#sensor' \
+    'https://tracker.example.org/pixel.png/'; do
+    ! grep -Fq "href=\"${unsafe_href}\"" "${fixture_html}" ||
+        fail "Bash HTML activated an unsafe external reference: ${unsafe_href}"
+done
+! grep -Eq 'href="https://[^"]+@' "${fixture_html}" ||
+    fail 'Bash HTML activated a URL containing userinfo.'
+! grep -Fq 'href="https://docs.example.org/?id=' "${fixture_html}" ||
+    fail 'Bash HTML activated a credential-like query value.'
+! grep -Fq '<img ' "${fixture_html}" ||
+    fail 'Bash HTML output activated an untrusted image.'
+
+preamble_report="${fixture_dir}/preamble-report.txt"
+preamble_markdown="${fixture_dir}/preamble-report.md"
+cat > "${preamble_report}" <<'EOF'
+Untrusted preamble before the first exact report heading.
+Safe-looking URL that must remain inert: https://docs.example.org/preamble
+<script>alert("unsafe")</script>
+<img src=x onerror=alert(1)>
+![body image](http://body.example.org/image.png)
+[body link](http://body.example.org/link)
+REVIEW CONTEXT
+Preamble renderer fixture.
+EOF
+write_markdown_report "${preamble_report}" "${preamble_markdown}" 1
+assert_markdown_body_inert "${preamble_markdown}" 'Preamble report'
+! grep -Fq \
+    '](https://docs.example.org/preamble)' "${preamble_markdown}" ||
+    fail 'Malformed report generated an external reference.'
+
+no_heading_report="${fixture_dir}/no-heading-report.txt"
+no_heading_markdown="${fixture_dir}/no-heading-report.md"
+cat > "${no_heading_report}" <<'EOF'
+No exact allowlisted report heading is present.
+Safe-looking URL that must remain inert: https://docs.example.org/no-heading
+<script>alert("unsafe")</script>
+<img src=x onerror=alert(1)>
+![body image](http://body.example.org/image.png)
+[body link](http://body.example.org/link)
+EOF
+write_markdown_report "${no_heading_report}" "${no_heading_markdown}" 1
+assert_markdown_body_inert "${no_heading_markdown}" 'No-heading report'
+! grep -Fq \
+    '](https://docs.example.org/no-heading)' "${no_heading_markdown}" ||
+    fail 'Report without the mandatory heading generated an external reference.'
+
+failure_report="${fixture_dir}/failure-report.txt"
+failure_markdown="${fixture_dir}/failure-report.md"
+cat > "${failure_report}" <<'EOF'
+================================================================================
+REPOSITORY REVIEW REPORT
+Repository review failed. See errors.txt.
+Safe-looking URL that must remain inert: https://docs.example.org/failure
+<script>alert("unsafe")</script>
+<img src=x onerror=alert(1)>
+![body image](http://body.example.org/image.png)
+[body link](http://body.example.org/link)
+================================================================================
+EOF
+write_markdown_report "${failure_report}" "${failure_markdown}" 1
+assert_markdown_body_inert "${failure_markdown}" 'Failure report'
+! grep -Fq '](https://docs.example.org/failure)' "${failure_markdown}" ||
+    fail 'Contract-invalid failure report generated an external reference.'
+
+scope_three_report="${fixture_dir}/scope-three-report.txt"
+cat > "${scope_three_report}" <<'EOF'
+================================================================================
+REPOSITORY REVIEW REPORT
+REVIEW CONTEXT
+Scope 3 validation fixture.
+
+EXECUTIVE SUMMARY
+Complete contract fixture.
+
+FINDINGS
+No qualifying findings.
+
+AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT
+1. Prompt injection and reviewer-directed instructions:
+   No supporting evidence.
+- Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:
+  No supporting evidence.
+2) Encoded/invisible instructions and tool-call bait: No supporting evidence.
+* Recursive/resource-exhaustion tarpits:
+  No supporting evidence.
++ Tracking pixels/callback beacons/trackers/sensors: No supporting evidence.
+6. Limitations of available evidence: Static validation fixture.
+7) Confidence:
+   High.
+8. Evidence basis:
+   Deterministic fixture text.
+
+RESEARCH SOURCE LANDSCAPE
+No material external source.
+
+INACCESSIBLE RESOURCE REGISTER
+None identified.
+
+TOP USER RETRIEVAL PRIORITIES
+None.
+
+RESEARCH TRANSPORT OBSERVATIONS
+No material anomaly.
+
+GENERATED-CODE PROVENANCE ASSESSMENT
+1. Generation assessment:
+   Indeterminate. No directly bound evidence was available.
+- Direct model attribution: No direct attribution.
+2) Heuristic model candidates (not attribution): No candidate identified
+* Heuristic model confidence:
+  Not applicable
++ Direct effort attribution: No direct attribution.
+5. Direct harness attribution:
+   No direct attribution.
++ Coverage/window: Exact commit and approved provenance window.
+7. Alternative explanations: No directly bound generation evidence.
+8) Confidence: Low; Evidence basis:
+   Static validation fixture.
+
+AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
+Contract structure.
+
+PRIORITIZED REMEDIATION
+None.
+
+OVERALL ASSESSMENT
+Complete scope 3 contract.
+================================================================================
+EOF
+validate_review_report_contract "${scope_three_report}" 3 ||
+    fail 'Bash scope 3 report contract rejected list markers or wrapped fields.'
+
+repeated_assessment_report="${fixture_dir}/repeated-assessment-report.txt"
+awk '
+    { print }
+    $0 == "Prompt injection and reviewer-directed instructions: No supporting evidence." {
+        print "Confidence: Medium."
+        print "Evidence basis:"
+        print "  Item-specific direct evidence."
+    }
+' "${fixture_report}" > "${repeated_assessment_report}"
+validate_review_report_contract "${repeated_assessment_report}" 1 ||
+    fail 'Bash report validation rejected repeated confidence/evidence labels.'
+
+same_line_assessment_report="${fixture_dir}/same-line-assessment-report.txt"
+awk '
+    $0 == "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" {
+        in_assessment = 1
+    }
+    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+        in_assessment = 0
+    }
+    in_assessment && $0 == "Confidence: High" {
+        print "Confidence: High. Evidence basis: deterministic inline evidence."
+        skip_evidence = 1
+        next
+    }
+    skip_evidence && $0 == "Evidence basis: deterministic fixture text." {
+        skip_evidence = 0
+        next
+    }
+    { print }
+' "${fixture_report}" > "${same_line_assessment_report}"
+validate_review_report_contract "${same_line_assessment_report}" 1 ||
+    fail 'Bash report validation rejected same-line confidence/evidence labels.'
+
+confidence_case=0
+for confidence_variant in \
+    'Confidence: High - deterministic inline evidence.' \
+    'Confidence: High. deterministic inline evidence.' \
+    'Confidence: High: deterministic inline evidence.'; do
+    confidence_case=$((confidence_case + 1))
+    delimited_confidence_report="${fixture_dir}/delimited-confidence-${confidence_case}.txt"
+    awk -v replacement="${confidence_variant}" '
+        $0 == "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" {
+            in_assessment = 1
+        }
+        $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+            in_assessment = 0
+        }
+        in_assessment && $0 == "Confidence: High" {
+            print replacement
+            skip_evidence = 1
+            next
+        }
+        skip_evidence && $0 == "Evidence basis: deterministic fixture text." {
+            skip_evidence = 0
+            next
+        }
+        { print }
+    ' "${fixture_report}" > "${delimited_confidence_report}"
+    validate_review_report_contract "${delimited_confidence_report}" 1 ||
+        fail "Bash report validation rejected delimited confidence syntax: ${confidence_variant}"
+done
+
+missing_assessment_confidence="${fixture_dir}/missing-assessment-confidence.txt"
+grep -Fv 'Confidence:' "${fixture_report}" \
+    > "${missing_assessment_confidence}"
+if validate_review_report_contract "${missing_assessment_confidence}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation accepted a true confidence omission.'
+fi
+
+missing_assessment_evidence="${fixture_dir}/missing-assessment-evidence.txt"
+grep -Fv 'Evidence basis:' "${fixture_report}" \
+    > "${missing_assessment_evidence}"
+if validate_review_report_contract "${missing_assessment_evidence}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation accepted a true evidence-basis omission.'
+fi
+
+invalid_repeated_confidence="${fixture_dir}/invalid-repeated-confidence.txt"
+sed '0,/^Confidence: Medium\.$/s//Confidence: Certain./' \
+    "${repeated_assessment_report}" > "${invalid_repeated_confidence}"
+if validate_review_report_contract "${invalid_repeated_confidence}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation ignored an invalid repeated confidence level.'
+fi
+
+ambiguous_confidence="${fixture_dir}/ambiguous-confidence.txt"
+awk '
+    $0 == "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" {
+        in_assessment = 1
+    }
+    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+        in_assessment = 0
+    }
+    in_assessment && $0 == "Confidence: High" {
+        print "Confidence: High confidence based on direct evidence."
+        next
+    }
+    { print }
+' "${fixture_report}" > "${ambiguous_confidence}"
+if validate_review_report_contract "${ambiguous_confidence}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation accepted a bare ambiguous confidence prefix.'
+fi
+
+empty_delimited_confidence="${fixture_dir}/empty-delimited-confidence.txt"
+awk '
+    $0 == "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" {
+        in_assessment = 1
+    }
+    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+        in_assessment = 0
+    }
+    in_assessment && $0 == "Confidence: High" {
+        print "Confidence: High -"
+        next
+    }
+    { print }
+' "${fixture_report}" > "${empty_delimited_confidence}"
+if validate_review_report_contract "${empty_delimited_confidence}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation accepted a confidence delimiter without text.'
+fi
+
+missing_agent_targeting="${fixture_dir}/missing-agent-targeting.txt"
+awk '
+    $0 == "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" {
+        skipping = 1
+        next
+    }
+    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+        skipping = 0
+    }
+    !skipping { print }
+' "${fixture_report}" > "${missing_agent_targeting}"
+if validate_review_report_contract "${missing_agent_targeting}" 1 \
+    >/dev/null 2>&1; then
+    fail 'Bash report validation accepted an omitted all-scope assessment.'
+fi
+
+missing_provenance="${fixture_dir}/missing-provenance.txt"
+awk '
+    $0 == "GENERATED-CODE PROVENANCE ASSESSMENT" {
+        skipping = 1
+        next
+    }
+    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+        skipping = 0
+    }
+    !skipping { print }
+' "${scope_three_report}" > "${missing_provenance}"
+if validate_review_report_contract "${missing_provenance}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted an omitted provenance assessment.'
+fi
+
+missing_provenance_field="${fixture_dir}/missing-provenance-field.txt"
+grep -Fv 'Direct harness attribution:' "${scope_three_report}" \
+    > "${missing_provenance_field}"
+if validate_review_report_contract "${missing_provenance_field}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted an omitted provenance field.'
+fi
+
+invalid_heuristic_confidence="${fixture_dir}/invalid-heuristic-confidence.txt"
+sed 's/^  Not applicable$/  High/' \
+    "${scope_three_report}" > "${invalid_heuristic_confidence}"
+if validate_review_report_contract "${invalid_heuristic_confidence}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted High heuristic model confidence.'
+fi
+
+invalid_heuristic_absence="${fixture_dir}/invalid-heuristic-absence.txt"
+sed \
+    's/Heuristic model candidates (not attribution): No candidate identified/Heuristic model candidates (not attribution): Claude-family candidate/' \
+    "${scope_three_report}" > "${invalid_heuristic_absence}"
+if validate_review_report_contract "${invalid_heuristic_absence}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted Not applicable for a named heuristic candidate.'
+fi
+
+valid_heuristic_candidate="${fixture_dir}/valid-heuristic-candidate.txt"
+sed \
+    -e 's/Heuristic model candidates (not attribution): No candidate identified/Heuristic model candidates (not attribution): Claude family/' \
+    -e 's/^  Not applicable$/  Medium/' \
+    "${scope_three_report}" > "${valid_heuristic_candidate}"
+validate_review_report_contract "${valid_heuristic_candidate}" 3 ||
+    fail 'Bash scope 3 validation rejected a Medium family-level heuristic candidate.'
+
+invalid_provenance_verdict="${fixture_dir}/invalid-provenance-verdict.txt"
+sed 's/^   Indeterminate\./   Probably generated./' \
+    "${scope_three_report}" > "${invalid_provenance_verdict}"
+if validate_review_report_contract "${invalid_provenance_verdict}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted an invalid provenance verdict.'
+fi
+
+delimited_provenance_verdict="${fixture_dir}/delimited-provenance-verdict.txt"
+sed 's/^   Indeterminate\..*/   Confirmed - directly bound commit attestation./' \
+    "${scope_three_report}" > "${delimited_provenance_verdict}"
+validate_review_report_contract "${delimited_provenance_verdict}" 3 ||
+    fail 'Bash scope 3 validation rejected a delimited allowed verdict.'
+
+prefixed_provenance_verdict="${fixture_dir}/prefixed-provenance-verdict.txt"
+sed 's/^   Indeterminate\..*/   Confirmed human-authored./' \
+    "${scope_three_report}" > "${prefixed_provenance_verdict}"
+if validate_review_report_contract "${prefixed_provenance_verdict}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted an allowed-verdict prefix without a delimiter.'
+fi
+
+hyphenated_provenance_verdict="${fixture_dir}/hyphenated-provenance-verdict.txt"
+sed 's/^   Indeterminate\..*/   Confirmed-human-authored./' \
+    "${scope_three_report}" > "${hyphenated_provenance_verdict}"
+if validate_review_report_contract "${hyphenated_provenance_verdict}" 3 \
+    >/dev/null 2>&1; then
+    fail 'Bash scope 3 validation accepted an unclear verdict delimiter.'
+fi
 
 "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World \
@@ -2810,6 +3901,82 @@ plan_scope_two_stderr="${fixture_dir}/plan-scope-2.stderr"
 [[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
     fail 'Bash scope 2 plan-only created workspace or output roots.'
 
+plan_scope_two_none_json="${fixture_dir}/plan-scope-2-none.json"
+plan_scope_two_none_stderr="${fixture_dir}/plan-scope-2-none.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --research-web-search-provider none \
+    --workspace-root "${plan_scope_two_workspace}" \
+    --output-root "${plan_scope_two_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_two_none_json}" \
+    2>"${plan_scope_two_none_stderr}"
+[[ ! -s "${plan_scope_two_none_stderr}" ]] ||
+    fail 'Bash scope 2 web-search opt-out plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
+    fail 'Bash scope 2 web-search opt-out plan-only created workspace or output roots.'
+
+plan_scope_two_cookie_json="${fixture_dir}/plan-scope-2-cookie.json"
+plan_scope_two_cookie_stderr="${fixture_dir}/plan-scope-2-cookie.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --research-cookies ephemeral \
+    --workspace-root "${plan_scope_two_workspace}" \
+    --output-root "${plan_scope_two_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_two_cookie_json}" \
+    2>"${plan_scope_two_cookie_stderr}"
+[[ ! -s "${plan_scope_two_cookie_stderr}" ]] ||
+    fail 'Bash scope 2 cookie plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
+    fail 'Bash scope 2 cookie plan-only created workspace or output roots.'
+
+custom_research_policy="${fixture_dir}/custom-research-policy.json"
+python3 - "${RESEARCH_POLICY}" "${custom_research_policy}" <<'PY'
+import json
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+value = json.loads(source.read_text(encoding="utf-8"))
+value["policyId"] = "fixture-tightened-policy-v1"
+value["scopeRequestBudgets"]["2"] = 400
+value["scopeRequestBudgets"]["3"] = 900
+value["transport"]["maxNormalizedBytes"] = 262144
+destination.write_text(
+    json.dumps(value, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+plan_scope_two_custom_json="${fixture_dir}/plan-scope-2-custom-policy.json"
+plan_scope_two_custom_stderr="${fixture_dir}/plan-scope-2-custom-policy.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --research-policy "${custom_research_policy}" \
+    --workspace-root "${plan_scope_two_workspace}" \
+    --output-root "${plan_scope_two_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_two_custom_json}" \
+    2>"${plan_scope_two_custom_stderr}"
+[[ ! -s "${plan_scope_two_custom_stderr}" ]] ||
+    fail 'Bash custom-policy plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_two_workspace}" && ! -e "${plan_scope_two_output}" ]] ||
+    fail 'Bash custom-policy plan-only created workspace or output roots.'
+if "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 2 \
+    --research-policy "${PLUGIN_MANIFEST}" \
+    --workspace-root "${plan_scope_two_workspace}" \
+    --output-root "${plan_scope_two_output}" \
+    --non-interactive \
+    --plan-only >/dev/null 2>&1; then
+    fail 'Bash runner accepted target-tree custom research policy input.'
+fi
+
 plan_scope_three_workspace="${fixture_dir}/plan workspace scope 3"
 plan_scope_three_output="${fixture_dir}/plan output scope 3"
 plan_scope_three_json="${fixture_dir}/plan-scope-3.json"
@@ -2915,6 +4082,9 @@ node - \
     "${plan_scope_one_canonical_json}" \
     "${plan_scope_one_fleet_json}" \
     "${plan_scope_two_json}" \
+    "${plan_scope_two_none_json}" \
+    "${plan_scope_two_cookie_json}" \
+    "${plan_scope_two_custom_json}" \
     "$(realpath -m -- "${plan_scope_two_workspace}")" \
     "$(realpath -m -- "${plan_scope_two_output}")" \
     "${plan_scope_three_json}" \
@@ -2935,6 +4105,9 @@ const [
   scopeOneCanonicalPath,
   scopeOneFleetPath,
   scopeTwoPath,
+  scopeTwoNonePath,
+  scopeTwoCookiePath,
+  scopeTwoCustomPath,
   scopeTwoWorkspace,
   scopeTwoOutput,
   scopeThreePath,
@@ -2999,6 +4172,7 @@ function assertCommonPlan(
     "OutputRoot",
     "PriorArtWindow",
     "ProvenanceWindow",
+    "ResearchTransport",
     "ReviewDate",
     "RememberPreferences",
     "SchemaVersion",
@@ -3008,7 +4182,7 @@ function assertCommonPlan(
     "ThrottleLimit",
     "WorkspaceRoot",
   ], `${label} top-level`);
-  if (plan.SchemaVersion !== 2 ||
+  if (plan.SchemaVersion !== 3 ||
       !/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(plan.ReviewDate) ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(plan.GeneratedAt) ||
@@ -3046,6 +4220,91 @@ function assertCommonPlan(
   ], `${label} prior-art window`);
 }
 
+function assertResearchTransport(
+  plan,
+  label,
+  enabled,
+  cookieMode,
+  webProvider = enabled ? "duckduckgo-html-v1" : "none",
+) {
+  const transport = plan.ResearchTransport;
+  const webAvailable = enabled && webProvider !== "none";
+  if (!transport || typeof transport !== "object" || Array.isArray(transport)) {
+    throw new Error(`${label} research transport is missing`);
+  }
+  assertKeys(transport, [
+    "AnonymousGitHub",
+    "BrokerVersion",
+    "Cookies",
+    "Enabled",
+    "GeneralWebSearch",
+    "Mode",
+    "NetworkLogPolicy",
+    "PolicyDigest",
+    "PolicyId",
+    "PolicySchemaVersion",
+    "ProviderId",
+    "ResourceProfile",
+    "Tools",
+    "UnsupportedBodyRetention",
+  ], `${label} research transport`);
+  if (transport.Enabled !== enabled ||
+      transport.Cookies?.ReplayMode !== cookieMode ||
+      transport.Cookies?.StartsEmpty !== true ||
+      transport.GeneralWebSearch?.ProviderId !== webProvider ||
+      transport.GeneralWebSearch?.Available !== webAvailable ||
+      transport.AnonymousGitHub?.Authentication !== "none") {
+    throw new Error(`${label} research transport mode is invalid`);
+  }
+  if (!enabled) {
+    if (transport.Mode !== "disabled" ||
+        transport.ProviderId !== "disabled" ||
+        transport.BrokerVersion !== null ||
+        transport.PolicySchemaVersion !== null ||
+        transport.PolicyDigest !== null ||
+        transport.ResourceProfile !== null ||
+        transport.Tools.length !== 0 ||
+        transport.Cookies.RawSetCookieRetention !== "disabled" ||
+        transport.UnsupportedBodyRetention !== "disabled" ||
+        transport.NetworkLogPolicy !== "disabled" ||
+        transport.AnonymousGitHub.Enabled !== false) {
+      throw new Error(`${label} disabled research transport is invalid`);
+    }
+    return;
+  }
+  const expectedTools = [
+    "research_capabilities",
+    "fetch_public_url",
+    "search_public_github",
+    "search_public_web",
+    "research_network_summary",
+  ];
+  if (transport.Mode !== "dedicated-worker-local-stdio-mcp" ||
+      transport.ProviderId !== "local-broker" ||
+      transport.BrokerVersion !== "1.1" ||
+      transport.PolicySchemaVersion !== 1 ||
+      typeof transport.PolicyId !== "string" ||
+      transport.PolicyId.length === 0 ||
+      !/^[0-9a-f]{64}$/.test(transport.PolicyDigest) ||
+      JSON.stringify(transport.Tools) !== JSON.stringify(expectedTools) ||
+      transport.AnonymousGitHub.ProviderId !== "anonymous-github-rest-v1" ||
+      transport.AnonymousGitHub.Enabled !== true ||
+      transport.Cookies.RawSetCookieRetention !== "private-ledger" ||
+      transport.UnsupportedBodyRetention !== "private-content-addressed" ||
+      transport.NetworkLogPolicy !==
+        "per-repository-sanitized-with-private-evidence" ||
+      !transport.ResourceProfile ||
+      transport.ResourceProfile.MaxConcurrentRequests !== 4 ||
+      transport.ResourceProfile.MaxConcurrentRequestsPerHost !== 2 ||
+      transport.ResourceProfile.MinHostIntervalMs !== 500 ||
+      transport.ResourceProfile.ConnectTimeoutSeconds !== 15 ||
+      transport.ResourceProfile.TotalTimeoutSeconds !== 60 ||
+      transport.ResourceProfile.MaxWireBytes !== 10485760 ||
+      transport.ResourceProfile.MaxRedirects !== 8) {
+    throw new Error(`${label} enabled research transport is invalid`);
+  }
+}
+
 function assertPriorArtWindow(plan, label, enabled) {
   const expectedStart = subtractCalendarMonths(plan.ReviewDate, priorArtLookback);
   if (!plan.PriorArtWindow ||
@@ -3060,6 +4319,7 @@ function assertPriorArtWindow(plan, label, enabled) {
 const scopeOne = parsePlan(scopeOnePath);
 assertCommonPlan(scopeOne, scopeOneWorkspace, scopeOneOutput, "scope 1");
 assertPriorArtWindow(scopeOne, "scope 1", false);
+assertResearchTransport(scopeOne, "scope 1", false, "off");
 if (scopeOne.Scope.Number !== 1 ||
     scopeOne.Scope.Name !== "1 - Core repository review" ||
     typeof scopeOne.Scope.PublicResearch !== "boolean" ||
@@ -3083,6 +4343,7 @@ assertCommonPlan(
   "scope 1 repeat",
 );
 assertPriorArtWindow(scopeOneRepeat, "scope 1 repeat", false);
+assertResearchTransport(scopeOneRepeat, "scope 1 repeat", false, "off");
 if (scopeOneRepeat.Scope.Number !== 1 ||
     scopeOneRepeat.Scope.PublicResearch !== false ||
     scopeOneRepeat.Scope.ProvenanceResearch !== false ||
@@ -3144,6 +4405,7 @@ if (scopeOneFleet.FleetMode !== "native" ||
 const scopeTwo = parsePlan(scopeTwoPath);
 assertCommonPlan(scopeTwo, scopeTwoWorkspace, scopeTwoOutput, "scope 2");
 assertPriorArtWindow(scopeTwo, "scope 2", true);
+assertResearchTransport(scopeTwo, "scope 2", true, "off");
 if (scopeTwo.Scope.Number !== 2 ||
     scopeTwo.Scope.Name !==
       "2 - Core plus public prior-art and community research" ||
@@ -3161,10 +4423,68 @@ if (scopeTwo.Scope.Number !== 2 ||
 if (scopeOne.ApprovalHash === scopeTwo.ApprovalHash) {
   throw new Error("changing public-research scope did not change the approval hash");
 }
+if (scopeTwo.ResearchTransport.ResourceProfile.RequestBudget !== 500) {
+  throw new Error("scope 2 research request budget is invalid");
+}
+
+const scopeTwoNone = parsePlan(scopeTwoNonePath);
+assertCommonPlan(
+  scopeTwoNone,
+  scopeTwoWorkspace,
+  scopeTwoOutput,
+  "scope 2 web-search opt-out",
+);
+assertPriorArtWindow(scopeTwoNone, "scope 2 web-search opt-out", true);
+assertResearchTransport(
+  scopeTwoNone,
+  "scope 2 web-search opt-out",
+  true,
+  "off",
+  "none",
+);
+if (scopeTwoNone.ApprovalHash === scopeTwo.ApprovalHash ||
+    scopeTwoNone.ResearchTransport.PolicyDigest ===
+      scopeTwo.ResearchTransport.PolicyDigest) {
+  throw new Error("web-search provider selection did not change plan binding");
+}
+
+const scopeTwoCookie = parsePlan(scopeTwoCookiePath);
+assertCommonPlan(
+  scopeTwoCookie,
+  scopeTwoWorkspace,
+  scopeTwoOutput,
+  "scope 2 cookie",
+);
+assertPriorArtWindow(scopeTwoCookie, "scope 2 cookie", true);
+assertResearchTransport(scopeTwoCookie, "scope 2 cookie", true, "ephemeral");
+if (scopeTwoCookie.ApprovalHash === scopeTwo.ApprovalHash) {
+  throw new Error("changing research cookie replay did not change the approval hash");
+}
+
+const scopeTwoCustom = parsePlan(scopeTwoCustomPath);
+assertCommonPlan(
+  scopeTwoCustom,
+  scopeTwoWorkspace,
+  scopeTwoOutput,
+  "scope 2 custom policy",
+);
+assertPriorArtWindow(scopeTwoCustom, "scope 2 custom policy", true);
+assertResearchTransport(scopeTwoCustom, "scope 2 custom policy", true, "off");
+if (scopeTwoCustom.ResearchTransport.PolicyId !==
+      "fixture-tightened-policy-v1" ||
+    scopeTwoCustom.ResearchTransport.ResourceProfile.RequestBudget !== 400 ||
+    scopeTwoCustom.ResearchTransport.ResourceProfile.MaxNormalizedBytes !==
+      262144 ||
+    scopeTwoCustom.ResearchTransport.PolicyDigest ===
+      scopeTwo.ResearchTransport.PolicyDigest ||
+    scopeTwoCustom.ApprovalHash === scopeTwo.ApprovalHash) {
+  throw new Error("custom research policy did not change effective plan/hash");
+}
 
 const scopeThree = parsePlan(scopeThreePath);
 assertCommonPlan(scopeThree, scopeThreeWorkspace, scopeThreeOutput, "scope 3");
 assertPriorArtWindow(scopeThree, "scope 3", true);
+assertResearchTransport(scopeThree, "scope 3", true, "off");
 const expectedScopeThreeStart =
   subtractCalendarMonths(scopeThree.ReviewDate, scopeThreeLookback);
 if (scopeThree.Scope.Number !== 3 ||
@@ -3186,6 +4506,9 @@ if (!scopeThree.ProvenanceWindow ||
     scopeThree.ProvenanceWindow.StartDate !== expectedScopeThreeStart ||
     scopeThree.ProvenanceWindow.EndDate !== scopeThree.ReviewDate) {
   throw new Error("scope 3 plan-only provenance window is invalid");
+}
+if (scopeThree.ResearchTransport.ResourceProfile.RequestBudget !== 1000) {
+  throw new Error("scope 3 research request budget is invalid");
 }
 if (scopeOne.ApprovalHash === scopeThree.ApprovalHash) {
   throw new Error("changing scope did not change the approval hash");
@@ -3459,17 +4782,23 @@ for schema_fragment in \
 done
 for failure_contract in \
     'AccessPreflightFailed' 'CloneFailed' 'CommitResolutionFailed' \
-    'SnapshotFailed' 'TimedOut' 'Incomplete report' \
+    'SnapshotFailed' 'TimedOut' 'Interrupted' 'Incomplete report' \
     'temporary harness runtime home' 'RHYOLITE ERROR'; do
     grep -Fq "${failure_contract}" "${RUNNER}" ||
         fail "Bash runner is missing failure contract: ${failure_contract}"
 done
 grep -Fq 'redact_credentials' "${RUNNER}" ||
     fail 'Runner error sanitizer does not redact credentials.'
+grep -Fq 'signal_process_tree' "${RUNNER}" &&
+    grep -Fq "trap 'interrupt_run INT' INT" "${RUNNER}" &&
+    grep -Fq "trap 'interrupt_repository_process TERM' TERM" "${RUNNER}" ||
+    fail 'Runner does not propagate targeted interruption signals.'
 
 mock_bin="${fixture_dir}/mock-bin"
 mock_log="${fixture_dir}/mock-copilot-args.txt"
 mock_git_log="${fixture_dir}/mock-git-args.txt"
+mock_hostile_trailer_sentinel="${fixture_dir}/hostile-trailer-executed"
+export MOCK_HOSTILE_TRAILER_SENTINEL="${mock_hostile_trailer_sentinel}"
 mkdir -p -- "${mock_bin}"
 cat > "${mock_bin}/git" <<'MOCK_GIT'
 #!/usr/bin/env bash
@@ -3571,7 +4900,18 @@ case "${command_name}" in
             exit 88
         fi
         ;;
-    cat-file|checkout|status|diff)
+    cat-file|checkout|diff)
+        ;;
+    status)
+        if [[ "${MOCK_CORRUPT_REPORT_AFTER_VALIDATION-}" == "1" &&
+            -n "${MOCK_FINALIZATION_OUTPUT_ROOT-}" ]]; then
+            finalization_report="$(
+                /usr/bin/find "${MOCK_FINALIZATION_OUTPUT_ROOT}" \
+                    -type f -name review.txt -print -quit
+            )"
+            [[ -n "${finalization_report}" ]] || exit 105
+            printf '\377' >> "${finalization_report}"
+        fi
         ;;
     config)
         if [[ -n "${MOCK_LOCAL_ORIGIN-}" ]]; then
@@ -3611,15 +4951,64 @@ case "${command_name}" in
         ;;
     for-each-ref)
         printf '%s\t%s\n' \
-            'refs/remotes/origin/main' \
-            '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'
+            'Ref name (attacker-controlled evidence): refs/remotes/origin/main' \
+            'Object ID (attacker-controlled evidence): 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'
         ;;
     log)
-        printf '%s\t%s\t%s\t%s\n' \
-            '7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
-            '2026-07-14T00:00:00+00:00' \
-            'Example Author' \
-            'Initial & exact commit'
+        [[ " $* " == *" -n 100 "* ]] || exit 101
+        [[ " $* " == *"%cn"* ]] || exit 102
+        [[ " $* " == *"%(trailers:key=Co-authored-by"* ]] || exit 103
+        [[ " $* " != *"%B"* && " $* " != *"%b"* ]] || exit 104
+        [[ " $* " == *"--pretty=tformat:"* ]] || exit 105
+        [[ " $* " == *"__RHYOLITE_COMMIT_RECORD_START__"* ]] || exit 106
+        [[ " $* " != *"%<("* ]] || exit 107
+        printf 'log %s\n' "$*" >> "${MOCK_GIT_LOG}"
+        long_identity_filler=""
+        while ((${#long_identity_filler} < 420)); do
+            long_identity_filler="${long_identity_filler}A"
+        done
+        long_trailer_filler=""
+        while ((${#long_trailer_filler} < 180)); do
+            long_trailer_filler="${long_trailer_filler}T"
+        done
+        overflow_subject_filler=""
+        while ((${#overflow_subject_filler} < 420)); do
+            overflow_subject_filler="${overflow_subject_filler}S"
+        done
+        printf '%s\n' \
+            '__RHYOLITE_COMMIT_RECORD_START__' \
+            'Commit object ID (attacker-controlled evidence): 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
+            'Author date (attacker-controlled evidence): 2026-07-14T00:00:00+00:00'
+        printf '%s%s%s\n' \
+            'Author name (attacker-controlled evidence): Long hostile author ' \
+            "${long_identity_filler}" \
+            'boundary-crossing-email@example.org'
+        printf '%s%s%s\n' \
+            'Committer name (attacker-controlled evidence): Example Committer Long hostile committer ' \
+            "${long_identity_filler}" \
+            ' api_key=committer-boundary-secret'
+        printf '%s\n' \
+            'Subject (attacker-controlled evidence): Initial & exact commit'
+        printf '%s\n' \
+            "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <collaborator@example.org> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); api_key=metadata-fixture-secret; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <trailer-boundary@example.org>" \
+            '' \
+            '__RHYOLITE_COMMIT_RECORD_END__'
+        commit_index=2
+        while ((commit_index <= 100)); do
+            printf '%s\n' '__RHYOLITE_COMMIT_RECORD_START__'
+            printf 'Commit object ID (attacker-controlled evidence): %040x\n' \
+                "${commit_index}"
+            printf '%s\n' \
+                'Author date (attacker-controlled evidence): 2026-07-13T00:00:00+00:00' \
+                "Author name (attacker-controlled evidence): Older Author ${commit_index}" \
+                "Committer name (attacker-controlled evidence): Older Committer ${commit_index}"
+            printf 'Subject (attacker-controlled evidence): Older commit %03d %s\n' \
+                "${commit_index}" "${overflow_subject_filler}"
+            printf 'Selected trailer values (attacker-controlled evidence): Generated-with: overflow-model-%03d | Model: overflow-%03d\n' \
+                "${commit_index}" "${commit_index}"
+            printf '%s\n' '' '__RHYOLITE_COMMIT_RECORD_END__'
+            commit_index=$((commit_index + 1))
+        done
         ;;
     archive)
         output_path=""
@@ -3640,7 +5029,11 @@ MOCK_GIT
 cat > "${mock_bin}/python3" <<'MOCK_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
-if (($# == 2)) && [[ "${1-}" == "-" && "${2-}" == */config.json ]]; then
+if [[ "${1-}" == *research-egress-broker.py ]] ||
+    {
+        [[ "${1-}" == "-" ]] &&
+        { (($# != 3)) || [[ "${2-}" == /* ]]; }
+    }; then
     exec /usr/bin/python3 "$@"
 fi
 [[ "${1-}" == "-" && -n "${2-}" && -n "${3-}" ]] || exit 82
@@ -3651,16 +5044,80 @@ cat > "${mock_bin}/copilot" <<'MOCK_COPILOT'
 set -euo pipefail
 
 [[ -z "${COPILOT_ALLOW_ALL-}" ]] || exit 71
-printf '%s\n' "$@" > "${MOCK_LOG}"
-grep -Fxq -- '--disallow-temp-dir' "${MOCK_LOG}" || exit 72
-grep -Fxq -- '--no-remote-export' "${MOCK_LOG}" || exit 73
-! grep -Fq 'shell(git' "${MOCK_LOG}" || exit 74
-grep -Fxq -- 'shell' "${MOCK_LOG}" || exit 76
+agent=""
+share_path=""
+working_directory=""
+additional_mcp_config=""
+previous=""
+for argument in "$@"; do
+    if [[ "${previous}" == "--agent" ]]; then
+        agent="${argument}"
+    fi
+    if [[ "${previous}" == "--share" ]]; then
+        share_path="${argument}"
+    fi
+    if [[ "${previous}" == "-C" ]]; then
+        working_directory="${argument}"
+    fi
+    if [[ "${previous}" == "--additional-mcp-config" ]]; then
+        additional_mcp_config="${argument}"
+    fi
+    previous="${argument}"
+done
+[[ -n "${agent}" && -n "${share_path}" && -n "${working_directory}" ]] ||
+    exit 75
+invocation_log="${MOCK_LOG}.${agent//:/-}"
+printf '%s\n' "$@" > "${invocation_log}"
+{
+    printf 'AGENT=%s\n' "${agent}"
+    printf '%s\n' "$@"
+    printf '%s\n' 'END_INVOCATION'
+} >> "${MOCK_LOG}"
+grep -Fxq -- '--disallow-temp-dir' "${invocation_log}" || exit 72
+grep -Fxq -- '--no-remote-export' "${invocation_log}" || exit 73
+! grep -Fq 'shell(git' "${invocation_log}" || exit 74
+grep -Fxq -- 'shell' "${invocation_log}" || exit 76
+! grep -Fq -- '--allow-all-urls' "${invocation_log}" || exit 89
+! grep -Fq 'web_fetch' "${invocation_log}" || exit 90
 [[ -f "${COPILOT_HOME}/settings.json" ]] || exit 77
 grep -Fq '"disableAllHooks": true' "${COPILOT_HOME}/settings.json" || exit 78
 grep -Fq '"defaultLocalOnly": true' "${COPILOT_HOME}/settings.json" || exit 80
-[[ "${COPILOT_HOME}" == "${TMPDIR:-/tmp}"/rhyolite-repo-review-copilot.* ]] ||
-    exit 81
+python3 - "${COPILOT_HOME}/settings.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+settings = json.loads(Path(sys.argv[1]).read_text())
+agents = settings.get("subagents", {}).get("agents", {})
+for name in (
+    "explore",
+    "task",
+    "code-review",
+    "general-purpose",
+    "research",
+    "security-review",
+    "rubber-duck",
+):
+    profile = agents.get(name)
+    if profile != {
+        "effortLevel": "max",
+        "contextTier": "long_context",
+    }:
+        raise SystemExit(f"unexpected {name} subagent profile: {profile!r}")
+PY
+case "${agent}" in
+    rhyolite:repo-research-worker)
+        [[ "${COPILOT_HOME}" == \
+            "${TMPDIR:-/tmp}"/rhyolite-repo-research-copilot.* ]] || exit 81
+        ;;
+    rhyolite:repo-review-worker)
+        [[ "${COPILOT_HOME}" == \
+            "${TMPDIR:-/tmp}"/rhyolite-repo-review-copilot.* ]] || exit 81
+        ;;
+    *)
+        exit 91
+        ;;
+esac
 [[ "$(stat -c '%a' "${COPILOT_HOME}")" == "700" ]] || exit 82
 [[ -f "${COPILOT_HOME}/config.json" ]] || exit 83
 if [[ -n "${MOCK_EXPECT_USER-}" ]]; then
@@ -3692,23 +5149,445 @@ printf 'mock-session-database\n' \
 printf 'repo-reviewer-secret-sentinel\n' \
     > "${COPILOT_HOME}/other-state/must-not-persist.txt"
 
-share_path=""
-working_directory=""
-previous=""
-for argument in "$@"; do
-    if [[ "${previous}" == "--share" ]]; then
-        share_path="${argument}"
-    fi
-    if [[ "${previous}" == "-C" ]]; then
-        working_directory="${argument}"
-    fi
-    previous="${argument}"
-done
-[[ -n "${share_path}" ]] || exit 75
 [[ -d "${working_directory}/source" &&
     ! -e "${working_directory}/.git" ]] || exit 79
-cat >/dev/null
+
+if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]]; then
+    mock_block_child_pid=""
+    mock_block_exit() {
+        local exit_code="$1"
+
+        trap - INT TERM HUP
+        if [[ -n "${mock_block_child_pid}" ]]; then
+            kill "${mock_block_child_pid}" 2>/dev/null || true
+            wait "${mock_block_child_pid}" 2>/dev/null || true
+        fi
+        exit "${exit_code}"
+    }
+    trap 'mock_block_exit 130' INT
+    trap 'mock_block_exit 143' TERM
+    trap 'mock_block_exit 129' HUP
+    [[ -n "${MOCK_COPILOT_PID_FILE-}" ]] &&
+        printf '%s\n' "$$" > "${MOCK_COPILOT_PID_FILE}"
+    sleep 300 &
+    mock_block_child_pid=$!
+    [[ -n "${MOCK_COPILOT_CHILD_PID_FILE-}" ]] &&
+        printf '%s\n' "${mock_block_child_pid}" \
+            > "${MOCK_COPILOT_CHILD_PID_FILE}"
+    wait "${mock_block_child_pid}"
+    exit 96
+fi
+
+if [[ "${agent}" == 'rhyolite:repo-research-worker' ]]; then
+    [[ -n "${additional_mcp_config}" &&
+        "${additional_mcp_config}" == @* ]] || exit 92
+    grep -Fxq -- 'rhyolite-research(research_capabilities)' "${invocation_log}" ||
+        exit 93
+    grep -Fxq -- 'rhyolite-research(fetch_public_url)' "${invocation_log}" ||
+        exit 94
+    grep -Fxq -- 'rhyolite-research(search_public_github)' "${invocation_log}" ||
+        exit 95
+    grep -Fxq -- 'rhyolite-research(search_public_web)' "${invocation_log}" ||
+        exit 96
+    grep -Fxq -- 'rhyolite-research(research_network_summary)' "${invocation_log}" ||
+        exit 97
+    mcp_config="${additional_mcp_config#@}"
+    [[ -f "${mcp_config}" && "$(stat -c '%a' "${mcp_config}")" == "600" ]] ||
+        exit 98
+    mapfile -t broker_fields < <(
+        /usr/bin/python3 - "${mcp_config}" <<'PY'
+import json
+import pathlib
+import sys
+
+config = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+servers = config.get("mcpServers", {})
+if list(servers) != ["rhyolite-research"]:
+    raise SystemExit("unexpected MCP server set")
+server = servers["rhyolite-research"]
+expected_tools = [
+    "research_capabilities",
+    "fetch_public_url",
+    "search_public_github",
+    "search_public_web",
+    "research_network_summary",
+]
+if (
+    server.get("type") != "local"
+    or server.get("tools") != expected_tools
+    or not str(server.get("command", "")).endswith(
+        "/launch-research-egress-broker.sh"
+    )
+):
+    raise SystemExit("invalid MCP config")
+arguments = server.get("args", [])
+values = {}
+for index in range(0, len(arguments), 2):
+    values[arguments[index]] = arguments[index + 1]
+for key in (
+    "--runtime-root",
+    "--network-root",
+    "--policy",
+    "--scope",
+    "--cookies",
+    "--repository-url",
+    "--expected-policy-digest",
+    "--web-search-provider",
+):
+    print(values[key])
+PY
+    )
+    ((${#broker_fields[@]} == 8)) || exit 99
+    broker_runtime="${broker_fields[0]}"
+    network_root="${broker_fields[1]}"
+    policy_path="${broker_fields[2]}"
+    research_scope="${broker_fields[3]}"
+    cookie_mode="${broker_fields[4]}"
+    repository_url="${broker_fields[5]}"
+    policy_digest="${broker_fields[6]}"
+    web_provider="${broker_fields[7]}"
+    [[ -d "${broker_runtime}" &&
+        "$(stat -c '%a' "${broker_runtime}")" == "700" &&
+        -f "${policy_path}" &&
+        "${research_scope}" =~ ^[23]$ &&
+        "${cookie_mode}" =~ ^(off|ephemeral)$ &&
+        "${repository_url}" == https://* &&
+        "${policy_digest}" =~ ^[0-9a-f]{64}$ &&
+        "${web_provider}" == 'duckduckgo-html-v1' ]] || exit 100
+    mkdir -p -- "${network_root}/private/bodies"
+    chmod 700 -- \
+        "${network_root}" \
+        "${network_root}/private" \
+        "${network_root}/private/bodies"
+    private_cookie="research-private-cookie-sentinel-${repository_url##*/}"
+    cat > "${network_root}/events.jsonl" <<EOF
+{"SchemaVersion":1,"Sequence":1,"Timestamp":"2026-10-01T00:00:00Z","Type":"capabilities_checked","Tools":["research_capabilities","fetch_public_url","search_public_github","search_public_web","research_network_summary"],"Health":"ready"}
+{"SchemaVersion":1,"Sequence":2,"Timestamp":"2026-10-01T00:00:01Z","Type":"http_response","RequestId":"request-000001","Url":"https://github.com/octocat/Hello-World","Method":"GET","Status":200,"ContentType":"text/html","WireBytes":128}
+{"SchemaVersion":1,"Sequence":3,"Timestamp":"2026-10-01T00:00:02Z","Type":"network_summary_requested"}
+EOF
+    successful_responses=1
+    failed_responses=0
+    if [[ "${MOCK_RESEARCH_ZERO_SUCCESS-}" == "1" ]]; then
+        successful_responses=0
+    fi
+    if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
+        failed_responses=1
+        cat >> "${network_root}/events.jsonl" <<'EOF'
+{"SchemaVersion":1,"Sequence":4,"Timestamp":"2026-10-01T00:00:03Z","Type":"request_failed","RequestId":"request-000002","Url":"https://independent.example.org/unavailable","Code":"dns_failed","Message":"Public DNS resolution failed","Retryable":true}
+EOF
+    fi
+    capability_calls=1
+    health='ready'
+    if [[ "${MOCK_RESEARCH_CAPABILITY_FAIL-}" == "1" ]]; then
+        capability_calls=0
+        successful_responses=0
+        health='unavailable'
+    fi
+    request_budget=500
+    [[ "${research_scope}" == "2" ]] || request_budget=1000
+    attempted_responses=$((1 + failed_responses))
+    cat > "${network_root}/summary.json" <<EOF
+{
+  "SchemaVersion": 1,
+  "BrokerVersion": "1.1",
+  "PolicySchemaVersion": 1,
+  "PolicyId": "rhyolite-public-research-v2",
+  "PolicyDigest": "${policy_digest}",
+  "Health": "${health}",
+  "CookieMode": "${cookie_mode}",
+  "RawSetCookieRetention": "private-ledger",
+  "UnsupportedBodyRetention": "private-content-addressed",
+  "Requests": {
+    "Budget": ${request_budget},
+    "Attempted": ${attempted_responses},
+    "SuccessfulPublicResponses": ${successful_responses},
+    "FailedResponses": ${failed_responses},
+    "Redirects": 0
+  },
+  "ToolCalls": {
+    "Total": 3,
+    "Capabilities": ${capability_calls},
+    "NetworkSummary": 1,
+    "Providers": {
+      "direct-public-https-v1": 1,
+      "anonymous-github-rest-v1": 0,
+      "duckduckgo-html-v1": 0,
+      "none": 0
+    }
+  },
+  "Cookies": {
+    "Observed": 1,
+    "Accepted": 0,
+    "Rejected": 1,
+    "Sent": 0
+  },
+  "TlsAnomalies": {},
+  "HttpAnomalies": {},
+  "RateLimits": {},
+  "ProjectControlledEndpointObservations": [],
+  "GeneralWebSearch": {
+    "ProviderId": "duckduckgo-html-v1",
+    "Available": true
+  },
+  "AnonymousGitHub": {
+    "ProviderId": "anonymous-github-rest-v1",
+    "Enabled": true,
+    "Authentication": "none"
+  },
+  "ResourceProfile": {
+    "RequestBudget": ${request_budget},
+    "MaxConcurrentRequests": 4,
+    "MaxConcurrentRequestsPerHost": 2,
+    "MinHostIntervalMs": 500,
+    "ConnectTimeoutSeconds": 15,
+    "TotalTimeoutSeconds": 60,
+    "MaxWireBytes": 10485760,
+    "MaxNormalizedBytes": 524288,
+    "MaxRedirects": 8,
+    "AllowedTlsPorts": [443]
+  }
+}
+EOF
+    cat > "${network_root}/private/cookies.jsonl" <<EOF
+{"SchemaVersion":1,"Timestamp":"2026-10-01T00:00:01Z","RequestId":"request-000001","Url":"https://github.com/octocat/Hello-World","RawSetCookie":"fixture=${private_cookie}; Path=/; Secure; HttpOnly"}
+EOF
+    : > "${network_root}/private/body-manifest.jsonl"
+    chmod 600 -- \
+        "${network_root}/events.jsonl" \
+        "${network_root}/summary.json" \
+        "${network_root}/private/cookies.jsonl" \
+        "${network_root}/private/body-manifest.jsonl"
+    cat > "${broker_runtime}/broker-exit.json" <<'EOF'
+{
+  "BrokerVersion": "1.1",
+  "CleanExit": true,
+  "CompletedAt": "2026-10-01T00:00:03Z"
+}
+EOF
+    chmod 600 -- "${broker_runtime}/broker-exit.json"
+    cat > "${MOCK_LOG}.research-request"
+    printf '# Mock Copilot research session\n' > "${share_path}"
+    if [[ "${MOCK_RESEARCH_CAPABILITY_FAIL-}" == "1" ]]; then
+        printf '%s\n' 'mock research capability failure' >&2
+        exit 31
+    fi
+    if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
+        cat <<DOSSIER
+================================================================================
+REPOSITORY RESEARCH DOSSIER
+RESEARCH CAPABILITY RECORD
+Broker health ready; approved exact tools were available. One successful public
+response was observed. General web search provider duckduckgo-html-v1 was
+available.
+Broker version: 1.1
+Policy digest: ${policy_digest}
+Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
+Unsupported bodies use private-content-addressed retention.
+Exact tools: research_capabilities, fetch_public_url, search_public_github,
+search_public_web, research_network_summary.
+Confidence: High. Evidence basis: sanitized capability and summary records.
+
+RESEARCH SOURCE LANDSCAPE
+1. https://github.com/octocat/Hello-World checked 2026-10-01; project-controlled
+   repository surface, current status observed.
+   Confidence: High. Evidence basis: successful broker response.
+
+INACCESSIBLE RESOURCE REGISTER
+1. https://independent.example.org/unavailable - independent source; DNS
+   retrieval failed. Public alternatives checked: repository surface.
+   Retrieval priority: low.
+   Confidence: High. Evidence basis: sanitized request failure.
+
+TOP USER RETRIEVAL PRIORITIES
+None that would change a material conclusion.
+
+RESEARCH LIMITATIONS
+One independent source was inaccessible. The fixed anonymous web-search
+provider returned no additional source needed for this fixture.
+Confidence: High. Evidence basis: sanitized broker events.
+
+RESEARCH TRANSPORT OBSERVATIONS
+The independent source DNS failure is a research limitation and is not
+attributed to project fitness. No project-controlled anomaly was observed.
+Confidence: High. Evidence basis: ownership-aware network summary.
+================================================================================
+DOSSIER
+        exit 0
+    fi
+    cat <<DOSSIER
+================================================================================
+REPOSITORY RESEARCH DOSSIER
+RESEARCH CAPABILITY RECORD
+Broker health ready; approved exact tools were available. One successful public
+response was observed. General web search provider duckduckgo-html-v1 was
+available.
+Broker version: 1.1
+Policy digest: ${policy_digest}
+Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
+Unsupported bodies use private-content-addressed retention.
+Exact tools: research_capabilities, fetch_public_url, search_public_github,
+search_public_web, research_network_summary.
+Confidence: High. Evidence basis: sanitized capability and summary records.
+
+RESEARCH SOURCE LANDSCAPE
+1. https://github.com/octocat/Hello-World checked 2026-10-01; project-controlled
+   repository surface, current status observed.
+   Confidence: High. Evidence basis: successful broker response.
+
+INACCESSIBLE RESOURCE REGISTER
+None identified.
+
+TOP USER RETRIEVAL PRIORITIES
+None.
+
+RESEARCH LIMITATIONS
+The fixed anonymous duckduckgo-html-v1 provider was available; the fixture used
+the direct HTTPS provider for its successful response.
+Confidence: High. Evidence basis: approval-bound capability record.
+
+RESEARCH TRANSPORT OBSERVATIONS
+No material TLS or HTTP anomaly was observed. One cookie was recorded privately
+and not replayed or exposed.
+Confidence: High. Evidence basis: sanitized transport summary.
+================================================================================
+DOSSIER
+    exit 0
+fi
+
+[[ -z "${additional_mcp_config}" ]] || exit 101
+cat > "${MOCK_LOG}.review-request"
 printf '# Mock Copilot session\n' > "${share_path}"
+
+emit_report_prefix() {
+    cat <<'REPORT'
+================================================================================
+REPOSITORY REVIEW REPORT
+REVIEW CONTEXT
+Repository: https://github.com/octocat/Hello-World
+Exact reviewed commit: 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+Scope and limitations: deterministic read-only fixture; target code was not
+executed.
+Confidence: High
+Evidence basis: trusted fixture inputs and the exact snapshot contract.
+
+EXECUTIVE SUMMARY
+The deterministic fixture completed without a qualifying repository finding.
+Confidence: High
+Evidence basis: fixture-controlled source and worker output.
+
+FINDINGS
+No qualifying findings.
+Confidence: High
+Evidence basis: deterministic fixture behavior.
+REPORT
+    if [[ "${MOCK_OMIT_AGENT_TARGETING-}" != "1" ]]; then
+        cat <<'REPORT'
+
+AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT
+Prompt injection and reviewer-directed instructions: No supporting evidence
+found in the deterministic fixture.
+Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning: No
+supporting evidence found in the deterministic fixture.
+Encoded/invisible instructions and tool-call bait: No supporting evidence
+found in the deterministic fixture.
+Recursive/resource-exhaustion tarpits: No supporting evidence found in the
+deterministic fixture.
+Tracking pixels/callback beacons/trackers/sensors: No supporting evidence found
+in checked-in fixture content; no resource URL was activated.
+Limitations of available evidence: Target code was not executed and normalized
+external pages can omit active-resource details.
+Confidence: High
+Evidence basis: checked-in fixture text and wrapper-collected metadata.
+REPORT
+    fi
+}
+
+emit_report_tail() {
+    cat <<'REPORT'
+
+AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
+Source layout, documentation, and deterministic runner integration.
+Confidence: High
+Evidence basis: fixture-controlled review surfaces.
+
+PRIORITIZED REMEDIATION
+No remediation is required for the deterministic fixture.
+Confidence: High
+Evidence basis: no qualifying finding was identified.
+
+OVERALL ASSESSMENT
+The deterministic fixture satisfies the canonical report contract.
+Confidence: High
+Evidence basis: bounded fixture output.
+================================================================================
+REPORT
+}
+
+emit_core_report() {
+    emit_report_prefix
+    emit_report_tail
+}
+
+emit_invalid_utf8_report() {
+    emit_report_prefix
+    printf '\377\n'
+    emit_report_tail
+}
+
+emit_research_report() {
+    emit_report_prefix
+    cat <<'REPORT'
+
+RESEARCH SOURCE LANDSCAPE
+Validated dedicated research dossier consumed from
+https://github.com/octocat/Hello-World.
+Confidence: High
+Evidence basis: validated sanitized research dossier.
+
+INACCESSIBLE RESOURCE REGISTER
+None identified.
+Confidence: High
+Evidence basis: deterministic broker fixture.
+
+TOP USER RETRIEVAL PRIORITIES
+None.
+Confidence: High
+Evidence basis: no material inaccessible source was identified.
+
+RESEARCH TRANSPORT OBSERVATIONS
+No material project-controlled transport anomaly was reported.
+Confidence: High
+Evidence basis: validated sanitized network summary.
+REPORT
+    if grep -Fq \
+        'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT' \
+        "${MOCK_LOG}.review-request" &&
+        [[ "${MOCK_OMIT_PROVENANCE-}" != "1" ]]; then
+        cat <<'REPORT'
+
+GENERATED-CODE PROVENANCE ASSESSMENT
+Generation assessment: No supporting evidence found
+Direct model attribution: No direct attribution.
+Heuristic model candidates (not attribution): No candidate identified
+Heuristic model confidence: Not applicable
+Direct effort attribution: No direct attribution.
+REPORT
+        if [[ "${MOCK_OMIT_PROVENANCE_FIELD-}" != "1" ]]; then
+            printf '%s\n' \
+                'Direct harness attribution: No direct attribution.'
+        fi
+        cat <<'REPORT'
+Coverage/window: Exact reviewed commit and approved provenance window.
+Alternative explanations: The fixture is synthetic and contains no bound
+generation record.
+Confidence: Low
+Evidence basis: no commit-specific attestation, transcript, provenance record,
+or explicit disclosure was present.
+REPORT
+    fi
+    emit_report_tail
+}
+
 if [[ -n "${MOCK_COPILOT_EXIT_CODE-}" ]]; then
     printf '%s\n' \
         "${MOCK_COPILOT_FAIL_MESSAGE-mock worker failure}" >&2
@@ -3722,8 +5601,13 @@ Recovered but incomplete deterministic repository review.
 REPORT
     exit 0
 fi
+if [[ "${MOCK_INVALID_UTF8-}" == "1" ]]; then
+    emit_invalid_utf8_report
+    exit 0
+fi
 if [[ "${MOCK_TRANSCRIPT_FALLBACK-}" == "1" ]]; then
-    cat > "${share_path}" <<'TRANSCRIPT'
+    {
+        cat <<'TRANSCRIPT'
 # Mock Copilot session
 
 ### User
@@ -3733,15 +5617,15 @@ The required final delimiter is:
 
 ### Copilot
 
-================================================================================
-REPOSITORY REVIEW REPORT
-Complete deterministic report recovered from the transcript.
-================================================================================
+TRANSCRIPT
+        emit_core_report
+        cat <<'TRANSCRIPT'
 
 ---
 
 <sub>Generated by GitHub Copilot CLI</sub>
 TRANSCRIPT
+    } > "${share_path}"
     cat <<'REPORT'
 ================================================================================
 REPOSITORY REVIEW REPORT
@@ -3749,12 +5633,13 @@ Truncated deterministic standard output.
 REPORT
     exit 0
 fi
-cat <<'REPORT'
-================================================================================
-REPOSITORY REVIEW REPORT
-Mock deterministic repository review.
-================================================================================
-REPORT
+if grep -Fq 'Public research mode:' "${MOCK_LOG}.review-request" &&
+    grep -Fq 'Dedicated research completed before this review.' \
+        "${MOCK_LOG}.review-request"; then
+    emit_research_report
+    exit 0
+fi
+emit_core_report
 MOCK_COPILOT
 chmod +x "${mock_bin}/git" "${mock_bin}/python3" "${mock_bin}/copilot"
 
@@ -3916,6 +5801,7 @@ if ! MOCK_LOG="${mock_log}" \
         --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d \
         --scope 3 \
         --provenance-lookback-months 1 \
+        --research-cookies ephemeral \
         --output-root "${fixture_dir}/mock&output" \
         --workspace-root "${fixture_dir}/mock&workspace" \
         --fleet-mode native \
@@ -3959,6 +5845,7 @@ if ! MOCK_LOG="${mock_log}" \
         --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d \
         --scope 3 \
         --provenance-lookback-months "${mock_provenance_lookback}" \
+        --research-cookies ephemeral \
         --output-root "${mock_output}" \
         --workspace-root "${mock_workspace}" \
         --expected-plan-hash "${mock_expected_hash}" \
@@ -3971,6 +5858,46 @@ if ! MOCK_LOG="${mock_log}" \
 fi
 [[ ! -s "${mock_run_stderr}" ]] ||
     fail 'Mock Bash run wrote unexpected stderr.'
+research_invocation_line="$(
+    grep -n '^AGENT=rhyolite:repo-research-worker$' "${mock_log}" |
+        tail -n 1 | cut -d: -f1
+)"
+review_invocation_line="$(
+    grep -n '^AGENT=rhyolite:repo-review-worker$' "${mock_log}" |
+        tail -n 1 | cut -d: -f1
+)"
+[[ -n "${research_invocation_line}" && -n "${review_invocation_line}" &&
+    "${research_invocation_line}" -lt "${review_invocation_line}" ]] ||
+    fail 'Dedicated research worker did not run before the main review worker.'
+! grep -Fq 'web_fetch' "${mock_log}" &&
+    ! grep -Fq -- '--allow-all-urls' "${mock_log}" ||
+    fail 'Mock child invocation regained raw web access.'
+[[ -f "${mock_log}.rhyolite-repo-research-worker" &&
+    -f "${mock_log}.rhyolite-repo-review-worker" ]] ||
+    fail 'Mock two-phase child argument logs are incomplete.'
+grep -Fxq -- '--additional-mcp-config' \
+    "${mock_log}.rhyolite-repo-research-worker" &&
+    ! grep -Fxq -- '--additional-mcp-config' \
+        "${mock_log}.rhyolite-repo-review-worker" ||
+    fail 'MCP broker configuration was not isolated to the research worker.'
+grep -Fq \
+    'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section' \
+    "${mock_log}.review-request" ||
+    fail 'Main review request lost its exact provenance section requirement.'
+grep -Fq \
+    'ENABLED. Gather whole-repository exact-commit public provenance evidence' \
+    "${mock_log}.research-request" &&
+    ! grep -Fq \
+        'Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section' \
+        "${mock_log}.research-request" &&
+    ! grep -Fxq 'GENERATED-CODE PROVENANCE ASSESSMENT' \
+        "${mock_log}.research-request" ||
+    fail 'Research request received the main report provenance section contract.'
+if find "${mock_workspace}" \
+    \( -name 'research-mcp-config.json' -o -name 'research-runtime' \) \
+    -print -quit | grep -q .; then
+    fail 'Ephemeral research MCP config or runtime survived cleanup.'
+fi
 
 mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
     head -n 1)"
@@ -4000,7 +5927,8 @@ node - \
     "${mock_run_output}" \
     "$(realpath -m -- "${mock_workspace}")" \
     "$(realpath -m -- "${mock_output}")" \
-    "${mock_expected_hash}" <<'JS'
+    "${mock_expected_hash}" \
+    "${mock_hostile_trailer_sentinel}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
@@ -4011,6 +5939,7 @@ const [
   expectedWorkspaceRoot,
   expectedOutputRoot,
   expectedApprovalHash,
+  hostileTrailerSentinel,
 ] = process.argv.slice(2);
 const run = fs.realpathSync(runInput);
 const provenanceLookback = Number.parseInt(provenanceLookbackText, 10);
@@ -4021,11 +5950,23 @@ const manifestPath = path.join(run, "manifest.json");
 const runStatePath = path.join(run, "state.json");
 const runHandoffPath = path.join(run, "handoff.md");
 const htmlIndexPath = path.join(run, "index.html");
+const researchDirectory = path.join(repository, "research");
+const researchDossierPath = path.join(researchDirectory, "research.txt");
+const researchTimelinePath = path.join(researchDirectory, "research-timeline.txt");
+const researchSessionPath = path.join(researchDirectory, "research-session.md");
+const researchErrorsPath = path.join(researchDirectory, "research-errors.txt");
+const researchStatePath = path.join(researchDirectory, "research-state.json");
+const networkDirectory = path.join(researchDirectory, "network");
+const networkSummaryPath = path.join(networkDirectory, "summary.json");
+const networkEventsPath = path.join(networkDirectory, "events.jsonl");
+const privateDirectory = path.join(networkDirectory, "private");
 const reviewPlan = JSON.parse(fs.readFileSync(reviewPlanJsonPath, "utf8"));
 const reviewPlanText = fs.readFileSync(reviewPlanTextPath, "utf8");
 const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const runState = JSON.parse(fs.readFileSync(runStatePath, "utf8"));
+const researchState = JSON.parse(fs.readFileSync(researchStatePath, "utf8"));
+const networkSummary = JSON.parse(fs.readFileSync(networkSummaryPath, "utf8"));
 const stdout = fs.readFileSync(stdoutPath, "utf8");
 
 function daysInMonth(year, month) {
@@ -4079,7 +6020,9 @@ function assertKeys(object, expectedKeys, label) {
   }
 }
 
-for (const key of ["Scope", "Session", "Paths", "Artifacts"]) {
+for (const key of [
+  "Scope", "Session", "Paths", "Artifacts", "Research", "ResearchTransport",
+]) {
   if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
     throw new Error(`repository state ${key} is not an object`);
   }
@@ -4098,12 +6041,21 @@ if (state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
     state.Status !== "Completed") {
   throw new Error("repository state lost the exact commit or status");
 }
-if (state.SchemaVersion !== 3 ||
+if (state.SchemaVersion !== 4 ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.Source?.LocalPath !== "" ||
     state.Source?.RemoteUrl !== state.Repository ||
     state.Scope?.PublicResearch !== true ||
-    state.Scope?.ProvenanceResearch !== true) {
+    state.Scope?.ProvenanceResearch !== true ||
+    state.Research?.Status !== "Completed" ||
+    state.Research?.Directory !== researchDirectory ||
+    state.Research?.Dossier !== researchDossierPath ||
+    state.Research?.NetworkSummary !== networkSummaryPath ||
+    state.Research?.NetworkEvents !== networkEventsPath ||
+    state.Research?.PrivateEvidence !== privateDirectory ||
+    state.Research?.State !== researchStatePath ||
+    state.ResearchTransport?.Enabled !== true ||
+    state.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral") {
   throw new Error("repository state lost remote source metadata");
 }
 if (state.Artifacts?.PlainText !== path.join(repository, "review.txt") ||
@@ -4136,6 +6088,7 @@ assertKeys(reviewPlan, [
   "OutputRoot",
   "PriorArtWindow",
   "ProvenanceWindow",
+  "ResearchTransport",
   "ReviewDate",
   "RememberPreferences",
   "RunId",
@@ -4167,7 +6120,7 @@ assertKeys(reviewPlan.PriorArtWindow, [
   "LookbackMonths",
   "StartDate",
 ], "review plan prior-art window");
-if (reviewPlan.SchemaVersion !== 2 ||
+if (reviewPlan.SchemaVersion !== 3 ||
     reviewPlan.ApprovalHash !== expectedApprovalHash ||
     reviewPlan.RunId !== runId ||
     reviewPlan.WorkspaceRoot !== expectedWorkspaceRoot ||
@@ -4182,6 +6135,18 @@ if (reviewPlan.SchemaVersion !== 2 ||
     reviewPlan.FleetMode !== "native" ||
     reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
+    reviewPlan.ResearchTransport?.Enabled !== true ||
+    reviewPlan.ResearchTransport?.Mode !==
+      "dedicated-worker-local-stdio-mcp" ||
+    reviewPlan.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+    reviewPlan.ResearchTransport?.GeneralWebSearch?.ProviderId !==
+      "duckduckgo-html-v1" ||
+    reviewPlan.ResearchTransport?.GeneralWebSearch?.Available !== true ||
+    reviewPlan.ResearchTransport?.AnonymousGitHub?.Authentication !== "none" ||
+    reviewPlan.ResearchTransport?.ResourceProfile?.RequestBudget !== 1000 ||
+    !/^[0-9a-f]{64}$/.test(
+      reviewPlan.ResearchTransport?.PolicyDigest ?? "",
+    ) ||
     reviewPlan.PriorArtWindow?.Enabled !== true ||
     reviewPlan.PriorArtWindow?.LookbackMonths !== 6 ||
     reviewPlan.PriorArtWindow?.StartDate !== expectedPriorArtStartDate ||
@@ -4225,6 +6190,16 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("Provenance lookback:") ||
     !reviewPlanText.includes("Provenance window (local calendar):") ||
     !reviewPlanText.includes(`${provenanceLookback} months`) ||
+    !reviewPlanText.includes("Research transport:") ||
+    !reviewPlanText.includes("dedicated-worker-local-stdio-mcp") ||
+    !reviewPlanText.includes("Research cookies:") ||
+    !reviewPlanText.includes("ephemeral") ||
+    !reviewPlanText.includes("Raw Set-Cookie:") ||
+    !reviewPlanText.includes("private per-repository ledger") ||
+    !reviewPlanText.includes("General web search:") ||
+    !reviewPlanText.includes(
+      "duckduckgo-html-v1 (available; anonymous fixed HTTPS adapter)",
+    ) ||
     !reviewPlanText.includes("Requested commit:") ||
     !reviewPlanText.includes("7fd1a60b01f91b314f59955a4e4d4e80d8edf11d")) {
   throw new Error("run-level review plan text is incomplete");
@@ -4234,7 +6209,9 @@ if (!stdout.includes("Generated at (UTC):") ||
     !stdout.includes("Approval hash:") ||
     !stdout.includes(expectedApprovalHash) ||
     !stdout.includes("Prior-art window (local calendar):") ||
-    !stdout.includes("Provenance window (local calendar):")) {
+    !stdout.includes("Provenance window (local calendar):") ||
+    !stdout.includes("Research transport:") ||
+    !stdout.includes("Research cookies:")) {
   throw new Error("run stdout is missing expected review-plan labels");
 }
 for (const line of [
@@ -4258,8 +6235,9 @@ if (!Array.isArray(manifest) || manifest.length !== 1 ||
     manifest[0].Session.Id !== state.Session.Id) {
   throw new Error("manifest does not use the repository state schema");
 }
-if (manifest[0].SchemaVersion !== 3) {
-  throw new Error("manifest entry lost schema version 3");
+if (manifest[0].SchemaVersion !== 4 ||
+    manifest[0].Research?.Status !== "Completed") {
+  throw new Error("manifest entry lost schema version 4 research state");
 }
 assertProvenanceWindow(
   manifest[0].ProvenanceWindow,
@@ -4267,7 +6245,7 @@ assertProvenanceWindow(
   expectedProvenanceStartDate,
   reviewDate,
 );
-for (const key of ["Scope", "Paths", "Artifacts"]) {
+for (const key of ["Scope", "Paths", "Artifacts", "ResearchTransport"]) {
   if (!runState[key] || typeof runState[key] !== "object") {
     throw new Error(`run state ${key} is not an object`);
   }
@@ -4276,11 +6254,15 @@ if (!Array.isArray(runState.Repositories) ||
     runState.Repositories.length !== 1) {
   throw new Error("run state repository summary is invalid");
 }
-if (runState.SchemaVersion !== 3 ||
+if (runState.SchemaVersion !== 4 ||
     runState.Scope?.PublicResearch !== true ||
     runState.Scope?.ProvenanceResearch !== true ||
+    runState.ResearchTransport?.Enabled !== true ||
+    runState.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
     runState.Repositories[0].Source?.Kind !== "RemoteUrl" ||
-    runState.Repositories[0].RequestedCommit !== state.RequestedCommit) {
+    runState.Repositories[0].RequestedCommit !== state.RequestedCommit ||
+    runState.Repositories[0].ResearchStatus !== "Completed" ||
+    runState.Repositories[0].ResearchDirectory !== researchDirectory) {
   throw new Error("run state lost source-aware schema metadata");
 }
 if (runState.Paths?.ReadOnlyWorkspace !== path.join(expectedWorkspaceRoot, runId) ||
@@ -4316,6 +6298,35 @@ for (const name of [
   if (!fs.existsSync(path.join(repository, name))) {
     throw new Error(`missing artifact ${name}`);
   }
+  for (const pathName of [
+    researchDossierPath,
+    researchTimelinePath,
+    researchSessionPath,
+    researchErrorsPath,
+    researchStatePath,
+    networkSummaryPath,
+    networkEventsPath,
+    path.join(privateDirectory, "cookies.jsonl"),
+    path.join(privateDirectory, "body-manifest.jsonl"),
+  ]) {
+    if (!fs.existsSync(pathName)) {
+      throw new Error(`missing research artifact ${pathName}`);
+    }
+  }
+  if (researchState.SchemaVersion !== 1 ||
+      researchState.Status !== "Completed" ||
+      researchState.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+      researchState.Artifacts?.Dossier !== researchDossierPath ||
+      researchState.Artifacts?.NetworkSummary !== networkSummaryPath ||
+      researchState.Artifacts?.PrivateEvidence !== privateDirectory ||
+      networkSummary.Health !== "ready" ||
+      networkSummary.PolicyDigest !==
+        reviewPlan.ResearchTransport.PolicyDigest ||
+      networkSummary.CookieMode !== "ephemeral" ||
+      networkSummary.Requests?.SuccessfulPublicResponses !== 1 ||
+      networkSummary.ToolCalls?.Capabilities !== 1) {
+    throw new Error("research state or network summary contract is invalid");
+  }
 }
 for (const pathName of [
   reviewPlanJsonPath,
@@ -4329,20 +6340,105 @@ for (const pathName of [
     throw new Error(`missing run-level artifact ${pathName}`);
   }
 }
-if (!request.includes("TRUSTED WRAPPER-SUPPLIED GIT METADATA")) {
-  throw new Error("rendered request lacks trusted Git metadata");
+if (!request.includes(
+      "TRUSTED WRAPPER COLLECTION OF UNTRUSTED GIT METADATA",
+    ) ||
+    !request.includes("author and committer names") ||
+    !request.includes("selected commit") ||
+    !request.includes("attacker-controlled untrusted evidence")) {
+  throw new Error("rendered request misstates the Git metadata trust boundary");
+}
+const metadataStart = request.indexOf(
+  "TRUSTED WRAPPER COLLECTION OF UNTRUSTED GIT METADATA",
+);
+const metadataEnd = request.indexOf(
+  "\nValidated sanitized research dossier path:",
+  metadataStart,
+);
+if (metadataStart < 0 || metadataEnd < 0) {
+  throw new Error("rendered request metadata boundaries are missing");
+}
+const metadata = request.slice(metadataStart, metadataEnd);
+const metadataLines = metadata.split("\n");
+if (Buffer.byteLength(metadata, "utf8") > 65536) {
+  throw new Error("bounded Git metadata exceeds 64 KiB");
+}
+if (metadataLines.some((line) => Buffer.byteLength(line, "utf8") > 512)) {
+  throw new Error("bounded Git metadata contains an overlong rendered line");
+}
+const omittedCommitMatch = metadata.match(
+  /^\[RHYOLITE metadata truncation: ([0-9]+) older commit records omitted after field sanitization and whole-record bounds\]$/m,
+);
+if (!omittedCommitMatch) {
+  throw new Error("bounded Git metadata lacks its deterministic truncation marker");
+}
+const omittedCommitCount = Number.parseInt(omittedCommitMatch[1], 10);
+const countMetadataLines = (prefix) =>
+  metadataLines.filter((line) => line.startsWith(prefix)).length;
+const includedCommitCount = countMetadataLines(
+  "Commit object ID (attacker-controlled evidence):",
+);
+for (const prefix of [
+  "Author date (attacker-controlled evidence):",
+  "Author name (attacker-controlled evidence):",
+  "Committer name (attacker-controlled evidence):",
+  "Subject (attacker-controlled evidence):",
+  "Selected trailer values (attacker-controlled evidence):",
+]) {
+  if (countMetadataLines(prefix) !== includedCommitCount) {
+    throw new Error(`bounded Git metadata cut a commit record at ${prefix}`);
+  }
+}
+if (includedCommitCount <= 0 ||
+    includedCommitCount + omittedCommitCount !== 100) {
+  throw new Error("bounded Git metadata lost the latest-100 accounting");
+}
+if (!metadataLines.some((line) =>
+      line.startsWith(
+        "Author name (attacker-controlled evidence): Long hostile author ",
+      ) && line.endsWith("[email omitted]"))) {
+  throw new Error("long author identity was bounded before email redaction");
+}
+for (const fragment of [
+  "Committer name (attacker-controlled evidence): Example Committer",
+  "Selected trailer values (attacker-controlled evidence):",
+  "Co-authored-by: Fixture Collaborator <[email omitted]>",
+  "Generated-with: aider model fixture",
+  "[credential omitted]",
+  "<script>alert('trailer')</script>",
+  `$(touch '${hostileTrailerSentinel}')`,
+]) {
+  if (!request.includes(fragment)) {
+    throw new Error(`rendered request lost bounded Git evidence: ${fragment}`);
+  }
+}
+if (request.includes("collaborator@example.org") ||
+    request.includes("metadata-fixture-secret") ||
+    request.includes("boundary-crossing-email@example.org") ||
+    request.includes("committer-boundary-secret") ||
+    request.includes("trailer-boundary@example.org") ||
+    request.includes("__RHYOLITE_") ||
+    request.includes("Older commit 100 ") ||
+    fs.existsSync(hostileTrailerSentinel)) {
+  throw new Error("hostile or sensitive trailer evidence was not kept inert");
 }
 if (!request.includes("Initial & exact commit") ||
     request.includes("{{REPOSITORY_METADATA}}") ||
     request.includes("{{PROVENANCE_LOOKBACK_MONTHS}}") ||
-    request.includes("{{PROVENANCE_START_DATE}}")) {
+    request.includes("{{PROVENANCE_START_DATE}}") ||
+    request.includes("{{RESEARCH_DOSSIER_PATH}}") ||
+    request.includes("{{RESEARCH_NETWORK_SUMMARY_PATH}}") ||
+    request.includes("{{RESEARCH_TRANSPORT_INSTRUCTIONS}}")) {
   throw new Error("literal-safe Bash template rendering failed");
 }
 if (!request.includes(
       `Recent-prior-art window: ${expectedPriorArtStartDate} through ${reviewDate}`,
     ) ||
     !request.includes(`Provenance lookback months: ${provenanceLookback}`) ||
-    !request.includes(`Provenance start date: ${expectedProvenanceStartDate}`)) {
+    !request.includes(`Provenance start date: ${expectedProvenanceStartDate}`) ||
+    !request.includes("research-evidence/research.txt") ||
+    !request.includes("research-evidence/network-summary.json") ||
+    request.includes("/research/network/private")) {
   throw new Error("scope 3 request rendering lost provenance or prior-art dates");
 }
 const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
@@ -4358,6 +6454,14 @@ if (!handoff.includes("Source kind:\n\n    RemoteUrl")) {
 }
 if (!handoff.includes(`Html:\n\n    ${repository}/review.html`) ||
     !handoff.includes(`State:\n\n    ${repository}/state.json`) ||
+    !handoff.includes(`ResearchDossier:\n\n    ${researchDossierPath}`) ||
+    !handoff.includes(
+      `ResearchNetworkSummary:\n\n    ${networkSummaryPath}`,
+    ) ||
+    !handoff.includes(
+      `ResearchPrivateEvidence:\n\n    ${privateDirectory}`,
+    ) ||
+    !handoff.includes("sensitive tracking identifiers and hostile") ||
     !handoff.includes(`AgentState:\n\n    ${repository}/agent-state`)) {
   throw new Error("repository handoff omits artifact paths");
 }
@@ -4397,17 +6501,42 @@ for (const href of [
   if (!indexHtml.includes(href)) {
     throw new Error(`run HTML index is missing ${href}`);
   }
+  if (!indexHtml.includes("Private research evidence exists") ||
+      indexHtml.includes("cookies.jsonl") ||
+      indexHtml.includes("body-manifest.jsonl") ||
+      indexHtml.includes("/private/")) {
+    throw new Error("run HTML index exposes private research evidence");
+  }
 }
 const transcript = fs.readFileSync(path.join(repository, "session.md"), "utf8");
 if (!transcript.includes("    # Mock Copilot session")) {
   throw new Error("session transcript is not wrapped as inert Markdown");
 }
 const agentState = path.join(repository, "agent-state", "copilot-home");
-const settings = fs.readFileSync(path.join(agentState, "settings.json"), "utf8");
+const settingsText = fs.readFileSync(
+  path.join(agentState, "settings.json"),
+  "utf8",
+);
+const settings = JSON.parse(settingsText);
 const configText = fs.readFileSync(path.join(agentState, "config.json"), "utf8");
 const config = JSON.parse(configText.split("\n")
   .filter((line) => !line.trimStart().startsWith("//")).join("\n"));
-if (settings.includes("storeTokenPlaintext") ||
+for (const name of [
+  "explore",
+  "task",
+  "code-review",
+  "general-purpose",
+  "research",
+  "security-review",
+  "rubber-duck",
+]) {
+  const profile = settings.subagents?.agents?.[name];
+  if (profile?.effortLevel !== "max" ||
+      profile?.contextTier !== "long_context") {
+    throw new Error(`persisted ${name} subagent profile is not pinned`);
+  }
+}
+if (settingsText.includes("storeTokenPlaintext") ||
     Object.keys(config).length !== 0 ||
     !fs.existsSync(path.join(
       agentState, "session-state", "mock-session", "state.json")) ||
@@ -4434,6 +6563,7 @@ if ((fs.statSync(agentState).mode & 0o777) !== 0o700) {
   throw new Error("persisted Copilot home is not mode 700");
 }
 assertPrivateModes(agentState);
+assertPrivateModes(privateDirectory);
 function readFiles(root) {
   const values = [];
   for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
@@ -4452,6 +6582,291 @@ for (const forbidden of [
 ]) {
   if (persisted.includes(Buffer.from(forbidden))) {
     throw new Error(`persisted output contains authentication data: ${forbidden}`);
+  }
+}
+const privateCookie = "research-private-cookie-sentinel";
+const privateCookiePath = path.join(privateDirectory, "cookies.jsonl");
+if (!fs.readFileSync(privateCookiePath, "utf8").includes(privateCookie)) {
+  throw new Error("private raw cookie evidence was not retained");
+}
+function readPublicFiles(root) {
+  const values = [];
+  for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
+    const entryPath = path.join(root, entry.name);
+    if (entryPath === privateDirectory) continue;
+    if (entry.isDirectory()) values.push(...readPublicFiles(entryPath));
+    else values.push(fs.readFileSync(entryPath));
+  }
+  return values;
+}
+const publicArtifacts = Buffer.concat(readPublicFiles(repository));
+if (publicArtifacts.includes(Buffer.from(privateCookie))) {
+  throw new Error("raw cookie value escaped private research evidence");
+}
+JS
+
+for research_failure_case in capability zero-success; do
+    case "${research_failure_case}" in
+        capability)
+            research_failure_env='MOCK_RESEARCH_CAPABILITY_FAIL'
+            expected_research_status='ResearchCapabilityFailed'
+            expected_research_stage='research capability'
+            ;;
+        zero-success)
+            research_failure_env='MOCK_RESEARCH_ZERO_SUCCESS'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            ;;
+    esac
+    research_failure_output="${fixture_dir}/${research_failure_case}-research-output"
+    research_failure_workspace="${fixture_dir}/${research_failure_case}-research-workspace"
+    research_failure_plan="${fixture_dir}/${research_failure_case}-research-plan.json"
+    PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${research_failure_workspace}" \
+            --output-root "${research_failure_output}" \
+            --non-interactive \
+            --no-open-html \
+            --plan-only > "${research_failure_plan}"
+    research_failure_hash="$(
+        node -e \
+            'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+            "${research_failure_plan}"
+    )"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    research_failure_stdout="${fixture_dir}/${research_failure_case}-research.stdout"
+    research_failure_stderr="${fixture_dir}/${research_failure_case}-research.stderr"
+    if env \
+        "${research_failure_env}=1" \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_RUNTIME_LOG="${runtime_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${research_failure_workspace}" \
+            --output-root "${research_failure_output}" \
+            --expected-plan-hash "${research_failure_hash}" \
+            --non-interactive \
+            --no-open-html >"${research_failure_stdout}" \
+            2>"${research_failure_stderr}"; then
+        fail "Mock ${research_failure_case} research failure unexpectedly succeeded."
+    fi
+    grep -Fq "Stage: ${expected_research_stage}" \
+        "${research_failure_stdout}" ||
+        fail "Mock ${research_failure_case} research failure lost its stage."
+    grep -Fq "AGENT=rhyolite:repo-research-worker" "${mock_log}" &&
+        ! grep -Fq "AGENT=rhyolite:repo-review-worker" "${mock_log}" ||
+        fail "Main review worker started after ${research_failure_case} research failure."
+    research_failure_run="$(
+        find "${research_failure_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${research_failure_run}" \
+        "${expected_research_status}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, expectedStatus] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
+const research = path.join(repository, "research");
+const researchState = JSON.parse(fs.readFileSync(
+  path.join(research, "research-state.json"),
+  "utf8",
+));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(research, "network", "summary.json"),
+  "utf8",
+));
+if (state.Status !== expectedStatus ||
+    state.SchemaVersion !== 4 ||
+    state.Research?.Status !== expectedStatus ||
+    researchState.Status !== expectedStatus ||
+    runState.Status !== "Failed" ||
+    runState.Repositories[0].ResearchStatus !== expectedStatus ||
+    fs.existsSync(path.join(repository, "agent-state", "copilot-home")) ||
+    !fs.existsSync(path.join(research, "research-errors.txt")) ||
+    !fs.existsSync(path.join(research, "research-timeline.txt")) ||
+    !fs.existsSync(path.join(research, "research.txt")) ||
+    !fs.existsSync(path.join(research, "network", "private"))) {
+  throw new Error("research failure artifacts or status are invalid");
+}
+if (expectedStatus === "ResearchCapabilityFailed" &&
+    (summary.ToolCalls?.Capabilities !== 0 ||
+     summary.Requests?.SuccessfulPublicResponses !== 0)) {
+  throw new Error("capability failure summary is misleading");
+}
+if (expectedStatus === "ResearchFailed" &&
+    (summary.ToolCalls?.Capabilities !== 1 ||
+     summary.Requests?.SuccessfulPublicResponses !== 0)) {
+  throw new Error("zero-success research failure summary is misleading");
+}
+JS
+done
+
+source_failure_output="${fixture_dir}/source-failure-research-output"
+source_failure_workspace="${fixture_dir}/source-failure-research-workspace"
+source_failure_plan="${fixture_dir}/source-failure-research-plan.json"
+PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${source_failure_workspace}" \
+        --output-root "${source_failure_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only > "${source_failure_plan}"
+source_failure_hash="$(
+    node -e \
+        'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+        "${source_failure_plan}"
+)"
+: > "${mock_log}"
+: > "${mock_git_log}"
+if ! MOCK_RESEARCH_SOURCE_FAILURE=1 \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${source_failure_workspace}" \
+        --output-root "${source_failure_output}" \
+        --expected-plan-hash "${source_failure_hash}" \
+        --non-interactive \
+        --no-open-html >/dev/null 2>&1; then
+    fail 'Individual inaccessible research source incorrectly failed the run.'
+fi
+source_failure_run="$(
+    find "${source_failure_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - "${source_failure_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const run = process.argv[2];
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(repository, "research", "network", "summary.json"),
+  "utf8",
+));
+const dossier = fs.readFileSync(
+  path.join(repository, "research", "research.txt"),
+  "utf8",
+);
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "Completed" ||
+    state.Research?.Status !== "Completed" ||
+    summary.Requests?.SuccessfulPublicResponses !== 1 ||
+    summary.Requests?.FailedResponses !== 1 ||
+    !dossier.includes("https://independent.example.org/unavailable") ||
+    !dossier.includes("research limitation") ||
+    !report.includes("RESEARCH TRANSPORT OBSERVATIONS")) {
+  throw new Error("individual inaccessible source was not preserved as evidence");
+}
+JS
+
+multi_research_output="${fixture_dir}/multi-research-output"
+multi_research_workspace="${fixture_dir}/multi-research-workspace"
+multi_research_plan="${fixture_dir}/multi-research-plan.json"
+PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --repo https://github.com/githubtraining/hellogitworld \
+        --scope 2 \
+        --research-cookies ephemeral \
+        --throttle 1 \
+        --workspace-root "${multi_research_workspace}" \
+        --output-root "${multi_research_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only > "${multi_research_plan}"
+multi_research_hash="$(
+    node -e \
+        'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+        "${multi_research_plan}"
+)"
+: > "${mock_log}"
+: > "${mock_git_log}"
+if ! MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --repo https://github.com/githubtraining/hellogitworld \
+        --scope 2 \
+        --research-cookies ephemeral \
+        --throttle 1 \
+        --workspace-root "${multi_research_workspace}" \
+        --output-root "${multi_research_output}" \
+        --expected-plan-hash "${multi_research_hash}" \
+        --non-interactive \
+        --no-open-html >/dev/null 2>&1; then
+    fail 'Mock multi-repository research run failed.'
+fi
+multi_research_run="$(
+    find "${multi_research_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - "${multi_research_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const run = process.argv[2];
+const first = path.join(run, "github--octocat--hello-world");
+const second = path.join(run, "github--githubtraining--hellogitworld");
+const firstCookie = fs.readFileSync(
+  path.join(first, "research", "network", "private", "cookies.jsonl"),
+  "utf8",
+);
+const secondCookie = fs.readFileSync(
+  path.join(second, "research", "network", "private", "cookies.jsonl"),
+  "utf8",
+);
+if (!firstCookie.includes("research-private-cookie-sentinel-Hello-World") ||
+    firstCookie.includes("research-private-cookie-sentinel-hellogitworld") ||
+    !secondCookie.includes("research-private-cookie-sentinel-hellogitworld") ||
+    secondCookie.includes("research-private-cookie-sentinel-Hello-World")) {
+  throw new Error("research cookie evidence crossed repository boundaries");
+}
+for (const repository of [first, second]) {
+  const state = JSON.parse(fs.readFileSync(
+    path.join(repository, "state.json"),
+    "utf8",
+  ));
+  if (state.Status !== "Completed" ||
+      state.Research?.Status !== "Completed" ||
+      state.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral") {
+    throw new Error("multi-repository research state is incomplete");
   }
 }
 JS
@@ -4566,8 +6981,10 @@ const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
 if (state.Status !== "AccessPreflightFailed" ||
     state.ExitCode !== 128 ||
-    state.SchemaVersion !== 3 ||
+    state.SchemaVersion !== 4 ||
     state.Source?.Kind !== "RemoteUrl" ||
+    state.ResearchTransport?.Enabled !== false ||
+    state.Research?.Status !== "Disabled" ||
     state.Commit !== "" ||
     state.Paths.ReadOnlyCheckout !== "" ||
     state.Paths.VerificationClone !== "" ||
@@ -4699,8 +7116,10 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
 if (state.Status !== "CloneFailed" ||
     state.ExitCode !== 42 ||
-    state.SchemaVersion !== 3 ||
+    state.SchemaVersion !== 4 ||
     state.ProvenanceWindow !== null ||
+    state.ResearchTransport?.Enabled !== false ||
+    state.Research?.Status !== "Disabled" ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.Commit !== "" ||
     state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
@@ -4758,10 +7177,179 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "Completed" ||
-    !report.includes("Complete deterministic report recovered from the transcript.") ||
+    state.SchemaVersion !== 4 ||
+    state.ResearchTransport?.Enabled !== false ||
+    state.Research?.Status !== "Disabled" ||
+    fs.existsSync(path.join(repository, "research")) ||
+    !report.includes("The deterministic fixture satisfies the canonical report contract.") ||
     report.includes("Generated by GitHub Copilot CLI") ||
     errors.trim() !== "") {
   throw new Error("complete transcript fallback was not finalized truthfully");
+}
+JS
+
+for report_contract_case in \
+    missing-agent-targeting \
+    missing-provenance \
+    missing-provenance-field; do
+    case "${report_contract_case}" in
+        missing-agent-targeting)
+            report_contract_scope=1
+            report_contract_flag='MOCK_OMIT_AGENT_TARGETING=1'
+            report_contract_detail='AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT'
+            ;;
+        missing-provenance)
+            report_contract_scope=3
+            report_contract_flag='MOCK_OMIT_PROVENANCE=1'
+            report_contract_detail='GENERATED-CODE PROVENANCE ASSESSMENT'
+            ;;
+        missing-provenance-field)
+            report_contract_scope=3
+            report_contract_flag='MOCK_OMIT_PROVENANCE_FIELD=1'
+            report_contract_detail='Direct harness attribution:'
+            ;;
+    esac
+    report_contract_output="${fixture_dir}/${report_contract_case}-output"
+    report_contract_workspace="${fixture_dir}/${report_contract_case}-workspace"
+    report_contract_stdout="${fixture_dir}/${report_contract_case}.stdout"
+    report_contract_stderr="${fixture_dir}/${report_contract_case}.stderr"
+    if env \
+        "${report_contract_flag}" \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        COPILOT_GITHUB_TOKEN=mock-token \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope "${report_contract_scope}" \
+            --output-root "${report_contract_output}" \
+            --workspace-root "${report_contract_workspace}" \
+            --non-interactive \
+            --no-open-html >"${report_contract_stdout}" \
+            2>"${report_contract_stderr}"; then
+        fail "Mock ${report_contract_case} report unexpectedly passed validation."
+    fi
+    report_contract_run="$(
+        find "${report_contract_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${report_contract_run}" \
+        "${report_contract_detail}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, expectedDetail] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (state.Status !== "ReviewFailed" ||
+    runState.Status !== "Failed" ||
+    !errors.includes("Final report contract validation failed:") ||
+    !errors.includes(expectedDetail)) {
+  throw new Error(JSON.stringify({
+    expectedDetail,
+    repositoryStatus: state.Status,
+    runStatus: runState.Status,
+    errors,
+  }));
+}
+JS
+done
+
+invalid_utf8_output="${fixture_dir}/invalid-utf8-output"
+invalid_utf8_workspace="${fixture_dir}/invalid-utf8-workspace"
+invalid_utf8_stdout="${fixture_dir}/invalid-utf8.stdout"
+invalid_utf8_stderr="${fixture_dir}/invalid-utf8.stderr"
+if MOCK_INVALID_UTF8=1 \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${invalid_utf8_output}" \
+        --workspace-root "${invalid_utf8_workspace}" \
+        --non-interactive \
+        --no-open-html >"${invalid_utf8_stdout}" \
+        2>"${invalid_utf8_stderr}"; then
+    fail 'Mock invalid-UTF-8 report unexpectedly completed.'
+fi
+grep -Fq 'Stage: report validation' "${invalid_utf8_stdout}" ||
+    fail 'Invalid-UTF-8 report did not surface report validation failure.'
+invalid_utf8_run="$(
+    find "${invalid_utf8_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+python3 - "${invalid_utf8_run}" <<'PY'
+import json
+import pathlib
+import sys
+
+run = pathlib.Path(sys.argv[1])
+repository = run / "github--octocat--hello-world"
+state = json.loads((repository / "state.json").read_text(encoding="utf-8"))
+errors = (repository / "errors.txt").read_text(encoding="utf-8")
+report = (repository / "review.txt").read_text(encoding="utf-8")
+markdown = (repository / "review.md").read_text(encoding="utf-8")
+(repository / "review.html").read_text(encoding="utf-8")
+if (
+    state.get("Status") != "ReviewFailed"
+    or "Final report UTF-8 finalization failed:" not in errors
+    or "invalid UTF-8 at byte offset" not in errors
+    or "\ufffd" not in report
+    or "## Canonical report" not in markdown
+):
+    raise SystemExit("invalid UTF-8 report was not finalized explicitly and safely")
+PY
+
+finalization_downgrade_output="${fixture_dir}/finalization-downgrade-output"
+finalization_downgrade_workspace="${fixture_dir}/finalization-downgrade-workspace"
+finalization_downgrade_stdout="${fixture_dir}/finalization-downgrade.stdout"
+finalization_downgrade_stderr="${fixture_dir}/finalization-downgrade.stderr"
+if MOCK_CORRUPT_REPORT_AFTER_VALIDATION=1 \
+    MOCK_FINALIZATION_OUTPUT_ROOT="${finalization_downgrade_output}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${finalization_downgrade_output}" \
+        --workspace-root "${finalization_downgrade_workspace}" \
+        --non-interactive \
+        --no-open-html >"${finalization_downgrade_stdout}" \
+        2>"${finalization_downgrade_stderr}"; then
+    fail 'Artifact finalization downgrade returned a success-shaped run status.'
+fi
+finalization_downgrade_run="$(
+    find "${finalization_downgrade_output}" \
+        -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+node - "${finalization_downgrade_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const run = process.argv[2];
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (state.Status !== "ReviewFailed" ||
+    state.ExitCode !== 1 ||
+    runState.Status !== "Failed" ||
+    runState.Repositories[0].Status !== "ReviewFailed" ||
+    !errors.includes("Final report UTF-8 finalization failed:")) {
+  throw new Error("artifact finalization failure left success-shaped status");
 }
 JS
 
@@ -4808,8 +7396,10 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "ReviewFailed" ||
-    state.SchemaVersion !== 3 ||
+    state.SchemaVersion !== 4 ||
     state.ProvenanceWindow !== null ||
+    state.ResearchTransport?.Enabled !== false ||
+    state.Research?.Status !== "Disabled" ||
     !report.includes("Recovered but incomplete") ||
     !errors.includes("Incomplete report:")) {
   throw new Error("unterminated report was not preserved and marked failed");
@@ -4877,6 +7467,87 @@ if (state.Status !== expectedStatus ||
 }
 JS
 done
+
+interrupt_output="${fixture_dir}/interrupt-output"
+interrupt_workspace="${fixture_dir}/interrupt-workspace"
+interrupt_stdout="${fixture_dir}/interrupt.stdout"
+interrupt_stderr="${fixture_dir}/interrupt.stderr"
+interrupt_copilot_pid_file="${fixture_dir}/interrupt-copilot.pid"
+interrupt_child_pid_file="${fixture_dir}/interrupt-child.pid"
+MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_PID_FILE="${interrupt_copilot_pid_file}" \
+    MOCK_COPILOT_CHILD_PID_FILE="${interrupt_child_pid_file}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${interrupt_output}" \
+        --workspace-root "${interrupt_workspace}" \
+        --non-interactive \
+        --no-open-html >"${interrupt_stdout}" 2>"${interrupt_stderr}" &
+interrupt_runner_pid=$!
+interrupt_ready=0
+for attempt in $(seq 1 30); do
+    if [[ -s "${interrupt_copilot_pid_file}" &&
+        -s "${interrupt_child_pid_file}" ]]; then
+        interrupt_ready=1
+        break
+    fi
+    if ! kill -0 "${interrupt_runner_pid}" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if ((interrupt_ready == 0)); then
+    kill "${interrupt_runner_pid}" 2>/dev/null || true
+    wait "${interrupt_runner_pid}" 2>/dev/null || true
+    fail 'Interrupt fixture did not start its nested mock worker process tree.'
+fi
+set +e
+kill -TERM "${interrupt_runner_pid}"
+wait "${interrupt_runner_pid}"
+interrupt_exit=$?
+set -e
+[[ "${interrupt_exit}" -eq 143 ]] ||
+    fail "Interrupted runner returned ${interrupt_exit}, expected 143."
+for pid_file in \
+    "${interrupt_copilot_pid_file}" \
+    "${interrupt_child_pid_file}"; do
+    read -r interrupted_process_id < "${pid_file}"
+    if kill -0 "${interrupted_process_id}" 2>/dev/null; then
+        fail "Interrupted runner left process ${interrupted_process_id} alive."
+    fi
+done
+interrupt_run="$(
+    find "${interrupt_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+node - "${interrupt_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const run = process.argv[2];
+const repository = path.join(run, "github--octocat--hello-world");
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (runState.Status !== "Interrupted" ||
+    state.Status !== "Interrupted" ||
+    state.ExitCode !== 143 ||
+    state.Research?.Status !== "Disabled" ||
+    !errors.includes("Runner received TERM") ||
+    !errors.includes("terminated its tracked repository-review process tree")) {
+  throw new Error("interrupted runner did not persist truthful cancellation state");
+}
+JS
+grep -Fq 'Stage: user interruption' "${interrupt_stdout}" &&
+    grep -Fq 'Status Interrupted; exit code 143' "${interrupt_stdout}" &&
+    grep -Fq 'RHYOLITE PROGRESS | run | completed | Interrupted;' \
+        "${interrupt_stdout}" ||
+    fail 'Interrupted runner terminal output lost its cancellation boundary.'
 
 while IFS= read -r -d '' path; do
     if head -c 3 "${path}" | grep -q $'^\xEF\xBB\xBF'; then
