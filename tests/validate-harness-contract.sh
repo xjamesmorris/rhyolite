@@ -1023,6 +1023,18 @@ set -e
     fail "Copilot missing-section extraction returned ${missing_section_status}, expected 42."
 [[ ! -e "${missing_section_temp}" ]] ||
     fail 'Copilot missing-section extraction left its temporary file.'
+set +e
+rhyolite_harness_invoke \
+    harness_extract_final_report \
+    "${fallback_timeline}" \
+    "${missing_section_transcript}" \
+    "${missing_section_temp}" \
+    "${missing_section_report}" >/dev/null
+missing_section_invoke_status=$?
+set -e
+[[ "${missing_section_invoke_status}" -eq 1 &&
+    "${RHYOLITE_HARNESS_LAST_STATUS}" -eq 42 ]] ||
+    fail 'Guarded harness invocation did not preserve the adapter status 42.'
 
 isolation_fixture="${fixture_root}/copilot-events.txt"
 printf 'Copilot adapter has no structured event isolation file.\n' \

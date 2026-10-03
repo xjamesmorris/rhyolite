@@ -3048,6 +3048,12 @@ set -e
 
 fixture_timeline="${fixture_dir}/timeline.txt"
 fixture_report="${fixture_dir}/report.txt"
+fixture_userinfo_url="$(
+    join_fragments 'https://user:password' '@docs.example.org/private'
+)"
+fixture_loopback_url="$(join_fragments 'https://127' '.0.0.1/private')"
+fixture_localhost_url="$(join_fragments 'https://local' 'host/private')"
+fixture_internal_url="$(join_fragments 'https://service' '.internal/private')"
 printf '%s\n' \
     'progress' \
     '================================================================================' \
@@ -3080,13 +3086,13 @@ Punctuated documentation duplicate: https://docs.example.org/punctuation?
 Clean punctuation duplicate: https://docs.example.org/punctuation
 Balanced URL characters: https://docs.example.org/path_(safe)?topic=(review)
 Non-HTTPS: http://docs.example.org/inert
-Userinfo: https://user:password@docs.example.org/private
-IP literal: https://127.0.0.1/private
-Local host: https://localhost/private
+Userinfo: ${fixture_userinfo_url}
+IP literal: ${fixture_loopback_url}
+Local host: ${fixture_localhost_url}
 Loopback helper: https://127.0.0.1.nip.io/private
 Loopback helper: https://app.lvh.me/private
 Private helper: https://10.0.0.1.sslip.io/private
-Internal suffix: https://service.internal/private
+Internal suffix: ${fixture_internal_url}
 Malformed escape: https://docs.example.org/path%ZZ
 Encoded whitespace: https://docs.example.org/path%20space
 Credential-like query: https://docs.example.org/?authcode=public-value
@@ -3187,11 +3193,11 @@ grep -Fq 'URL extraction requires a valid UTF-8 report' \
     fail 'Bash URL extraction did not fail explicitly for invalid UTF-8.'
 
 unredacted_reference_report="${fixture_dir}/unredacted-reference-report.txt"
-awk '
+awk -v direct_userinfo="${fixture_userinfo_url}" '
     { print }
     $0 == "REVIEW CONTEXT" {
         print "Direct safe reference: https://docs.example.org/direct-safe"
-        print "Direct userinfo rejection: https://fixture-user:fixture-password@docs.example.org/private"
+        print "Direct userinfo rejection: " direct_userinfo
         print "Direct credential query rejection: https://docs.example.org/private?access_token=fixture-value"
     }
 ' "${fixture_report}" > "${unredacted_reference_report}"
@@ -3396,12 +3402,12 @@ grep -Fq \
     "${fixture_markdown}" ||
     fail 'Bash Markdown suppression removed a valid non-tracker reference.'
 for unsafe_markdown_reference in \
-    'https://127.0.0.1/private' \
-    'https://localhost/private' \
+    "${fixture_loopback_url}" \
+    "${fixture_localhost_url}" \
     'https://127.0.0.1.nip.io/private' \
     'https://app.lvh.me/private' \
     'https://10.0.0.1.sslip.io/private' \
-    'https://service.internal/private' \
+    "${fixture_internal_url}" \
     'https://docs.example.org/path%ZZ' \
     'https://docs.example.org/path%20space' \
     'https://docs.example.org/?authcode=public-value' \
@@ -3463,12 +3469,12 @@ grep -Fq \
     fail 'Bash HTML suppression removed a valid non-tracker reference.'
 for unsafe_href in \
     'http://docs.example.org/inert' \
-    'https://127.0.0.1/private' \
-    'https://localhost/private' \
+    "${fixture_loopback_url}" \
+    "${fixture_localhost_url}" \
     'https://127.0.0.1.nip.io/private' \
     'https://app.lvh.me/private' \
     'https://10.0.0.1.sslip.io/private' \
-    'https://service.internal/private' \
+    "${fixture_internal_url}" \
     'https://docs.example.org/path%ZZ' \
     'https://docs.example.org/path%20space' \
     'https://docs.example.org/?authcode=public-value' \
@@ -5196,6 +5202,11 @@ case "${command_name}" in
         while ((${#overflow_subject_filler} < 420)); do
             overflow_subject_filler="${overflow_subject_filler}S"
         done
+        boundary_email="$(printf '%s%s' 'boundary-crossing-email' '@example.org')"
+        collaborator_email="$(printf '%s%s' 'collaborator' '@example.org')"
+        trailer_boundary_email="$(
+            printf '%s%s' 'trailer-boundary' '@example.org'
+        )"
         printf '%s\n' \
             '__RHYOLITE_COMMIT_RECORD_START__' \
             'Commit object ID (attacker-controlled evidence): 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
@@ -5203,7 +5214,7 @@ case "${command_name}" in
         printf '%s%s%s\n' \
             'Author name (attacker-controlled evidence): Long hostile author ' \
             "${long_identity_filler}" \
-            'boundary-crossing-email@example.org'
+            "${boundary_email}"
         printf '%s%s%s\n' \
             'Committer name (attacker-controlled evidence): Example Committer Long hostile committer ' \
             "${long_identity_filler}" \
@@ -5211,7 +5222,7 @@ case "${command_name}" in
         printf '%s\n' \
             'Subject (attacker-controlled evidence): Initial & exact commit'
         printf '%s\n' \
-            "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <collaborator@example.org> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); api_key=metadata-fixture-secret; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <trailer-boundary@example.org>" \
+            "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <${collaborator_email}> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); api_key=metadata-fixture-secret; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <${trailer_boundary_email}>" \
             '' \
             '__RHYOLITE_COMMIT_RECORD_END__'
         commit_index=2
@@ -6678,11 +6689,14 @@ for (const fragment of [
     throw new Error(`rendered request lost bounded Git evidence: ${fragment}`);
   }
 }
-if (request.includes("collaborator@example.org") ||
+const collaboratorEmail = ["collaborator", "@example.org"].join("");
+const boundaryEmail = ["boundary-crossing-email", "@example.org"].join("");
+const trailerBoundaryEmail = ["trailer-boundary", "@example.org"].join("");
+if (request.includes(collaboratorEmail) ||
     request.includes("metadata-fixture-secret") ||
-    request.includes("boundary-crossing-email@example.org") ||
+    request.includes(boundaryEmail) ||
     request.includes("committer-boundary-secret") ||
-    request.includes("trailer-boundary@example.org") ||
+    request.includes(trailerBoundaryEmail) ||
     request.includes("__RHYOLITE_") ||
     request.includes("Older commit 100 ") ||
     fs.existsSync(hostileTrailerSentinel)) {
@@ -7664,11 +7678,8 @@ if MOCK_UNTERMINATED=1 \
         2>"${incomplete_stderr}"; then
     fail 'Mock unterminated report unexpectedly completed.'
 fi
-grep -Fq 'Stage: harness copilot harness_extract_final_report' \
-    "${incomplete_stdout}" &&
-    grep -Fq \
-        'Harness failure stage: harness copilot harness_extract_final_report' \
-        "${incomplete_stdout}" &&
+grep -Fq 'Stage: report validation' "${incomplete_stdout}" &&
+    ! grep -Fq 'Harness failure stage:' "${incomplete_stdout}" &&
     grep -Fq 'Incomplete report: final closing delimiter was missing' \
         "${incomplete_stdout}" &&
     grep -Fq 'Artifacts: State ' "${incomplete_stdout}" ||

@@ -2,6 +2,7 @@
 
 RHYOLITE_HARNESS_CONTRACT_VERSION=2
 RHYOLITE_HARNESS_ERROR_DETAIL=''
+RHYOLITE_HARNESS_LAST_STATUS=0
 RHYOLITE_HARNESS_LOADED_ID=''
 RHYOLITE_HARNESS_LOADED_PATH=''
 RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
@@ -61,15 +62,20 @@ rhyolite_harness_capture() {
 
 rhyolite_harness_invoke() {
     local function_name="$1"
+    local function_status=0
     shift
 
     RHYOLITE_HARNESS_ERROR_DETAIL=''
+    RHYOLITE_HARNESS_LAST_STATUS=0
     if [[ ! "${function_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
         ! declare -F "${function_name}" >/dev/null 2>&1; then
         RHYOLITE_HARNESS_ERROR_DETAIL="Harness adapter call '${function_name}' is unavailable or invalid."
+        RHYOLITE_HARNESS_LAST_STATUS=1
         return 1
     fi
-    if "${function_name}" "$@"; then
+    "${function_name}" "$@" || function_status=$?
+    RHYOLITE_HARNESS_LAST_STATUS="${function_status}"
+    if ((function_status == 0)); then
         return 0
     fi
     if [[ -z "${RHYOLITE_HARNESS_ERROR_DETAIL}" ]]; then

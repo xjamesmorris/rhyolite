@@ -244,8 +244,10 @@ GITHUB_COPILOT_API_TOKEN
 The adapter keeps the existing worker restrictions, including the read-only
 worker agent, maximum reasoning/context settings, disabled custom
 instructions and built-in MCPs, denied write and shell tools, disabled
-temporary-directory access and remote export, and optional public URL access
-only when public research is enabled.
+temporary-directory access and remote export, and no direct public URL access.
+When public research is enabled, only the dedicated research worker reaches
+the network, and only through the constrained local stdio broker; the main
+review worker receives a validated sanitized dossier and network summary.
 
 The child environment removes inherited Copilot allow-all state and inherited
 skill/custom-instruction discovery variables. The isolated runtime home keeps

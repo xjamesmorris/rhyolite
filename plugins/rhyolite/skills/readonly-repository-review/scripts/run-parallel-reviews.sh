@@ -4733,6 +4733,7 @@ EOF
         if ((report_extracted == 0)) ||
             ! report_has_closing_delimiter "${report_path}"; then
             if [[ -s "${transcript_plain_path}" ]]; then
+                local transcript_extraction_status=0
                 if rhyolite_harness_invoke harness_extract_final_report \
                     "${timeline_path}" \
                     "${transcript_plain_path}" \
@@ -4752,10 +4753,13 @@ EOF
                         report_extracted=1
                     fi
                 else
-                    printf '%s\n' \
-                        "Harness failure stage: harness ${HARNESS} harness_extract_final_report" \
-                        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness final-report extraction failed.}" \
-                        >> "${error_path}"
+                    transcript_extraction_status="${RHYOLITE_HARNESS_LAST_STATUS:-1}"
+                    if ((transcript_extraction_status != 42)); then
+                        printf '%s\n' \
+                            "Harness failure stage: harness ${HARNESS} harness_extract_final_report" \
+                            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness final-report extraction failed.}" \
+                            >> "${error_path}"
+                    fi
                 fi
             fi
             rm -f -- "${transcript_report_path}"

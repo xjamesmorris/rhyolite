@@ -216,7 +216,7 @@ The provider object is:
 ```json
 {
   "Id": "github-copilot",
-  "Host": "github.com",
+  "Host": "managed-provider",
   "ForwardedEnvVarNames": [
     "COPILOT_GITHUB_TOKEN",
     "GH_TOKEN",
@@ -436,7 +436,7 @@ schema-3 fields:
   "Harness": "copilot",
   "Provider": {
     "Id": "github-copilot",
-    "Host": "github.com",
+    "Host": "managed-provider",
     "ForwardedEnvVarNames": [
       "COPILOT_GITHUB_TOKEN",
       "GH_TOKEN",
@@ -483,7 +483,7 @@ to explain how the approved review ran:
   "Harness": "copilot",
   "Provider": {
     "Id": "github-copilot",
-    "Host": "github.com",
+    "Host": "managed-provider",
     "ForwardedEnvVarNames": [
       "COPILOT_GITHUB_TOKEN",
       "GH_TOKEN",
