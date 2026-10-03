@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 - Unreleased
+## 0.5.0 - 2026-10-03
 
 - Added a fixed, fail-closed Contract-v2 review-harness boundary while
   retaining GitHub Copilot as the only production runtime. Harness identity,
