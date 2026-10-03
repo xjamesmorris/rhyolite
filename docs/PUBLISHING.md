@@ -1,11 +1,13 @@
-# Publishing preparation
+# Publishing and release process
 
-This repository is prepared for a public release path, but it is not
-fully publishable until the gates below are closed.
+`xjamesmorris/rhyolite` is the canonical source and release repository.
+Release branches, commits, and stable tags originate here. Repository
+visibility is an independent administrative decision; changing visibility is
+not part of the release script or checklist.
 
-If a public release originates from a non-public preparation repository,
-never push that repository's history or tags directly to the public
-remote. Publish only from an approved exported tree.
+The clean export and preflight remain mandatory release gates. They validate
+the exact candidate tree but do not create a separate history or release
+repository.
 
 ## Mandatory pre-publication gates
 
@@ -37,12 +39,11 @@ remote. Publish only from an approved exported tree.
 8. Export and preflight the exact approved source ref with
    `tools/public-release/` before any public push or tag.
 
-## First public release
+## Canonical release workflow
 
-1. Approve the exact source ref to publish after completing review in the
-   preparation repository.
-2. Export the approved ref into an empty destination and run preflight. Bash
-   example:
+1. Prepare and review the release on a feature branch in this repository.
+2. Export the exact candidate commit into an empty destination and run
+   preflight. Bash example:
 
    ```bash
    tools/public-release/public-export.sh \
@@ -55,28 +56,13 @@ remote. Publish only from an approved exported tree.
    ```
 
 3. Review the export audit report and preflight output. Do not proceed until
-   the exported tree is approved.
-4. The target `xjamesmorris/rhyolite` repository may be created privately
-   before export, but it must remain empty. Initialize the approved exported
-   tree as a brand-new Git history and push its root commit:
-
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial public release"
-   git branch -M main
-   git remote add origin https://github.com/xjamesmorris/rhyolite.git
-   git push -u origin main
-   ```
-
-5. If the release was prepared in a non-public repository, do not push that
-   repository's branch, history, or tags to the public remote. Never use
-   `git push --mirror`, never create the first public tag from the
-   non-public repository, and never reuse non-public tags by pushing them
-   outward.
-6. After the exported tree is committed and pushed from the new public
-   repository, create and push the first public stable tag from that public
-   repository, for example `v0.4.1`.
+   the candidate tree is approved.
+4. Fast-forward `main` to the approved candidate commit. Do not rewrite
+   `main`, publish a different tree, or tag an unpushed commit.
+5. Push `main`, create the matching annotated stable tag on that exact commit,
+   and push the tag, for example `v0.5.0`.
+6. Verify that local `main`, `origin/main`, and the stable tag resolve to the
+   same commit and that every version surface matches the tag.
 7. Ask users to register the marketplace repository:
 
    ```text
@@ -110,34 +96,20 @@ remote. Publish only from an approved exported tree.
     and open-HTML decisions use Copilot CLI's numbered picker with its
     automatic final `Other` custom-answer option.
 
-Before announcing the release, make the repository public, enable
-GitHub private vulnerability reporting, verify the report form, and
-confirm anonymous marketplace installation. GitHub Copilot plugins are
-currently public-preview features.
-
-## Later public releases
-
-1. Make and review release changes in the preparation repository, then
-   approve the exact source ref to publish.
-2. Re-run `tools/public-release/public-export.*` and
-   `tools/public-release/public-preflight.*` for that approved ref.
-3. Update a checkout of the existing public repository from the approved
-   exported tree only, review the public diff there, commit the release in the
-   public repository, and push the public branch.
-4. Create and push the matching stable tag from the public repository commit
-   after the public branch is pushed.
-5. Never merge, rebase, fetch, or push non-public preparation history or
-   tags into the public repository. Public history must remain the
-   sequence of approved exported trees only.
+If public distribution is intended, separately verify repository visibility,
+GitHub private vulnerability reporting, support forms, anonymous marketplace
+installation, and update behavior before announcing the release. GitHub
+Copilot plugins are public-preview features.
 
 ## Versioning
 
 - Keep `VERSION`, `plugin.json`, and `marketplace.json` versions
   synchronized.
-- Create release tags in the public repository only, after the approved
-  exported tree is committed there.
+- Create release tags in this canonical repository only after the approved
+  commit is pushed to `origin/main`.
 - Record security or behavior changes in release notes.
-- Test installation from the remote public repository, not only a local path.
+- Test installation from the canonical remote repository or tag, not only a
+  local path.
 
 ## User update process
 
@@ -177,16 +149,16 @@ that onboarding notice.
    and run `tools/public-release/public-preflight.sh` against the exported tree.
 6. Install from a local marketplace fixture and smoke-test the namespaced
    agents from the approved exported tree.
-7. Apply the approved exported tree to the public repository checkout, review
-   the public diff, commit there, and push the public branch.
-8. Create and push the matching stable tag from the public repository, for
-   example `v0.4.1`.
+7. Fast-forward local `main` to the approved release commit and push
+   `origin/main`.
+8. Create and push the matching annotated stable tag on that exact commit,
+   for example `v0.5.0`.
 9. Verify a fresh remote install and a manual update from the prior public
    release, including the one-line load status, the large plaque after
    a review-start command, and the exact
    `help`/`status`/`explain scopes` setup behavior.
-10. If the source of truth is non-public, never push its branch, history,
-   or tags to the public remote.
+10. Verify the remote branch and tag resolve to the same commit, then remove
+   merged release branches.
 
-Only stable tags matching `vX.Y.Z` and created in the public repository should
-be treated as public release versions.
+Only stable tags matching `vX.Y.Z` and created in this canonical repository
+should be treated as release versions.
