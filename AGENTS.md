@@ -29,10 +29,10 @@ broker or research-policy changes, run
 Documentation-only changes require at least `git diff --check`.
 
 The full validator requires Node.js. The Bash review runner also requires
-Python 3, and anonymous clone enforcement requires Git 2.41 or newer. There is
-no separate lint command. The Linux validation gate covers the harness
-adapter/runner contract, JSON metadata, prompt contracts, safety flags, Bash
-syntax, mocked runner behavior, state and artifact output, and
+Python 3 and curl, and anonymous clone enforcement requires Git 2.41 or newer.
+There is no separate lint command. The Linux validation gate covers the
+harness adapter/runner contract, JSON metadata, prompt contracts, safety flags,
+Bash syntax, mocked runner behavior, state and artifact output, and
 UTF-8-without-BOM/LF-only text formatting.
 
 Use the existing package managers and repository tools. Add dependencies only
@@ -90,10 +90,10 @@ supported and must not drive new work.
   closed to local documentation.
 - `plugins/rhyolite/bin/rhyolite` is the supported reliable entrypoint. It
   resolves the packaged plugin root, selects a clean non-Git `-C` directory,
-  syntactically canonicalizes selected public sources, collects native
-  fleet/model settings, preselects `rhyolite:repo-review`, passes
-  `--mode interactive`, and submits a trusted `-i` setup block without
-  enabling allow-all mode.
+  syntactically canonicalizes selected public sources without stripping a
+  terminal `.git` endpoint, collects native fleet/model/reasoning/context
+  settings, preselects `rhyolite:repo-review`, passes `--mode interactive`,
+  and submits a trusted `-i` setup block without enabling allow-all mode.
 - The launcher exports narrow trusted immediate-start and harness markers so
   the display-only `sessionStart` helper replaces the ordinary load line with
   the launcher plaque and the prompt hook suppresses launcher/internal
@@ -102,15 +102,16 @@ supported and must not drive new work.
   incidental compatibility does not make macOS or BSD a supported platform.
   It creates user-only launcher state and does not persist the initial review
   request or source in launch context.
-- The trusted runner saves approved harness/fleet/model preferences per canonical
-  repository under user-only launcher state. `/rhyolite:start` remains the
+- The trusted runner saves approved harness/fleet/model/reasoning/context
+  preferences per canonical repository under user-only launcher state.
+  `/rhyolite:start` remains the
   in-session compatibility path.
 - `plugins/rhyolite/lib/harness/common.sh` owns safe harness selection,
   launcher-context validation, the fixed adapter registry, complete required
   function checks, guarded calls, and sanitized failures.
   `plugins/rhyolite/lib/harness/copilot.sh` is the only production adapter.
   Production runtime support remains Copilot-only.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v2 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v3 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -119,7 +120,8 @@ supported and must not drive new work.
 - `plugins/rhyolite/agents/repo-review.agent.md` is the user-facing command
   orchestrator. It reserves its embedded prompt-native panel for exact
   `help`, follows that panel with a live `CURRENT SETUP STATUS` block,
-  consumes trusted launcher source/fleet/model selections or asks through
+  consumes trusted launcher source/fleet/model/reasoning/context selections
+  or asks through
   guided setup, then asks for output and scope through numbered `ask_user`
   pickers. It surfaces exact `help`, `status`, and `explain scopes` setup
   intents and delegates every review to the bundled runner.
@@ -174,9 +176,12 @@ supported and must not drive new work.
   `env -i` environment.
 - `run-parallel-reviews.sh` is the supported trusted boundary. It validates
   public HTTPS sources, rejects local paths before `.git` inspection or
-  network access, performs fail-closed anonymous-access preflight through
-  pinned public DNS with credentials/helpers/proxies/redirects disabled,
-  anonymously clones and pins the exact commit, creates a read-only
+  network access, preserves the selected canonical URL as plan, approval, and
+  source identity, and performs fail-closed anonymous smart-Git preflight
+  through pinned public DNS with credentials, helpers, proxies, and automatic
+  curl/Git redirects disabled. During execution only, it may follow at most
+  three explicit same-origin HTTP 301 discovery hops before anonymously
+  cloning and pinning the exact commit. It then creates a read-only
   `.git`-free snapshot, supplies bounded Git metadata, creates isolated
   harness homes, and invokes workers with write/shell/custom
   instructions/built-in MCPs disabled.
@@ -229,18 +234,34 @@ supported and must not drive new work.
   allow-all settings, or enable public URL access by default.
 - Rhyolite accepts only anonymously readable public HTTPS Git repository
   URLs. Reject local paths before `.git` inspection, origin/HEAD resolution,
-  DNS lookup, or network access.
+  DNS lookup, or network access. Preserve a selected terminal `.git` endpoint
+  in the canonical plan, approval hash, persisted state, and preference
+  identity.
 - Keep canonical, symlink-aware separation between clone, snapshot, runtime
   home, and writable output roots. Unsafe URLs, non-public DNS answers,
   credential or proxy inheritance, path overlap, incomplete reports, and
   cleanup failures fail closed.
 - Anonymous Git operations disable SSH, plaintext HTTP, embedded credentials,
-  credential helpers, netrc, inherited auth variables, proxies, and
-  redirects. DNS answers are public and pinned.
+  credential helpers, netrc, inherited auth variables, proxies, and automatic
+  curl/Git redirects. The runner may manually process only HTTP 301 smart-Git
+  discovery redirects, with at most three hops, when every target retains the
+  original HTTPS origin, compared as normalized DNS host plus effective
+  numeric port; host comparison is case-insensitive, implicit port 443 equals
+  explicit port 443, and changed hosts, ports, or subdomains are cross-origin.
+  It rejects every other 3xx, downgrade, credentials,
+  IP/local/reserved/private destination, unsafe encoding, query, fragment, or
+  path, loop, and hop exhaustion before following. The original all-public DNS
+  answers remain pinned for every discovery hop and later Git `ls-remote`,
+  clone, and fetch. Any final same-origin effective endpoint is internal
+  transport state and never replaces the selected source in the plan,
+  approval, persisted state, or preferences.
 - The runner owns repository validation, clone and snapshot isolation, plan
   approval, worker restrictions, redaction, artifact schemas, and failure
   mapping. A harness adapter may translate one known CLI only; it may not
   weaken these controls.
+- curl is a trusted-runner-only Git execution preflight dependency. Its use
+  does not grant web access to child agents, enable research, or change the
+  scope-1 no-research contract.
 - Keep onboarding hooks display-only. A command hook may recognize only
   trusted Rhyolite start markers/commands and emit the plaque. It must not
   mutate prompts, auto-select sessions, use network/Git, write files, or
@@ -316,9 +337,9 @@ supported and must not drive new work.
   cookie replay, private raw Set-Cookie retention, private unsupported-body
   retention, and network-log policy. Scope 1 fixes the object to disabled and
   clears stale cookie consent.
-- Harness Contract v2 is implemented. It uses plan schema 4 and state schema
-  5, makes
-  `Harness`, validated `Provider`, and `ReasoningEffort` approval-bound, and
+- Harness Contract v3 is implemented. It uses plan schema 5 and state schema
+  6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
+  `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
   `ForwardedEnvVarNames`. Follow `docs/ADDING-A-HARNESS.md`; do not claim v2
   is implemented until runtime and tests land together.
@@ -350,7 +371,7 @@ supported and must not drive new work.
   capability values, malformed provider summaries, and adapter-function
   failures stop the operation with sanitized nonzero errors.
 - Production remains Copilot-only until a separately approved adapter
-  satisfies every Contract-v2 requirement, negative test, end-to-end test,
+  satisfies every Contract-v3 requirement, negative test, end-to-end test,
   documentation update, packaging review, and release requirement.
 - A test no-op adapter belongs only under `tests/fixtures`. It is never a
   production registry entry, launcher option, plugin asset, marketplace
@@ -365,9 +386,10 @@ supported and must not drive new work.
 - Adapter output is data. Do not evaluate it, build shell command strings,
   accept success-shaped fallbacks, copy broad runtime homes, or expose secret
   values in plans, state, logs, handoffs, or provider summaries.
-- Plan-only resolution must not require the harness CLI or prepare runtime
-  authentication. Execution performs those checks only after the approved
-  plan still matches.
+- Plan-only resolution is syntax-only and offline. It must not require curl,
+  DNS, Git transport, the harness CLI, or runtime authentication, and it must
+  preserve the selected source URL unchanged. Execution performs transport and
+  authentication checks only after the approved plan still matches.
 
 ## Release contract
 

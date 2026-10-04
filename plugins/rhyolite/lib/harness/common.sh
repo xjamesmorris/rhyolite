@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=2
+RHYOLITE_HARNESS_CONTRACT_VERSION=3
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 RHYOLITE_HARNESS_LOADED_ID=''
@@ -12,9 +12,15 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_require_cli
     harness_capability
     harness_default_model
+    harness_list_models
     harness_validate_model_id
     harness_model_choices
     harness_max_reasoning_effort
+    harness_reasoning_effort_choices
+    harness_validate_reasoning_effort
+    harness_default_context_tier
+    harness_context_choices
+    harness_validate_context_tier
     harness_auth_secret_env_vars
     harness_login_remediation
     harness_provider_summary
@@ -30,6 +36,10 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_sanitize_runtime_home
     harness_allow_all_detected
 )
+
+rhyolite_harness_list_registered() {
+    printf '%s\n' copilot
+}
 
 rhyolite_harness_set_error() {
     RHYOLITE_HARNESS_ERROR_DETAIL="$1"

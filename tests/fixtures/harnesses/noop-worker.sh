@@ -8,6 +8,7 @@ session_name=''
 session_id=''
 model=''
 reasoning_effort=''
+context_tier=''
 transcript_path=''
 
 while (($# > 0)); do
@@ -32,6 +33,10 @@ while (($# > 0)); do
             reasoning_effort="${2-}"
             shift 2
             ;;
+        --context)
+            context_tier="${2-}"
+            shift 2
+            ;;
         --transcript)
             transcript_path="${2-}"
             shift 2
@@ -47,6 +52,7 @@ done
 [[ -n "${session_name}" && -n "${session_id}" ]]
 [[ "${model}" == 'noop-fixture-model' ]]
 [[ "${reasoning_effort}" == 'max' ]]
+[[ "${context_tier}" == 'long_context' ]]
 [[ -n "${transcript_path}" ]]
 [[ -n "${NOOP_RUNTIME_HOME:-}" ]]
 [[ -f "${NOOP_RUNTIME_HOME}/fixture-runtime.json" ]]

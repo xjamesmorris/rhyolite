@@ -23,13 +23,15 @@ copilot_forwarded_env_var_names() {
 copilot_write_settings() {
     local settings_path="$1"
     local store_token_plaintext="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
 
     {
         printf '{\n'
         if ((store_token_plaintext)); then
             printf '  "storeTokenPlaintext": true,\n'
         fi
-        cat <<'EOF'
+        cat <<EOF
   "disableAllHooks": true,
   "customAgents": {
     "defaultLocalOnly": true
@@ -37,32 +39,39 @@ copilot_write_settings() {
   "subagents": {
     "agents": {
       "explore": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "task": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "code-review": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "general-purpose": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "research": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "security-review": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "rubber-duck": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       }
     }
   }
@@ -108,19 +117,129 @@ harness_default_model() {
     printf '%s\n' 'gpt-5.6-sol'
 }
 
+harness_list_models() {
+    local help_output
+    local model
+    local found=0
+    local -A seen=()
+
+    command -v copilot >/dev/null 2>&1 || {
+        rhyolite_harness_set_error 'copilot is required to list available models.'
+        return 1
+    }
+    help_output="$(copilot help config 2>/dev/null)" || {
+        rhyolite_harness_set_error \
+            'Copilot did not return its available model catalog.'
+        return 1
+    }
+    while IFS= read -r model; do
+        [[ "${model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+            rhyolite_harness_set_error \
+                'Copilot returned an unsafe model identifier.'
+            return 1
+        }
+        [[ -z "${seen[${model}]+x}" ]] || continue
+        seen["${model}"]=1
+        printf '%s\n' "${model}"
+        found=1
+    done < <(
+        printf '%s\n' "${help_output}" |
+            awk '
+                /^[[:space:]]*`model`:/ {
+                    in_model = 1
+                    next
+                }
+                in_model &&
+                    /^[[:space:]]*-[[:space:]]*"[^"]+"[[:space:]]*$/ {
+                    value = $0
+                    sub(/^[[:space:]]*-[[:space:]]*"/, "", value)
+                    sub(/"[[:space:]]*$/, "", value)
+                    print value
+                    next
+                }
+                in_model && /^[[:space:]]*`[^`]+`:/ {
+                    exit
+                }
+            '
+    )
+    ((found)) || {
+        rhyolite_harness_set_error \
+            'Copilot returned an empty available model catalog.'
+        return 1
+    }
+}
+
 harness_validate_model_id() {
-    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+    local requested_model="$1"
+    local available_models
+    local available_model
+
+    [[ "${requested_model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+        rhyolite_harness_set_error \
+            'The model identifier contains unsupported characters.'
+        return 1
+    }
+    if ! available_models="$(harness_list_models)"; then
+        rhyolite_harness_set_error \
+            'Copilot model-catalog discovery failed during model validation.'
+        return 1
+    fi
+    while IFS= read -r available_model; do
+        [[ "${available_model}" == "${requested_model}" ]] && return 0
+    done <<< "${available_models}"
+    rhyolite_harness_set_error \
+        "Model '${requested_model}' is not in Copilot's available model catalog."
 }
 
 harness_model_choices() {
     printf '%s\n' \
         'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' \
-        'Claude Fable 5 - claude-fable-5'
+        'Claude Fable 5 - claude-fable-5' \
+        'List available model IDs'
 }
 
 harness_max_reasoning_effort() {
-    harness_validate_model_id "$1" || return 1
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
     printf '%s\n' 'max'
+}
+
+harness_reasoning_effort_choices() {
+    printf '%s\n' \
+        'Maximum reasoning (Recommended) - max' \
+        'Extra-high reasoning - xhigh' \
+        'High reasoning - high'
+}
+
+harness_validate_reasoning_effort() {
+    case "$1" in
+        high|xhigh|max) return 0 ;;
+        *)
+            rhyolite_harness_set_error \
+                'Reasoning effort must be high, xhigh, or max.'
+            return 1
+            ;;
+    esac
+}
+
+harness_default_context_tier() {
+    printf '%s\n' 'long_context'
+}
+
+harness_context_choices() {
+    printf '%s\n' \
+        'Long context (Recommended) - long_context' \
+        'Default context - default'
+}
+
+harness_validate_context_tier() {
+    case "$1" in
+        default|long_context) return 0 ;;
+        *)
+            rhyolite_harness_set_error \
+                'Context tier must be default or long_context.'
+            return 1
+            ;;
+    esac
 }
 
 harness_auth_secret_env_vars() {
@@ -221,6 +340,8 @@ PY
 
 harness_prepare_worker_home() {
     local runtime_home="$1"
+    local reasoning_effort="$2"
+    local context_tier="$3"
 
     COPILOT_RUNTIME_HOME="${runtime_home}"
     chmod 700 -- "${runtime_home}" || {
@@ -231,7 +352,9 @@ harness_prepare_worker_home() {
 
     if ! copilot_write_settings \
         "${runtime_home}/settings.json" \
-        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}"; then
+        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}" \
+        "${reasoning_effort}" \
+        "${context_tier}"; then
         rhyolite_harness_set_error \
             'Could not write temporary Copilot settings.'
         return 1
@@ -263,10 +386,11 @@ harness_worker_argv() {
     local session_id="$5"
     local model="$6"
     local reasoning_effort="$7"
-    local authentication_variables="$8"
-    local available_tools="$9"
-    local transcript_path="${10}"
-    local enable_public_research="${11}"
+    local context_tier="$8"
+    local authentication_variables="$9"
+    local available_tools="${10}"
+    local transcript_path="${11}"
+    local enable_public_research="${12}"
 
     output_arguments=(
         -C "${session_root}"
@@ -276,7 +400,7 @@ harness_worker_argv() {
         --agent rhyolite:repo-review-worker
         --model "${model}"
         --reasoning-effort "${reasoning_effort}"
-        --context long_context
+        --context "${context_tier}"
         --no-ask-user
         --no-color
         --no-custom-instructions
@@ -439,6 +563,8 @@ harness_verify_isolation() {
 harness_persist_agent_state() {
     local runtime_home="$1"
     local agent_state_directory="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
     local copilot_home_path="${agent_state_directory}/copilot-home"
     local state_entry
     local source_entry
@@ -459,7 +585,9 @@ harness_persist_agent_state() {
     }
     if ! copilot_write_settings \
         "${copilot_home_path}/settings.json" \
-        0; then
+        0 \
+        "${reasoning_effort}" \
+        "${context_tier}"; then
         rhyolite_harness_set_error \
             'Could not write persisted Copilot settings.'
         return 1

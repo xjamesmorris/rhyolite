@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Validate every selected review model against the live model catalog exposed
+  by the installed Copilot CLI. The launcher and guided setup can list exact
+  available IDs, including `gpt-6-sol` when present, and runtime agent
+  frontmatter no longer overrides the validated CLI model.
+- Added approval-bound reasoning-effort and context-tier selection with
+  explicit confirmation/modification flows. Model, effort, and context now
+  propagate through launcher preferences, plan hashes, workers, nested-agent
+  settings, state, manifests, and handoffs.
+- Advanced the harness contract to version 3, plan schema to 5, state schema
+  to 6, and launcher preferences to schema 3. Launcher and runner help now
+  list the registered `copilot` harness while preserving `--harness ID`
+  selection.
+
 ## 0.5.0 - 2026-10-03
 
 - Added a fixed, fail-closed Contract-v2 review-harness boundary while

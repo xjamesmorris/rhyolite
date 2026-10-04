@@ -2,7 +2,6 @@
 name: repo-review-worker
 description: Performs one write-disabled repository analysis inside Rhyolite's trusted repo-review runner.
 tools: ["read", "search", "agent"]
-model: gpt-5.6-sol
 disable-model-invocation: true
 user-invocable: false
 ---

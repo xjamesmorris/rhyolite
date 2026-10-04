@@ -4,6 +4,18 @@ rhyolite_ascii_lower() {
     printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
 }
 
+rhyolite_normalize_https_port() {
+    local value="$1"
+    local significant
+
+    RHYOLITE_NORMALIZED_HTTPS_PORT=''
+    [[ "${value}" =~ ^0*([0-9]{1,5})$ ]] || return 1
+    significant="${BASH_REMATCH[1]}"
+    ((10#${significant} >= 1 && 10#${significant} <= 65535)) ||
+        return 1
+    RHYOLITE_NORMALIZED_HTTPS_PORT="$((10#${significant}))"
+}
+
 rhyolite_launcher_home() {
     if [ -n "${XDG_STATE_HOME:-}" ]; then
         case "${XDG_STATE_HOME}" in
@@ -44,6 +56,20 @@ rhyolite_valid_harness_id() {
 
 rhyolite_valid_model_id() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+}
+
+rhyolite_valid_reasoning_effort() {
+    case "$1" in
+        high|xhigh|max) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+rhyolite_valid_context_tier() {
+    case "$1" in
+        default|long_context) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 rhyolite_path_has_no_symlink_components() {
@@ -259,7 +285,7 @@ rhyolite_canonicalize_repository() {
     local input="$1"
     local value="${input}"
     local lower_value remainder authority path host port decoded_path
-    local lower_path suffix label
+    local suffix label
     local -a host_labels
 
     while [[ "${value}" == */ ]]; do
@@ -295,9 +321,9 @@ rhyolite_canonicalize_repository() {
     if [[ "${authority}" == *:* ]]; then
         host="${authority%%:*}"
         port="${authority#*:}"
-        [[ "${port}" =~ ^[0-9]+$ ]] || return 1
-        ((10#${port} >= 1 && 10#${port} <= 65535)) || return 1
-        if ((10#${port} == 443)); then
+        rhyolite_normalize_https_port "${port}" || return 1
+        port="${RHYOLITE_NORMALIZED_HTTPS_PORT}"
+        if ((port == 443)); then
             port=""
         fi
     fi
@@ -319,10 +345,6 @@ rhyolite_canonicalize_repository() {
     done
 
     path="${path%/}"
-    lower_path="$(rhyolite_ascii_lower "${path}")"
-    if [[ "${lower_path}" == *.git ]]; then
-        path="${path:0:${#path}-4}"
-    fi
     decoded_path="$(rhyolite_decode_url_path "${path}")" || return 1
     if [[ -z "${path#/}" ]] ||
         [[ "${decoded_path}" =~ [[:cntrl:][:space:]\\] ]]; then
@@ -407,11 +429,15 @@ rhyolite_read_preference() {
     local stored_harness
     local fleet_mode
     local model
+    local reasoning_effort
+    local context_tier
 
     RHYOLITE_PREFERENCE_STATUS='missing'
     RHYOLITE_PREFERENCE_HARNESS=''
     RHYOLITE_PREFERENCE_FLEET_MODE=''
     RHYOLITE_PREFERENCE_MODEL=''
+    RHYOLITE_PREFERENCE_REASONING_EFFORT=''
+    RHYOLITE_PREFERENCE_CONTEXT_TIER=''
     if ! rhyolite_valid_harness_id "${selected_harness}"; then
         RHYOLITE_PREFERENCE_STATUS='invalid'
         return 1
@@ -485,6 +511,8 @@ rhyolite_read_preference() {
                 return 1
             }
             stored_harness='copilot'
+            reasoning_effort='max'
+            context_tier='long_context'
             ;;
         2)
             awk '
@@ -528,6 +556,62 @@ rhyolite_read_preference() {
             stored_harness="$(
                 rhyolite_read_json_string "${preference_path}" harness
             )" || stored_harness=''
+            reasoning_effort='max'
+            context_tier='long_context'
+            ;;
+        3)
+            awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function starts_with(value, prefix) {
+                return substr(value, 1, length(prefix)) == prefix
+            }
+            function ends_with(value, suffix) {
+                return substr(value, length(value) - length(suffix) + 1) == suffix
+            }
+            NF {
+                count++
+                lines[count] = trim($0)
+            }
+            END {
+                if (count != 10 ||
+                    lines[1] != "{" ||
+                    lines[2] !~ /^"schemaVersion":[[:space:]]*3,$/ ||
+                    !starts_with(lines[3], "\"canonicalRepository\": \"") ||
+                    !ends_with(lines[3], "\",") ||
+                    !starts_with(lines[4], "\"harness\": \"") ||
+                    !ends_with(lines[4], "\",") ||
+                    !starts_with(lines[5], "\"fleetMode\": \"") ||
+                    !ends_with(lines[5], "\",") ||
+                    !starts_with(lines[6], "\"model\": \"") ||
+                    !ends_with(lines[6], "\",") ||
+                    !starts_with(lines[7], "\"reasoningEffort\": \"") ||
+                    !ends_with(lines[7], "\",") ||
+                    !starts_with(lines[8], "\"contextTier\": \"") ||
+                    !ends_with(lines[8], "\",") ||
+                    !starts_with(lines[9], "\"updatedAt\": \"") ||
+                    !ends_with(lines[9], "\"") ||
+                    lines[10] != "}") {
+                    exit 1
+                }
+            }
+        ' "${preference_path}" || {
+                RHYOLITE_PREFERENCE_STATUS='invalid'
+                return 1
+            }
+            stored_harness="$(
+                rhyolite_read_json_string "${preference_path}" harness
+            )" || stored_harness=''
+            reasoning_effort="$(
+                rhyolite_read_json_string \
+                    "${preference_path}" reasoningEffort
+            )" || reasoning_effort=''
+            context_tier="$(
+                rhyolite_read_json_string "${preference_path}" contextTier
+            )" || context_tier=''
             ;;
         *)
             RHYOLITE_PREFERENCE_STATUS='invalid'
@@ -548,7 +632,9 @@ rhyolite_read_preference() {
     if [[ "${stored_repository}" != "${canonical_repository}" ]] ||
         ! rhyolite_valid_harness_id "${stored_harness}" ||
         [[ "${fleet_mode}" != native && "${fleet_mode}" != standard ]] ||
-        ! rhyolite_valid_model_id "${model}"; then
+        ! rhyolite_valid_model_id "${model}" ||
+        ! rhyolite_valid_reasoning_effort "${reasoning_effort}" ||
+        ! rhyolite_valid_context_tier "${context_tier}"; then
         RHYOLITE_PREFERENCE_STATUS='invalid'
         return 1
     fi
@@ -561,6 +647,8 @@ rhyolite_read_preference() {
     RHYOLITE_PREFERENCE_HARNESS="${stored_harness}"
     RHYOLITE_PREFERENCE_FLEET_MODE="${fleet_mode}"
     RHYOLITE_PREFERENCE_MODEL="${model}"
+    RHYOLITE_PREFERENCE_REASONING_EFFORT="${reasoning_effort}"
+    RHYOLITE_PREFERENCE_CONTEXT_TIER="${context_tier}"
     return 0
 }
 
@@ -569,7 +657,9 @@ rhyolite_write_preference() {
     local harness="$2"
     local fleet_mode="$3"
     local model="$4"
-    local launcher_home="${5:-$(rhyolite_launcher_home)}"
+    local reasoning_effort="$5"
+    local context_tier="$6"
+    local launcher_home="${7:-$(rhyolite_launcher_home)}"
     local preference_anchor
     local preference_path
     local preference_dir
@@ -580,6 +670,8 @@ rhyolite_write_preference() {
     [[ "${fleet_mode}" == native || "${fleet_mode}" == standard ]] ||
         return 1
     rhyolite_valid_model_id "${model}" || return 1
+    rhyolite_valid_reasoning_effort "${reasoning_effort}" || return 1
+    rhyolite_valid_context_tier "${context_tier}" || return 1
     preference_path="$(
         rhyolite_preference_path "${canonical_repository}" "${launcher_home}"
     )" || return 1
@@ -605,11 +697,13 @@ rhyolite_write_preference() {
         umask 077
         cat <<EOF
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "canonicalRepository": "$(rhyolite_json_escape "${canonical_repository}")",
   "harness": "$(rhyolite_json_escape "${harness}")",
   "fleetMode": "$(rhyolite_json_escape "${fleet_mode}")",
   "model": "$(rhyolite_json_escape "${model}")",
+  "reasoningEffort": "$(rhyolite_json_escape "${reasoning_effort}")",
+  "contextTier": "$(rhyolite_json_escape "${context_tier}")",
   "updatedAt": "$(rhyolite_json_escape "${updated_at}")"
 }
 EOF

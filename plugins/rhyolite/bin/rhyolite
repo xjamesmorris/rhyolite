@@ -9,7 +9,8 @@ readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_S
 readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'
 readonly RHYOLITE_DEFAULT_MODEL='gpt-5.6-sol'
 readonly RHYOLITE_ALTERNATE_MODEL='claude-fable-5'
-readonly RHYOLITE_REASONING_EFFORT='max'
+readonly RHYOLITE_DEFAULT_REASONING_EFFORT='max'
+readonly RHYOLITE_DEFAULT_CONTEXT_TIER='long_context'
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 
@@ -371,7 +372,7 @@ prompt_for_fleet_mode() {
 
 prompt_for_model() {
     local remembered_model="$1"
-    local answer custom_model
+    local answer candidate_model
 
     while true; do
         printf '\nReview model\n' >&2
@@ -382,14 +383,19 @@ prompt_for_model() {
                 "${RHYOLITE_DEFAULT_MODEL}" >&2
             printf '  3. Claude Fable 5 - %s\n' \
                 "${RHYOLITE_ALTERNATE_MODEL}" >&2
-            printf '  4. Enter another frontier model ID\n' >&2
+            printf '  4. List available model IDs\n' >&2
+            printf '  5. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
             IFS= read -r answer
             case "${answer:-1}" in
-                1) printf '%s\n' "${remembered_model}"; return ;;
-                2) printf '%s\n' "${RHYOLITE_DEFAULT_MODEL}"; return ;;
-                3) printf '%s\n' "${RHYOLITE_ALTERNATE_MODEL}"; return ;;
-                4) ;;
+                1) candidate_model="${remembered_model}" ;;
+                2) candidate_model="${RHYOLITE_DEFAULT_MODEL}" ;;
+                3) candidate_model="${RHYOLITE_ALTERNATE_MODEL}" ;;
+                4)
+                    print_available_models
+                    continue
+                    ;;
+                5) candidate_model='' ;;
                 *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
             esac
         else
@@ -397,32 +403,153 @@ prompt_for_model() {
                 "${RHYOLITE_DEFAULT_MODEL}" >&2
             printf '  2. Claude Fable 5 - %s\n' \
                 "${RHYOLITE_ALTERNATE_MODEL}" >&2
-            printf '  3. Enter another frontier model ID\n' >&2
+            printf '  3. List available model IDs\n' >&2
+            printf '  4. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
             IFS= read -r answer
             case "${answer:-1}" in
-                1) printf '%s\n' "${RHYOLITE_DEFAULT_MODEL}"; return ;;
-                2) printf '%s\n' "${RHYOLITE_ALTERNATE_MODEL}"; return ;;
-                3) ;;
+                1) candidate_model="${RHYOLITE_DEFAULT_MODEL}" ;;
+                2) candidate_model="${RHYOLITE_ALTERNATE_MODEL}" ;;
+                3)
+                    print_available_models
+                    continue
+                    ;;
+                4) candidate_model='' ;;
                 *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
             esac
         fi
 
-        printf 'Frontier model ID: ' >&2
-        IFS= read -r custom_model
-        if rhyolite_valid_model_id "${custom_model}"; then
-            printf '%s\n' "${custom_model}"
+        if [[ -z "${candidate_model}" ]]; then
+            printf 'Available model ID: ' >&2
+            IFS= read -r candidate_model
+        fi
+        if rhyolite_harness_invoke \
+            harness_validate_model_id "${candidate_model}" >/dev/null 2>&1; then
+            printf '%s\n' "${candidate_model}"
             return
         fi
-        printf 'Model IDs may contain only letters, numbers, dots, underscores, and hyphens.\n' >&2
+        printf 'Model selection rejected: %s\n' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-not available to this Copilot CLI installation}" >&2
     done
+}
+
+print_available_models() {
+    local available_models
+    local model
+
+    if ! available_models="$(harness_list_models)"; then
+        printf 'Could not list models: %s\n' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Copilot model catalog unavailable.}" >&2
+        return
+    fi
+    printf '\nAvailable Copilot model IDs\n' >&2
+    while IFS= read -r model; do
+        [[ -n "${model}" ]] && printf '  %s\n' "${model}" >&2
+    done <<< "${available_models}"
+}
+
+prompt_for_reasoning_effort() {
+    local remembered_effort="$1"
+    local answer
+
+    while true; do
+        printf '\nReasoning effort\n' >&2
+        if [[ -n "${remembered_effort}" ]]; then
+            printf '  1. Keep previously used (%s)\n' \
+                "${remembered_effort}" >&2
+            printf '  2. Maximum reasoning (Recommended) - max\n' >&2
+            printf '  3. Extra-high reasoning - xhigh\n' >&2
+            printf '  4. High reasoning - high\n' >&2
+            printf 'Select effort [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_effort}"; return ;;
+                2) printf '%s\n' max; return ;;
+                3) printf '%s\n' xhigh; return ;;
+                4) printf '%s\n' high; return ;;
+            esac
+        else
+            printf '  1. Maximum reasoning (Recommended) - max\n' >&2
+            printf '  2. Extra-high reasoning - xhigh\n' >&2
+            printf '  3. High reasoning - high\n' >&2
+            printf 'Select effort [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' max; return ;;
+                2) printf '%s\n' xhigh; return ;;
+                3) printf '%s\n' high; return ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+}
+
+prompt_for_context_tier() {
+    local remembered_context="$1"
+    local answer
+
+    while true; do
+        printf '\nContext tier\n' >&2
+        if [[ -n "${remembered_context}" ]]; then
+            printf '  1. Keep previously used (%s)\n' \
+                "${remembered_context}" >&2
+            printf '  2. Long context (Recommended) - long_context\n' >&2
+            printf '  3. Default context - default\n' >&2
+            printf 'Select context [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_context}"; return ;;
+                2) printf '%s\n' long_context; return ;;
+                3) printf '%s\n' default; return ;;
+            esac
+        else
+            printf '  1. Long context (Recommended) - long_context\n' >&2
+            printf '  2. Default context - default\n' >&2
+            printf 'Select context [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' long_context; return ;;
+                2) printf '%s\n' default; return ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+}
+
+prompt_to_confirm_runtime_settings() {
+    local harness="$1"
+    local model="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
+    local answer
+
+    printf '\nValidated review runtime\n' >&2
+    printf '  Harness: %s\n' "${harness}" >&2
+    printf '  Model: %s\n' "${model}" >&2
+    printf '  Reasoning effort: %s\n' "${reasoning_effort}" >&2
+    printf '  Context tier: %s\n' "${context_tier}" >&2
+    printf '  1. Confirm settings\n' >&2
+    printf '  2. Modify model\n' >&2
+    printf '  3. Modify reasoning effort\n' >&2
+    printf '  4. Modify context tier\n' >&2
+    printf 'Select action [1]: ' >&2
+    IFS= read -r answer
+    case "${answer:-1}" in
+        1) printf '%s\n' confirm ;;
+        2) printf '%s\n' model ;;
+        3) printf '%s\n' effort ;;
+        4) printf '%s\n' context ;;
+        *) printf '%s\n' invalid ;;
+    esac
 }
 
 build_initial_prompt() {
     local initial_request="$1"
     local fleet_mode="$2"
     local model="$3"
-    shift 3
+    local reasoning_effort="$4"
+    local context_tier="$5"
+    shift 5
     local repository
 
     printf '%s\n%s\n' \
@@ -433,6 +560,8 @@ build_initial_prompt() {
     done
     printf 'FleetMode=%s\n' "${fleet_mode}"
     printf 'Model=%s\n' "${model}"
+    printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
+    printf 'ContextTier=%s\n' "${context_tier}"
     printf 'RememberPreferences=true\n'
     printf 'END_%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
     printf "Begin Rhyolite's guided repository-review setup now."
@@ -450,6 +579,8 @@ write_launch_context() {
     local plugin_root="$5"
     local fleet_mode="$6"
     local model="$7"
+    local reasoning_effort="$8"
+    local context_tier="$9"
 
     {
         printf 'StartedAtUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -459,6 +590,8 @@ write_launch_context() {
         printf 'PluginRoot=%s\n' "${plugin_root}"
         printf 'FleetMode=%s\n' "${fleet_mode}"
         printf 'Model=%s\n' "${model}"
+        printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
+        printf 'ContextTier=%s\n' "${context_tier}"
         printf 'RememberPreferences=true\n'
     } > "${context_path}"
 }
@@ -473,19 +606,25 @@ Usage:
   rhyolite [--help]
   rhyolite [--version]
   rhyolite [--repo URL ...] [--harness ID] [--fleet-mode native|standard]
-           [--model MODEL] [--yolo]
+           [--model MODEL] [--reasoning-effort high|xhigh|max]
+           [--context default|long_context] [--yolo]
            [--] [initial review request...]
 
 Options:
-  --harness ID  Select the review harness (currently: copilot).
-  --model MODEL  Use gpt-5.6-sol (recommended), claude-fable-5, or a
-                 syntactically valid custom model ID.
+  --harness ID        Select a registered review harness.
+  --model MODEL       Select an exact ID from the active Copilot model catalog
+                      (default: gpt-5.6-sol; alternate: claude-fable-5).
+  --reasoning-effort  Select high, xhigh, or max (recommended).
+  --context TIER      Select default or long_context (recommended).
   --yolo         Start Copilot in YOLO mode for this launch.
+
+Available harnesses:
+$(rhyolite_harness_list_registered | sed 's/^/  - /')
 
 Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
 collects launcher settings, selects ${RHYOLITE_AGENT}, starts explicit
-interactive mode, and begins guided setup immediately. Approved fleet/model
-settings are remembered per repository.
+interactive mode, and begins guided setup immediately. Approved fleet/model/
+effort/context settings are remembered per repository.
 EOF
 }
 
@@ -507,10 +646,15 @@ main() {
     local harness
     local fleet_mode=''
     local model=''
+    local reasoning_effort=''
+    local context_tier=''
     local yolo=0
     local remembered_fleet_mode=''
     local remembered_model=''
+    local remembered_reasoning_effort=''
+    local remembered_context_tier=''
     local remembered_consistent=1
+    local confirmation_action
     local preference_status
     local repository_input
     local repository
@@ -677,6 +821,30 @@ main() {
                 model="$2"
                 shift 2
                 ;;
+            --reasoning-effort)
+                [ "$#" -ge 2 ] &&
+                    rhyolite_valid_reasoning_effort "$2" ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested reasoning effort is invalid.' \
+                        '--reasoning-effort requires high, xhigh, or max.' \
+                        'Use --reasoning-effort max unless a lower supported tier is intentional.' \
+                        2
+                reasoning_effort="$2"
+                shift 2
+                ;;
+            --context)
+                [ "$#" -ge 2 ] &&
+                    rhyolite_valid_context_tier "$2" ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested context tier is invalid.' \
+                        '--context requires default or long_context.' \
+                        'Use --context long_context unless the default context window is intentional.' \
+                        2
+                context_tier="$2"
+                shift 2
+                ;;
             --yolo)
                 yolo=1
                 shift
@@ -811,8 +979,12 @@ main() {
             if [[ -z "${remembered_fleet_mode}" ]]; then
                 remembered_fleet_mode="${RHYOLITE_PREFERENCE_FLEET_MODE}"
                 remembered_model="${RHYOLITE_PREFERENCE_MODEL}"
+                remembered_reasoning_effort="${RHYOLITE_PREFERENCE_REASONING_EFFORT}"
+                remembered_context_tier="${RHYOLITE_PREFERENCE_CONTEXT_TIER}"
             elif [[ "${remembered_fleet_mode}" != "${RHYOLITE_PREFERENCE_FLEET_MODE}" ||
-                "${remembered_model}" != "${RHYOLITE_PREFERENCE_MODEL}" ]]; then
+                "${remembered_model}" != "${RHYOLITE_PREFERENCE_MODEL}" ||
+                "${remembered_reasoning_effort}" != "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" ||
+                "${remembered_context_tier}" != "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" ]]; then
                 remembered_consistent=0
             fi
         else
@@ -827,6 +999,29 @@ main() {
     if ((remembered_consistent == 0)); then
         remembered_fleet_mode=''
         remembered_model=''
+        remembered_reasoning_effort=''
+        remembered_context_tier=''
+    fi
+
+    if [[ -n "${remembered_model}" ]] &&
+        ! rhyolite_harness_invoke \
+            harness_validate_model_id "${remembered_model}" >/dev/null 2>&1; then
+        printf 'Rhyolite launcher ignored saved settings because model %s is no longer available.\n' \
+            "${remembered_model}" >&2
+        remembered_fleet_mode=''
+        remembered_model=''
+        remembered_reasoning_effort=''
+        remembered_context_tier=''
+    fi
+    if [[ -n "${model}" ]] &&
+        ! rhyolite_harness_invoke \
+            harness_validate_model_id "${model}" >/dev/null 2>&1; then
+        fail \
+            'launcher model validation' \
+            'The requested model is not available.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
+            'Run the launcher interactively and choose List available model IDs, or pass one of the IDs shown by copilot help config.' \
+            2
     fi
 
     if [[ -z "${fleet_mode}" ]]; then
@@ -845,12 +1040,90 @@ main() {
             model="${remembered_model:-${RHYOLITE_DEFAULT_MODEL}}"
         fi
     fi
+    if ! rhyolite_harness_invoke \
+        harness_validate_model_id "${model}" >/dev/null 2>&1; then
+        fail \
+            'launcher model validation' \
+            'The selected model is not available.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
+            'Choose another model from the available catalog and retry.' \
+            2
+    fi
+    if [[ -z "${reasoning_effort}" ]]; then
+        if ((is_interactive)); then
+            reasoning_effort="$(
+                prompt_for_reasoning_effort \
+                    "${remembered_reasoning_effort}"
+            )"
+        else
+            reasoning_effort="${remembered_reasoning_effort:-${RHYOLITE_DEFAULT_REASONING_EFFORT}}"
+        fi
+    fi
+    rhyolite_harness_invoke \
+        harness_validate_reasoning_effort \
+        "${reasoning_effort}" >/dev/null 2>&1 ||
+        fail \
+            'launcher reasoning-effort validation' \
+            'The selected reasoning effort is unsupported.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected harness rejected the reasoning effort.}" \
+            'Choose high, xhigh, or max and retry.' \
+            2
+    if [[ -z "${context_tier}" ]]; then
+        if ((is_interactive)); then
+            context_tier="$(
+                prompt_for_context_tier "${remembered_context_tier}"
+            )"
+        else
+            context_tier="${remembered_context_tier:-${RHYOLITE_DEFAULT_CONTEXT_TIER}}"
+        fi
+    fi
+    rhyolite_harness_invoke \
+        harness_validate_context_tier "${context_tier}" >/dev/null 2>&1 ||
+        fail \
+            'launcher context-tier validation' \
+            'The selected context tier is unsupported.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected harness rejected the context tier.}" \
+            'Choose default or long_context and retry.' \
+            2
+
+    if ((is_interactive)); then
+        while true; do
+            confirmation_action="$(
+                prompt_to_confirm_runtime_settings \
+                    "${harness}" \
+                    "${model}" \
+                    "${reasoning_effort}" \
+                    "${context_tier}"
+            )"
+            case "${confirmation_action}" in
+                confirm) break ;;
+                model)
+                    model="$(prompt_for_model "${model}")"
+                    ;;
+                effort)
+                    reasoning_effort="$(
+                        prompt_for_reasoning_effort "${reasoning_effort}"
+                    )"
+                    ;;
+                context)
+                    context_tier="$(
+                        prompt_for_context_tier "${context_tier}"
+                    )"
+                    ;;
+                *)
+                    printf 'Enter one of the displayed choice numbers.\n' >&2
+                    ;;
+            esac
+        done
+    fi
 
     initial_prompt="$(
         build_initial_prompt \
             "${initial_request}" \
             "${fleet_mode}" \
             "${model}" \
+            "${reasoning_effort}" \
+            "${context_tier}" \
             "${repositories[@]}"
     )"
     write_launch_context \
@@ -860,7 +1133,9 @@ main() {
         "${launch_dir}" \
         "${plugin_root}" \
         "${fleet_mode}" \
-        "${model}"
+        "${model}" \
+        "${reasoning_effort}" \
+        "${context_tier}"
 
     export RHYOLITE_LAUNCHER_CALLER_DIR="${original_dir}"
     export RHYOLITE_LAUNCHER_LAUNCH_DIR="${launch_dir}"
@@ -871,6 +1146,8 @@ main() {
     export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"
     export RHYOLITE_LAUNCHER_FLEET_MODE="${fleet_mode}"
     export RHYOLITE_LAUNCHER_MODEL="${model}"
+    export RHYOLITE_LAUNCHER_REASONING_EFFORT="${reasoning_effort}"
+    export RHYOLITE_LAUNCHER_CONTEXT_TIER="${context_tier}"
 
     copilot_arguments=(
         --experimental
@@ -879,8 +1156,8 @@ main() {
         --mode interactive
         --agent "${RHYOLITE_AGENT}"
         --model "${model}"
-        --reasoning-effort "${RHYOLITE_REASONING_EFFORT}"
-        --context long_context
+        --reasoning-effort "${reasoning_effort}"
+        --context "${context_tier}"
         --log-dir "${log_dir}"
         --no-custom-instructions
         -i "${initial_prompt}"

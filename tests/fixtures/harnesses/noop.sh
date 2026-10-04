@@ -67,6 +67,11 @@ harness_default_model() {
     printf '%s\n' 'noop-fixture-model'
 }
 
+harness_list_models() {
+    noop_fixture_require_success harness_list_models || return 1
+    printf '%s\n' 'noop-fixture-model'
+}
+
 harness_validate_model_id() {
     noop_fixture_require_success harness_validate_model_id || return 1
     [[ "$1" == 'noop-fixture-model' ]]
@@ -82,6 +87,31 @@ harness_max_reasoning_effort() {
     noop_fixture_require_success harness_max_reasoning_effort || return 1
     harness_validate_model_id "$1" || return 1
     printf '%s\n' 'max'
+}
+
+harness_reasoning_effort_choices() {
+    noop_fixture_require_success harness_reasoning_effort_choices || return 1
+    printf '%s\n' 'Maximum reasoning (diagnostic only) - max'
+}
+
+harness_validate_reasoning_effort() {
+    noop_fixture_require_success harness_validate_reasoning_effort || return 1
+    [[ "$1" == max ]]
+}
+
+harness_default_context_tier() {
+    noop_fixture_require_success harness_default_context_tier || return 1
+    printf '%s\n' 'long_context'
+}
+
+harness_context_choices() {
+    noop_fixture_require_success harness_context_choices || return 1
+    printf '%s\n' 'Long context (diagnostic only) - long_context'
+}
+
+harness_validate_context_tier() {
+    noop_fixture_require_success harness_validate_context_tier || return 1
+    [[ "$1" == long_context ]]
 }
 
 harness_auth_secret_env_vars() {
@@ -116,8 +146,12 @@ harness_prepare_run() {
 
 harness_prepare_worker_home() {
     local runtime_home="$1"
+    local reasoning_effort="$2"
+    local context_tier="$3"
 
     noop_fixture_require_success harness_prepare_worker_home || return 1
+    [[ "${reasoning_effort}" == max && "${context_tier}" == long_context ]] ||
+        return 1
     [[ -d "${runtime_home}" ]] || {
         rhyolite_harness_set_error \
             'The no-op fixture runtime home was not created by the runner.'
@@ -148,8 +182,9 @@ harness_worker_argv() {
     local session_id="$5"
     local model="$6"
     local reasoning_effort="$7"
-    local authentication_variables="$8"
-    local transcript_path="${10}"
+    local context_tier="$8"
+    local authentication_variables="$9"
+    local transcript_path="${11}"
 
     noop_fixture_require_success harness_worker_argv || return 1
     [[ -z "${authentication_variables}" ]] || {
@@ -163,6 +198,7 @@ harness_worker_argv() {
         --session-id "${session_id}"
         --model "${model}"
         --reasoning-effort "${reasoning_effort}"
+        --context "${context_tier}"
         --transcript "${transcript_path}"
     )
 }
@@ -260,8 +296,12 @@ harness_verify_isolation() {
 
 harness_persist_agent_state() {
     local agent_state_directory="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
 
     noop_fixture_require_success harness_persist_agent_state || return 1
+    [[ "${reasoning_effort}" == max && "${context_tier}" == long_context ]] ||
+        return 1
     if [[ -d "${agent_state_directory}" ]] &&
         [[ -n "$(find "${agent_state_directory}" -mindepth 1 -print -quit)" ]]; then
         rhyolite_harness_set_error \

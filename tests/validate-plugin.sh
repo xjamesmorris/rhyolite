@@ -22,6 +22,7 @@ AGENT="${PLUGIN_ROOT}/agents/repo-review.agent.md"
 WORKER_AGENT="${PLUGIN_ROOT}/agents/repo-review-worker.agent.md"
 RESEARCH_WORKER_AGENT="${PLUGIN_ROOT}/agents/repo-research-worker.agent.md"
 RESEARCH_BROKER_TEST="${ROOT}/tests/test-research-egress-broker.py"
+REPOSITORY_DISCOVERY_CURL_FIXTURE="${ROOT}/tests/fixtures/repository-discovery-curl.sh"
 UI_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-ui-validator.agent.md"
 TUI_RUNTIME_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-tui-runtime-validator.agent.md"
 TUI_RUNTIME_VALIDATOR="${ROOT}/tests/validate-tui-runtime.mjs"
@@ -172,6 +173,7 @@ required_files=(
     "${RESEARCH_BROKER}"
     "${RESEARCH_BROKER_LAUNCHER}"
     "${RESEARCH_BROKER_TEST}"
+    "${REPOSITORY_DISCOVERY_CURL_FIXTURE}"
     "${RUNNER}"
     "${DISCOVERY}"
     "${OUTPUT_HELPER}"
@@ -235,7 +237,7 @@ grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
     grep -Fq 'supported Claude Code runtime harness' "${CLAUDE_GUIDANCE}" ||
     fail 'Claude contributor pointer does not preserve the Copilot-only runtime claim.'
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v2' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v3' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -549,10 +551,13 @@ grep -Fq \
     "${AGENT}" || fail 'Agent does not use the expected tool set.'
 grep -Fq 'name: repo-review' "${AGENT}" ||
     fail 'User-facing agent is not named repo-review.'
-grep -Fq 'model: gpt-5.6-sol' "${AGENT}" &&
-    grep -Fq 'model: gpt-5.6-sol' "${WORKER_AGENT}" &&
-    grep -Fq 'model: gpt-5.6-sol' "${RESEARCH_WORKER_AGENT}" ||
-    fail 'Analytical Rhyolite agents are not pinned to GPT-5.6 Sol.'
+for runtime_agent in \
+    "${AGENT}" \
+    "${WORKER_AGENT}" \
+    "${RESEARCH_WORKER_AGENT}"; do
+    ! grep -Eq '^model:[[:space:]]' "${runtime_agent}" ||
+        fail "Runtime agent frontmatter overrides the validated CLI model: ${runtime_agent}"
+done
 grep -Fq \
     'tools: ["read", "search", "agent"]' \
     "${WORKER_AGENT}" || fail 'Worker agent does not use the expected tool set.'
@@ -629,12 +634,16 @@ grep -Fq \
     grep -Fq -- '--reasoning-effort "${reasoning_effort}"' \
         "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not enforce maximum reasoning effort.'
-grep -Fq "readonly RHYOLITE_REASONING_EFFORT='max'" \
+grep -Fq "readonly RHYOLITE_DEFAULT_REASONING_EFFORT='max'" \
     "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq -- '--reasoning-effort "${RHYOLITE_REASONING_EFFORT}"' \
+    grep -Fq "readonly RHYOLITE_DEFAULT_CONTEXT_TIER='long_context'" \
         "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq -- '--context long_context' "${RHYOLITE_LAUNCHER}" ||
-    fail 'Launcher does not enforce maximum reasoning effort and long context.'
+    grep -Fq -- '--reasoning-effort "${reasoning_effort}"' \
+        "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq -- '--context "${context_tier}"' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq 'harness_validate_reasoning_effort' "${RHYOLITE_LAUNCHER}" &&
+    grep -Fq 'harness_validate_context_tier' "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher does not validate selectable reasoning effort and context.'
 grep -Fq '"${MODEL} review started; scope ${SCOPE}"' "${RUNNER}" ||
     fail 'Bash progress does not display the selected model.'
 grep -Fq 'name: rhyolite-ui-validator' "${UI_VALIDATOR_AGENT}" ||
@@ -726,6 +735,10 @@ grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing model.'
+grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${AGENT}" ||
+    fail 'Agent help/status block is missing reasoning effort.'
+grep -Fq 'Context tier: <default, long_context, or NOT SELECTED>' "${AGENT}" ||
+    fail 'Agent help/status block is missing context tier.'
 grep -Fq 'Remember settings: <YES, NO, or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing remembered settings.'
 grep -Fq 'Output: <selected value or NOT SELECTED>' "${AGENT}" ||
@@ -819,8 +832,9 @@ grep -Fq '`Edit setup` -> `Scope`.' "${AGENT}" ||
 grep -Fq 'If the user selects `Edit setup`, use `ask_user` for exactly one focused' \
     "${AGENT}" ||
     fail 'Agent does not describe Edit setup.'
-grep -Fq 'exact explicit choices `Source`, `Model`, `Output`,' "${AGENT}" &&
-    grep -Fq '`Scope`, or `Research cookies`, in that order.' "${AGENT}" ||
+grep -Fq 'exact explicit choices `Source`, `Model`,' "${AGENT}" &&
+    grep -Fq '`Reasoning effort`, `Context tier`, `Output`, `Scope`, or' "${AGENT}" &&
+    grep -Fq '`Research cookies`, in that order.' "${AGENT}" ||
     fail 'Agent Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Continue in standard mode`' "${AGENT}" &&
@@ -828,6 +842,10 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
         "${AGENT}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${AGENT}" &&
     grep -Fq '`Claude Fable 5 - claude-fable-5`' "${AGENT}" &&
+    grep -Fq '`List available model IDs`' "${AGENT}" &&
+    grep -Fq '`Maximum reasoning (Recommended) - max`' "${AGENT}" &&
+    grep -Fq '`Long context (Recommended) - long_context`' "${AGENT}" &&
+    grep -Fq '`Confirm runtime settings`' "${AGENT}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${AGENT}" ||
     fail 'Agent fleet/model preference setup contract is incomplete.'
@@ -978,6 +996,19 @@ for model_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         fail "Recommended model picker choice drifted: ${model_ui_file}"
     grep -Fq 'Claude Fable 5 - claude-fable-5' "${model_ui_file}" ||
         fail "Alternate model picker choice drifted: ${model_ui_file}"
+    grep -Fq 'List available model IDs' "${model_ui_file}" ||
+        fail "Model-list picker choice drifted: ${model_ui_file}"
+    grep -Fq 'Maximum reasoning (Recommended) - max' "${model_ui_file}" &&
+        grep -Fq 'Extra-high reasoning - xhigh' "${model_ui_file}" &&
+        grep -Fq 'High reasoning - high' "${model_ui_file}" ||
+        fail "Reasoning-effort picker drifted: ${model_ui_file}"
+    grep -Fq 'Long context (Recommended) - long_context' "${model_ui_file}" &&
+        grep -Fq 'Default context - default' "${model_ui_file}" ||
+        fail "Context-tier picker drifted: ${model_ui_file}"
+    grep -Fq 'Confirm runtime settings' "${model_ui_file}" &&
+        grep -Fq 'Modify reasoning effort' "${model_ui_file}" &&
+        grep -Fq 'Modify context tier' "${model_ui_file}" ||
+        fail "Runtime-settings confirmation drifted: ${model_ui_file}"
 done
 node - "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}" <<'JS'
 const fs = require("fs");
@@ -1145,6 +1176,10 @@ grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing model.'
+grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${SKILL}" ||
+    fail 'Skill help/status block is missing reasoning effort.'
+grep -Fq 'Context tier: <default, long_context, or NOT SELECTED>' "${SKILL}" ||
+    fail 'Skill help/status block is missing context tier.'
 grep -Fq 'Remember settings: <YES, NO, or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing remembered settings.'
 grep -Fq 'Output: <selected value or NOT SELECTED>' "${SKILL}" ||
@@ -1219,7 +1254,9 @@ grep -Fq 'Accept exact `Change scope` as the shortcut `Edit setup` ->' \
     "${SKILL}" ||
     fail 'Skill does not describe the Change scope shortcut.'
 grep -Fq 'exact explicit choices `Source`, `Model`,' "${SKILL}" &&
-    grep -Fq '`Output`, `Scope`, or `Research cookies`, in that order.' \
+    grep -Fq '`Reasoning effort`, `Context tier`, `Output`, `Scope`, or' \
+        "${SKILL}" &&
+    grep -Fq '`Research cookies`, in that order.' \
         "${SKILL}" ||
     fail 'Skill Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
@@ -1228,6 +1265,10 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
         "${SKILL}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${SKILL}" &&
     grep -Fq '`Claude Fable 5 - claude-fable-5`' "${SKILL}" &&
+    grep -Fq '`List available model IDs`' "${SKILL}" &&
+    grep -Fq '`Maximum reasoning (Recommended) - max`' "${SKILL}" &&
+    grep -Fq '`Long context (Recommended) - long_context`' "${SKILL}" &&
+    grep -Fq '`Confirm runtime settings`' "${SKILL}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${SKILL}" ||
     fail 'Skill fleet/model preference setup contract is incomplete.'
@@ -1699,6 +1740,11 @@ grep -Fq 'http.proxy=' "${RUNNER}" ||
     fail 'Anonymous clone can still route through inherited proxies.'
 grep -Fq 'http.followRedirects=false' "${RUNNER}" ||
     fail 'Anonymous clone redirects are not disabled.'
+grep -Fq 'resolve_repository_transport()' "${RUNNER}" &&
+    grep -Fq -- "--write-out '%{http_code}\\n%{redirect_url}\\n'" "${RUNNER}" &&
+    grep -Fq -- '--max-redirs 0' "${RUNNER}" &&
+    grep -Fq -- "--proto '=https'" "${RUNNER}" ||
+    fail 'Bounded manual repository redirect discovery is not implemented safely.'
 grep -Fq 'ls-remote' "${RUNNER}" ||
     fail 'Repository accessibility preflight is not implemented.'
 grep -Fq 'AccessPreflightFailed' "${RUNNER}" ||
@@ -1707,12 +1753,12 @@ grep -Fq 'PreflightBlocked' "${RUNNER}" ||
     fail 'Fail-closed multi-repository preflight blocking is not reported explicitly.'
 grep -Fq 'Local repository paths are not supported.' "${RUNNER}" ||
     fail 'Runner does not reject local repository paths explicitly.'
-grep -Fq 'PLAN_SCHEMA_VERSION=4' "${RUNNER}" ||
-    fail 'Bash runner does not emit harness-aware plan schema version 4.'
-grep -Fq 'STATE_SCHEMA_VERSION=5' "${RUNNER}" ||
-    fail 'Bash runner does not emit harness-aware state schema version 5.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=2' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 2.'
+grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
+    fail 'Bash runner does not emit harness-aware plan schema version 5.'
+grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
+    fail 'Bash runner does not emit harness-aware state schema version 6.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=3' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 3.'
 grep -Fq 'harness_resume_policy' "${HARNESS_COMMON}" &&
     grep -Fq 'harness_resume_policy() {' "${COPILOT_HARNESS}" ||
     fail 'Harness contract-v2 resume policy is incomplete.'
@@ -1723,6 +1769,7 @@ for hash_fragment in \
     'PlanSchemaVersion=%s' \
     'Harness=%s' \
     'ReasoningEffort=%s' \
+    'ContextTier=%s' \
     'Provider=%s'; do
     grep -Fq "${hash_fragment}" "${RUNNER}" ||
         fail "Approval hash material is missing ${hash_fragment}."
@@ -1981,24 +2028,65 @@ fixture_dir="${fixture_root}/validate-plugin-sh.$$.$RANDOM.$RANDOM"
 mkdir -p -- "${fixture_root}" "${fixture_dir}"
 trap 'chmod -R u+w -- "${fixture_dir}" 2>/dev/null || true; rm -rf -- "${fixture_dir}"' EXIT
 
+offline_curl_guard_bin="${fixture_dir}/offline-curl-guard-bin"
+mkdir -p -- "${offline_curl_guard_bin}"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${offline_curl_guard_bin}/curl"
+chmod +x "${offline_curl_guard_bin}/curl"
+PATH="${offline_curl_guard_bin}:${PATH}"
+export PATH
+
 rhyolite_canonicalize_repository \
-    'https://github.com:443/octocat/Hello-World///' &&
+    'https://GitHub.com:0443/octocat/Hello-World.git///' &&
     [[ "${RHYOLITE_CANONICAL_REPOSITORY}" == \
-        'https://github.com/octocat/Hello-World' ]] ||
-    fail 'Bash launcher preference canonicalization retained port 443 or trailing slashes.'
+        'https://github.com/octocat/Hello-World.git' ]] ||
+    fail 'Bash launcher preference canonicalization changed the selected .git endpoint.'
+long_zero_padded_https_port=''
+while ((${#long_zero_padded_https_port} < 256)); do
+    long_zero_padded_https_port+='00000000'
+done
+long_zero_padded_https_port+='443'
+rhyolite_canonicalize_repository \
+    "https://GitHub.com:${long_zero_padded_https_port}/octocat/Hello-World.git///" &&
+    [[ "${RHYOLITE_CANONICAL_REPOSITORY}" == \
+        'https://github.com/octocat/Hello-World.git' ]] ||
+    fail 'Bash canonicalization mishandled a safely zero-padded default HTTPS port.'
+if rhyolite_canonicalize_repository \
+    'https://github.com:12345678901234567890/octocat/Hello-World.git'; then
+    fail 'Bash canonicalization accepted an oversized significant HTTPS port.'
+fi
 preference_helper_root="${fixture_dir}/preference-helper-state"
 rhyolite_write_preference \
     'https://github.com/octocat/Hello-World' \
     copilot \
     native \
     gpt-5.6-sol \
+    max \
+    long_context \
     "${preference_helper_root}" ||
     fail 'Bash preference helper could not write a valid preference.'
+git_preference_repository='https://github.com/octocat/Hello-World.git'
+git_preference_path="$(
+    rhyolite_preference_path \
+        "${git_preference_repository}" \
+        "${preference_helper_root}"
+)"
 preference_helper_path="$(
     rhyolite_preference_path \
         'https://github.com/octocat/Hello-World' \
         "${preference_helper_root}"
 )"
+[[ "${git_preference_path}" != "${preference_helper_path}" ]] ||
+    fail 'Bash preference helper merged .git and non-.git repository identities.'
+rhyolite_write_preference \
+    "${git_preference_repository}" \
+    copilot \
+    standard \
+    gpt-6-sol \
+    xhigh \
+    default \
+    "${preference_helper_root}" ||
+    fail 'Bash preference helper could not write a distinct .git preference.'
 node - "${preference_helper_path}" <<'JS'
 const fs = require("fs");
 const preference = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -2007,15 +2095,19 @@ const expectedKeys = [
   "fleetMode",
   "harness",
   "model",
+  "reasoningEffort",
+  "contextTier",
   "schemaVersion",
   "updatedAt",
 ].sort().join(",");
 if (Object.keys(preference).sort().join(",") !== expectedKeys ||
-    preference.schemaVersion !== 2 ||
+    preference.schemaVersion !== 3 ||
     preference.harness !== "copilot" ||
     preference.fleetMode !== "native" ||
-    preference.model !== "gpt-5.6-sol") {
-  throw new Error("launcher preference schema 2 is invalid");
+    preference.model !== "gpt-5.6-sol" ||
+    preference.reasoningEffort !== "max" ||
+    preference.contextTier !== "long_context") {
+  throw new Error("launcher preference schema 3 is invalid");
 }
 JS
 if ! rhyolite_read_preference \
@@ -2023,14 +2115,24 @@ if ! rhyolite_read_preference \
     copilot \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_HARNESS}" != copilot ]]; then
-    fail 'Bash preference helper could not read schema 2 for Copilot.'
+    fail 'Bash preference helper could not read schema 3 for Copilot.'
+fi
+if ! rhyolite_read_preference \
+    "${git_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" != standard ||
+        "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
+        "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" != xhigh ||
+        "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" != default ]]; then
+    fail 'Bash preference helper did not preserve the distinct .git preference.'
 fi
 if rhyolite_read_preference \
     'https://github.com/octocat/Hello-World' \
     codex \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
-    fail 'Bash preference helper reused schema 2 across harnesses.'
+    fail 'Bash preference helper reused schema 3 across harnesses.'
 fi
 
 legacy_preference_repository='https://github.com/octocat/legacy-preference'
@@ -2094,6 +2196,8 @@ if rhyolite_write_preference \
     copilot \
     standard \
     gpt-5.6-sol \
+    max \
+    long_context \
     "${preference_helper_root}"; then
     fail 'Bash preference helper treated a directory destination as success.'
 fi
@@ -2562,6 +2666,16 @@ ln -s "${RHYOLITE_LAUNCHER}" "${launcher_link}"
 cat > "${launcher_mock_bin}/copilot" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-6-sol"
+    - "gpt-5.6-sol"
+    - "claude-fable-5"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 : "${RHYOLITE_STUB_LOG:?}"
 {
     printf 'PWD\0%s\0' "${PWD}"
@@ -2592,14 +2706,18 @@ launcher_version="$("${launcher_link}" --version)"
     "${launcher_help}" == *'--yolo'* &&
     "${launcher_help}" == *'gpt-5.6-sol'* &&
     "${launcher_help}" == *'claude-fable-5'* &&
-    "${launcher_help}" == *'syntactically valid custom model ID'* &&
+    "${launcher_help}" == *'Available harnesses:'* &&
+    "${launcher_help}" == *'  - copilot'* &&
+    "${launcher_help}" == *'--reasoning-effort'* &&
+    "${launcher_help}" == *'--context'* &&
     "${launcher_help}" != *'--autopilot'* ]] ||
     fail 'Unix launcher --help output is incomplete.'
 runner_help="$("${RUNNER}" --help)"
 [[ "${runner_help}" == *'gpt-5.6-sol (recommended)'* &&
     "${runner_help}" == *'claude-fable-5'* &&
-    "${runner_help}" == *'syntactically valid custom model ID'* ]] ||
-    fail 'Bash runner --model help does not expose known and custom IDs.'
+    "${runner_help}" == *'another available model ID'* &&
+    "${runner_help}" == *'--list-models'* ]] ||
+    fail 'Bash runner model help does not expose available-ID discovery.'
 [[ "${launcher_version}" == \
     "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}")" ]] ||
     fail 'Unix launcher --version does not match VERSION.'
@@ -2741,9 +2859,11 @@ const expectedRequest =
 const expectedPrompt =
   "RHYOLITE_START_COMMAND_V1\n" +
   "RHYOLITE_LAUNCHER_SETUP_V1\n" +
-  "Source=https://example.com/owner/repository\n" +
+  "Source=https://example.com/owner/repository.git\n" +
   "FleetMode=native\n" +
   "Model=claude-fable-5\n" +
+  "ReasoningEffort=max\n" +
+  "ContextTier=long_context\n" +
   "RememberPreferences=true\n" +
   "END_RHYOLITE_LAUNCHER_SETUP_V1\n" +
   "Begin Rhyolite's guided repository-review setup now.\n" +
@@ -2810,6 +2930,8 @@ if (context.includes("InitialRequest=") ||
     context.includes("https://example.com/owner/repository") ||
     !context.includes("FleetMode=native") ||
     !context.includes("Model=claude-fable-5") ||
+    !context.includes("ReasoningEffort=max") ||
+    !context.includes("ContextTier=long_context") ||
     /[\x00-\x08\x0B-\x1F\x7F]/u.test(context)) {
   throw new Error("launcher context persisted source/request data or lost settings");
 }
@@ -2824,7 +2946,9 @@ rm -f -- "${launcher_stub_log}"
         "${launcher_link}" \
             --repo https://example.com/owner/custom-model \
             --fleet-mode standard \
-            --model vendor.custom-1
+            --model gpt-6-sol \
+            --reasoning-effort xhigh \
+            --context default
 )
 node - "${launcher_stub_log}" <<'JS'
 const fs = require("fs");
@@ -2833,12 +2957,15 @@ if (fields.at(-1) === "") fields.pop();
 const argsIndex = fields.indexOf("ARGS");
 const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
-if (valueAfter("--model") !== "vendor.custom-1" ||
+if (valueAfter("--model") !== "gpt-6-sol" ||
+    valueAfter("--reasoning-effort") !== "xhigh" ||
+    valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
       "Source=https://example.com/owner/custom-model\n" +
-      "FleetMode=standard\nModel=vendor.custom-1\n",
+      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
-  throw new Error("custom model ID did not round-trip through launcher setup");
+  throw new Error("runtime selections did not round-trip through launcher setup");
 }
 JS
 
@@ -2847,7 +2974,9 @@ rhyolite_write_preference \
     'https://example.com/owner/custom-preference' \
     copilot \
     standard \
-    vendor.custom-1 \
+    gpt-6-sol \
+    xhigh \
+    default \
     "${launcher_preference_home}" ||
     fail 'Could not create custom-model launcher preference fixture.'
 rm -f -- "${launcher_stub_log}"
@@ -2866,11 +2995,14 @@ if (fields.at(-1) === "") fields.pop();
 const argsIndex = fields.indexOf("ARGS");
 const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
-if (valueAfter("--model") !== "vendor.custom-1" ||
+if (valueAfter("--model") !== "gpt-6-sol" ||
+    valueAfter("--reasoning-effort") !== "xhigh" ||
+    valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
-      "FleetMode=standard\nModel=vendor.custom-1\n",
+      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
-  throw new Error("stored custom model ID did not round-trip through launcher");
+  throw new Error("stored runtime settings did not round-trip through launcher");
 }
 JS
 
@@ -2879,6 +3011,8 @@ rhyolite_write_preference \
     copilot \
     native \
     claude-fable-5 \
+    max \
+    long_context \
     "${launcher_preference_home}" ||
     fail 'Could not create launcher preference reuse fixture.'
 rm -f -- "${launcher_stub_log}"
@@ -2912,6 +3046,8 @@ rhyolite_write_preference \
     codex \
     native \
     claude-fable-5 \
+    max \
+    long_context \
     "${launcher_preference_home}" ||
     fail 'Could not create mismatched-harness launcher preference fixture.'
 launcher_mismatched_preference_stderr="${fixture_dir}/launcher-mismatched-preference.stderr"
@@ -3850,7 +3986,25 @@ fi
     --output-root "${fixture_dir}/output" \
     --non-interactive \
     --validate-only >/dev/null
-env PATH=/usr/bin:/bin bash "${RUNNER}" \
+validation_catalog_bin="${fixture_dir}/validation-catalog-bin"
+mkdir -p -- "${validation_catalog_bin}"
+cat > "${validation_catalog_bin}/copilot" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'MODELS'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-5.6-sol"
+  `reasoning_effort`: Reasoning effort.
+MODELS
+    exit 0
+fi
+exit 97
+EOF
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${validation_catalog_bin}/curl"
+chmod +x "${validation_catalog_bin}/copilot" \
+    "${validation_catalog_bin}/curl"
+env PATH="${validation_catalog_bin}:/usr/bin:/bin" bash "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World \
     --scope 1 \
     --output-root "${fixture_dir}/output" \
@@ -4078,6 +4232,36 @@ plan_scope_one_canonical_stderr="${fixture_dir}/plan-scope-1-canonical.stderr"
 [[ ! -s "${plan_scope_one_canonical_stderr}" ]] ||
     fail 'Bash canonical URL plan-only wrote unexpected stderr.'
 
+plan_scope_one_git_json="${fixture_dir}/plan-scope-1-git.json"
+plan_scope_one_git_stderr="${fixture_dir}/plan-scope-1-git.stderr"
+"${RUNNER}" \
+    --repo https://GitHub.com:0443/octocat/Hello-World.git/// \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_git_json}" \
+    2>"${plan_scope_one_git_stderr}"
+[[ ! -s "${plan_scope_one_git_stderr}" ]] ||
+    fail 'Bash .git endpoint plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash .git endpoint plan-only created workspace or output roots.'
+
+plan_scope_one_padded_git_json="${fixture_dir}/plan-scope-1-padded-git.json"
+plan_scope_one_padded_git_stderr="${fixture_dir}/plan-scope-1-padded-git.stderr"
+"${RUNNER}" \
+    --repo "https://GitHub.com:${long_zero_padded_https_port}/octocat/Hello-World.git///" \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_padded_git_json}" \
+    2>"${plan_scope_one_padded_git_stderr}"
+[[ ! -s "${plan_scope_one_padded_git_stderr}" ]] ||
+    fail 'Bash zero-padded default-port plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash zero-padded default-port plan-only created workspace or output roots.'
+
 plan_scope_one_fleet_json="${fixture_dir}/plan-scope-1-fleet.json"
 plan_scope_one_fleet_stderr="${fixture_dir}/plan-scope-1-fleet.stderr"
 "${RUNNER}" \
@@ -4290,6 +4474,8 @@ node - \
     "$(realpath -m -- "${plan_scope_one_alt_output}")" \
     "${plan_scope_one_no_html_json}" \
     "${plan_scope_one_canonical_json}" \
+    "${plan_scope_one_git_json}" \
+    "${plan_scope_one_padded_git_json}" \
     "${plan_scope_one_fleet_json}" \
     "${plan_scope_two_json}" \
     "${plan_scope_two_none_json}" \
@@ -4313,6 +4499,8 @@ const [
   scopeOneAltOutput,
   scopeOneNoHtmlPath,
   scopeOneCanonicalPath,
+  scopeOneGitPath,
+  scopeOnePaddedGitPath,
   scopeOneFleetPath,
   scopeTwoPath,
   scopeTwoNonePath,
@@ -4374,6 +4562,7 @@ function assertCommonPlan(
 ) {
   assertKeys(plan, [
     "ApprovalHash",
+    "ContextTier",
     "FleetMode",
     "GeneratedAt",
     "Harness",
@@ -4400,7 +4589,7 @@ function assertCommonPlan(
     "Host",
     "Id",
   ], `${label} provider`);
-  if (plan.SchemaVersion !== 4 ||
+  if (plan.SchemaVersion !== 5 ||
       !/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(plan.ReviewDate) ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(plan.GeneratedAt) ||
@@ -4410,6 +4599,7 @@ function assertCommonPlan(
       plan.MaxRepositories !== 5 ||
       plan.Harness !== "copilot" ||
       plan.ReasoningEffort !== "max" ||
+      plan.ContextTier !== "long_context" ||
       plan.Provider?.Id !== "github-copilot" ||
       plan.Provider?.Host !== "managed-provider" ||
       JSON.stringify(plan.Provider?.ForwardedEnvVarNames) !== JSON.stringify([
@@ -4630,6 +4820,21 @@ if (scopeOneCanonical.Sources[0].RemoteUrl !==
   throw new Error("canonical URL variants changed the resolved plan");
 }
 
+const scopeOneGit = parsePlan(scopeOneGitPath);
+if (scopeOneGit.Sources[0].RemoteUrl !==
+      "https://github.com/octocat/Hello-World.git" ||
+    scopeOneGit.Sources[0].Slug !== "github--octocat--hello-world" ||
+    scopeOneGit.ApprovalHash === scopeOne.ApprovalHash) {
+  throw new Error(".git and non-.git sources did not remain approval-distinct");
+}
+
+const scopeOnePaddedGit = parsePlan(scopeOnePaddedGitPath);
+if (scopeOnePaddedGit.Sources[0].RemoteUrl !==
+      "https://github.com/octocat/Hello-World.git" ||
+    scopeOnePaddedGit.ApprovalHash !== scopeOneGit.ApprovalHash) {
+  throw new Error("zero-padded default HTTPS port changed the .git plan");
+}
+
 const scopeOneFleet = parsePlan(scopeOneFleetPath);
 if (scopeOneFleet.FleetMode !== "native" ||
     scopeOneFleet.RememberPreferences !== true ||
@@ -4843,6 +5048,16 @@ grep -Fq "Output root:          ${HOME}/rhyolite-output/repo-review" \
     --validate-only >/dev/null ||
     fail 'Bash runner rejected a public non-GitHub HTTPS repository.'
 
+if "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --repo https://github.com/octocat/Hello-World.git \
+    --scope 1 \
+    --output-root "${fixture_dir}/output" \
+    --non-interactive \
+    --validate-only >/dev/null 2>&1; then
+    fail 'Bash runner accepted distinct approval sources with a duplicate artifact slug.'
+fi
+
 unsafe_repositories=(
     "${fixture_public_repository_url_http}"
     "${fixture_userinfo_repository_url}"
@@ -4854,6 +5069,7 @@ unsafe_repositories=(
     "${fixture_public_repository_url_encoded_slash}"
     "${fixture_public_repository_url_encoded_space}"
     "${fixture_public_repository_url_bad_escape}"
+    'https://github.com:12345678901234567890/owner/repository'
 )
 for unsafe_repository in "${unsafe_repositories[@]}"; do
     if "${RUNNER}" \
@@ -4882,7 +5098,15 @@ cat > "${local_guard_bin}/python3" <<'EOF'
 printf 'python3\n' >> "$MOCK_GUARD_LOG"
 exit 99
 EOF
-chmod +x "${local_guard_bin}/git" "${local_guard_bin}/python3"
+cat > "${local_guard_bin}/curl" <<'EOF'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$MOCK_GUARD_LOG"
+exit 99
+EOF
+chmod +x \
+    "${local_guard_bin}/git" \
+    "${local_guard_bin}/python3" \
+    "${local_guard_bin}/curl"
 local_validation_stdout="${fixture_dir}/local-validation.stdout"
 local_validation_stderr="${fixture_dir}/local-validation.stderr"
 if PATH="${local_guard_bin}:${PATH}" \
@@ -5032,6 +5256,7 @@ grep -Fq 'signal_process_tree' "${RUNNER}" &&
 mock_bin="${fixture_dir}/mock-bin"
 mock_log="${fixture_dir}/mock-copilot-args.txt"
 mock_git_log="${fixture_dir}/mock-git-args.txt"
+mock_dns_log="${fixture_dir}/mock-dns-requests.txt"
 mock_hostile_trailer_sentinel="${fixture_dir}/hostile-trailer-executed"
 export MOCK_HOSTILE_TRAILER_SENTINEL="${mock_hostile_trailer_sentinel}"
 mkdir -p -- "${mock_bin}"
@@ -5046,6 +5271,64 @@ if [[ "${1-}" == "--version" ]]; then
     printf 'git version 2.55.0\n'
     exit 0
 fi
+
+assert_anonymous_repository_safety() {
+    local expected_resolve="${MOCK_EXPECT_GIT_CURL_RESOLVE-}"
+
+    [[ "${HOME}" == */.anonymous-git-home ]] || exit 60
+    [[ "${USERPROFILE-}" == "${HOME}" ]] || exit 61
+    [[ "${XDG_CONFIG_HOME-}" == "${HOME}" ]] || exit 62
+    [[ "${CURL_HOME-}" == "${HOME}" ]] || exit 63
+    [[ "${GIT_CONFIG_NOSYSTEM-}" == 1 ]] || exit 64
+    [[ "${GIT_CONFIG_GLOBAL-}" == /dev/null ]] || exit 65
+    [[ -z "${COPILOT_GITHUB_TOKEN-}" &&
+        -z "${GH_TOKEN-}" &&
+        -z "${GITHUB_TOKEN-}" &&
+        -z "${GIT_ASKPASS-}" &&
+        -z "${SSH_ASKPASS-}" &&
+        -z "${SSH_AUTH_SOCK-}" &&
+        -z "${NETRC-}" &&
+        -z "${http_proxy-}" &&
+        -z "${https_proxy-}" &&
+        -z "${all_proxy-}" &&
+        -z "${no_proxy-}" &&
+        -z "${HTTP_PROXY-}" &&
+        -z "${HTTPS_PROXY-}" &&
+        -z "${ALL_PROXY-}" &&
+        -z "${NO_PROXY-}" ]] || exit 66
+    [[ " $* " == *" credential.helper= "* ]] || exit 67
+    [[ " $* " == *" credential.interactive=false "* ]] || exit 68
+    [[ " $* " == *" http.extraHeader= "* ]] || exit 69
+    [[ " $* " == *" http.proxy= "* ]] || exit 71
+    [[ " $* " == *" http.sslVerify=true "* ]] || exit 72
+    [[ " $* " == *" http.followRedirects=false "* ]] || exit 73
+    [[ " $* " == *" http.curloptResolve="* ]] || exit 74
+    if [[ -n "${expected_resolve}" ]]; then
+        [[ " $* " == *" http.curloptResolve=${expected_resolve} "* ]] ||
+            exit 75
+    fi
+}
+
+assert_expected_repository_argument() {
+    local expected_repository="${MOCK_EXPECT_GIT_REPOSITORY-}"
+    local repository_seen=0
+    local argument
+
+    if [[ -n "${expected_repository}" ]]; then
+        for argument in "$@"; do
+            if [[ "${argument}" == "${expected_repository}" ]]; then
+                repository_seen=1
+                break
+            fi
+        done
+        ((repository_seen)) || exit 76
+    fi
+}
+
+assert_anonymous_repository_network() {
+    assert_anonymous_repository_safety "$@"
+    assert_expected_repository_argument "$@"
+}
 
 command_name=""
 for argument in "$@"; do
@@ -5070,17 +5353,18 @@ for argument in "$@"; do
     previous="${argument}"
 done
 
+if [[ "${working_directory}" == *-readonly ]]; then
+    assert_anonymous_repository_safety "$@"
+    printf 'clone-operation %s %s\n' \
+        "${command_name}" "$*" >> "${MOCK_GIT_LOG}"
+fi
+
 case "${command_name}" in
     version)
         printf '%s\n' 'git version 2.43.0'
         ;;
     ls-remote)
-        [[ "${HOME}" == */.anonymous-git-home ]] || exit 82
-        [[ -z "${COPILOT_GITHUB_TOKEN-}" ]] || exit 83
-        [[ " $* " == *" credential.interactive=false "* ]] || exit 84
-        [[ " $* " == *" http.followRedirects=false "* ]] || exit 85
-        [[ " $* " == *" http.proxy= "* ]] || exit 86
-        [[ " $* " == *" http.curloptResolve="* ]] || exit 87
+        assert_anonymous_repository_network "$@"
         printf 'ls-remote %s\n' "$*" >> "${MOCK_GIT_LOG}"
         if [[ "${MOCK_PREFLIGHT_FAIL-}" == "1" ]] ||
             [[ -n "${MOCK_PREFLIGHT_FAIL_URL-}" &&
@@ -5099,19 +5383,7 @@ case "${command_name}" in
         mkdir -p -- "${destination}/.git"
         ;;
     clone)
-        [[ "${HOME}" == */.anonymous-git-home ]] || exit 61
-        [[ "${USERPROFILE-}" == "${HOME}" ]] || exit 62
-        [[ "${XDG_CONFIG_HOME-}" == "${HOME}" ]] || exit 63
-        [[ -z "${COPILOT_GITHUB_TOKEN-}" ]] || exit 64
-        [[ -z "${GH_TOKEN-}" ]] || exit 65
-        [[ -z "${GITHUB_TOKEN-}" ]] || exit 66
-        [[ " $* " == *" credential.helper= "* ]] || exit 71
-        [[ " $* " == *" credential.interactive=false "* ]] || exit 72
-        [[ " $* " == *" http.extraHeader= "* ]] || exit 73
-        [[ " $* " == *" http.followRedirects=false "* ]] || exit 74
-        [[ " $* " == *" http.proxy= "* ]] || exit 79
-        [[ " $* " == *" http.sslVerify=true "* ]] || exit 80
-        [[ " $* " == *" http.curloptResolve="* ]] || exit 81
+        assert_anonymous_repository_network "$@"
         printf 'clone %s\n' "$*" >> "${MOCK_GIT_LOG}"
         if [[ "${MOCK_CLONE_FAIL-}" == "1" ]]; then
             printf '%s\n' \
@@ -5123,9 +5395,7 @@ case "${command_name}" in
         printf '# mock repository\n' > "${destination}/README.md"
         ;;
     fetch)
-        [[ "${HOME}" == */.anonymous-git-home ]] || exit 75
-        [[ -z "${COPILOT_GITHUB_TOKEN-}" ]] || exit 76
-        [[ " $* " == *" credential.interactive=false "* ]] || exit 77
+        assert_anonymous_repository_network "$@"
         printf 'fetch %s\n' "$*" >> "${MOCK_GIT_LOG}"
         if [[ "${working_directory}" == *-preflight &&
             "${MOCK_PREFLIGHT_FETCH_FAIL-}" == "1" ]]; then
@@ -5135,7 +5405,13 @@ case "${command_name}" in
             exit 88
         fi
         ;;
-    cat-file|checkout|diff)
+    cat-file)
+        if [[ "${MOCK_REQUIRE_POST_CLONE_FETCH-}" == 1 &&
+            "${working_directory}" == *-readonly ]]; then
+            exit 89
+        fi
+        ;;
+    checkout|diff)
         ;;
     status)
         if [[ "${MOCK_CORRUPT_REPORT_AFTER_VALIDATION-}" == "1" &&
@@ -5279,11 +5555,34 @@ if [[ "${1-}" == *research-egress-broker.py ]] ||
     exec /usr/bin/python3 "$@"
 fi
 [[ "${1-}" == "-" && -n "${2-}" && -n "${3-}" ]] || exit 82
+if [[ -n "${MOCK_DNS_LOG-}" ]]; then
+    printf '%s:%s\n' "$2" "$3" >> "${MOCK_DNS_LOG}"
+fi
+if [[ "${MOCK_DNS_NONPUBLIC-}" == 1 ]]; then
+    printf 'Repository host must resolve only to public IP addresses: %s\n' \
+        "$2" >&2
+    exit 91
+fi
+if [[ -n "${MOCK_DNS_RESOLVE_OVERRIDE-}" ]]; then
+    printf '%s\n' "${MOCK_DNS_RESOLVE_OVERRIDE}"
+    exit 0
+fi
 printf '%s:%s:93.184.216.34\n' "$2" "$3"
 MOCK_PYTHON
 cat > "${mock_bin}/copilot" <<'MOCK_COPILOT'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-6-sol"
+    - "gpt-5.6-sol"
+    - "claude-fable-5"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 
 [[ -z "${COPILOT_ALLOW_ALL-}" ]] || exit 71
 agent=""
@@ -5342,6 +5641,7 @@ for name in (
 ):
     profile = agents.get(name)
     if profile != {
+        "model": "inherit",
         "effortLevel": "max",
         "contextTier": "long_context",
     }:
@@ -5883,21 +6183,51 @@ if grep -Fq 'Public research mode:' "${MOCK_LOG}.review-request" &&
 fi
 emit_core_report
 MOCK_COPILOT
-chmod +x "${mock_bin}/git" "${mock_bin}/python3" "${mock_bin}/copilot"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" "${mock_bin}/curl"
+cat > "${mock_bin}/curl.map" <<'EOF'
+https://github.com/octocat/Hello-World/info/refs?service=git-upload-pack|200||github.com:443:93.184.216.34
+https://github.com/githubtraining/hellogitworld/info/refs?service=git-upload-pack|200||github.com:443:93.184.216.34
+https://github.com/octocat/Private-World/info/refs?service=git-upload-pack|200||github.com:443:93.184.216.34
+https://gitlab.com/example/blocked/info/refs?service=git-upload-pack|200||gitlab.com:443:93.184.216.34
+EOF
+chmod +x \
+    "${mock_bin}/git" \
+    "${mock_bin}/python3" \
+    "${mock_bin}/copilot" \
+    "${mock_bin}/curl"
 
 copilot_guard_bin="${fixture_dir}/copilot-guard-bin"
 mkdir -p -- "${copilot_guard_bin}"
 cat > "${copilot_guard_bin}/copilot" <<'MOCK_COPILOT_GUARD'
 #!/usr/bin/env bash
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-5.6-sol"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 printf '%s\n' 'copilot must not execute in this test' >&2
 exit 97
 MOCK_COPILOT_GUARD
-chmod +x "${copilot_guard_bin}/copilot"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${copilot_guard_bin}/curl"
+chmod +x "${copilot_guard_bin}/copilot" \
+    "${copilot_guard_bin}/curl"
 
 resolve_fail_bin="${fixture_dir}/resolve-fail-bin"
 mkdir -p -- "${resolve_fail_bin}"
 cat > "${resolve_fail_bin}/copilot" <<'RESOLVE_FAIL_COPILOT'
 #!/usr/bin/env bash
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-5.6-sol"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 printf '%s\n' 'copilot must not execute in resolve-failure test' >&2
 exit 98
 RESOLVE_FAIL_COPILOT
@@ -5910,7 +6240,12 @@ fi
 printf '%s\n' 'mock public endpoint resolution failure' >&2
 exit 91
 RESOLVE_FAIL_PYTHON
-chmod +x "${resolve_fail_bin}/copilot" "${resolve_fail_bin}/python3"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${resolve_fail_bin}/curl"
+chmod +x \
+    "${resolve_fail_bin}/copilot" \
+    "${resolve_fail_bin}/python3" \
+    "${resolve_fail_bin}/curl"
 
 plaintext_copilot_home="${fixture_dir}/plaintext-copilot-home"
 metadata_copilot_home="${fixture_dir}/metadata-copilot-home"
@@ -6023,6 +6358,816 @@ grep -Fq 'mock public endpoint resolution failure' "${resolve_fail_stderr}" ||
 [[ ! -e "${resolve_fail_workspace}" && ! -e "${resolve_fail_output}" ]] ||
     fail 'Unresolved public endpoint failure created workspace or output roots.'
 
+mock_curl_sequence="${mock_bin}/curl.sequence"
+mock_curl_counter="${mock_bin}/curl.counter"
+mock_curl_log="${mock_bin}/curl.log"
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+
+redirect_plan_hash() {
+    local repository="$1"
+    local workspace_root="$2"
+    local output_root="$3"
+    local plan_path="$4"
+    local requested_commit="${5-}"
+    local -a arguments=(
+        --repo "${repository}"
+        --scope 1
+        --workspace-root "${workspace_root}"
+        --output-root "${output_root}"
+        --non-interactive
+        --no-open-html
+        --plan-only
+    )
+
+    if [[ -n "${requested_commit}" ]]; then
+        arguments+=(--commit "${requested_commit}")
+    fi
+    COPILOT_HOME="${metadata_copilot_home}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" "${arguments[@]}" > "${plan_path}"
+    node -e '
+const fs = require("fs");
+const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)) process.exit(2);
+process.stdout.write(plan.ApprovalHash);
+' "${plan_path}"
+}
+
+redirect_selected_repository='https://github.com/octocat/Redirect-Source.git'
+redirect_initial_discovery_url="${redirect_selected_repository}/info/refs?service=git-upload-pack"
+redirect_expected_resolve='github.com:443:93.184.216.34'
+
+run_redirect_failure_case() {
+    local case_name="$1"
+    local expected_request_count="$2"
+    local expected_error_fragment="$3"
+    local expected_exit_code="${4:-1}"
+    local forbidden_location_fragment="${5-}"
+    local case_root="${fixture_dir}/redirect-${case_name}"
+    local case_workspace="${case_root}/workspace"
+    local case_output="${case_root}/output"
+    local case_plan="${case_root}/plan.json"
+    local case_stdout="${case_root}/stdout.txt"
+    local case_stderr="${case_root}/stderr.txt"
+    local case_hash
+    local case_status
+    local request_count
+    local run_path
+
+    mkdir -p -- "${case_root}"
+    cat > "${mock_curl_sequence}"
+    rm -f -- "${mock_curl_counter}"
+    : > "${mock_curl_log}"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    case_hash="$(
+        redirect_plan_hash \
+            "${redirect_selected_repository}" \
+            "${case_workspace}" \
+            "${case_output}" \
+            "${case_plan}"
+    )" || fail "${case_name}: could not generate the redirect failure plan."
+
+    set +e
+    MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        COPILOT_GITHUB_TOKEN=poisoned-copilot-token \
+        GH_TOKEN=poisoned-gh-token \
+        GITHUB_TOKEN=poisoned-github-token \
+        GIT_ASKPASS=/poisoned/askpass \
+        SSH_ASKPASS=/poisoned/ssh-askpass \
+        SSH_AUTH_SOCK=/poisoned/agent.sock \
+        NETRC=/poisoned/netrc \
+        http_proxy=http://127.0.0.1:9 \
+        https_proxy=http://127.0.0.1:9 \
+        all_proxy=http://127.0.0.1:9 \
+        no_proxy='*' \
+        HTTP_PROXY=http://127.0.0.1:9 \
+        HTTPS_PROXY=http://127.0.0.1:9 \
+        ALL_PROXY=http://127.0.0.1:9 \
+        NO_PROXY='*' \
+        CURL_HOME=/poisoned/curl-home \
+        GIT_CONFIG_GLOBAL=/poisoned/gitconfig \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo "${redirect_selected_repository}" \
+            --scope 1 \
+            --workspace-root "${case_workspace}" \
+            --output-root "${case_output}" \
+            --expected-plan-hash "${case_hash}" \
+            --non-interactive \
+            --no-open-html >"${case_stdout}" 2>"${case_stderr}"
+    case_status=$?
+    set -e
+
+    ((case_status != 0)) ||
+        fail "${case_name}: unsafe redirect unexpectedly succeeded."
+    [[ -f "${mock_curl_counter}" ]] ||
+        fail "${case_name}: repository discovery curl was not invoked."
+    read -r request_count < "${mock_curl_counter}"
+    [[ "${request_count}" == "${expected_request_count}" ]] ||
+        fail "${case_name}: expected ${expected_request_count} curl requests, got ${request_count}."
+    [[ "$(wc -l < "${mock_curl_log}" | tr -d '[:space:]')" == \
+        "${expected_request_count}" ]] ||
+        fail "${case_name}: curl request log count is incorrect."
+    [[ ! -s "${mock_git_log}" ]] ||
+        fail "${case_name}: redirect rejection reached a Git network operation."
+    [[ ! -s "${mock_log}" ]] ||
+        fail "${case_name}: redirect rejection started a worker."
+    grep -Fq 'RHYOLITE ERROR' "${case_stdout}" &&
+        grep -Fq 'Stage: anonymous repository preflight' "${case_stdout}" ||
+        fail "${case_name}: terminal redirect failure contract is missing."
+
+    run_path="$(
+        find "${case_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    [[ -n "${run_path}" ]] ||
+        fail "${case_name}: redirect rejection did not preserve artifacts."
+    node - \
+        "${run_path}" \
+        "${redirect_selected_repository}" \
+        "${expected_error_fragment}" \
+        "${case_name}" \
+        "${expected_exit_code}" \
+        "${forbidden_location_fragment}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [
+  run,
+  selectedRepository,
+  expectedError,
+  caseName,
+  expectedExitText,
+  forbiddenLocation,
+] = process.argv.slice(2);
+const expectedExit = Number.parseInt(expectedExitText, 10);
+const repository = path.join(run, "github--octocat--redirect-source");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
+const plan = JSON.parse(fs.readFileSync(path.join(run, "review-plan.json")));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
+if (state.Status !== "AccessPreflightFailed" ||
+    state.SchemaVersion !== 6 ||
+    state.ExitCode !== expectedExit ||
+    state.Repository !== selectedRepository ||
+    state.Source?.Kind !== "RemoteUrl" ||
+    state.Source?.RemoteUrl !== selectedRepository ||
+    state.Commit !== "" ||
+    state.Paths?.ReadOnlyCheckout !== "" ||
+    state.Paths?.VerificationClone !== "" ||
+    runState.Status !== "Failed" ||
+    runState.Repositories?.[0]?.Status !== "AccessPreflightFailed" ||
+    plan.Sources?.[0]?.RemoteUrl !== selectedRepository ||
+    plan.Sources?.[0]?.Slug !== "github--octocat--redirect-source" ||
+    !errors.includes("Anonymous repository redirect discovery preflight failed.") ||
+    !errors.includes(expectedError) ||
+    (forbiddenLocation &&
+      `${errors}\n${report}\n${handoff}`.includes(forbiddenLocation))) {
+  throw new Error(`${caseName}: redirect failure artifacts are invalid: ${
+    JSON.stringify({
+      stateStatus: state.Status,
+      schemaVersion: state.SchemaVersion,
+      exitCode: state.ExitCode,
+      repository: state.Repository,
+      source: state.Source,
+      commit: state.Commit,
+      paths: state.Paths,
+      runStatus: runState.Status,
+      repositoryStatus: runState.Repositories?.[0]?.Status,
+      planSource: plan.Sources?.[0],
+      hasSummary: errors.includes(
+        "Anonymous repository redirect discovery preflight failed.",
+      ),
+      hasExpectedError: errors.includes(expectedError),
+      expectedError,
+      exposedForbiddenLocation: forbiddenLocation &&
+        `${errors}\n${report}\n${handoff}`.includes(forbiddenLocation),
+    })
+  }`);
+}
+JS
+    if [[ -n "${forbidden_location_fragment}" ]] &&
+        {
+            grep -Fq -- "${forbidden_location_fragment}" "${case_stdout}" ||
+                grep -Fq -- "${forbidden_location_fragment}" "${case_stderr}"
+        }; then
+        fail "${case_name}: terminal output exposed the unvalidated Location."
+    fi
+    if find "${case_workspace}" \
+        \( -name '*-transport-error*' -o -name '*-preflight' \
+        -o -name '*-readonly' -o -name '*-session' \) \
+        -print -quit | grep -q .; then
+        fail "${case_name}: redirect rejection left transport, clone, or worker scratch state."
+    fi
+    cp -- "${mock_curl_log}" "${case_root}/curl.log"
+    rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+}
+
+redirect_success_root="${fixture_dir}/redirect-success"
+redirect_success_workspace="${redirect_success_root}/workspace"
+redirect_success_output="${redirect_success_root}/output"
+redirect_success_plan="${redirect_success_root}/plan.json"
+redirect_success_stdout="${redirect_success_root}/stdout.txt"
+redirect_success_stderr="${redirect_success_root}/stderr.txt"
+redirect_success_commit='7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'
+redirect_success_selected='https://github.com/octocat/Hello-World.git'
+redirect_success_transport='https://github.com/octocat/Final.git'
+redirect_glob_discovery_url='https://github.com/octocat/Redirect-[One]{A}.git/info/refs?service=git-upload-pack'
+mkdir -p -- "${redirect_success_root}"
+cat > "${mock_curl_sequence}" <<EOF
+https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack|301|https://GITHUB.COM:0443/octocat/Redirect-[One]{A}.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+${redirect_glob_discovery_url}|301|/octocat/Redirect-Two.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Redirect-Two.git/info/refs?service=git-upload-pack|301|https://github.com:443/octocat/Final.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Final.git/info/refs?service=git-upload-pack|200||${redirect_expected_resolve}
+EOF
+rm -f -- "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+redirect_success_hash="$(
+    redirect_plan_hash \
+        "${redirect_success_selected}" \
+        "${redirect_success_workspace}" \
+        "${redirect_success_output}" \
+        "${redirect_success_plan}" \
+        "${redirect_success_commit}"
+)" || fail 'Could not generate the bounded redirect success plan.'
+if ! MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_GIT_REPOSITORY="${redirect_success_transport}" \
+    MOCK_EXPECT_GIT_CURL_RESOLVE="${redirect_expected_resolve}" \
+    MOCK_REQUIRE_POST_CLONE_FETCH=1 \
+    MOCK_DNS_LOG="${mock_dns_log}" \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    COPILOT_GITHUB_TOKEN=poisoned-copilot-token \
+    GH_TOKEN=poisoned-gh-token \
+    GITHUB_TOKEN=poisoned-github-token \
+    GIT_ASKPASS=/poisoned/askpass \
+    SSH_ASKPASS=/poisoned/ssh-askpass \
+    SSH_AUTH_SOCK=/poisoned/agent.sock \
+    NETRC=/poisoned/netrc \
+    http_proxy=http://127.0.0.1:9 \
+    https_proxy=http://127.0.0.1:9 \
+    all_proxy=http://127.0.0.1:9 \
+    no_proxy='*' \
+    HTTP_PROXY=http://127.0.0.1:9 \
+    HTTPS_PROXY=http://127.0.0.1:9 \
+    ALL_PROXY=http://127.0.0.1:9 \
+    NO_PROXY='*' \
+    CURL_HOME=/poisoned/curl-home \
+    GIT_CONFIG_GLOBAL=/poisoned/gitconfig \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${redirect_success_selected}" \
+        --commit "${redirect_success_commit}" \
+        --scope 1 \
+        --workspace-root "${redirect_success_workspace}" \
+        --output-root "${redirect_success_output}" \
+        --expected-plan-hash "${redirect_success_hash}" \
+        --non-interactive \
+        --no-open-html >"${redirect_success_stdout}" \
+        2>"${redirect_success_stderr}"; then
+    cat "${redirect_success_stderr}" >&2
+    fail 'Three-hop same-origin redirect resolution unexpectedly failed.'
+fi
+[[ ! -s "${redirect_success_stderr}" ]] ||
+    fail 'Three-hop same-origin redirect resolution wrote unexpected stderr.'
+[[ "$(< "${mock_curl_counter}")" == 4 ]] ||
+    fail 'Three-hop same-origin redirect resolution used the wrong request count.'
+[[ "$(wc -l < "${mock_curl_log}" | tr -d '[:space:]')" == 4 ]] ||
+    fail 'Three-hop same-origin redirect resolution curl log is incomplete.'
+[[ "$(grep -Fc -- "${redirect_glob_discovery_url}" "${mock_curl_log}")" == 1 ]] ||
+    fail 'Glob-like redirect path was not requested exactly once as literal data.'
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 1 ]] &&
+    grep -Fxq 'github.com:443' "${mock_dns_log}" ||
+    fail 'Redirect resolution repeated DNS lookup or resolved beyond the original host.'
+for git_operation in ls-remote fetch clone; do
+    grep -F "${git_operation} " "${mock_git_log}" |
+        grep -Fq -- "${redirect_success_transport}" ||
+        fail "Resolved .git transport did not reach Git ${git_operation}."
+done
+[[ "$(grep -c '^fetch ' "${mock_git_log}")" == 2 ]] &&
+    grep '^fetch ' "${mock_git_log}" | grep -Fq -- '-preflight' &&
+    grep '^fetch ' "${mock_git_log}" | grep -Fq -- '-readonly' ||
+    fail 'Resolved transport did not feed both preflight and post-clone exact-commit fetches.'
+for clone_git_operation in \
+    cat-file fetch checkout rev-parse ls-files ls-tree for-each-ref \
+    log archive status diff; do
+    grep -Fq "clone-operation ${clone_git_operation} " "${mock_git_log}" ||
+        fail "Clone-path Git ${clone_git_operation} bypassed the anonymous repository wrapper."
+done
+while IFS= read -r clone_operation_line; do
+    [[ "${clone_operation_line}" == \
+        *" http.curloptResolve=${redirect_expected_resolve} "* ]] ||
+        fail 'Clone-path Git operation lost the original DNS pin.'
+done < <(grep '^clone-operation ' "${mock_git_log}")
+! grep -Fq -- "${redirect_success_selected}" "${mock_git_log}" ||
+    fail 'Git network operations reused the original pre-redirect endpoint.'
+redirect_success_run="$(
+    find "${redirect_success_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${redirect_success_run}" \
+    "${redirect_success_selected}" \
+    "${redirect_success_hash}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, selectedRepository, expectedHash] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const plan = JSON.parse(fs.readFileSync(path.join(run, "review-plan.json")));
+if (state.Status !== "Completed" ||
+    state.Repository !== selectedRepository ||
+    state.Source?.RemoteUrl !== selectedRepository ||
+    state.Slug !== "github--octocat--hello-world" ||
+    plan.ApprovalHash !== expectedHash ||
+    plan.Sources?.[0]?.RemoteUrl !== selectedRepository ||
+    plan.Sources?.[0]?.Slug !== "github--octocat--hello-world") {
+  throw new Error("redirect success artifacts lost the original .git source");
+}
+JS
+cp -- "${mock_curl_log}" "${redirect_success_root}/curl.log"
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+
+suffix_redirect_root="${fixture_dir}/suffix-redirect-success"
+suffix_redirect_workspace="${suffix_redirect_root}/workspace"
+suffix_redirect_output="${suffix_redirect_root}/output"
+suffix_redirect_plan="${suffix_redirect_root}/plan.json"
+suffix_redirect_stdout="${suffix_redirect_root}/stdout.txt"
+suffix_redirect_stderr="${suffix_redirect_root}/stderr.txt"
+suffix_redirect_selected='https://github.com/octocat/No-Suffix-Redirect'
+suffix_redirect_transport='https://github.com/octocat/Server-Supplied.git'
+mkdir -p -- "${suffix_redirect_root}"
+cat > "${mock_curl_sequence}" <<EOF
+https://github.com/octocat/No-Suffix-Redirect/info/refs?service=git-upload-pack|301|https://github.com/octocat/Server-Supplied.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Server-Supplied.git/info/refs?service=git-upload-pack|200||${redirect_expected_resolve}
+EOF
+rm -f -- "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+suffix_redirect_hash="$(
+    redirect_plan_hash \
+        "${suffix_redirect_selected}" \
+        "${suffix_redirect_workspace}" \
+        "${suffix_redirect_output}" \
+        "${suffix_redirect_plan}"
+)" || fail 'Could not generate the server-supplied .git redirect plan.'
+if ! MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_GIT_REPOSITORY="${suffix_redirect_transport}" \
+    MOCK_EXPECT_GIT_CURL_RESOLVE="${redirect_expected_resolve}" \
+    MOCK_DNS_LOG="${mock_dns_log}" \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${suffix_redirect_selected}" \
+        --scope 1 \
+        --workspace-root "${suffix_redirect_workspace}" \
+        --output-root "${suffix_redirect_output}" \
+        --expected-plan-hash "${suffix_redirect_hash}" \
+        --non-interactive \
+        --no-open-html >"${suffix_redirect_stdout}" \
+        2>"${suffix_redirect_stderr}"; then
+    cat "${suffix_redirect_stderr}" >&2
+    fail 'Validated server-supplied .git transport unexpectedly failed.'
+fi
+[[ ! -s "${suffix_redirect_stderr}" ]] ||
+    fail 'Validated server-supplied .git transport wrote unexpected stderr.'
+[[ "$(< "${mock_curl_counter}")" == 2 ]] ||
+    fail 'Server-supplied .git transport used the wrong discovery request count.'
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 1 ]] &&
+    grep -Fxq 'github.com:443' "${mock_dns_log}" ||
+    fail 'Server-supplied .git transport repeated or changed DNS resolution.'
+for git_operation in ls-remote clone; do
+    grep -F "${git_operation} " "${mock_git_log}" |
+        grep -Fq -- "${suffix_redirect_transport}" ||
+        fail "Server-supplied .git transport did not reach Git ${git_operation}."
+done
+! grep -Fq -- "${suffix_redirect_selected} HEAD" "${mock_git_log}" ||
+    fail 'Git ignored the validated server-supplied .git transport.'
+suffix_redirect_run="$(
+    find "${suffix_redirect_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${suffix_redirect_run}" \
+    "${suffix_redirect_selected}" \
+    "${suffix_redirect_hash}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, selectedRepository, expectedHash] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--no-suffix-redirect");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const plan = JSON.parse(fs.readFileSync(path.join(run, "review-plan.json")));
+if (state.Status !== "Completed" ||
+    state.Repository !== selectedRepository ||
+    state.Source?.RemoteUrl !== selectedRepository ||
+    plan.ApprovalHash !== expectedHash ||
+    plan.Sources?.[0]?.RemoteUrl !== selectedRepository ||
+    selectedRepository.endsWith(".git")) {
+  throw new Error("server-supplied .git transport changed selected identity");
+}
+JS
+cp -- "${mock_curl_log}" "${suffix_redirect_root}/curl.log"
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+
+run_redirect_failure_case \
+    fourth-redirect \
+    4 \
+    'Repository discovery exceeded the maximum of three HTTP 301 redirects.' <<EOF
+${redirect_initial_discovery_url}|301|https://github.com/octocat/Hop-One.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Hop-One.git/info/refs?service=git-upload-pack|301|https://github.com/octocat/Hop-Two.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Hop-Two.git/info/refs?service=git-upload-pack|301|https://github.com/octocat/Hop-Three.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Hop-Three.git/info/refs?service=git-upload-pack|301|https://github.com/octocat/Hop-Four.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+EOF
+
+run_redirect_failure_case \
+    self-loop \
+    1 \
+    'Repository discovery rejected a normalized redirect loop.' <<EOF
+${redirect_initial_discovery_url}|301|${redirect_initial_discovery_url}|${redirect_expected_resolve}
+EOF
+
+run_redirect_failure_case \
+    multi-url-loop \
+    3 \
+    'Repository discovery rejected a normalized redirect loop.' <<EOF
+${redirect_initial_discovery_url}|301|https://github.com/octocat/Loop-One.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Loop-One.git/info/refs?service=git-upload-pack|301|https://github.com/octocat/Loop-Two.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+https://github.com/octocat/Loop-Two.git/info/refs?service=git-upload-pack|301|https://github.com/octocat/Loop-One.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+EOF
+
+while IFS='|' read -r case_name redirect_target expected_error; do
+    run_redirect_failure_case \
+        "${case_name}" \
+        1 \
+        "${expected_error}" <<EOF
+${redirect_initial_discovery_url}|301|${redirect_target}|${redirect_expected_resolve}
+EOF
+done <<'EOF'
+changed-host|https://gitlab.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
+changed-subdomain|//api.github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
+changed-port|https://github.com:444/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
+http-downgrade|http://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+file-scheme|file:///tmp/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+ssh-scheme|ssh://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+scp-syntax|git@github.com:octocat/Redirected.git|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+literal-credentials|https://user:pass@github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-credentials|https://user%3Apass%40github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+loopback-ipv4|https://127.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+private-ipv4|https://10.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+loopback-ipv6|https://[::1]/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+localhost|https://localhost/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+local-suffix|https://github.local/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+malformed-location|not-a-valid-url|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+fragment-tampering|https://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack#fragment|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+query-service-tampering|https://github.com/octocat/Redirected.git/info/refs?service=git-receive-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+query-extra-tampering|https://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack&extra=1|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+dot-segment|https://github.com/octocat/../Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-dot-segment|https://github.com/octocat/%2E%2E/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+trailing-repository-slash|https://github.com/octocat/Redirected.git//info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-slash|https://github.com/octocat%2FRedirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-backslash|https://github.com/octocat%5CRedirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-control|https://github.com/octocat/%0ARedirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+encoded-space|https://github.com/octocat/Redirected%20Repository.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+EOF
+
+redirect_literal_credentials_target="$(
+    printf '%s%s%s' \
+        'https://redirect-user:redirect-pass' \
+        '@github.com' \
+        '/octocat/Redirected.git/info/refs?service=git-upload-pack'
+)"
+run_redirect_failure_case \
+    constructed-literal-credentials \
+    1 \
+    'Repository discovery returned a redirect target that violates the safe HTTPS URL policy.' <<EOF
+${redirect_initial_discovery_url}|301|${redirect_literal_credentials_target}|${redirect_expected_resolve}
+EOF
+
+run_redirect_failure_case \
+    unvalidated-location-redaction \
+    1 \
+    'Repository discovery returned a redirect target that violates the safe HTTPS URL policy.' \
+    1 \
+    'unsafe-location-sentinel' <<EOF
+${redirect_initial_discovery_url}|301|https://github.com/octocat/unsafe-location-sentinel.git/info/refs?service=git-receive-pack|${redirect_expected_resolve}
+EOF
+
+run_redirect_failure_case \
+    empty-location \
+    1 \
+    'Repository discovery returned HTTP 301 without a usable redirect target.' <<EOF
+${redirect_initial_discovery_url}|301||${redirect_expected_resolve}
+EOF
+
+for redirect_status in 302 307 308; do
+    run_redirect_failure_case \
+        "status-${redirect_status}" \
+        1 \
+        "Repository discovery rejected unsupported HTTP redirect status ${redirect_status}." <<EOF
+${redirect_initial_discovery_url}|${redirect_status}|https://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+EOF
+done
+
+run_redirect_failure_case \
+    success-with-location \
+    1 \
+    'Repository discovery returned an unexpected redirect target with a success status.' <<EOF
+${redirect_initial_discovery_url}|200|https://github.com/octocat/Unexpected.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+EOF
+
+run_redirect_failure_case \
+    http-failure \
+    1 \
+    'Repository discovery returned unsupported HTTP status 500.' <<EOF
+${redirect_initial_discovery_url}|500||${redirect_expected_resolve}
+EOF
+
+tls_raw_curl_stderr="$(
+    printf '%s%s%s' \
+        'tls-raw-secret-sentinel https://curl-user:curl-pass' \
+        '@example.com' \
+        '/private'
+)"
+run_redirect_failure_case \
+    tls-failure \
+    1 \
+    'Repository discovery request failed before anonymous access could be verified (curl exit code 60).' \
+    60 \
+    'tls-raw-secret-sentinel' <<EOF
+${redirect_initial_discovery_url}|exit:60|${tls_raw_curl_stderr}|${redirect_expected_resolve}
+EOF
+
+multi_transport_root="${fixture_dir}/multi-transport-failure"
+multi_transport_workspace="${multi_transport_root}/workspace"
+multi_transport_output="${multi_transport_root}/output"
+multi_transport_plan="${multi_transport_root}/plan.json"
+multi_transport_stdout="${multi_transport_root}/stdout.txt"
+multi_transport_stderr="${multi_transport_root}/stderr.txt"
+multi_transport_good='https://github.com/octocat/Hello-World'
+mkdir -p -- "${multi_transport_root}"
+COPILOT_HOME="${metadata_copilot_home}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${multi_transport_good}" \
+        --repo "${redirect_selected_repository}" \
+        --scope 1 \
+        --workspace-root "${multi_transport_workspace}" \
+        --output-root "${multi_transport_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only > "${multi_transport_plan}"
+multi_transport_hash="$(
+    node -e '
+const fs = require("fs");
+const plan = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)) process.exit(2);
+process.stdout.write(plan.ApprovalHash);
+' "${multi_transport_plan}"
+)" || fail 'Multi-source redirect failure plan did not emit a valid hash.'
+cat > "${mock_curl_sequence}" <<EOF
+https://github.com/octocat/Hello-World/info/refs?service=git-upload-pack|200||${redirect_expected_resolve}
+${redirect_initial_discovery_url}|301|https://gitlab.com/octocat/Redirected.git/info/refs?service=git-upload-pack|${redirect_expected_resolve}
+EOF
+rm -f -- "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+if MOCK_DNS_LOG="${mock_dns_log}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${multi_transport_good}" \
+        --repo "${redirect_selected_repository}" \
+        --scope 1 \
+        --workspace-root "${multi_transport_workspace}" \
+        --output-root "${multi_transport_output}" \
+        --expected-plan-hash "${multi_transport_hash}" \
+        --non-interactive \
+        --no-open-html >"${multi_transport_stdout}" \
+        2>"${multi_transport_stderr}"; then
+    fail 'Multi-source redirect rejection unexpectedly succeeded.'
+fi
+[[ "$(< "${mock_curl_counter}")" == 2 ]] &&
+    [[ "$(wc -l < "${mock_curl_log}" | tr -d '[:space:]')" == 2 ]] ||
+    fail 'Multi-source redirect rejection used the wrong discovery request count.'
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 2 ]] &&
+    [[ "$(grep -Fxc 'github.com:443' "${mock_dns_log}")" == 2 ]] ||
+    fail 'Multi-source redirect rejection changed or repeated a per-source DNS lookup.'
+[[ "$(grep -c '^ls-remote ' "${mock_git_log}")" == 1 ]] &&
+    ! grep -Eq '^(clone|fetch) ' "${mock_git_log}" ||
+    fail 'Multi-source redirect rejection reached clone or fetch.'
+[[ ! -s "${mock_log}" ]] ||
+    fail 'Multi-source redirect rejection started a worker.'
+multi_transport_run="$(
+    find "${multi_transport_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${multi_transport_run}" \
+    "${multi_transport_good}" \
+    "${redirect_selected_repository}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, goodSource, failedSource] = process.argv.slice(2);
+const good = path.join(run, "github--octocat--hello-world");
+const failed = path.join(run, "github--octocat--redirect-source");
+const goodState = JSON.parse(fs.readFileSync(path.join(good, "state.json")));
+const failedState = JSON.parse(fs.readFileSync(path.join(failed, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
+const plan = JSON.parse(fs.readFileSync(path.join(run, "review-plan.json")));
+const goodErrors = fs.readFileSync(path.join(good, "errors.txt"), "utf8");
+const failedErrors = fs.readFileSync(path.join(failed, "errors.txt"), "utf8");
+if (goodState.Status !== "PreflightBlocked" ||
+    goodState.Repository !== goodSource ||
+    goodState.Source?.RemoteUrl !== goodSource ||
+    failedState.Status !== "AccessPreflightFailed" ||
+    failedState.Repository !== failedSource ||
+    failedState.Source?.RemoteUrl !== failedSource ||
+    runState.Status !== "Failed" ||
+    runState.Repositories?.[0]?.Status !== "PreflightBlocked" ||
+    runState.Repositories?.[1]?.Status !== "AccessPreflightFailed" ||
+    plan.Sources?.[0]?.RemoteUrl !== goodSource ||
+    plan.Sources?.[1]?.RemoteUrl !== failedSource ||
+    !goodErrors.includes(
+      "one inaccessible or anonymously unreadable source stops the whole approved plan",
+    ) ||
+    !failedErrors.includes(
+      "Anonymous repository redirect discovery preflight failed.",
+    ) ||
+    !failedErrors.includes(
+      "Repository discovery rejected a cross-origin HTTPS redirect.",
+    )) {
+  throw new Error("multi-source redirect failure mapping is invalid");
+}
+JS
+if find "${multi_transport_workspace}" \
+    \( -name '*-transport-error*' -o -name '*-preflight' \
+    -o -name '*-readonly' -o -name '*-session' \) \
+    -print -quit | grep -q .; then
+    fail 'Multi-source redirect rejection left transport, clone, or worker scratch state.'
+fi
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+
+nonpublic_dns_root="${fixture_dir}/nonpublic-dns"
+nonpublic_dns_workspace="${nonpublic_dns_root}/workspace"
+nonpublic_dns_output="${nonpublic_dns_root}/output"
+nonpublic_dns_plan="${nonpublic_dns_root}/plan.json"
+nonpublic_dns_stdout="${nonpublic_dns_root}/stdout.txt"
+nonpublic_dns_stderr="${nonpublic_dns_root}/stderr.txt"
+mkdir -p -- "${nonpublic_dns_root}"
+nonpublic_dns_hash="$(
+    redirect_plan_hash \
+        "${redirect_selected_repository}" \
+        "${nonpublic_dns_workspace}" \
+        "${nonpublic_dns_output}" \
+        "${nonpublic_dns_plan}"
+)" || fail 'Could not generate the nonpublic-DNS rejection plan.'
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+if MOCK_DNS_NONPUBLIC=1 \
+    MOCK_DNS_LOG="${mock_dns_log}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${redirect_selected_repository}" \
+        --scope 1 \
+        --workspace-root "${nonpublic_dns_workspace}" \
+        --output-root "${nonpublic_dns_output}" \
+        --expected-plan-hash "${nonpublic_dns_hash}" \
+        --non-interactive \
+        --no-open-html >"${nonpublic_dns_stdout}" \
+        2>"${nonpublic_dns_stderr}"; then
+    fail 'Mock nonpublic DNS answer unexpectedly reached repository discovery.'
+fi
+grep -Fq 'Repository host must resolve only to public IP addresses: github.com' \
+    "${nonpublic_dns_stderr}" ||
+    fail 'Mock nonpublic DNS rejection was not surfaced.'
+[[ ! -s "${mock_curl_log}" && ! -s "${mock_git_log}" && ! -s "${mock_log}" ]] ||
+    fail 'Mock nonpublic DNS rejection reached curl, Git network, or a worker.'
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 1 ]] &&
+    grep -Fxq 'github.com:443' "${mock_dns_log}" ||
+    fail 'Mock nonpublic DNS rejection did not stop after the original lookup.'
+[[ ! -e "${nonpublic_dns_workspace}" && ! -e "${nonpublic_dns_output}" ]] ||
+    fail 'Mock nonpublic DNS rejection created workspace or output roots.'
+
+pin_mismatch_root="${fixture_dir}/pin-mismatch"
+pin_mismatch_workspace="${pin_mismatch_root}/workspace"
+pin_mismatch_output="${pin_mismatch_root}/output"
+pin_mismatch_plan="${pin_mismatch_root}/plan.json"
+pin_mismatch_stdout="${pin_mismatch_root}/stdout.txt"
+pin_mismatch_stderr="${pin_mismatch_root}/stderr.txt"
+mkdir -p -- "${pin_mismatch_root}"
+pin_mismatch_hash="$(
+    redirect_plan_hash \
+        "${redirect_selected_repository}" \
+        "${pin_mismatch_workspace}" \
+        "${pin_mismatch_output}" \
+        "${pin_mismatch_plan}"
+)" || fail 'Could not generate the mismatched-DNS-pin rejection plan.'
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+if MOCK_DNS_RESOLVE_OVERRIDE='gitlab.com:443:93.184.216.34' \
+    MOCK_DNS_LOG="${mock_dns_log}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo "${redirect_selected_repository}" \
+        --scope 1 \
+        --workspace-root "${pin_mismatch_workspace}" \
+        --output-root "${pin_mismatch_output}" \
+        --expected-plan-hash "${pin_mismatch_hash}" \
+        --non-interactive \
+        --no-open-html >"${pin_mismatch_stdout}" \
+        2>"${pin_mismatch_stderr}"; then
+    fail 'Mismatched original DNS pin unexpectedly reached discovery.'
+fi
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 1 ]] &&
+    grep -Fxq 'github.com:443' "${mock_dns_log}" ||
+    fail 'Mismatched-pin fixture did not perform exactly one original lookup.'
+[[ ! -s "${mock_curl_log}" && ! -s "${mock_git_log}" && ! -s "${mock_log}" ]] &&
+    [[ ! -e "${mock_curl_counter}" ]] ||
+    fail 'Mismatched original DNS pin reached curl, Git network, or a worker.'
+grep -Fq 'RHYOLITE ERROR' "${pin_mismatch_stdout}" &&
+    grep -Fq 'Stage: anonymous repository preflight' "${pin_mismatch_stdout}" ||
+    fail 'Mismatched original DNS pin lost the terminal preflight contract.'
+pin_mismatch_run="$(
+    find "${pin_mismatch_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${pin_mismatch_run}" \
+    "${redirect_selected_repository}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, selectedRepository] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--redirect-source");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const plan = JSON.parse(fs.readFileSync(path.join(run, "review-plan.json")));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (state.Status !== "AccessPreflightFailed" ||
+    state.ExitCode !== 1 ||
+    state.Repository !== selectedRepository ||
+    state.Source?.RemoteUrl !== selectedRepository ||
+    state.Paths?.ReadOnlyCheckout !== "" ||
+    state.Paths?.VerificationClone !== "" ||
+    plan.Sources?.[0]?.RemoteUrl !== selectedRepository ||
+    !errors.includes("Repository discovery rejected an invalid original DNS pin.")) {
+  throw new Error("mismatched original DNS pin artifacts are invalid");
+}
+JS
+if find "${pin_mismatch_workspace}" \
+    \( -name '*-transport-error*' -o -name '*-preflight' \
+    -o -name '*-readonly' -o -name '*-session' \) \
+    -print -quit | grep -q .; then
+    fail 'Mismatched original DNS pin left transport, clone, or worker scratch state.'
+fi
+
+rm -f -- "${mock_curl_sequence}" "${mock_curl_counter}"
+: > "${mock_curl_log}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+: > "${mock_dns_log}"
+
 mock_plan_json="${fixture_dir}/mock-run-plan.json"
 mock_plan_stderr="${fixture_dir}/mock-run-plan.stderr"
 mock_preference_state="${fixture_dir}/mock-preference-state"
@@ -6072,7 +7217,10 @@ mock_run_stderr="${fixture_dir}/mock-run-stderr.txt"
 mock_provenance_lookback=1
 if ! MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_DNS_LOG="${mock_dns_log}" \
     MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_GIT_REPOSITORY='https://github.com/octocat/Hello-World' \
+    MOCK_EXPECT_GIT_CURL_RESOLVE="${redirect_expected_resolve}" \
     MOCK_EXPECT_USER='plaintext-user' \
     MOCK_EXPECT_PLAINTEXT=1 \
     COPILOT_HOME="${plaintext_copilot_home}" \
@@ -6100,6 +7248,21 @@ if ! MOCK_LOG="${mock_log}" \
 fi
 [[ ! -s "${mock_run_stderr}" ]] ||
     fail 'Mock Bash run wrote unexpected stderr.'
+IFS=$'\t' read -r mock_direct_discovery_url _ < "${mock_curl_log}"
+[[ "$(wc -l < "${mock_curl_log}" | tr -d '[:space:]')" == 1 &&
+    "${mock_direct_discovery_url}" == \
+        'https://github.com/octocat/Hello-World/info/refs?service=git-upload-pack' ]] ||
+    fail 'Direct no-suffix source changed before smart-Git discovery.'
+[[ "$(wc -l < "${mock_dns_log}" | tr -d '[:space:]')" == 1 ]] &&
+    grep -Fxq 'github.com:443' "${mock_dns_log}" ||
+    fail 'Direct no-suffix source repeated or changed DNS resolution.'
+for git_operation in ls-remote fetch clone; do
+    grep -F "${git_operation} " "${mock_git_log}" |
+        grep -Fq -- 'https://github.com/octocat/Hello-World' ||
+        fail "Direct no-suffix source did not reach Git ${git_operation}."
+done
+! grep -Fq -- 'https://github.com/octocat/Hello-World.git' "${mock_git_log}" ||
+    fail 'Direct no-suffix source acquired an invented .git suffix.'
 research_invocation_line="$(
     grep -n '^AGENT=rhyolite:repo-research-worker$' "${mock_log}" |
         tail -n 1 | cut -d: -f1
@@ -6146,7 +7309,7 @@ mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
 [[ -n "${mock_run}" ]] || fail 'Mock Bash run did not create an output bundle.'
 grep -Fq 'EFFECTIVE REVIEW PLAN' "${mock_run_output}" ||
     fail 'Mock Bash run did not print the effective review plan.'
-grep -Fq 'Remembered approved fleet/model settings for 1 repositories.' \
+grep -Fq 'Remembered approved fleet/model/effort/context settings for 1 repositories.' \
     "${mock_run_output}" ||
     fail 'Mock Bash run did not report saved launcher preferences.'
 if ! rhyolite_read_preference \
@@ -6287,12 +7450,15 @@ if (state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
     state.Status !== "Completed") {
   throw new Error("repository state lost the exact commit or status");
 }
-if (state.SchemaVersion !== 5 ||
+if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
+    state.Model !== "gpt-5.6-sol" ||
     state.ReasoningEffort !== "max" ||
+    state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
     state.Provider?.Host !== "managed-provider" ||
     !Array.isArray(state.Provider?.ForwardedEnvVarNames) ||
+    state.Repository !== "https://github.com/octocat/Hello-World" ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.Source?.LocalPath !== "" ||
     state.Source?.RemoteUrl !== state.Repository ||
@@ -6331,6 +7497,7 @@ if (expectedPriorArtStartDate === expectedProvenanceStartDate) {
 }
 assertKeys(reviewPlan, [
   "ApprovalHash",
+  "ContextTier",
   "FleetMode",
   "GeneratedAt",
   "Harness",
@@ -6379,11 +7546,12 @@ assertKeys(reviewPlan.PriorArtWindow, [
   "LookbackMonths",
   "StartDate",
 ], "review plan prior-art window");
-if (reviewPlan.SchemaVersion !== 4 ||
+if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ApprovalHash !== expectedApprovalHash ||
     reviewPlan.RunId !== runId ||
     reviewPlan.Harness !== "copilot" ||
     reviewPlan.ReasoningEffort !== "max" ||
+    reviewPlan.ContextTier !== "long_context" ||
     reviewPlan.Provider?.Id !== "github-copilot" ||
     reviewPlan.Provider?.Host !== "managed-provider" ||
     JSON.stringify(reviewPlan.Provider?.ForwardedEnvVarNames) !==
@@ -6441,7 +7609,9 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes(expectedApprovalHash) ||
     !reviewPlanText.includes("Harness:") ||
     !reviewPlanText.includes("Copilot (copilot)") ||
+    !reviewPlanText.includes("Model:") ||
     !reviewPlanText.includes("Reasoning effort:") ||
+    !reviewPlanText.includes("Context tier:") ||
     !reviewPlanText.includes("Provider ID:") ||
     !reviewPlanText.includes("github-copilot") ||
     !reviewPlanText.includes("Provider host:") ||
@@ -6513,12 +7683,14 @@ if (!Array.isArray(manifest) || manifest.length !== 1 ||
     manifest[0].Session.Id !== state.Session.Id) {
   throw new Error("manifest does not use the repository state schema");
 }
-if (manifest[0].SchemaVersion !== 5 ||
+if (manifest[0].SchemaVersion !== 6 ||
     manifest[0].Harness !== state.Harness ||
+    manifest[0].Model !== state.Model ||
     manifest[0].ReasoningEffort !== state.ReasoningEffort ||
+    manifest[0].ContextTier !== state.ContextTier ||
     manifest[0].Provider?.Id !== state.Provider?.Id ||
     manifest[0].Research?.Status !== "Completed") {
-  throw new Error("manifest entry lost schema version 5 research state");
+  throw new Error("manifest entry lost schema version 6 research state");
 }
 assertProvenanceWindow(
   manifest[0].ProvenanceWindow,
@@ -6537,9 +7709,11 @@ if (!Array.isArray(runState.Repositories) ||
     runState.Repositories.length !== 1) {
   throw new Error("run state repository summary is invalid");
 }
-if (runState.SchemaVersion !== 5 ||
+if (runState.SchemaVersion !== 6 ||
     runState.Harness !== state.Harness ||
+    runState.Model !== state.Model ||
     runState.ReasoningEffort !== state.ReasoningEffort ||
+    runState.ContextTier !== state.ContextTier ||
     runState.Provider?.Id !== state.Provider?.Id ||
     runState.Provider?.Host !== state.Provider?.Host ||
     runState.Scope?.PublicResearch !== true ||
@@ -7006,7 +8180,7 @@ const summary = JSON.parse(fs.readFileSync(
   "utf8",
 ));
 if (state.Status !== expectedStatus ||
-    state.SchemaVersion !== 5 ||
+    state.SchemaVersion !== 6 ||
     state.Research?.Status !== expectedStatus ||
     researchState.Status !== expectedStatus ||
     runState.Status !== "Failed" ||
@@ -7295,7 +8469,7 @@ const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
 if (state.Status !== "AccessPreflightFailed" ||
     state.ExitCode !== 128 ||
-    state.SchemaVersion !== 5 ||
+    state.SchemaVersion !== 6 ||
     state.Source?.Kind !== "RemoteUrl" ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
@@ -7430,7 +8604,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
 if (state.Status !== "CloneFailed" ||
     state.ExitCode !== 42 ||
-    state.SchemaVersion !== 5 ||
+    state.SchemaVersion !== 6 ||
     state.ProvenanceWindow !== null ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
@@ -7491,7 +8665,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "Completed" ||
-    state.SchemaVersion !== 5 ||
+    state.SchemaVersion !== 6 ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
     fs.existsSync(path.join(repository, "research")) ||
@@ -7707,7 +8881,7 @@ const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
 if (state.Status !== "ReviewFailed" ||
-    state.SchemaVersion !== 5 ||
+    state.SchemaVersion !== 6 ||
     state.ProvenanceWindow !== null ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||

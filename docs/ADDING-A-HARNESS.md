@@ -1,7 +1,7 @@
 # Adding a review harness
 
 This is the implementation playbook for the target Rhyolite Harness Contract
-version 2. It is written for contributors and coding agents that must change
+version 3. It is written for contributors and coding agents that must change
 the harness seam without weakening Rhyolite's read-only repository-review
 boundary.
 
@@ -10,8 +10,8 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v2.
-- The current review plan is schema 4 and repository/run state is schema 5.
+- The implemented production seam is Contract v3.
+- The current review plan is schema 5 and repository/run state is schema 6.
 - Production remains GitHub Copilot-only. A contract refactor does not itself
   add another supported harness.
 - The no-op adapter and worker under `tests/fixtures/harnesses/` are
@@ -52,7 +52,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v2 function and every negative and
+12. The adapter can satisfy every Contract-v3 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -75,7 +75,7 @@ Harness work crosses a strict set of surfaces:
 - User and contributor documentation, packaging, release metadata, and
   publication checks when production support changes.
 
-Contract v2 must land as one coordinated behavior change. Do not ship a plan
+Contract v3 must land as one coordinated behavior change. Do not ship a plan
 schema bump without state consumers, add provider fields without hashing them,
 or register an adapter before validation understands its complete lifecycle.
 
@@ -115,12 +115,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v2 boundary
+## Contract-v3 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=2
+RHYOLITE_HARNESS_CONTRACT_VERSION=3
 ```
 
 The shared loader must require all functions in this document before calling
@@ -170,7 +170,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v2 capability keys remain:
+Contract-v3 capability keys remain:
 
 ```text
 fleet
@@ -195,13 +195,19 @@ it must not be silently translated into another mode.
 | Function | Signature and output | Required validation |
 | --- | --- | --- |
 | `harness_default_model` | No arguments. Print one model ID. | Must pass the same adapter validator used for explicit models. |
-| `harness_validate_model_id` | One model ID. Status only. | Accept or reject the exact value. Never substitute, normalize, alias, or silently downgrade it. |
-| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default. Do not print an explicit `Other`; Copilot CLI owns the final custom-answer option. |
-| `harness_max_reasoning_effort` | One already validated model ID. Print one effort token. | The value must be safe, supported by that model, and the strongest available setting. It becomes approval-bound Contract-v2 data. |
+| `harness_list_models` | No arguments. Print the current available model IDs, one per line. | Use only a local non-interactive help/config surface; reject empty, unsafe, or duplicated IDs. |
+| `harness_validate_model_id` | One model ID. Status only. | Require exact membership in the current catalog. Never substitute, normalize, alias, or silently downgrade it. |
+| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default and one choice may list the live catalog. Do not print an explicit `Other`; Copilot CLI owns the final custom-answer option. |
+| `harness_max_reasoning_effort` | One already validated model ID. Print one effort token. | The value must be safe, supported by that model, and the strongest available setting. It is the default approval-bound effort. |
+| `harness_reasoning_effort_choices` | No arguments. Print ordered guided effort labels. | Include only supported values at or above the project hard minimum. |
+| `harness_validate_reasoning_effort` | One effort token. Status only. | Accept only exact supported values. |
+| `harness_default_context_tier` | No arguments. Print the recommended context tier. | Must pass the context validator. |
+| `harness_context_choices` | No arguments. Print ordered guided context labels. | The recommended tier is first. |
+| `harness_validate_context_tier` | One context token. Status only. | Accept only exact supported values. |
 
-Model selection remains adapter-owned, but the runner owns plan approval.
-Changing the harness, model, or resolved maximum effort after approval is a
-plan mismatch.
+Model, effort, and context selection remain adapter-owned, but the runner owns
+plan approval. Changing the harness, model, selected effort, or selected
+context after approval is a plan mismatch.
 
 ### Authentication and provider summary
 
@@ -269,7 +275,7 @@ release artifacts.
 | --- | --- | --- |
 | `harness_prepare_run` | No arguments. Status only; no contract data on stdout. | Run once after approved-plan verification and protected-name validation. Prepare only run-wide ephemeral adapter context. |
 | `harness_render_request` | Template path, request path, repository URL, snapshot path, exact commit, review dates/windows, scope, output path, bounded metadata, research instructions, dossier path, network-summary path, and transport instructions. Status only. | Write the request file without evaluating template or repository content. |
-| `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
+| `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
 | `harness_worker_env` | Destination array name. Status only. | Populate the exact ordered `env` argument array, including unsets and the isolated home binding. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
@@ -327,7 +333,7 @@ Worker environment must:
 
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
-| `harness_prepare_worker_home` | One runner-created runtime-home path. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data. |
+| `harness_prepare_worker_home` | Runner-created runtime-home path, reasoning effort, and context tier. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data using the approved settings. |
 | `harness_persist_agent_state` | Runtime-home path and destination agent-state directory. Status only. | Copy only an explicit sanitized continuation allowlist. |
 | `harness_sanitize_runtime_home` | Runtime-home path. Status only. | Remove or sanitize the entire temporary home; be safe when called by normal flow or the exit trap. |
 | `harness_verify_isolation` | Sanitized timeline path. Status only. | Perform adapter-specific post-run isolation checks. An explicit no-op is allowed only when the adapter has no additional invariant to verify. |
@@ -424,58 +430,10 @@ If a capability changes the effective review, it must be resolved before plan
 approval and either represented directly in approval-bound data or
 deterministically implied by the approved harness and contract version.
 
-## Plan schema 4 and approval hash
+## Plan schema 5 and approval hash
 
-Contract v2 promotes harness execution identity into the effective plan. Plan
-schema 4 includes these exact top-level fields in addition to the existing
-schema-3 fields:
-
-```json
-{
-  "SchemaVersion": 4,
-  "Harness": "copilot",
-  "Provider": {
-    "Id": "github-copilot",
-    "Host": "managed-provider",
-    "ForwardedEnvVarNames": [
-      "COPILOT_GITHUB_TOKEN",
-      "GH_TOKEN",
-      "GITHUB_TOKEN"
-    ]
-  },
-  "Model": "gpt-5.6-sol",
-  "ReasoningEffort": "max"
-}
-```
-
-The provider array shown above is abbreviated.
-
-Requirements:
-
-- Resolve and validate `Harness`, `Provider`, `Model`, and
-  `ReasoningEffort` before computing the plan.
-- Surface them in both JSON and text `EFFECTIVE REVIEW PLAN` output.
-- Add them to approval-hash material field by field. Hash the harness ID,
-  provider ID, provider host, every forwarded variable name with its stable
-  index, and reasoning effort. Never hash or serialize secret values.
-- Keep default Copilot and explicit `--harness copilot` plans byte-equivalent
-  apart from ordinary non-hash timestamps, with the same approval hash.
-- Any adapter, provider summary, forwarded-name order, model, or effort change
-  invalidates the approved plan.
-- Plan-only mode does not require the CLI and does not prepare authentication.
-- Actual execution re-resolves the metadata and refuses to run if it no longer
-  matches the approved plan.
-- Preserve all existing source, path, date-window, research-transport,
-  concurrency, timeout, preference, and open-HTML hash material.
-
-Do not use a display name, executable path, environment value, account name,
-or runtime-home path as approval identity.
-
-## State schema 5, manifests, and handoffs
-
-Repository state, run state, manifest entries, and generated handoffs move
-together to state schema 5. They must carry safe execution identity sufficient
-to explain how the approved review ran:
+Contract v3 promotes validated runtime selection into the effective plan. Plan
+schema 5 includes these exact top-level fields:
 
 ```json
 {
@@ -491,7 +449,58 @@ to explain how the approved review ran:
     ]
   },
   "Model": "gpt-5.6-sol",
-  "ReasoningEffort": "max"
+  "ReasoningEffort": "max",
+  "ContextTier": "long_context"
+}
+```
+
+The provider array shown above is abbreviated.
+
+Requirements:
+
+- Resolve and validate `Harness`, `Provider`, `Model`, `ReasoningEffort`, and
+  `ContextTier` before computing the plan.
+- Surface them in both JSON and text `EFFECTIVE REVIEW PLAN` output.
+- Add them to approval-hash material field by field. Hash the harness ID,
+  provider ID, provider host, every forwarded variable name with its stable
+  index, model, reasoning effort, and context tier. Never hash or serialize
+  secret values.
+- Keep default Copilot and explicit `--harness copilot` plans byte-equivalent
+  apart from ordinary non-hash timestamps, with the same approval hash.
+- Any adapter, provider summary, forwarded-name order, model, effort, or
+  context change invalidates the approved plan.
+- Plan-only mode may use only the local CLI help/config surface required to
+  validate the model catalog; it does not prepare authentication.
+- Actual execution re-resolves the metadata and refuses to run if it no longer
+  matches the approved plan.
+- Preserve all existing source, path, date-window, research-transport,
+  concurrency, timeout, preference, and open-HTML hash material.
+
+Do not use a display name, executable path, environment value, account name,
+or runtime-home path as approval identity.
+
+## State schema 6, manifests, and handoffs
+
+Repository state, run state, manifest entries, and generated handoffs move
+together to state schema 6. They must carry safe execution identity sufficient
+to explain how the approved review ran:
+
+```json
+{
+  "SchemaVersion": 6,
+  "Harness": "copilot",
+  "Provider": {
+    "Id": "github-copilot",
+    "Host": "managed-provider",
+    "ForwardedEnvVarNames": [
+      "COPILOT_GITHUB_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN"
+    ]
+  },
+  "Model": "gpt-5.6-sol",
+  "ReasoningEffort": "max",
+  "ContextTier": "long_context"
 }
 ```
 
@@ -506,14 +515,14 @@ Requirements:
 - Never add secret values, token presence, account information, raw auth
   errors, or runtime-home paths to state.
 - Update every schema validator and consumer at the same time. Do not accept
-  mixed schema 4/5 output as success.
+  mixed schema 5/6 output as success.
 
 ## Preference implications
 
-Current launcher preference schema 2 stores a canonical repository, harness,
-fleet mode, model, and update time. Schema 1 remains readable only as a
-Copilot preference, and schema-2 values are reused only when the stored
-harness matches the selected harness.
+Current launcher preference schema 3 stores a canonical repository, harness,
+fleet mode, model, reasoning effort, context tier, and update time. Schemas 1
+and 2 remain readable with `max`/`long_context` defaults; saved values are
+reused only when the stored harness matches and the model remains available.
 
 Before any second production harness can remember settings:
 
@@ -604,11 +613,12 @@ At minimum, add deterministic coverage for:
 
 ### Planning and schemas
 
-- plan schema exactly 4 and state schema exactly 5;
-- presence and exact capitalization of `Harness`, `Provider`, and
-  `ReasoningEffort`;
+- plan schema exactly 5 and state schema exactly 6;
+- presence and exact capitalization of `Harness`, `Provider`, `Model`,
+  `ReasoningEffort`, and `ContextTier`;
 - provider fields and ordered forwarded names in approval-hash material;
-- a one-field harness/provider/effort change causing plan-hash mismatch;
+- a one-field harness/provider/model/effort/context change causing plan-hash
+  mismatch;
 - default versus explicit Copilot equivalence;
 - plan-only operation with no harness CLI and no authentication preparation;
 - state/manifest/handoff values matching the approved plan on all terminal
@@ -650,8 +660,8 @@ generic seam:
 1. Compare default and explicit Copilot selection.
 2. Preserve Copilot worker argv and relevant environment exactly unless the
    approved change intentionally updates the golden contract.
-3. Produce plan schema 4, state schema 5, and identical approved
-   harness/provider/model/effort values through plan, execution, repository
+3. Produce plan schema 5, state schema 6, and identical approved
+   harness/provider/model/effort/context values through plan, execution, repository
    state, manifest, run state, handoff, and summary output.
 4. Exercise the no-op fixture through a test-owned fixed registry from plan to
    deterministic canonical report, persistence, cleanup, state, and handoff.
@@ -735,12 +745,12 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v2 function inventory for the adapter;
+- the complete Contract-v3 function inventory for the adapter;
 - a capability decision table with evidence;
 - model, effort, authentication, and provider-summary examples;
 - exact argv and environment captures;
 - runtime-home and persisted-state file/permission inventories;
-- plan schema 4 and state schema 5 examples;
+- plan schema 5 and state schema 6 examples;
 - approval-hash tests showing every new field is bound;
 - default/explicit selection equivalence;
 - negative results for every failure class above;

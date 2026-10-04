@@ -1,6 +1,6 @@
 # Harness architecture
 
-**Contract version:** 2
+**Contract version:** 3
 
 **Initial implementation:** I1a
 
@@ -16,13 +16,14 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v2 is a fail-closed data-contract seam. It preserves the I1a Copilot
-execution behavior while binding harness, resolved reasoning effort, and
-strict provider metadata into approved plans and persisted artifacts. It does
-not make additional harnesses available.
+Contract v3 is a fail-closed data-contract seam. It preserves the Copilot-only
+runtime while binding harness, exact catalog-validated model, selected
+reasoning effort, selected context tier, and strict provider metadata into
+approved plans and persisted artifacts. It does not make additional harnesses
+available.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v2 and any future production adapter.
+playbook for Contract v3 and any future production adapter.
 
 ## I1a invariants
 
@@ -104,7 +105,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v2 function exists.
+6. Assert every required Contract-v3 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -113,14 +114,16 @@ detail remains available for sanitized reporting. The runner rejects empty,
 malformed, duplicated, or otherwise invalid contract values before using them.
 
 In addition to the loader's identity and tri-state capability checks, the
-runner validates adapter-provided display and CLI names, default and explicit
-model IDs, maximum reasoning effort, resume policy, strict provider JSON, and
-the protected secret-environment list. Provider JSON must contain exactly
+runner validates adapter-provided display and CLI names, the live model
+catalog, default and explicit model IDs, selected reasoning effort, selected
+context tier, resume policy, strict provider JSON, and the protected
+secret-environment list. Provider JSON must contain exactly
 `Id`, `Host`, and `ForwardedEnvVarNames`; the forwarded names must exactly
 match the unique shell identifiers returned by
-`harness_auth_secret_env_vars`. Plan-only resolution does not require the
-selected harness CLI and does not prepare run-time authentication context;
-execution performs those checks only after the approved plan still matches.
+`harness_auth_secret_env_vars`. Planning may invoke only the local harness CLI
+help surface needed to obtain and validate its model catalog; it does not
+prepare run-time authentication context. Execution performs authentication and
+worker checks only after the approved plan still matches.
 
 A missing or unreadable mapped adapter, an unknown ID, an incomplete adapter,
 or invalid load-time identity/capability metadata fails at stage:
@@ -139,7 +142,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v2 functions
+## Contract-v3 functions
 
 Every mapped adapter must define all functions below.
 
@@ -151,9 +154,15 @@ Every mapped adapter must define all functions below.
 | `harness_require_cli` | Verify that the required CLI is available without starting it. |
 | `harness_capability` | Return exactly `yes`, `no`, or `unverified` for the requested capability. |
 | `harness_default_model` | Return the adapter's default model ID. |
-| `harness_validate_model_id` | Accept or reject a user-supplied model ID without substitution. |
+| `harness_list_models` | Return the current available model IDs from the harness CLI's local help/config surface. |
+| `harness_validate_model_id` | Accept only an exact member of the current model catalog without substitution. |
 | `harness_model_choices` | Return the adapter-owned guided model choices. |
 | `harness_max_reasoning_effort` | Return the strongest supported reasoning-effort value for the supplied model. |
+| `harness_reasoning_effort_choices` | Return the ordered guided effort choices. |
+| `harness_validate_reasoning_effort` | Accept only an explicitly supported effort token. |
+| `harness_default_context_tier` | Return the recommended context tier. |
+| `harness_context_choices` | Return the ordered guided context choices. |
+| `harness_validate_context_tier` | Accept only an explicitly supported context tier. |
 | `harness_auth_secret_env_vars` | Return the exact inherited secret-variable allowlist protected from disclosure. |
 | `harness_login_remediation` | Return harness-specific, non-automatic sign-in remediation. |
 | `harness_provider_summary` | Return a JSON object with exactly `Id`, `Host`, and `ForwardedEnvVarNames`. |
@@ -171,7 +180,8 @@ Every mapped adapter must define all functions below.
 
 The runner treats function output as data. It does not evaluate adapter output,
 accept success-shaped fallbacks, or continue after malformed values.
-`harness_prepare_worker_home` receives only the new runtime-home path.
+`harness_prepare_worker_home` receives the new runtime-home path plus the
+approved reasoning effort and context tier.
 Array-producing functions receive the destination array name first.
 
 ## Capabilities
@@ -187,7 +197,7 @@ No other spelling, empty output, multiple values, or successful exit with an
 invalid value is accepted. A future adapter must not report `yes` merely
 because its CLI has a similarly named option.
 
-Contract v2 defines these capability keys:
+Contract v3 defines these capability keys:
 
 | Capability | Copilot I1a |
 | --- | --- |
@@ -212,7 +222,10 @@ Copilot is the only mapped I1a adapter.
 - CLI: `copilot`
 - Default model: `gpt-5.6-sol`
 - Guided alternate model: `claude-fable-5`
-- Maximum reasoning effort: `max`
+- Model catalog: parsed from local `copilot help config`; safe syntax alone is
+  not availability
+- Reasoning effort: `max` recommended; `xhigh` and `high` selectable
+- Context tier: `long_context` recommended; `default` selectable
 - Provider summary ID: `github-copilot`
 - Provider host summary: `managed-provider`
 - Forwarded provider environment names: exactly the protected
@@ -242,7 +255,7 @@ GITHUB_COPILOT_API_TOKEN
 ```
 
 The adapter keeps the existing worker restrictions, including the read-only
-worker agent, maximum reasoning/context settings, disabled custom
+worker agent, approved reasoning/context settings, disabled custom
 instructions and built-in MCPs, denied write and shell tools, disabled
 temporary-directory access and remote export, and no direct public URL access.
 When public research is enabled, only the dedicated research worker reaches
@@ -357,18 +370,20 @@ The original I1a seam did not:
 - broaden worker tools, inherited environment, network access, or persisted
   runtime state.
 
-Contract v2 intentionally changes only the data contract around that baseline:
+Contract v2 introduced harness/provider approval identity. Contract v3 extends
+that data contract:
 
-- plan schema is `4` and state schema is `5`;
+- plan schema is `5` and state schema is `6`;
 - plan JSON/text, review-plan artifacts, repository/run state, manifests, and
-  handoffs record `Harness`, resolved `ReasoningEffort`, and strict `Provider`
-  metadata where identity matters;
+  handoffs record `Harness`, `Model`, selected `ReasoningEffort`,
+  `ContextTier`, and strict `Provider` metadata where identity matters;
 - the generic session `ResumePolicy` is adapter-owned, with Copilot retaining
   its trusted-runner-only continuation behavior;
 - approval hashes include the plan schema and all harness identity metadata,
-  so hashes from earlier plans cannot authorize contract-v2 plans;
-- launcher preferences use schema `2` with `harness`; schema `1` is read as
-  Copilot-only, and preferences are reused only for a matching harness;
+  so hashes from earlier plans cannot authorize contract-v3 plans;
+- launcher preferences use schema `3` with harness/model/effort/context;
+  schemas `1` and `2` remain readable with `max` and `long_context` defaults,
+  and preferences are reused only for a matching harness and available model;
 - preference and launcher-state paths reject wrong ownership, symlink
   components, and group/world-writable components.
 
@@ -379,12 +394,13 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v2 function; do not inherit missing behavior from
+3. Implement every Contract-v3 function; do not inherit missing behavior from
    Copilot.
 4. Return only tri-state capability values and document any `unverified`
    result.
-5. Define exact model validation, choices, maximum effort, protected secret
-   variables, provider summary, and login remediation.
+5. Define model-catalog discovery, exact model validation, model/effort/context
+   choices and validators, protected secret variables, provider summary, and
+   login remediation.
 6. Build deterministic argv/env arrays with no Rhyolite-only selection
    arguments downstream.
 7. Use a unique isolated runtime home and persist only an explicit state
@@ -403,7 +419,7 @@ partially initialized run.
 
 ## Validation
 
-The focused contract-v2 validator is:
+The focused contract-v3 validator is:
 
 ```bash
 bash ./tests/validate-harness-contract.sh

@@ -33,11 +33,12 @@ MAX_REPOSITORIES=5
 SESSION_TIMEOUT_MINUTES=0
 WORKSPACE_ROOT="${HOME}/.cache/rhyolite/repo-review/workspaces"
 OUTPUT_ROOT=""
-PLAN_SCHEMA_VERSION=4
+PLAN_SCHEMA_VERSION=5
 SCOPE=0
 SCOPE_SPECIFIED=0
 MODEL=""
 REASONING_EFFORT=""
+CONTEXT_TIER=""
 REQUESTED_HARNESS=""
 HARNESS=""
 HARNESS_DISPLAY_NAME=""
@@ -57,12 +58,13 @@ DEFAULT_PROVENANCE_LOOKBACK_MONTHS=6
 PROVENANCE_LOOKBACK_MONTHS=""
 PROVENANCE_START_DATE=""
 PROVENANCE_LOOKBACK_SPECIFIED=0
-STATE_SCHEMA_VERSION=5
+STATE_SCHEMA_VERSION=6
 NON_INTERACTIVE=0
 OPEN_HTML=0
 NO_OPEN_HTML=0
 VALIDATE_ONLY=0
 PLAN_ONLY=0
+LIST_MODELS=0
 REQUESTED_COMMIT=""
 EXPECTED_PLAN_HASH=""
 APPROVAL_HASH=""
@@ -97,6 +99,7 @@ usage() {
 Usage:
   run-parallel-reviews.sh --repo URL [--repo URL ...] [options]
   run-parallel-reviews.sh --repo-file FILE [options]
+  run-parallel-reviews.sh --harness ID --list-models
 
 Options:
   --repo URL                       Anonymous public HTTPS Git repository URL
@@ -112,7 +115,9 @@ Options:
   --commit SHA                     Exact 40-character commit for one repository
   --harness ID                     Review harness (default: copilot)
   --model MODEL                    gpt-5.6-sol (recommended), claude-fable-5,
-                                   or a syntactically valid custom model ID
+                                   or another available model ID
+  --reasoning-effort LEVEL         high, xhigh, or max (default: max)
+  --context TIER                   default or long_context (default: long_context)
   --fleet-mode MODE                Outer launcher mode: native or standard
   --remember-preferences           Save fleet/model per repository after approval
   --enable-public-research         Enable constrained public research
@@ -128,8 +133,12 @@ Options:
   --no-open-html                   Never open the HTML run index
   --validate-only                  Validate arguments without cloning or review
   --plan-only                      Resolve and print the effective plan as JSON
+  --list-models                    Print available model IDs and exit
   --expected-plan-hash SHA256      Require the resolved plan approval hash
   --help                           Show this help
+
+Available harnesses:
+  - copilot
 EOF
 }
 
@@ -847,6 +856,8 @@ write_approval_hash_material() {
     printf 'Harness=%s\n' "$(approval_hash_string "${HARNESS}")"
     printf 'ReasoningEffort=%s\n' \
         "$(approval_hash_string "${REASONING_EFFORT}")"
+    printf 'ContextTier=%s\n' \
+        "$(approval_hash_string "${CONTEXT_TIER}")"
     printf 'Provider=%s\n' \
         "$(approval_hash_string "${HARNESS_PROVIDER_JSON}")"
     for index in "${!canonical_urls[@]}"; do
@@ -1071,6 +1082,8 @@ write_review_plan_json() {
     printf '  "Harness": "%s",\n' "$(json_escape "${HARNESS}")"
     printf '  "ReasoningEffort": "%s",\n' \
         "$(json_escape "${REASONING_EFFORT}")"
+    printf '  "ContextTier": "%s",\n' \
+        "$(json_escape "${CONTEXT_TIER}")"
     printf '  "Provider": %s,\n' "${HARNESS_PROVIDER_JSON}"
     if [[ -n "${run_id}" ]]; then
         printf '  "RunId": "%s",\n' "$(json_escape "${run_id}")"
@@ -1134,6 +1147,7 @@ write_review_plan_text() {
     printf '%-20s %s (%s)\n' \
         'Harness:' "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
     printf '%-20s %s\n' 'Reasoning effort:' "${REASONING_EFFORT}"
+    printf '%-20s %s\n' 'Context tier:' "${CONTEXT_TIER}"
     printf '%-20s %s\n' 'Provider ID:' "${HARNESS_PROVIDER_ID}"
     printf '%-20s %s\n' 'Provider host:' "${HARNESS_PROVIDER_HOST}"
     printf '%-20s %s\n' \
@@ -1279,6 +1293,16 @@ while (($# > 0)); do
             MODEL="$2"
             shift 2
             ;;
+        --reasoning-effort)
+            require_value "$1" "${2-}"
+            REASONING_EFFORT="$2"
+            shift 2
+            ;;
+        --context)
+            require_value "$1" "${2-}"
+            CONTEXT_TIER="$2"
+            shift 2
+            ;;
         --fleet-mode)
             require_value "$1" "${2-}"
             FLEET_MODE="$2"
@@ -1341,6 +1365,10 @@ while (($# > 0)); do
             ;;
         --plan-only)
             PLAN_ONLY=1
+            shift
+            ;;
+        --list-models)
+            LIST_MODELS=1
             shift
             ;;
         --expected-plan-hash)
@@ -1416,6 +1444,35 @@ if ! rhyolite_harness_capture HARNESS_CLI_NAME harness_cli_name ||
         'Review planning and execution did not start.' \
         'Restore the complete harness adapter and retry.'
     exit 2
+fi
+if ((LIST_MODELS)); then
+    if ((${#repositories[@]} > 0)) || [[ -n "${repository_file}" ]] ||
+        ((VALIDATE_ONLY || PLAN_ONLY)); then
+        printf '%s\n' \
+            '--list-models cannot be combined with repository or planning modes.' >&2
+        exit 2
+    fi
+    if ! rhyolite_harness_invoke harness_require_cli >/dev/null 2>&1; then
+        print_runner_error \
+            "The ${HARNESS_DISPLAY_NAME} CLI is unavailable." \
+            "harness ${HARNESS} harness_require_cli" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Required harness CLI validation failed.}" \
+            'The model catalog could not be listed.' \
+            "Install or repair the ${HARNESS_DISPLAY_NAME} CLI, then retry."
+        exit 2
+    fi
+    if ! rhyolite_harness_invoke harness_list_models; then
+        print_runner_error \
+            'The selected review harness could not list available models.' \
+            "harness ${HARNESS} harness_list_models" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness model-catalog discovery failed.}" \
+            'The model catalog could not be listed.' \
+            'Repair the harness CLI model help output and retry.'
+        exit 2
+    fi
+    exit 0
 fi
 if ! rhyolite_harness_capture \
     HARNESS_LOGIN_REMEDIATION harness_login_remediation ||
@@ -1600,29 +1657,62 @@ if ! rhyolite_harness_invoke \
             'Restore the complete harness adapter and retry.'
         exit 2
     fi
-    printf 'Invalid %s model identifier: %s\n' \
-        "${HARNESS_DISPLAY_NAME}" "${MODEL}" >&2
+    print_runner_error \
+        'The selected model is not available.' \
+        "harness ${HARNESS} harness_validate_model_id" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the harness model catalog.}" \
+        'Review planning and execution did not start.' \
+        'List the available model IDs, select one exact value, and retry.'
     exit 2
 fi
-if ! rhyolite_harness_capture \
-    REASONING_EFFORT harness_max_reasoning_effort "${MODEL}"; then
+if [[ -z "${REASONING_EFFORT}" ]]; then
+    if ! rhyolite_harness_capture \
+        REASONING_EFFORT harness_max_reasoning_effort "${MODEL}"; then
+        print_runner_error \
+            'The selected review harness could not resolve maximum reasoning effort.' \
+            "harness ${HARNESS} harness_max_reasoning_effort" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness reasoning-effort resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Select a valid model for this harness and retry.'
+        exit 2
+    fi
+fi
+if ! rhyolite_harness_invoke \
+    harness_validate_reasoning_effort \
+    "${REASONING_EFFORT}" >/dev/null 2>&1; then
     print_runner_error \
-        'The selected review harness could not resolve maximum reasoning effort.' \
-        "harness ${HARNESS} harness_max_reasoning_effort" \
+        'The selected reasoning effort is unsupported.' \
+        "harness ${HARNESS} harness_validate_reasoning_effort" \
         "Harness ${HARNESS}" \
-        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness reasoning-effort resolution failed.}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected harness rejected the reasoning effort.}" \
         'Review planning and execution did not start.' \
-        'Select a valid model for this harness and retry.'
+        'Select high, xhigh, or max and retry.'
     exit 2
 fi
-if [[ ! "${REASONING_EFFORT}" =~ ^[A-Za-z][A-Za-z0-9_-]{0,31}$ ]]; then
+if [[ -z "${CONTEXT_TIER}" ]]; then
+    if ! rhyolite_harness_capture \
+        CONTEXT_TIER harness_default_context_tier; then
+        print_runner_error \
+            'The selected review harness could not resolve its default context tier.' \
+            "harness ${HARNESS} harness_default_context_tier" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness context-tier resolution failed.}" \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+    fi
+fi
+if ! rhyolite_harness_invoke \
+    harness_validate_context_tier "${CONTEXT_TIER}" >/dev/null 2>&1; then
     print_runner_error \
-        'The selected review harness returned an invalid reasoning effort.' \
-        "harness ${HARNESS} harness_max_reasoning_effort" \
+        'The selected context tier is unsupported.' \
+        "harness ${HARNESS} harness_validate_context_tier" \
         "Harness ${HARNESS}" \
-        'Harness reasoning effort is empty or contains unsupported characters.' \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected harness rejected the context tier.}" \
         'Review planning and execution did not start.' \
-        'Restore the complete harness adapter and retry.'
+        'Select default or long_context and retry.'
     exit 2
 fi
 case "${FLEET_MODE}" in
@@ -2254,6 +2344,11 @@ if ((!VALIDATE_ONLY && !PLAN_ONLY)); then
         printf 'tar is required.\n' >&2
         exit 2
     }
+    command -v curl >/dev/null 2>&1 || {
+        printf 'curl is required for bounded repository redirect discovery.\n' \
+            >&2
+        exit 2
+    }
     command -v python3 >/dev/null 2>&1 || {
         printf 'Python 3 is required for public DNS validation.\n' >&2
         exit 2
@@ -2268,6 +2363,7 @@ declare -a requested_commits=()
 declare -a repository_hosts=()
 declare -a repository_ports=()
 declare -a curl_resolves=()
+declare -a repository_transport_urls=()
 declare -A seen_slugs=()
 
 decode_url_path() {
@@ -2340,13 +2436,13 @@ canonicalize_repository() {
     if [[ "${authority}" == *:* ]]; then
         host="${authority%%:*}"
         port="${authority#*:}"
-        if [[ ! "${port}" =~ ^[0-9]+$ ]] ||
-            ((10#${port} < 1 || 10#${port} > 65535)); then
+        if ! rhyolite_normalize_https_port "${port}"; then
             printf 'Repository URL contains an invalid HTTPS port: %s\n' \
                 "${input}" >&2
             return 1
         fi
-        if ((10#${port} == 443)); then
+        port="${RHYOLITE_NORMALIZED_HTTPS_PORT}"
+        if ((port == 443)); then
             port=""
         fi
     fi
@@ -2378,9 +2474,6 @@ canonicalize_repository() {
     done
 
     path="${path%/}"
-    if [[ "${path,,}" == *.git ]]; then
-        path="${path:0:${#path}-4}"
-    fi
     decoded_path="$(decode_url_path "${path}")" || {
         printf 'Repository URL contains malformed percent encoding: %s\n' \
             "${input}" >&2
@@ -2427,6 +2520,138 @@ canonicalize_repository() {
     repository_hosts+=("${host}")
     repository_ports+=("${port:-443}")
     curl_resolves+=("")
+    repository_transport_urls+=("")
+}
+
+normalize_repository_url_path() {
+    local input="$1"
+    local output=""
+    local character hex byte
+    local index=0
+
+    while ((index < ${#input})); do
+        character="${input:index:1}"
+        if [[ "${character}" == '%' ]]; then
+            ((index + 2 < ${#input})) || return 1
+            hex="${input:index+1:2}"
+            [[ "${hex}" =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
+            hex="${hex^^}"
+            printf -v byte '%b' "\\x${hex}"
+            if [[ "${byte}" =~ ^[A-Za-z0-9._~-]$ ]]; then
+                output+="${byte}"
+            else
+                output+="%${hex}"
+            fi
+            index=$((index + 3))
+        else
+            output+="${character}"
+            index=$((index + 1))
+        fi
+    done
+
+    printf '%s' "${output}"
+}
+
+RHYOLITE_DISCOVERY_REQUEST_URL=""
+RHYOLITE_DISCOVERY_NORMALIZED_URL=""
+RHYOLITE_DISCOVERY_REPOSITORY_BASE=""
+RHYOLITE_DISCOVERY_HOST=""
+RHYOLITE_DISCOVERY_PORT=""
+
+parse_repository_discovery_url() {
+    local input="$1"
+    local query_suffix='?service=git-upload-pack'
+    local path_suffix='/info/refs'
+    local query_start path_start
+    local without_query base_url scheme remainder authority path
+    local host port decoded_path normalized_path suffix label component
+    local -a host_labels path_components
+
+    RHYOLITE_DISCOVERY_REQUEST_URL=""
+    RHYOLITE_DISCOVERY_NORMALIZED_URL=""
+    RHYOLITE_DISCOVERY_REPOSITORY_BASE=""
+    RHYOLITE_DISCOVERY_HOST=""
+    RHYOLITE_DISCOVERY_PORT=""
+
+    if [[ "${input}" =~ [[:cntrl:][:space:]\\] ]] ||
+        [[ "${input}" != *"${query_suffix}" ]]; then
+        return 1
+    fi
+    query_start=$((${#input} - ${#query_suffix}))
+    without_query="${input:0:${query_start}}"
+    if [[ "${without_query}" == *'?'* ]] ||
+        [[ "${without_query}" == *'#'* ]] ||
+        [[ "${without_query}" != *"${path_suffix}" ]]; then
+        return 1
+    fi
+    path_start=$((${#without_query} - ${#path_suffix}))
+    base_url="${without_query:0:${path_start}}"
+    [[ -n "${base_url}" ]] || return 1
+
+    scheme="${base_url:0:8}"
+    [[ "${scheme,,}" == 'https://' ]] || return 1
+    if [[ "${base_url,,}" =~ %0[0-9a-f]|%1[0-9a-f]|%7f|%2f|%5c ]]; then
+        return 1
+    fi
+
+    remainder="${base_url:8}"
+    authority="${remainder%%/*}"
+    path="/${remainder#*/}"
+    if [[ "${authority}" == "${remainder}" ]] ||
+        [[ -z "${authority}" ]] ||
+        [[ "${authority}" == *'@'* ]] ||
+        [[ "${authority}" == *'['* || "${authority}" == *']'* ]]; then
+        return 1
+    fi
+
+    host="${authority}"
+    port=443
+    if [[ "${authority}" == *:* ]]; then
+        host="${authority%%:*}"
+        port="${authority#*:}"
+        rhyolite_normalize_https_port "${port}" || return 1
+        port="${RHYOLITE_NORMALIZED_HTTPS_PORT}"
+    fi
+    host="${host,,}"
+    if [[ "${host}" != *.* ]] ||
+        [[ "${host}" == localhost ]] ||
+        [[ "${host}" =~ ^[0-9.]+$ ]]; then
+        return 1
+    fi
+    for suffix in \
+        .localhost .local .localdomain .internal .home .lan .corp \
+        .test .invalid .example; do
+        [[ "${host}" != *"${suffix}" ]] || return 1
+    done
+    IFS='.' read -r -a host_labels <<< "${host}"
+    for label in "${host_labels[@]}"; do
+        if [[ ! "${label}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] &&
+            [[ ! "${label}" =~ ^[A-Za-z0-9]$ ]]; then
+            return 1
+        fi
+    done
+
+    decoded_path="$(decode_url_path "${path}")" || return 1
+    if [[ -z "${path#/}" ]] ||
+        [[ "${path}" == */ ]] ||
+        [[ "${decoded_path}" =~ [[:cntrl:][:space:]\\] ]]; then
+        return 1
+    fi
+    IFS='/' read -r -a path_components <<< "${decoded_path#/}"
+    for component in "${path_components[@]}"; do
+        [[ "${component}" != '.' && "${component}" != '..' ]] || return 1
+    done
+    normalized_path="$(normalize_repository_url_path "${path}")" || return 1
+
+    authority="${host}"
+    if ((port != 443)); then
+        authority+=":${port}"
+    fi
+    RHYOLITE_DISCOVERY_REPOSITORY_BASE="https://${authority}${path}"
+    RHYOLITE_DISCOVERY_REQUEST_URL="${RHYOLITE_DISCOVERY_REPOSITORY_BASE}${path_suffix}${query_suffix}"
+    RHYOLITE_DISCOVERY_NORMALIZED_URL="https://${authority}${normalized_path}${path_suffix}${query_suffix}"
+    RHYOLITE_DISCOVERY_HOST="${host}"
+    RHYOLITE_DISCOVERY_PORT="${port}"
 }
 
 clear_inherited_git_environment() {
@@ -2527,6 +2752,7 @@ if ((VALIDATE_ONLY)); then
     printf 'Harness:              %s (%s)\n' \
         "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
     printf 'Reasoning effort:     %s\n' "${REASONING_EFFORT}"
+    printf 'Context tier:         %s\n' "${CONTEXT_TIER}"
     printf 'Provider ID:          %s\n' "${HARNESS_PROVIDER_ID}"
     printf 'Provider host:        %s\n' "${HARNESS_PROVIDER_HOST}"
     printf 'Provider env vars:    %s\n' \
@@ -2577,6 +2803,8 @@ if ((REMEMBER_PREFERENCES)); then
             "${HARNESS}" \
             "${FLEET_MODE}" \
             "${MODEL}" \
+            "${REASONING_EFFORT}" \
+            "${CONTEXT_TIER}" \
             "${launcher_preference_home}" ||
             {
                 printf '%s\n' \
@@ -2586,7 +2814,7 @@ if ((REMEMBER_PREFERENCES)); then
                 exit 2
             }
     done
-    printf 'Remembered approved fleet/model settings for %s repositories.\n' \
+    printf 'Remembered approved fleet/model/effort/context settings for %s repositories.\n' \
         "${#canonical_urls[@]}"
 fi
 
@@ -2769,6 +2997,179 @@ anonymous_git_repository() {
         "$@"
 }
 
+anonymous_repository_discovery() {
+    local curl_resolve="$1"
+    local discovery_url="$2"
+
+    env -i \
+        HOME="${ANONYMOUS_GIT_HOME}" \
+        USERPROFILE="${ANONYMOUS_GIT_HOME}" \
+        XDG_CONFIG_HOME="${ANONYMOUS_GIT_HOME}" \
+        CURL_HOME="${ANONYMOUS_GIT_HOME}" \
+        PATH="${PATH:-/usr/bin:/bin}" \
+        LC_ALL=C \
+        curl \
+        --disable \
+        --no-location \
+        --no-insecure \
+        --config /dev/null \
+        --silent \
+        --globoff \
+        --request GET \
+        --output /dev/null \
+        --write-out '%{http_code}\n%{redirect_url}\n' \
+        --connect-timeout 10 \
+        --max-time 30 \
+        --retry 0 \
+        --max-redirs 0 \
+        --proto '=https' \
+        --proto-redir '=https' \
+        --proxy '' \
+        --noproxy '*' \
+        --no-netrc \
+        --header 'Authorization:' \
+        --header 'Proxy-Authorization:' \
+        --header 'Cookie:' \
+        --resolve "${curl_resolve}" \
+        -- "${discovery_url}"
+}
+
+resolve_repository_transport() {
+    local selected_repository="$1"
+    local original_curl_resolve="$2"
+    local initial_discovery_url
+    local current_discovery_url current_repository_base
+    local current_normalized_url original_host original_port
+    local response status redirect_url visited_url
+    local next_discovery_url next_repository_base next_normalized_url
+    local pin_prefix curl_exit_code
+    local redirect_count=0
+    local -a visited_urls=()
+
+    initial_discovery_url="${selected_repository}/info/refs?service=git-upload-pack"
+    if ! parse_repository_discovery_url "${initial_discovery_url}"; then
+        printf '%s\n' \
+            'Selected repository could not be represented as a safe HTTPS Git discovery endpoint.' \
+            >&2
+        return 1
+    fi
+    current_discovery_url="${RHYOLITE_DISCOVERY_REQUEST_URL}"
+    current_repository_base="${RHYOLITE_DISCOVERY_REPOSITORY_BASE}"
+    current_normalized_url="${RHYOLITE_DISCOVERY_NORMALIZED_URL}"
+    original_host="${RHYOLITE_DISCOVERY_HOST}"
+    original_port="${RHYOLITE_DISCOVERY_PORT}"
+    pin_prefix="${original_host}:${original_port}:"
+    if [[ "${original_curl_resolve}" != "${pin_prefix}"?* ]] ||
+        [[ "${original_curl_resolve}" =~ [[:cntrl:][:space:]] ]]; then
+        printf '%s\n' \
+            'Repository discovery rejected an invalid original DNS pin.' \
+            >&2
+        return 1
+    fi
+    visited_urls+=("${current_normalized_url}")
+
+    while true; do
+        if response="$(
+            anonymous_repository_discovery \
+                "${original_curl_resolve}" \
+                "${current_discovery_url}" 2>/dev/null
+        )"; then
+            curl_exit_code=0
+        else
+            curl_exit_code=$?
+            printf 'Repository discovery request failed before anonymous access could be verified (curl exit code %s).\n' \
+                "${curl_exit_code}" >&2
+            return "${curl_exit_code}"
+        fi
+        if [[ "${response}" == *$'\r'* ]] ||
+            [[ "${response}" =~ [[:cntrl:]] && "${response}" != *$'\n'* ]]; then
+            printf '%s\n' \
+                'Repository discovery returned a malformed status response.' \
+                >&2
+            return 1
+        fi
+        status="${response%%$'\n'*}"
+        if [[ "${response}" == *$'\n'* ]]; then
+            redirect_url="${response#*$'\n'}"
+        else
+            redirect_url=""
+        fi
+        if [[ ! "${status}" =~ ^[0-9]{3}$ ]] ||
+            [[ "${redirect_url}" == *$'\n'* ]]; then
+            printf '%s\n' \
+                'Repository discovery returned a malformed status response.' \
+                >&2
+            return 1
+        fi
+
+        case "${status}" in
+            200)
+                if [[ -n "${redirect_url}" ]]; then
+                    printf '%s\n' \
+                        'Repository discovery returned an unexpected redirect target with a success status.' \
+                        >&2
+                    return 1
+                fi
+                printf '%s\n' "${current_repository_base}"
+                return 0
+                ;;
+            301)
+                if [[ -z "${redirect_url}" ]]; then
+                    printf '%s\n' \
+                        'Repository discovery returned HTTP 301 without a usable redirect target.' \
+                        >&2
+                    return 1
+                fi
+                if ((redirect_count >= 3)); then
+                    printf '%s\n' \
+                        'Repository discovery exceeded the maximum of three HTTP 301 redirects.' \
+                        >&2
+                    return 1
+                fi
+                if ! parse_repository_discovery_url "${redirect_url}"; then
+                    printf '%s\n' \
+                        'Repository discovery returned a redirect target that violates the safe HTTPS URL policy.' \
+                        >&2
+                    return 1
+                fi
+                if [[ "${RHYOLITE_DISCOVERY_HOST}" != "${original_host}" ]] ||
+                    [[ "${RHYOLITE_DISCOVERY_PORT}" != "${original_port}" ]]; then
+                    printf '%s\n' \
+                        'Repository discovery rejected a cross-origin HTTPS redirect.' \
+                        >&2
+                    return 1
+                fi
+                next_discovery_url="${RHYOLITE_DISCOVERY_REQUEST_URL}"
+                next_repository_base="${RHYOLITE_DISCOVERY_REPOSITORY_BASE}"
+                next_normalized_url="${RHYOLITE_DISCOVERY_NORMALIZED_URL}"
+                for visited_url in "${visited_urls[@]}"; do
+                    if [[ "${visited_url}" == "${next_normalized_url}" ]]; then
+                        printf '%s\n' \
+                            'Repository discovery rejected a normalized redirect loop.' \
+                            >&2
+                        return 1
+                    fi
+                done
+                visited_urls+=("${next_normalized_url}")
+                redirect_count=$((redirect_count + 1))
+                current_discovery_url="${next_discovery_url}"
+                current_repository_base="${next_repository_base}"
+                current_normalized_url="${next_normalized_url}"
+                ;;
+            3[0-9][0-9])
+                printf 'Repository discovery rejected unsupported HTTP redirect status %s.\n' \
+                    "${status}" >&2
+                return 1
+                ;;
+            *)
+                printf 'Repository discovery returned unsupported HTTP status %s.\n' \
+                    "${status}" >&2
+                return 1
+                ;;
+        esac
+    done
+}
+
 write_result() {
     local path="$1"
     local slug="$2"
@@ -2799,7 +3200,9 @@ write_result() {
 {
   "SchemaVersion": ${STATE_SCHEMA_VERSION},
   "Harness": "$(json_escape "${HARNESS}")",
+  "Model": "$(json_escape "${MODEL}")",
   "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "ContextTier": "$(json_escape "${CONTEXT_TIER}")",
   "Provider": ${HARNESS_PROVIDER_JSON},
   "Slug": "$(json_escape "${slug}")",
   "Repository": "$(json_escape "${repository}")",
@@ -2943,7 +3346,8 @@ EOF
         "${RESEARCH_DOSSIER_PATH:-}" \
         "${RESEARCH_NETWORK_SUMMARY_PATH:-}" \
         "${RESEARCH_PRIVATE_DIRECTORY:-}" \
-        "${HARNESS}" "${HARNESS_DISPLAY_NAME}" "${REASONING_EFFORT}" \
+        "${HARNESS}" "${HARNESS_DISPLAY_NAME}" "${MODEL}" \
+        "${REASONING_EFFORT}" "${CONTEXT_TIER}" \
         "${HARNESS_PROVIDER_ID}" "${HARNESS_PROVIDER_HOST}" \
         "$(provider_forwarded_env_var_names_text)" \
         "${HARNESS_RESUME_POLICY}"
@@ -3031,6 +3435,7 @@ EOF
 PREFLIGHT_FAILURE_SUMMARY=""
 PREFLIGHT_ERROR_DETAILS=""
 PREFLIGHT_EXIT_CODE=1
+PREFLIGHT_TRANSPORT_URL=""
 
 preflight_repository_access() {
     local repository="$1"
@@ -3048,16 +3453,60 @@ preflight_repository_access() {
     local verify_output=""
     local verify_exit=0
     local preflight_path="${RUN_WORKSPACE}/${slug}-preflight"
+    local transport_repository=""
+    local transport_error=""
+    local transport_error_path="${RUN_WORKSPACE}/${slug}-transport-error.$$"
+    local transport_exit=0
 
     PREFLIGHT_FAILURE_SUMMARY=""
     PREFLIGHT_ERROR_DETAILS=""
     PREFLIGHT_EXIT_CODE=1
+    PREFLIGHT_TRANSPORT_URL=""
 
     review_progress "${slug}" 'preflight' 'checking anonymous public access'
 
+    if transport_repository="$(
+        resolve_repository_transport \
+            "${repository}" \
+            "${curl_resolve}" 2> "${transport_error_path}"
+    )"; then
+        transport_exit=0
+    else
+        transport_exit=$?
+    fi
+    if [[ -f "${transport_error_path}" ]]; then
+        transport_error="$(< "${transport_error_path}")"
+    else
+        transport_error='Repository discovery did not return a diagnostic.'
+    fi
+    rm -f -- "${transport_error_path}"
+    if ((transport_exit != 0)) ||
+        [[ -z "${transport_repository}" ]] ||
+        [[ "${transport_repository}" == *$'\n'* ]]; then
+        PREFLIGHT_EXIT_CODE="${transport_exit:-1}"
+        ((PREFLIGHT_EXIT_CODE != 0)) || PREFLIGHT_EXIT_CODE=1
+        PREFLIGHT_FAILURE_SUMMARY='Anonymous repository redirect discovery preflight failed. Rhyolite accepts only bounded same-origin HTTP 301 redirects and does not attempt authentication. See errors.txt.'
+        PREFLIGHT_ERROR_DETAILS="$(
+            cat <<EOF
+Anonymous repository redirect discovery preflight failed.
+Rhyolite accepts at most three HTTP 301 redirects on the original HTTPS host and effective port.
+Repository: ${repository}
+Source kind: ${source_kind}
+Selected source path: ${source_path:-NOT APPLICABLE}
+Requested commit: ${requested_commit:-HEAD}
+Redirect policy: HTTPS only, same host and effective port, original public DNS pin, no credentials, no automatic following.
+
+${transport_error:-Repository discovery did not return a safe transport URL.}
+EOF
+        )"
+        return 1
+    fi
+    PREFLIGHT_TRANSPORT_URL="${transport_repository}"
+
     ls_remote_output="$(
         anonymous_git_repository "${curl_resolve}" \
-            ls-remote --symref --exit-code -- "${repository}" HEAD 2>&1
+            ls-remote --symref --exit-code -- \
+            "${transport_repository}" HEAD 2>&1
     )" || ls_remote_exit=$?
     if ((ls_remote_exit != 0)); then
         PREFLIGHT_EXIT_CODE="${ls_remote_exit}"
@@ -3070,7 +3519,7 @@ Repository: ${repository}
 Source kind: ${source_kind}
 Selected source path: ${source_path:-NOT APPLICABLE}
 Requested commit: ${requested_commit:-HEAD}
-Git command: git ls-remote --symref --exit-code -- ${repository} HEAD
+Git command: git ls-remote --symref --exit-code -- ${transport_repository} HEAD
 Exit code: ${ls_remote_exit}
 
 ${ls_remote_output}
@@ -3109,7 +3558,7 @@ EOF
             anonymous_git_repository "${curl_resolve}" \
                 -C "${preflight_path}" \
                 fetch --quiet --no-tags --depth=1 -- \
-                "${repository}" "${requested_commit}" 2>&1
+                "${transport_repository}" "${requested_commit}" 2>&1
         )" || fetch_exit=$?
         if ((fetch_exit != 0)); then
             PREFLIGHT_EXIT_CODE="${fetch_exit}"
@@ -3122,7 +3571,7 @@ Repository: ${repository}
 Source kind: ${source_kind}
 Selected source path: ${source_path:-NOT APPLICABLE}
 Requested commit: ${requested_commit}
-Git command: git fetch --quiet --no-tags --depth=1 -- ${repository} ${requested_commit}
+Git command: git fetch --quiet --no-tags --depth=1 -- ${transport_repository} ${requested_commit}
 Exit code: ${fetch_exit}
 
 ${fetch_output}
@@ -3213,13 +3662,15 @@ sanitize_and_remove_runtime_copilot_home() {
 write_isolated_copilot_settings() {
     local settings_path="$1"
     local store_token_plaintext="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
 
     {
         printf '{\n'
         if ((store_token_plaintext)); then
             printf '  "storeTokenPlaintext": true,\n'
         fi
-        cat <<'EOF'
+        cat <<EOF
   "disableAllHooks": true,
   "customAgents": {
     "defaultLocalOnly": true
@@ -3227,32 +3678,39 @@ write_isolated_copilot_settings() {
   "subagents": {
     "agents": {
       "explore": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "task": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "code-review": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "general-purpose": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "research": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "security-review": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       },
       "rubber-duck": {
-        "effortLevel": "max",
-        "contextTier": "long_context"
+        "model": "inherit",
+        "effortLevel": "${reasoning_effort}",
+        "contextTier": "${context_tier}"
       }
     }
   }
@@ -3271,7 +3729,9 @@ initialize_runtime_copilot_home() {
     fi
     write_isolated_copilot_settings \
         "${runtime_home}/settings.json" \
-        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}"
+        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}" \
+        "${REASONING_EFFORT}" \
+        "${CONTEXT_TIER}"
     {
         printf '%s\n' \
             '// User settings belong in settings.json.' \
@@ -3742,6 +4202,7 @@ process_repository() {
     local source_kind="$4"
     local source_path="$5"
     local curl_resolve="$6"
+    local transport_repository="$7"
     local started_at
     started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local clone_path="${RUN_WORKSPACE}/${slug}-readonly"
@@ -3807,7 +4268,7 @@ process_repository() {
         --filter=blob:none \
         --no-recurse-submodules \
         -- \
-        "${repository}" \
+        "${transport_repository}" \
         "${clone_path}" 2> "${error_path}"
     local clone_exit_code=$?
     set -e
@@ -3832,7 +4293,8 @@ EOF
     if [[ -n "${requested_commit}" ]]; then
         local commit_setup_exit_code=0
         set +e
-        git -C "${clone_path}" \
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
             cat-file -e "${requested_commit}^{commit}" 2>> "${error_path}"
         commit_setup_exit_code=$?
         set -e
@@ -3843,7 +4305,8 @@ EOF
                 fetch \
                 --quiet \
                 --no-tags \
-                origin \
+                -- \
+                "${transport_repository}" \
                 "${requested_commit}" 2>> "${error_path}"
             commit_setup_exit_code=$?
             set -e
@@ -3867,7 +4330,7 @@ EOF
             fi
         fi
         set +e
-        git \
+        anonymous_git_repository "${curl_resolve}" \
             -C "${clone_path}" \
             -c core.hooksPath=/dev/null \
             checkout \
@@ -3897,7 +4360,11 @@ EOF
 
     local commit_resolution_exit_code=0
     set +e
-    commit="$(git -C "${clone_path}" rev-parse HEAD 2>> "${error_path}")"
+    commit="$(
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            rev-parse HEAD 2>> "${error_path}"
+    )"
     commit_resolution_exit_code=$?
     set -e
     if ((commit_resolution_exit_code != 0)); then
@@ -3940,7 +4407,11 @@ EOF
 
     local tracked_file_count repository_metadata
     tracked_file_count="$(
-        git -C "${clone_path}" ls-files | wc -l | tr -d '[:space:]'
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            ls-files |
+            wc -l |
+            tr -d '[:space:]'
     )"
     repository_metadata="$(
         set +o pipefail
@@ -3963,14 +4434,18 @@ Tracked file count: ${tracked_file_count}
 Top-level tracked entries (maximum 200):
 EOF
             printf '%s\n' '__RHYOLITE_TRACKED_METADATA_START__'
-            git -C "${clone_path}" ls-tree --name-only HEAD |
+            anonymous_git_repository "${curl_resolve}" \
+                -C "${clone_path}" \
+                ls-tree --name-only HEAD |
                 awk 'NR <= 200 {
                     print "Tracked entry (attacker-controlled evidence): " $0
                 }'
             printf '%s\n' '__RHYOLITE_TRACKED_METADATA_END__'
             printf '\nRefs (maximum 200):\n'
             printf '%s\n' '__RHYOLITE_REF_METADATA_START__'
-            git -C "${clone_path}" for-each-ref \
+            anonymous_git_repository "${curl_resolve}" \
+                -C "${clone_path}" \
+                for-each-ref \
                 '--format=Ref name (attacker-controlled evidence): %(refname)%09Object ID (attacker-controlled evidence): %(objectname)' \
                 refs/heads refs/remotes refs/tags |
                 awk 'NR <= 200 { print }'
@@ -3984,7 +4459,9 @@ and Model; each logical field is sanitized before its rendered line is capped
 at 512 characters; aggregate overflow omits only whole older records and emits
 a deterministic inert truncation marker):
 EOF
-            git -C "${clone_path}" log \
+            anonymous_git_repository "${curl_resolve}" \
+                -C "${clone_path}" \
+                log \
                 --no-show-signature \
                 -n 100 \
                 --date=iso-strict \
@@ -4001,7 +4478,9 @@ EOF
     local archive_path="${session_root}/source.tar"
     local attribute_path
     attribute_path="$(
-        git -C "${clone_path}" rev-parse --git-path info/attributes
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            rev-parse --git-path info/attributes
     )"
     if [[ "${attribute_path}" != /* ]]; then
         attribute_path="${clone_path}/${attribute_path}"
@@ -4016,7 +4495,7 @@ EOF
     printf '%s\n' '* -export-ignore -export-subst' > "${attribute_path}"
     local snapshot_exit_code=0
     set +e
-    git \
+    anonymous_git_repository "${curl_resolve}" \
         -C "${clone_path}" \
         -c core.hooksPath=/dev/null \
         archive \
@@ -4178,7 +4657,7 @@ EOF
             --agent rhyolite:repo-research-worker
             --model "${MODEL}"
             --reasoning-effort "${REASONING_EFFORT}"
-            --context long_context
+            --context "${CONTEXT_TIER}"
             --no-ask-user
             --no-color
             --no-custom-instructions
@@ -4570,6 +5049,7 @@ EOF
         "${session_id}" \
         "${MODEL}" \
         "${REASONING_EFFORT}" \
+        "${CONTEXT_TIER}" \
         "${authentication_variable_list}" \
         "${available_tools}" \
         "${transcript_path}" \
@@ -4597,6 +5077,8 @@ EOF
         ' EXIT
         if ! rhyolite_harness_invoke harness_prepare_worker_home \
             "${runtime_harness_home}" \
+            "${REASONING_EFFORT}" \
+            "${CONTEXT_TIER}" \
             >/dev/null 2>> "${error_path}"; then
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_prepare_worker_home" \
@@ -4673,6 +5155,8 @@ EOF
         ! rhyolite_harness_invoke harness_persist_agent_state \
             "${runtime_harness_home}" \
             "${agent_state_path}" \
+            "${REASONING_EFFORT}" \
+            "${CONTEXT_TIER}" \
             >/dev/null 2>> "${error_path}"; then
         printf '%s\n' \
             "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
@@ -4805,18 +5289,26 @@ EOF
 
     local checkout_changed=0
     if [[ -n "$(
-        git -C "${clone_path}" status \
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            status \
             --porcelain --untracked-files=all 2>> "${error_path}"
     )" ]]; then
         checkout_changed=1
     fi
     if [[ "$(
-        git -C "${clone_path}" rev-parse HEAD 2>> "${error_path}"
+        anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            rev-parse HEAD 2>> "${error_path}"
     )" != "${commit}" ]]; then
         checkout_changed=1
     fi
-    if ! git -C "${clone_path}" diff --quiet --no-ext-diff ||
-        ! git -C "${clone_path}" diff --cached --quiet --no-ext-diff; then
+    if ! anonymous_git_repository "${curl_resolve}" \
+        -C "${clone_path}" \
+        diff --quiet --no-ext-diff ||
+        ! anonymous_git_repository "${curl_resolve}" \
+            -C "${clone_path}" \
+            diff --cached --quiet --no-ext-diff; then
         checkout_changed=1
     fi
     if ((checkout_changed)); then
@@ -4937,11 +5429,13 @@ for index in "${!canonical_urls[@]}"; do
         "${source_paths[index]}" \
         "${curl_resolves[index]}"; then
         preflight_passed[index]=1
+        repository_transport_urls[index]="${PREFLIGHT_TRANSPORT_URL}"
         preflight_failure_summaries[index]=''
         preflight_error_details[index]=''
         preflight_exit_codes[index]=0
     else
         preflight_passed[index]=0
+        repository_transport_urls[index]=''
         preflight_failure_summaries[index]="${PREFLIGHT_FAILURE_SUMMARY}"
         preflight_error_details[index]="${PREFLIGHT_ERROR_DETAILS}"
         preflight_exit_codes[index]="${PREFLIGHT_EXIT_CODE}"
@@ -5012,7 +5506,8 @@ else
             "${requested_commits[index]}" \
             "${source_kinds[index]}" \
             "${source_paths[index]}" \
-            "${curl_resolves[index]}" &
+            "${curl_resolves[index]}" \
+            "${repository_transport_urls[index]}" &
         pids+=("$!")
 
         if ((${#pids[@]} >= THROTTLE_LIMIT)); then
@@ -5103,7 +5598,9 @@ INDEX_PATH="${RUN_RESULTS}/index.html"
 {
   "SchemaVersion": ${STATE_SCHEMA_VERSION},
   "Harness": "$(json_escape "${HARNESS}")",
+  "Model": "$(json_escape "${MODEL}")",
   "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "ContextTier": "$(json_escape "${CONTEXT_TIER}")",
   "Provider": ${HARNESS_PROVIDER_JSON},
   "RunId": "$(json_escape "${RUN_ID}")",
   "Status": "$(json_escape "${RUN_STATUS}")",
@@ -5167,7 +5664,9 @@ EOF
     printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
     printf 'Harness:\n\n    %s (%s)\n\n' \
         "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
+    printf 'Model:\n\n    %s\n\n' "${MODEL}"
     printf 'Reasoning effort:\n\n    %s\n\n' "${REASONING_EFFORT}"
+    printf 'Context tier:\n\n    %s\n\n' "${CONTEXT_TIER}"
     printf 'Provider:\n\n'
     while IFS= read -r line || [[ -n "${line}" ]]; do
         printf '    %s\n' "${line}"

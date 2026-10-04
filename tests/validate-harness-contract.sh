@@ -17,6 +17,7 @@ MARKETPLACE_MANIFEST="${ROOT}/.github/plugin/marketplace.json"
 NOOP_FIXTURE_ROOT="${ROOT}/tests/fixtures/harnesses"
 NOOP_ADAPTER_FIXTURE="${NOOP_FIXTURE_ROOT}/noop.sh"
 NOOP_WORKER_FIXTURE="${NOOP_FIXTURE_ROOT}/noop-worker.sh"
+REPOSITORY_DISCOVERY_CURL_FIXTURE="${ROOT}/tests/fixtures/repository-discovery-curl.sh"
 
 required_contract_functions=(
     harness_id
@@ -25,9 +26,15 @@ required_contract_functions=(
     harness_require_cli
     harness_capability
     harness_default_model
+    harness_list_models
     harness_validate_model_id
     harness_model_choices
     harness_max_reasoning_effort
+    harness_reasoning_effort_choices
+    harness_validate_reasoning_effort
+    harness_default_context_tier
+    harness_context_choices
+    harness_validate_context_tier
     harness_auth_secret_env_vars
     harness_login_remediation
     harness_provider_summary
@@ -92,6 +99,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+offline_curl_guard_bin="${fixture_root}/offline-curl-guard-bin"
+mkdir -p -- "${offline_curl_guard_bin}"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${offline_curl_guard_bin}/curl"
+chmod +x "${offline_curl_guard_bin}/curl"
+PATH="${offline_curl_guard_bin}:${PATH}"
+export PATH
+
 for path in \
     "${RUNNER}" \
     "${PROMPT}" \
@@ -101,7 +116,8 @@ for path in \
     "${PLUGIN_MANIFEST}" \
     "${MARKETPLACE_MANIFEST}" \
     "${NOOP_ADAPTER_FIXTURE}" \
-    "${NOOP_WORKER_FIXTURE}"; do
+    "${NOOP_WORKER_FIXTURE}" \
+    "${REPOSITORY_DISCOVERY_CURL_FIXTURE}"; do
     [[ -f "${path}" ]] || fail "Required production file is missing: ${path}"
 done
 [[ -f "${HARNESS_COMMON}" ]] ||
@@ -184,7 +200,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '2' \
+assert_equal '3' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 production_registry_path=''
@@ -219,7 +235,7 @@ assert_equal \
 
 for function_name in "${required_contract_functions[@]}"; do
     declare -F "${function_name}" >/dev/null ||
-        fail "Copilot adapter is missing Contract-v2 function: ${function_name}"
+        fail "Copilot adapter is missing Contract-v3 function: ${function_name}"
 done
 [[ "${RHYOLITE_HARNESS_REQUIRED_FUNCTIONS[*]}" == \
     "${required_contract_functions[*]}" ]] ||
@@ -281,19 +297,45 @@ assert_equal 'max' \
     'Copilot alternate-model reasoning effort'
 
 mapfile -t model_choices < <(harness_model_choices)
-[[ ${#model_choices[@]} -eq 2 &&
+[[ ${#model_choices[@]} -eq 3 &&
     "${model_choices[0]}" == \
         'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' &&
     "${model_choices[1]}" == \
-        'Claude Fable 5 - claude-fable-5' ]] ||
+        'Claude Fable 5 - claude-fable-5' &&
+    "${model_choices[2]}" == 'List available model IDs' ]] ||
     fail 'Copilot model choices lost their exact text or order.'
-for valid_model in gpt-5.6-sol claude-fable-5 gpt-6_sol model.1; do
+mapfile -t available_models < <(harness_list_models)
+[[ " ${available_models[*]} " == *' gpt-5.6-sol '* &&
+    " ${available_models[*]} " == *' claude-fable-5 '* &&
+    " ${available_models[*]} " == *' gpt-6-sol '* ]] ||
+    fail 'Copilot available-model catalog lost expected current model IDs.'
+for valid_model in gpt-5.6-sol claude-fable-5 gpt-6-sol; do
     harness_validate_model_id "${valid_model}" ||
-        fail "Copilot adapter rejected a safe model ID: ${valid_model}"
+        fail "Copilot adapter rejected an available model ID: ${valid_model}"
 done
-for invalid_model in '' '../model' 'model/name' 'model name' '-model'; do
+for invalid_model in '' '../model' 'model/name' 'model name' '-model' \
+    gpt-6_sol model.1; do
     if harness_validate_model_id "${invalid_model}"; then
         fail "Copilot adapter accepted an unsafe model ID: ${invalid_model}"
+    fi
+    for valid_effort in high xhigh max; do
+        harness_validate_reasoning_effort "${valid_effort}" ||
+            fail "Copilot adapter rejected supported effort: ${valid_effort}"
+    done
+    for invalid_effort in none minimal low medium extreme; do
+        if harness_validate_reasoning_effort "${invalid_effort}"; then
+            fail "Copilot adapter accepted unsupported effort: ${invalid_effort}"
+        fi
+    done
+    assert_equal long_context \
+        "$(harness_default_context_tier)" \
+        'Copilot default context tier'
+    for valid_context in default long_context; do
+        harness_validate_context_tier "${valid_context}" ||
+            fail "Copilot adapter rejected supported context: ${valid_context}"
+    done
+    if harness_validate_context_tier huge >/dev/null 2>&1; then
+        fail 'Copilot adapter accepted an unsupported context tier.'
     fi
 done
 if harness_max_reasoning_effort '../model' >/dev/null 2>&1; then
@@ -378,19 +420,38 @@ assert_equal \
 source "${PREFERENCE_HELPER}"
 
 preference_contract_root="${fixture_root}/preference-contract"
-preference_contract_repository='https://github.com/octocat/Hello-World'
+preference_contract_repository='https://github.com/octocat/Hello-World.git'
 rhyolite_write_preference \
     "${preference_contract_repository}" \
     copilot \
     native \
     gpt-5.6-sol \
+    max \
+    long_context \
     "${preference_contract_root}" ||
-    fail 'Contract-v2 preference write failed.'
+    fail 'Contract-v3 preference write failed.'
 preference_contract_path="$(
     rhyolite_preference_path \
         "${preference_contract_repository}" \
         "${preference_contract_root}"
 )"
+preference_contract_peer='https://github.com/octocat/Hello-World'
+preference_contract_peer_path="$(
+    rhyolite_preference_path \
+        "${preference_contract_peer}" \
+        "${preference_contract_root}"
+)"
+[[ "${preference_contract_path}" != "${preference_contract_peer_path}" ]] ||
+    fail 'Contract-v3 preferences merged .git and non-.git source identities.'
+rhyolite_write_preference \
+    "${preference_contract_peer}" \
+    copilot \
+    standard \
+    gpt-6-sol \
+    xhigh \
+    default \
+    "${preference_contract_root}" ||
+    fail 'Contract-v3 non-.git peer preference write failed.'
 python3 - "${preference_contract_path}" <<'PY'
 import json
 import pathlib
@@ -403,26 +464,44 @@ if set(preference) != {
     "harness",
     "fleetMode",
     "model",
+    "reasoningEffort",
+    "contextTier",
     "updatedAt",
 }:
-    raise SystemExit("preference schema 2 keys are invalid")
+    raise SystemExit("preference schema 3 keys are invalid")
 if (
-    preference["schemaVersion"] != 2
+    preference["schemaVersion"] != 3
+    or preference["canonicalRepository"] !=
+        "https://github.com/octocat/Hello-World.git"
     or preference["harness"] != "copilot"
     or preference["fleetMode"] != "native"
     or preference["model"] != "gpt-5.6-sol"
+    or preference["reasoningEffort"] != "max"
+    or preference["contextTier"] != "long_context"
 ):
-    raise SystemExit("preference schema 2 values are invalid")
+    raise SystemExit("preference schema 3 values are invalid")
 PY
 rhyolite_read_preference \
     "${preference_contract_repository}" \
     copilot \
     "${preference_contract_root}" ||
-    fail 'Contract-v2 preference read failed.'
+    fail 'Contract-v3 preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
     "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
-    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
-    fail 'Contract-v2 preference values did not round-trip.'
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol &&
+    "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == max &&
+    "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == long_context ]] ||
+    fail 'Contract-v3 preference values did not round-trip.'
+rhyolite_read_preference \
+    "${preference_contract_peer}" \
+    copilot \
+    "${preference_contract_root}" ||
+    fail 'Contract-v3 non-.git peer preference read failed.'
+[[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == standard &&
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
+    "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == xhigh &&
+    "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == default ]] ||
+    fail 'Contract-v3 .git and non-.git preferences were not independent.'
 if rhyolite_read_preference \
     "${preference_contract_repository}" \
     codex \
@@ -591,6 +670,7 @@ write_worker_vector() {
             "${worker_session_id}" \
             gpt-5.6-sol \
             max \
+            long_context \
             "${authentication_variables_csv}" \
             "${available_tools}" \
             "${worker_transcript}" \
@@ -720,7 +800,7 @@ harness_prepare_run > "${prepare_run_second_output}" ||
 [[ "${COPILOT_AUTH_BRIDGE_JSON}" == *'"fixture-user"'* &&
     "${COPILOT_AUTH_BRIDGE_JSON}" != *'must-not-be-reread'* ]] ||
     fail 'Repeated Copilot run preparation reread mutable source config.'
-harness_prepare_worker_home "${runtime_home}" ||
+harness_prepare_worker_home "${runtime_home}" max long_context ||
     fail 'Copilot adapter could not prepare the worker home.'
 [[ "$(stat -c '%a' "${runtime_home}")" == 700 ]] ||
     fail 'Copilot runtime home is not mode 700.'
@@ -771,7 +851,8 @@ COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT=0
 COPILOT_AUTH_BRIDGE_JSON='{}'
 harness_prepare_run >/dev/null ||
     fail 'Copilot adapter could not prepare metadata-only authentication.'
-harness_prepare_worker_home "${metadata_runtime_home}" ||
+harness_prepare_worker_home \
+    "${metadata_runtime_home}" max long_context ||
     fail 'Copilot adapter could not prepare a metadata-only worker home.'
 assert_not_contains \
     "${metadata_runtime_home}/settings.json" \
@@ -828,7 +909,7 @@ assert_fail_soft_auth_config() {
     if [[ -e "${case_config}" ]]; then
         chmod 600 -- "${case_config}" 2>/dev/null || true
     fi
-    harness_prepare_worker_home "${case_runtime}" ||
+    harness_prepare_worker_home "${case_runtime}" max long_context ||
         fail "Copilot fail-soft worker home failed: ${name}"
     assert_not_contains \
         "${case_runtime}/settings.json" \
@@ -933,7 +1014,8 @@ printf 'mock-session-database\n' \
     > "${runtime_home}/session-store/sessions.db"
 printf 'must-not-persist bridge-secret\n' \
     > "${runtime_home}/other-state/secret.txt"
-harness_persist_agent_state "${runtime_home}" "${agent_state}" ||
+harness_persist_agent_state \
+    "${runtime_home}" "${agent_state}" max long_context ||
     fail 'Copilot adapter could not persist allowlisted agent state.'
 persisted_home="${agent_state}/copilot-home"
 [[ -f "${persisted_home}/session-state/mock-session/state.json" &&
@@ -1116,7 +1198,9 @@ case "$*" in
         ;;
 esac
 MOCK_PLAN_DATE
-chmod +x "${plan_mock_bin}/date"
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${plan_mock_bin}/curl"
+chmod +x "${plan_mock_bin}/date" "${plan_mock_bin}/curl"
 plan_arguments=(
     --repo https://github.com/octocat/Hello-World
     --scope 1
@@ -1172,6 +1256,8 @@ env \
     fail 'Explicit Copilot did not override RHYOLITE_HARNESS within matching launcher context.'
 [[ ! -s "${plan_stderr}" ]] ||
     fail 'Explicit-over-environment Copilot launcher-context plan wrote stderr.'
+[[ ! -e "${plan_mock_bin}/curl.log" ]] ||
+    fail 'Plan-only harness selection invoked repository transport discovery.'
 
 python3 - \
     "${plan_default}" \
@@ -1185,12 +1271,14 @@ import sys
 plans = [json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
          for path in sys.argv[1:]]
 for index, plan in enumerate(plans):
-    if plan.get("SchemaVersion") != 4:
-        raise SystemExit(f"plan {index} did not use harness-aware schema 4")
+    if plan.get("SchemaVersion") != 5:
+        raise SystemExit(f"plan {index} did not use harness-aware schema 5")
     if plan.get("Harness") != "copilot":
         raise SystemExit(f"plan {index} lost the selected harness")
     if plan.get("ReasoningEffort") != "max":
         raise SystemExit(f"plan {index} lost resolved reasoning effort")
+    if plan.get("ContextTier") != "long_context":
+        raise SystemExit(f"plan {index} lost resolved context tier")
     provider = plan.get("Provider")
     if not isinstance(provider, dict) or set(provider) != {
         "Id", "Host", "ForwardedEnvVarNames"
@@ -1578,7 +1666,7 @@ env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     fail 'Plan-only mode invoked the failing harness CLI check.'
 assert_contains \
     "${function_failure_plan_stdout}" \
-    '"SchemaVersion": 4' \
+    '"SchemaVersion": 5' \
     'Plan-only mode without harness CLI'
 [[ ! -e "${function_failure_plan_workspace}" &&
     ! -e "${function_failure_plan_output}" ]] ||
@@ -1704,6 +1792,39 @@ if [[ "${1-}" == "--version" ]]; then
     exit 0
 fi
 
+assert_anonymous_clone_operation() {
+    [[ "${HOME}" == */.anonymous-git-home ]] || exit 60
+    [[ "${USERPROFILE-}" == "${HOME}" ]] || exit 61
+    [[ "${XDG_CONFIG_HOME-}" == "${HOME}" ]] || exit 62
+    [[ "${CURL_HOME-}" == "${HOME}" ]] || exit 63
+    [[ "${GIT_CONFIG_NOSYSTEM-}" == 1 ]] || exit 64
+    [[ "${GIT_CONFIG_GLOBAL-}" == /dev/null ]] || exit 65
+    [[ "${GIT_NO_REPLACE_OBJECTS-}" == 1 ]] || exit 66
+    [[ -z "${COPILOT_GITHUB_TOKEN-}" &&
+        -z "${GH_TOKEN-}" &&
+        -z "${GITHUB_TOKEN-}" &&
+        -z "${GIT_ASKPASS-}" &&
+        -z "${SSH_ASKPASS-}" &&
+        -z "${SSH_AUTH_SOCK-}" &&
+        -z "${NETRC-}" &&
+        -z "${http_proxy-}" &&
+        -z "${https_proxy-}" &&
+        -z "${all_proxy-}" &&
+        -z "${no_proxy-}" &&
+        -z "${HTTP_PROXY-}" &&
+        -z "${HTTPS_PROXY-}" &&
+        -z "${ALL_PROXY-}" &&
+        -z "${NO_PROXY-}" ]] || exit 67
+    [[ " $* " == *" credential.helper= "* ]] || exit 68
+    [[ " $* " == *" credential.interactive=false "* ]] || exit 69
+    [[ " $* " == *" http.extraHeader= "* ]] || exit 70
+    [[ " $* " == *" http.proxy= "* ]] || exit 71
+    [[ " $* " == *" http.sslVerify=true "* ]] || exit 72
+    [[ " $* " == *" http.followRedirects=false "* ]] || exit 73
+    [[ " $* " == *" http.curloptResolve=github.com:443:93.184.216.34 "* ]] ||
+        exit 74
+}
+
 command_name=""
 for argument in "$@"; do
     case "${argument}" in
@@ -1722,6 +1843,10 @@ for argument in "$@"; do
     fi
     previous="${argument}"
 done
+
+if [[ "${working_directory}" == *-readonly ]]; then
+    assert_anonymous_clone_operation "$@"
+fi
 
 case "${command_name}" in
     version)
@@ -1818,6 +1943,17 @@ MOCK_RUNNER_GIT
 cat > "${runner_mock_bin}/copilot" <<'MOCK_RUNNER_COPILOT'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-6-sol"
+    - "gpt-5.6-sol"
+    - "claude-fable-5"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 
 : "${RHYOLITE_WORKER_CAPTURE:?}"
 mkdir -p -- "${RHYOLITE_WORKER_CAPTURE}"
@@ -1920,11 +2056,17 @@ Mock deterministic repository review.
 REPORT
 MOCK_RUNNER_COPILOT
 
+cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
+    "${runner_mock_bin}/curl"
+cat > "${runner_mock_bin}/curl.map" <<'EOF'
+https://github.com/octocat/Hello-World/info/refs?service=git-upload-pack|200||github.com:443:93.184.216.34
+EOF
 chmod +x \
     "${runner_mock_bin}/date" \
     "${runner_mock_bin}/python3" \
     "${runner_mock_bin}/git" \
-    "${runner_mock_bin}/copilot"
+    "${runner_mock_bin}/copilot" \
+    "${runner_mock_bin}/curl"
 
 contract_plan_hash() {
     node -e '
@@ -1969,9 +2111,11 @@ contract_assert_worker_contract() {
         node - "${state_path}" <<'JS'
 const fs = require("fs");
 const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-if (state.SchemaVersion !== 5 ||
+if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
+    state.Model !== "gpt-5.6-sol" ||
     state.ReasoningEffort !== "max" ||
+    state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
     state.Provider?.Host !== "managed-provider" ||
     JSON.stringify(state.Provider?.ForwardedEnvVarNames) !== JSON.stringify([
@@ -1989,7 +2133,7 @@ if (state.SchemaVersion !== 5 ||
     ]) ||
     state.Session.ResumePolicy !==
       "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.") {
-  throw new Error("runner seam state lost harness contract-v2 identity");
+  throw new Error("runner seam state lost harness contract-v3 identity");
 }
 for (const value of [
   state.Session.Name,
@@ -2153,14 +2297,16 @@ const fs = require("fs");
 const plans = process.argv.slice(2).map((planPath) =>
   JSON.parse(fs.readFileSync(planPath, "utf8")));
 for (const [index, plan] of plans.entries()) {
-  if (plan.SchemaVersion !== 4) {
+  if (plan.SchemaVersion !== 5) {
     throw new Error(`runner seam plan ${index} changed schema`);
   }
   if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash)) {
     throw new Error(`runner seam plan ${index} has invalid hash`);
   }
   if (plan.Harness !== "copilot" ||
+      plan.Model !== "gpt-5.6-sol" ||
       plan.ReasoningEffort !== "max" ||
+      plan.ContextTier !== "long_context" ||
       plan.Provider?.Id !== "github-copilot" ||
       plan.Provider?.Host !== "managed-provider" ||
       !Array.isArray(plan.Provider?.ForwardedEnvVarNames)) {
@@ -2373,8 +2519,8 @@ production_copilot, copied_copilot, noop = [
 ]
 if production_copilot["ApprovalHash"] != copied_copilot["ApprovalHash"]:
     raise SystemExit("copied fixed registry changed the Copilot approval hash")
-if noop.get("SchemaVersion") != 4:
-    raise SystemExit("no-op plan did not use schema 4")
+if noop.get("SchemaVersion") != 5:
+    raise SystemExit("no-op plan did not use schema 5")
 if noop.get("Harness") != "noop":
     raise SystemExit("no-op plan lost harness identity")
 if noop.get("Model") != "noop-fixture-model":
@@ -2582,6 +2728,7 @@ noop_expected_arguments=(
     --session-id "${noop_state_values[1]}"
     --model noop-fixture-model
     --reasoning-effort max
+    --context long_context
     --transcript "${noop_state_values[3]}"
 )
 noop_expected_vector="${noop_capture}/expected-argv"
@@ -2747,17 +2894,20 @@ const provider = {
   ForwardedEnvVarNames: [],
 };
 function assertIdentity(value, label) {
-  if (value.SchemaVersion !== 5 ||
+  if (value.SchemaVersion !== 6 ||
       value.Harness !== "noop" ||
+      value.Model !== "noop-fixture-model" ||
       value.ReasoningEffort !== "max" ||
+      value.ContextTier !== "long_context" ||
       JSON.stringify(value.Provider) !== JSON.stringify(provider)) {
     throw new Error(`${label} lost no-op harness/provider identity`);
   }
 }
-if (plan.SchemaVersion !== 4 ||
+if (plan.SchemaVersion !== 5 ||
     plan.Harness !== "noop" ||
     plan.Model !== "noop-fixture-model" ||
     plan.ReasoningEffort !== "max" ||
+    plan.ContextTier !== "long_context" ||
     JSON.stringify(plan.Provider) !== JSON.stringify(provider)) {
   throw new Error("executed no-op plan lost adapter-owned identity");
 }
@@ -2876,11 +3026,13 @@ contract_run_noop_failure_case() {
 const fs = require("fs");
 const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const workerStarted = process.argv[3] === "1";
-if (state.SchemaVersion !== 5 ||
+if (state.SchemaVersion !== 6 ||
     state.Harness !== "noop" ||
+    state.Model !== "noop-fixture-model" ||
     state.Provider?.Id !== "fixture-noop" ||
     state.Provider?.Host !== "fixture.invalid" ||
     state.ReasoningEffort !== "max" ||
+    state.ContextTier !== "long_context" ||
     state.Status !== "ReviewFailed" ||
     state.ExitCode === 0) {
   throw new Error("no-op lifecycle failure state is not truthful");
@@ -3289,9 +3441,11 @@ const fs = require("fs");
 const [statePath, expectedStatus, workerStartedText] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
 const workerStarted = workerStartedText === "1";
-if (state.SchemaVersion !== 5 ||
+if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
+    state.Model !== "gpt-5.6-sol" ||
     state.ReasoningEffort !== "max" ||
+    state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
     state.Status !== expectedStatus ||
     state.ExitCode === 0) {
@@ -3483,6 +3637,16 @@ chmod 0700 -- "${launcher_default_state}" "${launcher_explicit_state}"
 cat > "${launcher_mock_bin}/copilot" <<'MOCK_LAUNCHER_COPILOT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    cat <<'EOF'
+  `model`: AI model to use for Copilot CLI.
+    - "gpt-6-sol"
+    - "gpt-5.6-sol"
+    - "claude-fable-5"
+  `reasoning_effort`: Reasoning effort.
+EOF
+    exit 0
+fi
 : "${RHYOLITE_LAUNCHER_CAPTURE:?}"
 {
     printf 'HARNESS\0%s\0' "${RHYOLITE_LAUNCHER_HARNESS-}"
@@ -3499,8 +3663,9 @@ launcher_help="$(
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${LAUNCHER}" --help
 )"
-[[ "${launcher_help}" == \
-    *'--harness ID  Select the review harness (currently: copilot).'* ]] ||
+[[ "${launcher_help}" == *'--harness ID        Select a registered review harness.'* &&
+    "${launcher_help}" == *'Available harnesses:'* &&
+    "${launcher_help}" == *'  - copilot'* ]] ||
     fail 'Launcher help does not document the I1a Copilot harness selector.'
 [[ "${launcher_help}" != *noop* ]] ||
     fail 'Launcher help exposed the development-only no-op harness.'
@@ -3634,7 +3799,7 @@ assert_launcher_state_path_failure() {
             RHYOLITE_LAUNCHER_CAPTURE="${capture_path}" \
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
-                --repo https://example.com/owner/repository \
+                --repo https://example.com/owner/repository.git \
                 --fleet-mode standard \
                 --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
@@ -3684,7 +3849,7 @@ assert_launcher_state_path_failure \
         RHYOLITE_LAUNCHER_CAPTURE="${launcher_default_capture}" \
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${LAUNCHER}" \
-            --repo https://example.com/owner/repository \
+            --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
             --model gpt-5.6-sol
 )
@@ -3697,7 +3862,7 @@ assert_launcher_state_path_failure \
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${LAUNCHER}" \
             --harness copilot \
-            --repo https://example.com/owner/repository \
+            --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
             --model gpt-5.6-sol
 )
@@ -3745,9 +3910,11 @@ expected_prompt="$(
     cat <<'PROMPT'
 RHYOLITE_START_COMMAND_V1
 RHYOLITE_LAUNCHER_SETUP_V1
-Source=https://example.com/owner/repository
+Source=https://example.com/owner/repository.git
 FleetMode=standard
 Model=gpt-5.6-sol
+ReasoningEffort=max
+ContextTier=long_context
 RememberPreferences=true
 END_RHYOLITE_LAUNCHER_SETUP_V1
 Begin Rhyolite's guided repository-review setup now.

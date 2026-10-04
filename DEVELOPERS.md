@@ -63,11 +63,12 @@ bash --version
 node --version
 npm --version
 python3 --version
+curl --version
 copilot --version
 ```
 
-Git 2.41 or newer is required. Authenticate from a clean directory
-outside every Git worktree:
+Git 2.41 or newer, Python 3, and curl are required for runner execution.
+Authenticate from a clean directory outside every Git worktree:
 
 ```bash
 mkdir -p "$HOME/rhyolite-work"
@@ -172,7 +173,7 @@ GitHub Copilot is the only production harness. The no-op adapter belongs
 only under `tests/fixtures` and may be loaded only through test-owned fixed
 fixture wiring. It must never be added to the production registry, plugin
 assets, launcher choices, marketplace metadata, or public support claims.
-Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v2
+Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v3
 work and any future adapter.
 
 Scope 1 must remain transport-free: no research worker, MCP config,

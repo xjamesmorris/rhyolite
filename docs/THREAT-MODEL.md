@@ -23,7 +23,7 @@
 - Repository URLs supplied to the runner.
 - User-selected trusted research policy files and advanced provider/cookie
   settings.
-- User-local launcher fleet/model preference files.
+- User-local launcher fleet/model/reasoning/context preference files.
 - User-selected output workspace paths and generated artifact paths.
 
 ## Primary threats
@@ -54,8 +54,8 @@
     link-local, or otherwise non-public address, or changes resolution
     between validation and clone.
 17. Git obtains repository credentials from helpers, `_netrc`/`.netrc`,
-    inherited auth variables, a proxy, a redirect, or a client
-    certificate.
+    inherited auth variables, a proxy, an automatic or cross-origin redirect,
+    or a client certificate.
 18. A local path is accepted as a review source and triggers filesystem,
     Git metadata, DNS, or network access before the public-source
     contract rejects it.
@@ -104,15 +104,32 @@
 - User-facing orchestration starts from a clean non-Git directory, never
   from inside the target checkout.
 - Launcher bootstrap performs syntax-only public-HTTPS canonicalization
-  without DNS, Git, authentication, or target inspection. The runner
-  independently repeats canonicalization and anonymous public-access
-  preflight before clone.
+  without DNS, Git, authentication, or target inspection and preserves a
+  selected terminal `.git` endpoint. The runner independently repeats
+  canonicalization and anonymous public-access preflight before clone.
 - Exact URL parsing before invoking Git.
 - DNS answers are classified before clone; any non-public address rejects
-  the source. Approved IPv4/IPv6 addresses are pinned with
-  `http.curloptResolve`, and redirects and explicit proxies are disabled
-  to prevent rebinding or proxy-side re-resolution. Git 2.41 or newer is
-  required.
+  the source. Approved IPv4/IPv6 addresses are pinned, explicit proxies and
+  automatic curl/Git redirects are disabled, and the original validated
+  origin and all-public pins are reused for every discovery request and later
+  Git `ls-remote`, clone, and fetch.
+- During execution only, the trusted runner may manually process at most three
+  HTTP 301 smart-Git discovery hops. Every target must retain the original
+  HTTPS origin, compared as normalized DNS host plus effective numeric port;
+  host comparison is case-insensitive, implicit port 443 equals explicit port
+  443, and a changed host, port, or subdomain is cross-origin. Every other
+  3xx, downgrade, credential, IP/local/reserved/private destination, unsafe
+  encoding, query, fragment, or path, loop, and hop exhaustion is rejected
+  before following.
+- The selected canonical URL, including a terminal `.git` endpoint, remains
+  the source identity in the plan, approval, persisted state, and preferences.
+  A final same-origin effective endpoint is internal execution transport state
+  only.
+- Plan-only remains syntax-only and offline, with no curl, DNS, Git transport,
+  harness-runtime, or authentication dependency. curl is trusted-runner-only
+  Git preflight machinery and grants no child web permissions; scope 1 remains
+  research-off.
+- Git 2.41 or newer is required.
 - Hooks, submodules, LFS smudging, global Git config, and prompts
   disabled.
 - Inherited Git environment variables are removed; only an explicit safe
@@ -133,9 +150,10 @@
   continuations, launcher prompts, and unrelated text. Neither hook
   performs network access, Git commands, writes, prompt mutation, or
   environment/auth inspection.
-- Native fleet mode and the outer model are selected before Copilot
-  starts. The trusted launcher setup block contains only canonical
-  source URLs plus constrained fleet/model/remember fields; sources
+- Native fleet mode and the outer model, reasoning effort, and context tier
+  are selected before Copilot starts. The trusted launcher setup block
+  contains only canonical source URLs plus constrained
+  fleet/model/reasoning/context/remember fields; sources
   remain untrusted data rather than prompt instructions.
 - `--yolo` is disabled by default and is an ephemeral per-launch
   outer-orchestrator switch. It opts the outer Copilot orchestrator into all
@@ -155,8 +173,9 @@
   Bash runner propagates INT/TERM/HUP through tracked repository, timeout,
   Copilot worker, and broker processes, then records `Interrupted` state and
   artifacts.
-- Per-repository fleet/model preferences are keyed by a SHA-256 hash of
-  the canonical public URL, stored under user-only launcher state, and
+- Per-repository fleet/model/reasoning/context preferences are keyed by a
+  SHA-256 hash of the selected canonical public URL, including its terminal
+  `.git` endpoint when present, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
   mismatched preferences are ignored rather than silently applied.
 - Preferences are written atomically only after effective-plan approval.

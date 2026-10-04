@@ -2,7 +2,6 @@
 name: repo-research-worker
 description: Performs one write-disabled public-source research phase through Rhyolite's constrained local egress broker.
 tools: ["read", "search", "rhyolite-research-research_capabilities", "rhyolite-research-fetch_public_url", "rhyolite-research-search_public_github", "rhyolite-research-search_public_web", "rhyolite-research-research_network_summary"]
-model: gpt-5.6-sol
 disable-model-invocation: true
 user-invocable: false
 ---

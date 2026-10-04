@@ -55,7 +55,7 @@ harness. The harness abstraction is a fixed, fail-closed internal seam; it
 does not make other CLIs supported. Contributor and coding-agent guidance is
 canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
-Contract-v2 implementation playbook in
+Contract-v3 implementation playbook in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
@@ -138,12 +138,18 @@ outside every Git worktree, pass `--plugin-dir`, preselect
 `rhyolite:repo-review`, and submit a trusted `-i` setup block while
 preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
-selected public HTTPS repository URLs, ask whether to use native
-Copilot fleet mode, and confirm the review model. Known choices are
-`gpt-5.6-sol` (recommended) and `claude-fable-5`; a syntactically valid
-custom model ID is also accepted and preserved. Native mode adds the
-process-level `--fleet` flag, and every launch passes the selected
-`--model`. Because setup starts immediately,
+selected public HTTPS repository URLs without removing a terminal `.git`
+endpoint, ask whether to use native Copilot fleet mode, and confirm the
+validated review runtime. Known model choices are `gpt-5.6-sol` (recommended)
+and `claude-fable-5`; the selector can list the live model IDs reported by
+`copilot help config`, including `gpt-6-sol` when available. Every model must
+match that catalog exactly.
+Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
+context is selectable as `long_context` (recommended) or `default`. The
+launcher displays harness, model, effort, and context together and asks the
+user to confirm or modify them. Native mode adds the process-level `--fleet` flag,
+and every launch passes the selected `--model`, `--reasoning-effort`,
+and `--context`. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
 (`Rhyolite v... loaded — type /rhyolite:start to start.`) and show
 automatic-guided-mode copy that tells the user to wait for the first
@@ -157,7 +163,8 @@ context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
 with user-only permissions and does not persist the initial review
 request or selected source in its context file.
 After the user approves the effective plan, the runner atomically saves
-only the canonical repository URL, fleet mode, model, and update time
+only the canonical repository URL, fleet mode, model, reasoning effort,
+context tier, and update time
 in a user-only hashed preference file below the same launcher state
 root. Future launcher runs reuse a preference only when every selected
 repository has the same valid setting; mixed, missing, or malformed
@@ -350,16 +357,20 @@ The agent asks one question at a time:
 1. Which source to review.
 2. Whether to continue in standard mode or restart through the launcher
    for native fleet mode when setup did not come from the launcher.
-3. Which frontier review model to use.
-4. Whether to remember fleet/model settings for the selected
+3. Which available review model to use, with an option to list live model IDs.
+4. Which reasoning effort to use.
+5. Which context tier to use.
+6. Whether to confirm the validated harness/model/effort/context settings or
+   modify one of them.
+7. Whether to remember fleet/model/effort/context settings for the selected
    repositories after plan approval.
-5. Whether the output parent is the current directory, home directory,
+8. Whether the output parent is the current directory, home directory,
    or a custom location.
-6. Which review scope to use.
-7. For scope `3`, which provenance lookback to use.
-8. For scope `2` or `3`, whether research cookie replay remains off or
+9. Which review scope to use.
+10. For scope `3`, which provenance lookback to use.
+11. For scope `2` or `3`, whether research cookie replay remains off or
    uses a fresh per-repository ephemeral jar.
-9. After those answers are collected, the agent requests the runner's
+12. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
 
@@ -376,7 +387,8 @@ choices:
 ```text
 1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
 2. Claude Fable 5 - claude-fable-5
-3. Other (wording supplied by Copilot CLI)
+3. List available model IDs
+4. Other (wording supplied by Copilot CLI)
 ```
 
 The final custom-answer option accepts a model ID containing only letters,
@@ -530,6 +542,9 @@ topics can take substantially longer.
 
 The guided plan step uses the runner's `--plan-only` mode and
 corresponding review-plan artifacts.
+Plan-only is syntax-only and offline: it performs no DNS, curl, or Git
+transport and preserves the selected canonical source, including a terminal
+`.git` endpoint, as the plan and approval identity.
 The plan JSON also supplies an `ApprovalHash`, which the agent must
 retain and pass back unchanged to the actual runner with
 `--expected-plan-hash`. The actual review must reuse
@@ -565,13 +580,20 @@ date-derived prior-art/provenance window rollover. The agent does not
 start the review until the user selects exact `Run review`.
 
 Remote clones are anonymous: SSH, HTTP, embedded credentials, credential
-helpers, `_netrc`/`.netrc`, inherited auth variables, proxies, and
-redirects are disabled. The runner resolves the host, rejects non-public
-IP answers, and pins the approved addresses into Git. Before any clone or
-worker starts, it performs a real anonymous accessibility preflight
-through that same boundary and fails the whole approved plan closed if
-any selected source is not publicly reachable. Git 2.41 or newer is
-required.
+helpers, `_netrc`/`.netrc`, inherited auth variables, proxies, and automatic
+curl/Git redirects are disabled. During execution only, the trusted runner
+may manually follow at most three HTTP 301 smart-Git discovery hops when each
+target remains on the original HTTPS origin, compared as normalized DNS host
+plus effective numeric port. Host comparison is case-insensitive, implicit
+port 443 equals explicit port 443, and changed hosts, ports, or subdomains are
+forbidden. Other 3xx responses, downgrade, credentials,
+IP/local/reserved/private targets, unsafe encodings, queries, fragments,
+paths, loops, and hop exhaustion fail closed before following. The runner
+reuses the original all-public DNS pins at every hop and for later Git
+`ls-remote`, clone, and fetch operations. A final same-origin effective
+endpoint is internal transport state; it never replaces the selected source,
+including its `.git` endpoint, in the plan, approval, persisted state, or
+preferences. Git 2.41 or newer is required.
 
 Local repository paths are not supported input. The runners accept only
 anonymously readable public HTTPS Git repository URLs and reject local
@@ -619,10 +641,12 @@ After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
 runtime home.
 
-The Bash runner also requires Python 3 for public DNS classification and
-the bundled stdio research broker. The broker is the explicitly approved
-constrained exception to the Bash-first architecture and uses only the
-Python standard library.
+The Bash runner also requires Python 3 for public DNS classification and the
+bundled stdio research broker, plus curl for trusted-runner-only anonymous
+smart-Git execution preflight. curl does not grant child agents web access or
+enable research; scope 1 remains research-off. The broker is the explicitly
+approved constrained exception to the Bash-first architecture and uses only
+the Python standard library.
 
 The legacy Bash research switches remain available. Public research is
 opt-in and uses only the constrained local broker. Evidence-based
@@ -712,11 +736,12 @@ installed runner during guided setup.
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot
 under a clean, non-Git session root. Before that clone, they perform a
-real anonymous accessibility preflight with pinned public DNS, disabled
-credentials/helpers/proxies, and no redirects. Repository hooks, custom
-instructions, and project skills cannot become executable child
-configuration. Child agents deny write and shell tools. The research
-worker receives only snapshot-contained reads/searches and the exact
+real anonymous accessibility preflight with pinned public DNS and disabled
+credentials, helpers, proxies, and automatic redirects. Only the bounded
+explicit same-origin HTTP 301 discovery described above is allowed.
+Repository hooks, custom instructions, and project skills cannot become
+executable child configuration. Child agents deny write and shell tools. The
+research worker receives only snapshot-contained reads/searches and the exact
 broker tools; the main worker receives snapshot reads/searches plus the
 sanitized dossier and network summary. Automatic
 temporary-directory access and remote export are disabled; the trusted

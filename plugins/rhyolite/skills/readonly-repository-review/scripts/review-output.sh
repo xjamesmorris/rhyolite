@@ -1177,11 +1177,13 @@ write_review_handoff() {
     local research_private_directory="${19:-}"
     local harness="${20:-}"
     local harness_display_name="${21:-}"
-    local reasoning_effort="${22:-}"
-    local provider_id="${23:-}"
-    local provider_host="${24:-}"
-    local provider_env_names="${25:-(none)}"
-    local resume_policy="${26:-}"
+    local model="${22:-}"
+    local reasoning_effort="${23:-}"
+    local context_tier="${24:-}"
+    local provider_id="${25:-}"
+    local provider_host="${26:-}"
+    local provider_env_names="${27:-(none)}"
+    local resume_policy="${28:-}"
     local continuation
 
     if [[ -n "${session_id}" ]]; then
@@ -1199,7 +1201,9 @@ write_review_handoff() {
         printf 'Status:\n\n    %s\n\n' "${status}"
         printf 'Harness:\n\n    %s (%s)\n\n' \
             "${harness_display_name}" "${harness}"
+        printf 'Model:\n\n    %s\n\n' "${model}"
         printf 'Reasoning effort:\n\n    %s\n\n' "${reasoning_effort}"
+        printf 'Context tier:\n\n    %s\n\n' "${context_tier}"
         printf 'Provider:\n\n'
         printf '    ID: %s\n' "${provider_id}"
         printf '    Host: %s\n' "${provider_host}"

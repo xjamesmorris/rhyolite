@@ -95,13 +95,36 @@ order:
 ```text
 GPT-5.6 Sol (Recommended) - gpt-5.6-sol
 Claude Fable 5 - claude-fable-5
+List available model IDs
 ```
 
-The automatic final custom-answer option accepts a syntactically valid custom
-model ID containing only letters, numbers, dots, underscores, and hyphens.
+The list choice must use the bundled runner's `--list-models` mode, display
+the returned newline-delimited IDs, and repeat the same picker. The automatic
+final custom-answer option accepts another exact catalog ID. Safe syntax alone
+is insufficient; every selected model must be validated by exact catalog
+membership.
 The initial setup model picker and `Edit setup` -> `Model` must reuse this
 same choice order, validation, and custom-answer behavior without resetting
 other setup values.
+
+For reasoning effort, require exactly these choices in order:
+
+```text
+Maximum reasoning (Recommended) - max
+Extra-high reasoning - xhigh
+High reasoning - high
+```
+
+For context tier, require exactly these choices in order:
+
+```text
+Long context (Recommended) - long_context
+Default context - default
+```
+
+After model, effort, and context validation, require a focused confirmation
+picker with `Confirm runtime settings`, `Modify model`,
+`Modify reasoning effort`, and `Modify context tier`, in that order.
 
 Return exactly one of these forms:
 
