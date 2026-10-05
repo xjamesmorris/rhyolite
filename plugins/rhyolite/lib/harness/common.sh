@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=3
+RHYOLITE_HARNESS_CONTRACT_VERSION=4
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 RHYOLITE_HARNESS_LOADED_ID=''
@@ -29,8 +29,11 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_prepare_worker_home
     harness_worker_argv
     harness_worker_env
+    harness_report_repair_argv
+    harness_report_repair_env
     harness_render_request
     harness_extract_final_report
+    harness_extract_report_repair
     harness_verify_isolation
     harness_persist_agent_state
     harness_sanitize_runtime_home

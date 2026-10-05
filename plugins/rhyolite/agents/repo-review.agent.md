@@ -477,7 +477,11 @@ start the review yet. Instead:
    root, effective scope, public research setting, provenance setting,
    provenance lookback if any,
    `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`, and
-   `ResearchTransport`. Label `ReviewDate`, `PriorArtWindow`, and
+   `ResearchTransport`, and `ReportRepairPolicy`. Explain that the fixed
+   repair policy permits one fresh, tool-less confidence edit within its
+   returned `TimeoutSeconds` (at most 300 seconds, capped by the session
+   timeout) under the approved model settings, with no research rerun
+   and no weakening of strict validation. Label `ReviewDate`, `PriorArtWindow`, and
    `ProvenanceWindow` as local-session calendar dates. Label
    `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
    disabled. For scope `2` or `3`, show the authoritative prior-art
@@ -534,7 +538,7 @@ Never run the actual review until the user selects exact `Run review`.
 Before invoking the runner, tell the user that Rhyolite will report
 clone, exact-commit, snapshot, dedicated research, analysis, artifact,
 heartbeat, and
-finalization milestones. Do not suppress `RHYOLITE PROGRESS` lines from
+finalization milestones, including report-only repair when eligible. Do not suppress `RHYOLITE PROGRESS` lines from
 the runner. Keep `Stage` and `/rhyolite:status` aligned with the latest
 milestone. For current progress, use exact `/rhyolite:status`; bare `status`
 remains only the in-agent setup intent/fallback.

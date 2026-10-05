@@ -23,8 +23,9 @@ bash ./tests/validate-all.sh
 ```
 
 `bash ./tests/validate-all.sh` is the mandatory full development and release
-gate. The fail-fast aggregate runs the focused harness contract validator
-first, then the legacy monolithic plugin validator. Use
+gate. The fail-fast aggregate runs the focused harness contract validator,
+the confidence-edit protocol regressions, and the legacy monolithic plugin
+validator, in that order. Use
 `bash ./tests/validate-harness-contract.sh` for the focused harness seam or
 `bash -n <file>` as the narrowest syntax check for one changed Bash file. For
 broker or research-policy changes, run
@@ -114,7 +115,7 @@ supported and must not drive new work.
   function checks, guarded calls, and sanitized failures.
   `plugins/rhyolite/lib/harness/copilot.sh` is the only production adapter.
   Production runtime support remains Copilot-only.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v3 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v4 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -239,6 +240,18 @@ supported and must not drive new work.
   escaped HTML, state, and handoff artifacts. Per-repository artifacts,
   research/network warnings, and transport state roll up into a run manifest,
   state, handoff, and HTML index.
+- Report finalization allows one fresh, tool-less confidence-edit attempt,
+  bounded to at most 300 seconds and capped by the session timeout, disclosed
+  as approval-bound `ReportRepairPolicy`.
+  The repair child receives only the sanitized candidate, exact diagnostic,
+  scope, and fixed edit protocol, never a snapshot, research evidence, MCP,
+  prior session, or filesystem/network tools. The runner validates the exact
+  descriptor, conservatively preserves the original confidence detail, and
+  copies every other report byte unchanged. Strict validation is unchanged;
+  only a fully revalidated candidate can become canonical. Unsupported
+  errors and exhausted repair fail explicitly. Candidates, diagnostics,
+  progress, and `ReportRepair` state remain observable without rerunning
+  research or exposing direct child resume.
 - Release validation is local only on Fedora Linux 44. Do not add or require
   hosted CI workflows for the current release.
 
@@ -354,12 +367,16 @@ supported and must not drive new work.
   cookie replay, private raw Set-Cookie retention, private unsupported-body
   retention, and network-log policy. Scope 1 fixes the object to disabled and
   clears stale cookie consent.
-- Harness Contract v3 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v4 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
   `ForwardedEnvVarNames`. Follow `docs/ADDING-A-HARNESS.md`; do not claim v2
   is implemented until runtime and tests land together.
+- `ReportRepairPolicy` is part of plan approval. The additive `ReportRepair`
+  object is synchronized across repository state, manifest entries, run-state
+  repositories, handoffs, and the HTML index. Repair itself never widens an
+  approved harness, provider, model, effort, context, source, or research scope.
 - The direct runner is a lower-level interface than the agent. Its interactive
   prompt order may differ, but it enforces the same effective plan and
   approval hash.
@@ -388,7 +405,7 @@ supported and must not drive new work.
   capability values, malformed provider summaries, and adapter-function
   failures stop the operation with sanitized nonzero errors.
 - Production remains Copilot-only until a separately approved adapter
-  satisfies every Contract-v3 requirement, negative test, end-to-end test,
+  satisfies every Contract-v4 requirement, negative test, end-to-end test,
   documentation update, packaging review, and release requirement.
 - A test no-op adapter belongs only under `tests/fixtures`. It is never a
   production registry entry, launcher option, plugin asset, marketplace

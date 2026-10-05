@@ -225,6 +225,12 @@ Evidence basis: direct path-and-line evidence.` are valid. Values may continue
 on immediately following wrapped lines. Reject unknown levels, bare prefixes
 such as `High confidence`, delimiters without text, and true confidence or
 evidence-basis omissions.
+Use exactly one level per `Confidence:` label. This compound value is invalid:
+`Confidence: High for the two observed constructs; Medium for absence outside normalized text.`
+A conservative single-level correction that preserves the original detail is:
+`Confidence: Medium - Original confidence detail: High for the two observed constructs; Medium for absence outside normalized text.`
+That correction preserves explicit confidence intent; it does not silently
+reinterpret the original detail.
 
 Under AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT, include each of
 these exact field labels and assess every category even when no supporting
