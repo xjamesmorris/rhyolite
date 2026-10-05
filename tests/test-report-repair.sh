@@ -1200,7 +1200,7 @@ handoff_without_summary="${FIXTURE_ROOT}/handoff-without-summary.md"
 repair_summary=$'Applied one bounded confidence grammar correction.\n# raw diagnostic heading remains inert'
 write_review_handoff \
     "${handoff_with_summary}" \
-    'https://example.invalid/trusted-synthetic.git' \
+    'https://github.com/octocat/Hello-World.git' \
     '0123456789abcdef' \
     'Completed' \
     "${FIXTURE_ROOT}/session.md" \
@@ -1210,7 +1210,7 @@ write_review_handoff \
     'Synthetic estimate' \
     'session-id' \
     'RemoteUrl' \
-    'https://example.invalid/trusted-synthetic.git' \
+    'https://github.com/octocat/Hello-World.git' \
     'Disabled' \
     'Disabled' \
     'Disabled' \
@@ -1247,7 +1247,7 @@ fi
 
 write_review_handoff \
     "${handoff_without_summary}" \
-    'https://example.invalid/trusted-synthetic.git' \
+    'https://github.com/octocat/Hello-World.git' \
     '0123456789abcdef' \
     'Completed' \
     "${FIXTURE_ROOT}/session.md" \
@@ -1257,7 +1257,7 @@ write_review_handoff \
     'Synthetic estimate' \
     'session-id' \
     'RemoteUrl' \
-    'https://example.invalid/trusted-synthetic.git' \
+    'https://github.com/octocat/Hello-World.git' \
     'Disabled' \
     'Disabled' \
     'Disabled' \
