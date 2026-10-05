@@ -494,7 +494,11 @@ Before invoking the runner:
     effective scope,
     public-research/provenance settings, provenance lookback if any,
     `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`,
-    and `ResearchTransport`. Label `ReviewDate`, `PriorArtWindow`, and
+    `ResearchTransport`, and `ReportRepairPolicy`. Disclose the one fresh,
+    tool-less confidence-edit attempt, its returned `TimeoutSeconds` bound
+    (at most 300 seconds, capped by the session timeout), the unchanged
+    approved model settings, strict revalidation, and no research rerun.
+    Label `ReviewDate`, `PriorArtWindow`, and
     `ProvenanceWindow` as local-session calendar dates. Label
     `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
     disabled. For scope `2` or `3`, show the authoritative prior-art
@@ -544,7 +548,8 @@ Before invoking the runner:
     `Run review`.
 26. Before execution, explain that the runner surfaces clone,
     exact-commit, snapshot, dedicated research, analysis, artifact,
-    heartbeat, and finalization milestones. Do not suppress lines beginning
+    heartbeat, and finalization milestones, including eligible report-only
+    repair. Do not suppress lines beginning
     `RHYOLITE PROGRESS`. Keep the current stage and `/rhyolite:status`
     response aligned with the latest milestone. For current progress, use exact
     `/rhyolite:status`; bare `status` remains only the in-agent setup

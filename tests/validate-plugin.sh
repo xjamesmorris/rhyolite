@@ -239,7 +239,7 @@ grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
     grep -Fq 'supported Claude Code runtime harness' "${CLAUDE_GUIDANCE}" ||
     fail 'Claude contributor pointer does not preserve the Copilot-only runtime claim.'
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v3' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v4' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -1155,8 +1155,9 @@ done
 [[ "$(grep -Fc 'Never include or relay the phrases' "${SKILL}")" -ge 2 ]] ||
     fail 'Skill does not enforce the action-menu ban in completion and report requirements.'
 for progress_stage in \
-    'started' 'preflight' 'clone' 'snapshot' 'analysis' 'artifacts' \
-    'finalizing' 'interrupted' 'completed' 'still running; elapsed'; do
+    'started' 'preflight' 'clone' 'snapshot' 'analysis' \
+    'report validation' 'report repair' 'artifacts' 'finalizing' \
+    'interrupted' 'completed' 'still running; elapsed'; do
     grep -Fq "${progress_stage}" "${RUNNER}" ||
         fail "Runner progress contract is missing: ${progress_stage}"
 done
@@ -1891,25 +1892,141 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=3' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 3.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=4' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 4.'
 grep -Fq 'harness_resume_policy' "${HARNESS_COMMON}" &&
     grep -Fq 'harness_resume_policy() {' "${COPILOT_HARNESS}" ||
-    fail 'Harness contract-v2 resume policy is incomplete.'
+    fail 'Harness contract-v4 resume policy is incomplete.'
+for repair_function in \
+    harness_report_repair_argv \
+    harness_report_repair_env \
+    harness_extract_report_repair; do
+    grep -Fq "${repair_function}" "${HARNESS_COMMON}" &&
+        grep -Fq "${repair_function}() {" "${COPILOT_HARNESS}" ||
+        fail "Harness contract-v4 report-repair interface is incomplete: ${repair_function}"
+done
 grep -Fq '"ForwardedEnvVarNames"' "${COPILOT_HARNESS}" &&
     grep -Fq '"Host":"managed-provider"' "${COPILOT_HARNESS}" ||
-    fail 'Copilot provider summary does not expose safe contract-v2 metadata.'
+    fail 'Copilot provider summary does not expose safe contract-v4 metadata.'
 for hash_fragment in \
     'PlanSchemaVersion=%s' \
     'Harness=%s' \
     'ReasoningEffort=%s' \
     'ContextTier=%s' \
-    'Provider=%s'; do
+    'Provider=%s' \
+    'ReportRepairPolicy=%s'; do
     grep -Fq "${hash_fragment}" "${RUNNER}" ||
         fail "Approval hash material is missing ${hash_fragment}."
 done
+grep -Fq \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+    "${RUNNER}" &&
+    grep -Fq 'REPORT_REPAIR_ATTEMPT_LIMIT=1' "${RUNNER}" &&
+    grep -Fq 'REPORT_REPAIR_TIMEOUT_SECONDS=300' "${RUNNER}" &&
+    grep -Fq \
+        '10#${SESSION_TIMEOUT_MINUTES} * 60 < REPORT_REPAIR_TIMEOUT_SECONDS' \
+        "${RUNNER}" &&
+    grep -Fq \
+        'REPORT_REPAIR_TIMEOUT_SECONDS=$((10#${SESSION_TIMEOUT_MINUTES} * 60))' \
+        "${RUNNER}" ||
+    fail 'Approval-bound report-repair policy is not protocol 1, one attempt, and at most 300 seconds capped by the session timeout.'
+for repair_policy_surface in \
+    "${AGENTS_GUIDANCE}" \
+    "${README}" \
+    "${PLATFORM_POR}" \
+    "${AGENT}" \
+    "${SKILL}"; do
+    normalized_repair_policy="$(
+        tr '\r\n\t' '   ' < "${repair_policy_surface}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    grep -Fq 'at most 300 seconds' \
+        <<< "${normalized_repair_policy}" &&
+        grep -Fq 'capped by the session timeout' \
+            <<< "${normalized_repair_policy}" ||
+        fail "Report-repair timeout-cap wording is missing: ${repair_policy_surface}"
+done
+for harness_timeout_document in \
+    "${HARNESS_ARCHITECTURE}" \
+    "${HARNESS_PLAYBOOK}"; do
+    grep -Fq 'min(300, SessionTimeoutMinutes * 60)' \
+        "${harness_timeout_document}" ||
+        fail "Harness documentation does not define the approval-bound report-repair timeout formula: ${harness_timeout_document}"
+done
+copilot_repair_argv_contract="$(
+    sed -n \
+        '/^harness_report_repair_argv() {/,/^harness_report_repair_env() {/p' \
+        "${COPILOT_HARNESS}" |
+        sed '$d'
+)"
+grep -Fq -- \
+    "--excluded-tools 'builtin:*' 'mcp:*' 'custom:*'" \
+    <<< "${copilot_repair_argv_contract}" &&
+    ! grep -Fq -- '--available-tools' \
+        <<< "${copilot_repair_argv_contract}" &&
+    ! grep -Fq -- '--allow-tool' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--deny-tool read' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--deny-tool write' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--deny-tool shell' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--deny-tool url' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--no-custom-instructions' \
+        <<< "${copilot_repair_argv_contract}" &&
+    grep -Fq -- '--disable-builtin-mcps' \
+        <<< "${copilot_repair_argv_contract}" ||
+    fail 'Copilot report repair is not statically tool-less and instruction-isolated.'
+copilot_repair_env_contract="$(
+    sed -n \
+        '/^harness_report_repair_env() {/,/^harness_render_request() {/p' \
+        "${COPILOT_HARNESS}" |
+        sed '$d'
+)"
+copilot_worker_env_contract="$(
+    sed -n \
+        '/^copilot_populate_worker_environment() {/,/^copilot_write_pure_report_repair_descriptor() {/p' \
+        "${COPILOT_HARNESS}" |
+        sed '$d'
+)"
+grep -Fq \
+    'copilot_populate_worker_environment' \
+    <<< "${copilot_repair_env_contract}" &&
+    grep -Fq \
+        '"${destination_name}" "${runtime_home}"' \
+        <<< "${copilot_repair_env_contract}" &&
+    ! grep -Eq '^[[:space:]]*-i[[:space:]]*$' \
+        <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"PATH=' <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"HOME=' <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"XDG_CONFIG_HOME=' <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"XDG_CACHE_HOME=' <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"XDG_DATA_HOME=' <<< "${copilot_worker_env_contract}" &&
+    ! grep -Fq '"XDG_STATE_HOME=' <<< "${copilot_worker_env_contract}" &&
+    grep -Fq '"COPILOT_HOME=${runtime_home}"' \
+        <<< "${copilot_worker_env_contract}" &&
+    grep -Fq -- '-u COPILOT_ALLOW_ALL' \
+        <<< "${copilot_worker_env_contract}" &&
+    grep -Fq -- '-u COPILOT_SKILLS_DIRS' \
+        <<< "${copilot_worker_env_contract}" &&
+    grep -Fq -- '-u COPILOT_CUSTOM_INSTRUCTIONS_DIRS' \
+        <<< "${copilot_worker_env_contract}" &&
+    grep -Fq -- '-u COPILOT_DYNAMIC_RETRIEVAL_SKILLS' \
+        <<< "${copilot_worker_env_contract}" &&
+    grep -Fq -- '-u COPILOT_EMBEDDING_ONLY_SKILLS' \
+        <<< "${copilot_worker_env_contract}" ||
+    fail 'Copilot report repair does not preserve host HOME/cache while isolating COPILOT_HOME.'
+grep -Fq 'EXPECTED CONFIDENCE EDIT' "${OUTPUT_HELPER}" &&
+    grep -Fq '"OriginalValueSha256"' "${OUTPUT_HELPER}" &&
+    grep -Fq '"ConservativeLevel"' "${OUTPUT_HELPER}" ||
+    fail 'Exact confidence-edit request protocol is missing.'
 grep -Fq '"ResearchTransport": $(research_transport_json' "${RUNNER}" ||
     fail 'Bash runner does not emit ResearchTransport state.'
+grep -Fq '"ReportRepair": $(report_repair_saved_json' "${RUNNER}" &&
+    grep -Fq '"ReportRepairPolicy": $(report_repair_policy_json)' "${RUNNER}" ||
+    fail 'Bash runner does not emit report-repair policy and state.'
 grep -Fq '"ProvenanceWindow": $(provenance_window_json' "${RUNNER}" ||
     fail 'Bash runner does not emit provenance-window state.'
 grep -Fq 'children=(' "${DISCOVERY}" ||
@@ -1918,7 +2035,11 @@ grep -Fq '"disableAllHooks": true' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not disable hooks in the isolated Copilot home.'
 grep -Fq '"defaultLocalOnly": true' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not exclude remote organization agents.'
-grep -Fq 'COPILOT_HOME=${COPILOT_RUNTIME_HOME}' "${COPILOT_HARNESS}" ||
+grep -Fq '"COPILOT_HOME=${runtime_home}"' \
+    <<< "${copilot_worker_env_contract}" &&
+    grep -Fq \
+        'copilot_populate_worker_environment "$1" "${COPILOT_RUNTIME_HOME}"' \
+        "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not isolate persisted Copilot state.'
 grep -Fq \
     '"${TMPDIR:-/tmp}/rhyolite-repo-review-${HARNESS}.XXXXXXXX"' \
@@ -2030,7 +2151,10 @@ for artifact_name in \
     review.md review.html state.json handoff.md index.html request.txt agent-state \
     research.txt research-timeline.txt research-session.md research-errors.txt \
     research-state.json summary.json events.jsonl cookies.jsonl \
-    body-manifest.jsonl; do
+    body-manifest.jsonl report-repair initial-candidate.txt \
+    initial-diagnostic.txt attempt-1-request.txt attempt-1-edit.json \
+    attempt-1-candidate.txt attempt-1-diagnostic.txt \
+    attempt-1-timeline.txt attempt-1-session.md; do
     grep -Fq "${artifact_name}" "${RUNNER}" ||
         fail "Bash runner artifact contract is missing: ${artifact_name}"
 done
@@ -3562,16 +3686,42 @@ cat > "${fixture_transcript}" <<'EOF'
 After the report, print:
 ================================================================================
 
+### `view`
+
+Trusted synthetic tool output.
+
+### `view` — Failed
+
+Trusted synthetic failed-tool output.
+
+### task (Completed)
+
+Trusted synthetic task output.
+
+### Info
+
+The read-only tool call completed.
+
 ### Copilot
 
 ================================================================================
 REPOSITORY REVIEW REPORT
 Complete report recovered from the final assistant message.
+### `view`
+Legitimate report content resembling a tool heading.
+### `view` — Failed
+Legitimate report content resembling a failed-tool heading.
+### task (Completed)
+Legitimate report content resembling a task heading.
+### Info
+Legitimate report content resembling an info heading.
+### Alert 1
+Legitimate Markdown heading inside the report.
 ================================================================================
 
 ---
 
-<sub>Generated by GitHub Copilot CLI</sub>
+<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>
 EOF
 harness_extract_final_report \
     '' \
@@ -3583,9 +3733,60 @@ report_has_closing_delimiter "${fixture_transcript_report}" ||
     fail 'Recovered final Copilot report lost its closing delimiter.'
 grep -Fq 'Complete report recovered from the final assistant message.' \
     "${fixture_transcript_report}" &&
-    ! grep -Fq 'Generated by GitHub Copilot CLI' \
+    grep -Fq 'Legitimate report content resembling a tool heading.' \
+        "${fixture_transcript_report}" &&
+    grep -Fq 'Legitimate report content resembling a failed-tool heading.' \
+        "${fixture_transcript_report}" &&
+    grep -Fq 'Legitimate report content resembling a task heading.' \
+        "${fixture_transcript_report}" &&
+    grep -Fq 'Legitimate report content resembling an info heading.' \
+        "${fixture_transcript_report}" &&
+    grep -Fq 'Legitimate Markdown heading inside the report.' \
+        "${fixture_transcript_report}" &&
+    ! grep -Fq 'Generated by [GitHub Copilot CLI]' \
         "${fixture_transcript_report}" ||
     fail 'Final Copilot report extraction included transcript framing.'
+
+repair_boundary_descriptor='{"ProtocolVersion":1,"Section":"AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT","Field":"Confidence:","Occurrence":1,"OriginalValueSha256":"0000000000000000000000000000000000000000000000000000000000000000","ConservativeLevel":"Low"}'
+for transcript_boundary in tool tool-failed task info synthetic-tool; do
+    boundary_transcript="${fixture_dir}/session-${transcript_boundary}-boundary.md"
+    boundary_reply="${fixture_dir}/session-${transcript_boundary}-boundary.txt"
+    case "${transcript_boundary}" in
+        tool)
+            boundary_heading='### `view`'
+            ;;
+        tool-failed)
+            boundary_heading='### `view` — Failed'
+            ;;
+        task)
+            boundary_heading='### task (Completed)'
+            ;;
+        info)
+            boundary_heading='### Info'
+            ;;
+        synthetic-tool)
+            boundary_heading='### Tool `read_file`'
+            ;;
+    esac
+    cat > "${boundary_transcript}" <<EOF
+# Copilot Session Transcript
+
+### Copilot
+
+${repair_boundary_descriptor}
+
+${boundary_heading}
+
+Transcript framing that must not enter the assistant reply.
+EOF
+    harness_extract_report_repair \
+        '' "${boundary_transcript}" "${boundary_reply}" ||
+        fail "Copilot repair extraction rejected the supported ${transcript_boundary} boundary."
+    grep -Fxq "${repair_boundary_descriptor}" \
+        "${boundary_reply}" &&
+        ! grep -Fq 'Transcript framing' "${boundary_reply}" ||
+        fail "Copilot repair extraction crossed the supported ${transcript_boundary} boundary."
+done
 
 cat >> "${fixture_transcript}" <<'EOF'
 
@@ -4349,6 +4550,22 @@ sleep 1
 [[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
     fail 'Repeated Bash scope 1 plan-only created workspace or output roots.'
 
+plan_scope_one_short_timeout_json="${fixture_dir}/plan-scope-1-short-timeout.json"
+plan_scope_one_short_timeout_stderr="${fixture_dir}/plan-scope-1-short-timeout.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --timeout-minutes 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_short_timeout_json}" \
+    2>"${plan_scope_one_short_timeout_stderr}"
+[[ ! -s "${plan_scope_one_short_timeout_stderr}" ]] ||
+    fail 'Bash one-minute scope 1 plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash one-minute scope 1 plan-only created workspace or output roots.'
+
 plan_scope_one_alt_output="${fixture_dir}/plan output scope 1 alt"
 plan_scope_one_alt_json="${fixture_dir}/plan-scope-1-alt-output.json"
 plan_scope_one_alt_stderr="${fixture_dir}/plan-scope-1-alt-output.stderr"
@@ -4648,6 +4865,7 @@ node - \
     "$(realpath -m -- "${plan_scope_one_workspace}")" \
     "$(realpath -m -- "${plan_scope_one_output}")" \
     "${plan_scope_one_repeat_json}" \
+    "${plan_scope_one_short_timeout_json}" \
     "${plan_scope_one_alt_json}" \
     "$(realpath -m -- "${plan_scope_one_alt_output}")" \
     "${plan_scope_one_no_html_json}" \
@@ -4674,6 +4892,7 @@ const [
   scopeOneWorkspace,
   scopeOneOutput,
   scopeOneRepeatPath,
+  scopeOneShortTimeoutPath,
   scopeOneAltPath,
   scopeOneAltOutput,
   scopeOneNoHtmlPath,
@@ -4754,6 +4973,7 @@ function assertCommonPlan(
     "Provider",
     "ProvenanceWindow",
     "ReasoningEffort",
+    "ReportRepairPolicy",
     "ResearchTransport",
     "ReviewDate",
     "RememberPreferences",
@@ -4799,6 +5019,11 @@ function assertCommonPlan(
       plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
       plan.OpenHtmlPolicy !== expectedOpenHtmlPolicy ||
+      plan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||
+      plan.ReportRepairPolicy?.ProtocolVersion !== 1 ||
+      plan.ReportRepairPolicy?.AttemptLimit !== 1 ||
+      plan.ReportRepairPolicy?.TimeoutSeconds !==
+        Math.min(300, plan.SessionTimeoutMinutes * 60) ||
       !Array.isArray(plan.Sources) ||
       plan.Sources.length !== 1) {
     throw new Error(`${label} common plan contract is invalid`);
@@ -4823,6 +5048,12 @@ function assertCommonPlan(
     "LookbackMonths",
     "StartDate",
   ], `${label} prior-art window`);
+  assertKeys(plan.ReportRepairPolicy, [
+    "AttemptLimit",
+    "Mode",
+    "ProtocolVersion",
+    "TimeoutSeconds",
+  ], `${label} report-repair policy`);
 }
 
 function assertResearchTransport(
@@ -4961,6 +5192,31 @@ if (scopeOne.ApprovalHash !== scopeOneRepeat.ApprovalHash) {
 }
 if (scopeOne.GeneratedAt === scopeOneRepeat.GeneratedAt) {
   throw new Error("repeated scope 1 plan-only did not change GeneratedAt");
+}
+
+const scopeOneShortTimeout = parsePlan(scopeOneShortTimeoutPath);
+assertCommonPlan(
+  scopeOneShortTimeout,
+  scopeOneWorkspace,
+  scopeOneOutput,
+  "scope 1 one-minute timeout",
+);
+assertPriorArtWindow(
+  scopeOneShortTimeout,
+  "scope 1 one-minute timeout",
+  false,
+);
+assertResearchTransport(
+  scopeOneShortTimeout,
+  "scope 1 one-minute timeout",
+  false,
+  "off",
+);
+if (scopeOneShortTimeout.Scope.Number !== 1 ||
+    scopeOneShortTimeout.SessionTimeoutMinutes !== 1 ||
+    scopeOneShortTimeout.ReportRepairPolicy?.TimeoutSeconds !== 60 ||
+    scopeOneShortTimeout.ApprovalHash === scopeOne.ApprovalHash) {
+  throw new Error("one-minute session did not cap or approval-bind report repair");
 }
 
 const scopeOneAlt = parsePlan(scopeOneAltPath);
@@ -5624,6 +5880,39 @@ case "${command_name}" in
     checkout|diff)
         ;;
     status)
+        if [[ "${MOCK_BLOCK_GIT_STATUS_AFTER_REPAIR-}" == "1" &&
+            -n "${MOCK_FINALIZATION_OUTPUT_ROOT-}" ]]; then
+            repair_state="$(
+                /usr/bin/find "${MOCK_FINALIZATION_OUTPUT_ROOT}" \
+                    -path '*/report-repair/state.json' -print -quit
+            )"
+            if [[ -n "${repair_state}" ]] &&
+                grep -Fq '"Status": "Succeeded"' "${repair_state}"; then
+                mock_status_child_pid=""
+                mock_status_exit() {
+                    local exit_code="$1"
+
+                    trap - INT TERM HUP
+                    if [[ -n "${mock_status_child_pid}" ]]; then
+                        kill "${mock_status_child_pid}" 2>/dev/null || true
+                        wait "${mock_status_child_pid}" 2>/dev/null || true
+                    fi
+                    exit "${exit_code}"
+                }
+                trap 'mock_status_exit 130' INT
+                trap 'mock_status_exit 143' TERM
+                trap 'mock_status_exit 129' HUP
+                [[ -n "${MOCK_GIT_STATUS_PID_FILE-}" ]] &&
+                    printf '%s\n' "$$" > "${MOCK_GIT_STATUS_PID_FILE}"
+                sleep 300 &
+                mock_status_child_pid=$!
+                [[ -n "${MOCK_GIT_STATUS_CHILD_PID_FILE-}" ]] &&
+                    printf '%s\n' "${mock_status_child_pid}" \
+                        > "${MOCK_GIT_STATUS_CHILD_PID_FILE}"
+                wait "${mock_status_child_pid}"
+                exit 96
+            fi
+        fi
         if [[ "${MOCK_CORRUPT_REPORT_AFTER_VALIDATION-}" == "1" &&
             -n "${MOCK_FINALIZATION_OUTPUT_ROOT-}" ]]; then
             finalization_report="$(
@@ -5757,6 +6046,14 @@ MOCK_GIT
 cat > "${mock_bin}/python3" <<'MOCK_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1-}" == "-c" ]] &&
+    {
+        [[ "${2-}" == *'Invalid trusted report-repair state'* ]] ||
+            [[ "${2-}" == *'Invalid report-repair attempt count'* ]] ||
+            [[ "${2-}" == *'["ReportRepair"]'* ]]
+    }; then
+    exec /usr/bin/python3 "$@"
+fi
 if [[ "${1-}" == *research-egress-broker.py ]] ||
     {
         [[ "${1-}" == "-" ]] &&
@@ -5794,11 +6091,44 @@ EOF
     exit 0
 fi
 
+mock_executable="$0"
+if [[ "${mock_executable}" != */* ]]; then
+    mock_executable="$(command -v -- "${mock_executable}")"
+fi
+mock_binary_directory="$(
+    CDPATH= cd -- "$(dirname -- "${mock_executable}")" && pwd
+)"
+repair_control_root="${mock_binary_directory}/report-repair-control"
+if [[ -f "${repair_control_root}/log-path" ]]; then
+    if [[ -z "${MOCK_LOG-}" ]]; then
+        read -r MOCK_LOG < "${repair_control_root}/log-path"
+    fi
+    if [[ -f "${repair_control_root}/reply-mode" ]]; then
+        read -r MOCK_REPAIR_REPLY_MODE \
+            < "${repair_control_root}/reply-mode"
+    fi
+    if [[ -f "${repair_control_root}/block" ]]; then
+        read -r MOCK_REPAIR_BLOCK < "${repair_control_root}/block"
+    fi
+    if [[ -f "${repair_control_root}/pid-file" ]]; then
+        read -r MOCK_REPAIR_PID_FILE \
+            < "${repair_control_root}/pid-file"
+    fi
+    if [[ -f "${repair_control_root}/child-pid-file" ]]; then
+        read -r MOCK_REPAIR_CHILD_PID_FILE \
+            < "${repair_control_root}/child-pid-file"
+    fi
+fi
+[[ -n "${MOCK_LOG-}" ]] || exit 70
 [[ -z "${COPILOT_ALLOW_ALL-}" ]] || exit 71
 agent=""
+phase=""
 share_path=""
 working_directory=""
 additional_mcp_config=""
+model=""
+reasoning_effort=""
+context_tier=""
 previous=""
 for argument in "$@"; do
     if [[ "${previous}" == "--agent" ]]; then
@@ -5813,14 +6143,38 @@ for argument in "$@"; do
     if [[ "${previous}" == "--additional-mcp-config" ]]; then
         additional_mcp_config="${argument}"
     fi
+    if [[ "${previous}" == "--model" ]]; then
+        model="${argument}"
+    fi
+    if [[ "${previous}" == "--reasoning-effort" ]]; then
+        reasoning_effort="${argument}"
+    fi
+    if [[ "${previous}" == "--context" ]]; then
+        context_tier="${argument}"
+    fi
     previous="${argument}"
 done
-[[ -n "${agent}" && -n "${share_path}" && -n "${working_directory}" ]] ||
+if [[ -n "${agent}" ]]; then
+    phase="${agent}"
+else
+    phase='report-repair'
+fi
+[[ -n "${share_path}" && -n "${working_directory}" &&
+    -n "${model}" && -n "${reasoning_effort}" &&
+    -n "${context_tier}" ]] ||
     exit 75
-invocation_log="${MOCK_LOG}.${agent//:/-}"
+invocation_log="${MOCK_LOG}.${phase//:/-}"
 printf '%s\n' "$@" > "${invocation_log}"
 {
-    printf 'AGENT=%s\n' "${agent}"
+    printf 'PHASE=%s\n' "${phase}"
+    if [[ -n "${agent}" ]]; then
+        printf 'AGENT=%s\n' "${agent}"
+    fi
+    printf 'COPILOT_HOME=%s\n' "${COPILOT_HOME}"
+    printf 'WORKING_DIRECTORY=%s\n' "${working_directory}"
+    printf 'MODEL=%s\n' "${model}"
+    printf 'REASONING_EFFORT=%s\n' "${reasoning_effort}"
+    printf 'CONTEXT_TIER=%s\n' "${context_tier}"
     printf '%s\n' "$@"
     printf '%s\n' 'END_INVOCATION'
 } >> "${MOCK_LOG}"
@@ -5832,8 +6186,24 @@ grep -Fxq -- 'shell' "${invocation_log}" || exit 76
 ! grep -Fq 'web_fetch' "${invocation_log}" || exit 90
 [[ -f "${COPILOT_HOME}/settings.json" ]] || exit 77
 grep -Fq '"disableAllHooks": true' "${COPILOT_HOME}/settings.json" || exit 78
-grep -Fq '"defaultLocalOnly": true' "${COPILOT_HOME}/settings.json" || exit 80
-python3 - "${COPILOT_HOME}/settings.json" <<'PY'
+if [[ "${phase}" == 'report-repair' ]]; then
+    /usr/bin/python3 - "${COPILOT_HOME}/settings.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+settings = json.loads(Path(sys.argv[1]).read_text())
+if settings != {
+    "disableAllHooks": True,
+    "memory": False,
+    "ide": {"autoConnect": False},
+}:
+    raise SystemExit(f"unexpected report-repair settings: {settings!r}")
+PY
+else
+    grep -Fq '"defaultLocalOnly": true' \
+        "${COPILOT_HOME}/settings.json" || exit 80
+    python3 - "${COPILOT_HOME}/settings.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -5857,7 +6227,8 @@ for name in (
     }:
         raise SystemExit(f"unexpected {name} subagent profile: {profile!r}")
 PY
-case "${agent}" in
+fi
+case "${phase}" in
     rhyolite:repo-research-worker)
         [[ "${COPILOT_HOME}" == \
             "${TMPDIR:-/tmp}"/rhyolite-repo-research-copilot.* ]] || exit 81
@@ -5865,6 +6236,52 @@ case "${agent}" in
     rhyolite:repo-review-worker)
         [[ "${COPILOT_HOME}" == \
             "${TMPDIR:-/tmp}"/rhyolite-repo-review-copilot.* ]] || exit 81
+        ;;
+    report-repair)
+        [[ "${COPILOT_HOME}" == \
+            */rhyolite-report-repair-copilot.* ]] || exit 81
+        [[ "${HOME-}" != "${COPILOT_HOME}" &&
+            "${XDG_CONFIG_HOME-}" != "${COPILOT_HOME}" &&
+            "${XDG_CACHE_HOME-}" != "${COPILOT_HOME}/cache" &&
+            "${XDG_DATA_HOME-}" != "${COPILOT_HOME}/data" &&
+            "${XDG_STATE_HOME-}" != "${COPILOT_HOME}/state" ]] || exit 106
+        [[ "${working_directory}" == \
+            */rhyolite-report-repair.* ]] || exit 107
+        ! grep -Fxq -- '--agent' "${invocation_log}" || exit 108
+        ! grep -Fxq -- '--plugin-dir' "${invocation_log}" || exit 109
+        ! grep -Fxq -- '--additional-mcp-config' "${invocation_log}" ||
+            exit 110
+        ! grep -Eq -- '--resume|--allow-all|--fleet' "${invocation_log}" ||
+            exit 111
+        awk '
+            $0 == "--excluded-tools" {
+                getline
+                first = $0
+                getline
+                second = $0
+                getline
+                third = $0
+                getline
+                found = (first == "builtin:*" &&
+                    second == "mcp:*" &&
+                    third == "custom:*" &&
+                    $0 == "--deny-tool")
+            }
+            END { exit(found ? 0 : 1) }
+        ' "${invocation_log}" || exit 112
+        ! grep -Fxq -- '--available-tools' "${invocation_log}" ||
+            exit 116
+        ! grep -Fxq -- '--allow-tool' "${invocation_log}" ||
+            exit 117
+        for denied_tool in read write shell url; do
+            awk -v expected="${denied_tool}" '
+                previous == "--deny-tool" && $0 == expected {
+                    found = 1
+                }
+                { previous = $0 }
+                END { exit(found ? 0 : 1) }
+            ' "${invocation_log}" || exit 113
+        done
         ;;
     *)
         exit 91
@@ -5890,6 +6307,17 @@ fi
 if [[ -n "${MOCK_RUNTIME_LOG-}" ]]; then
     printf '%s\n' "${COPILOT_HOME}" >> "${MOCK_RUNTIME_LOG}"
 fi
+printf '%s\n' "${COPILOT_HOME}" > "${MOCK_LOG}.${phase//:/-}.home"
+printf '%s\n' "${working_directory}" \
+    > "${MOCK_LOG}.${phase//:/-}.working-directory"
+{
+    printf 'HOME=%s\n' "${HOME-}"
+    printf 'XDG_CONFIG_HOME=%s\n' "${XDG_CONFIG_HOME-}"
+    printf 'XDG_CACHE_HOME=%s\n' "${XDG_CACHE_HOME-}"
+    printf 'XDG_DATA_HOME=%s\n' "${XDG_DATA_HOME-}"
+    printf 'XDG_STATE_HOME=%s\n' "${XDG_STATE_HOME-}"
+    printf 'COPILOT_HOME=%s\n' "${COPILOT_HOME}"
+} > "${MOCK_LOG}.${phase//:/-}.environment"
 mkdir -p -- \
     "${COPILOT_HOME}/session-state/mock-session" \
     "${COPILOT_HOME}/session-store" \
@@ -5901,10 +6329,55 @@ printf 'mock-session-database\n' \
 printf 'repo-reviewer-secret-sentinel\n' \
     > "${COPILOT_HOME}/other-state/must-not-persist.txt"
 
-[[ -d "${working_directory}/source" &&
-    ! -e "${working_directory}/.git" ]] || exit 79
+if [[ "${phase}" == 'report-repair' ]]; then
+    [[ ! -e "${working_directory}/source" &&
+        ! -e "${working_directory}/.git" ]] || exit 79
+    cat > "${MOCK_LOG}.report-repair-request"
+    printf '# Mock Copilot report repair session\n' > "${share_path}"
+    repair_descriptor="$(
+        awk '
+            found {
+                print
+                exit
+            }
+            $0 == "EXPECTED CONFIDENCE EDIT" {
+                found = 1
+            }
+        ' "${MOCK_LOG}.report-repair-request"
+    )"
+    [[ -n "${repair_descriptor}" ]] || exit 114
+    /usr/bin/python3 - "${repair_descriptor}" <<'PY'
+import json
+import sys
 
-if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]]; then
+descriptor = json.loads(sys.argv[1])
+expected_keys = {
+    "ProtocolVersion",
+    "Section",
+    "Field",
+    "Occurrence",
+    "OriginalValueSha256",
+    "ConservativeLevel",
+}
+if (
+    set(descriptor) != expected_keys
+    or descriptor["ProtocolVersion"] != 1
+    or descriptor["Field"] != "Confidence:"
+    or type(descriptor["Occurrence"]) is not int
+    or not isinstance(descriptor["Section"], str)
+    or not isinstance(descriptor["OriginalValueSha256"], str)
+    or not isinstance(descriptor["ConservativeLevel"], str)
+):
+    raise SystemExit("invalid expected confidence-edit descriptor")
+PY
+else
+    [[ -d "${working_directory}/source" &&
+        ! -e "${working_directory}/.git" ]] || exit 79
+fi
+
+if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
+    [[ "${phase}" == 'report-repair' &&
+        "${MOCK_REPAIR_BLOCK-}" == "1" ]]; then
     mock_block_child_pid=""
     mock_block_exit() {
         local exit_code="$1"
@@ -5919,15 +6392,123 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]]; then
     trap 'mock_block_exit 130' INT
     trap 'mock_block_exit 143' TERM
     trap 'mock_block_exit 129' HUP
-    [[ -n "${MOCK_COPILOT_PID_FILE-}" ]] &&
-        printf '%s\n' "$$" > "${MOCK_COPILOT_PID_FILE}"
+    if [[ "${phase}" == 'report-repair' ]]; then
+        [[ -n "${MOCK_REPAIR_PID_FILE-}" ]] &&
+            printf '%s\n' "$$" > "${MOCK_REPAIR_PID_FILE}"
+    else
+        [[ -n "${MOCK_COPILOT_PID_FILE-}" ]] &&
+            printf '%s\n' "$$" > "${MOCK_COPILOT_PID_FILE}"
+    fi
     sleep 300 &
     mock_block_child_pid=$!
-    [[ -n "${MOCK_COPILOT_CHILD_PID_FILE-}" ]] &&
-        printf '%s\n' "${mock_block_child_pid}" \
-            > "${MOCK_COPILOT_CHILD_PID_FILE}"
+    if [[ "${phase}" == 'report-repair' ]]; then
+        [[ -n "${MOCK_REPAIR_CHILD_PID_FILE-}" ]] &&
+            printf '%s\n' "${mock_block_child_pid}" \
+                > "${MOCK_REPAIR_CHILD_PID_FILE}"
+    else
+        [[ -n "${MOCK_COPILOT_CHILD_PID_FILE-}" ]] &&
+            printf '%s\n' "${mock_block_child_pid}" \
+                > "${MOCK_COPILOT_CHILD_PID_FILE}"
+    fi
     wait "${mock_block_child_pid}"
     exit 96
+fi
+
+if [[ "${phase}" == 'report-repair' ]]; then
+    repair_reply_mode="${MOCK_REPAIR_REPLY_MODE-valid}"
+    case "${repair_reply_mode}" in
+        valid)
+            printf '%s\n' "${repair_descriptor}"
+            ;;
+        transcript-valid)
+            cat > "${share_path}" <<EOF
+# Mock Copilot report repair session
+
+### User
+
+Return the one-line confidence edit descriptor.
+
+### Copilot
+
+${repair_descriptor}
+
+---
+
+<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>
+EOF
+            printf '%s\n' 'Authorization: repair-transcript-secret'
+            printf 'contact %s%s\n' \
+                'repair-transcript' '@example.org'
+            ;;
+        extra-field)
+            /usr/bin/python3 - "${repair_descriptor}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+value["Unexpected"] = "extra field"
+print(json.dumps(value, separators=(",", ":")))
+PY
+            ;;
+        substantive-edit)
+            cat <<'REPORT'
+================================================================================
+REPOSITORY REVIEW REPORT
+EXECUTIVE SUMMARY
+The repair child attempted to replace substantive report content.
+================================================================================
+REPORT
+            ;;
+        full-report)
+            cat <<'REPORT'
+================================================================================
+REPOSITORY REVIEW REPORT
+The repair child returned a full report instead of one edit descriptor.
+================================================================================
+REPORT
+            ;;
+        inflated-level)
+            /usr/bin/python3 - "${repair_descriptor}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+value["ConservativeLevel"] = "High"
+print(json.dumps(value, separators=(",", ":")))
+PY
+            ;;
+        wrong-hash)
+            /usr/bin/python3 - "${repair_descriptor}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+value["OriginalValueSha256"] = "0" * 64
+print(json.dumps(value, separators=(",", ":")))
+PY
+            ;;
+        wrong-target)
+            /usr/bin/python3 - "${repair_descriptor}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+value["Section"] = "EXECUTIVE SUMMARY"
+print(json.dumps(value, separators=(",", ":")))
+PY
+            ;;
+        timeout)
+            printf '%s\n' "${phase}" \
+                > "${MOCK_LOG}.timeout-phase"
+            exit 124
+            ;;
+        *)
+            printf 'Unknown mock report-repair reply mode: %s\n' \
+                "${repair_reply_mode}" >&2
+            exit 115
+            ;;
+    esac
+    exit 0
 fi
 
 if [[ "${agent}" == 'rhyolite:repo-research-worker' ]]; then
@@ -6229,6 +6810,13 @@ Evidence basis: fixture-controlled source and worker output.
 
 FINDINGS
 No qualifying findings.
+REPORT
+    if [[ "${MOCK_VALID_MENU_TEXT-}" == "1" ]]; then
+        printf '%s\n' \
+            'I cannot verify the commit beyond the bounded fixture evidence.' \
+            'Fix all issues reported by CodeQL remains descriptive evidence.'
+    fi
+    cat <<'REPORT'
 Confidence: High
 Evidence basis: deterministic fixture behavior.
 REPORT
@@ -6248,9 +6836,18 @@ Tracking pixels/callback beacons/trackers/sensors: No supporting evidence found
 in checked-in fixture content; no resource URL was activated.
 Limitations of available evidence: Target code was not executed and normalized
 external pages can omit active-resource details.
-Confidence: High
-Evidence basis: checked-in fixture text and wrapper-collected metadata.
 REPORT
+        if [[ "${MOCK_MALFORMED_CONFIDENCE-}" == "1" ]]; then
+            printf '%s\n' \
+                'Confidence: High for the two observed constructs; Medium for absence outside normalized text.'
+        else
+            printf '%s\n' 'Confidence: High'
+        fi
+        printf '%s\n' \
+            'Evidence basis: checked-in fixture text and wrapper-collected metadata.'
+        if [[ "${MOCK_REVALIDATION_FAILURE-}" == "1" ]]; then
+            printf '%s\n' 'Fix all issues'
+        fi
     fi
 }
 
@@ -6367,6 +6964,22 @@ if [[ "${MOCK_TRANSCRIPT_FALLBACK-}" == "1" ]]; then
 The required final delimiter is:
 ================================================================================
 
+### `view`
+
+Trusted synthetic tool output.
+
+### `view` — Failed
+
+Trusted synthetic failed-tool output.
+
+### task (Completed)
+
+Trusted synthetic task output.
+
+### Info
+
+The read-only tool call completed.
+
 ### Copilot
 
 TRANSCRIPT
@@ -6375,7 +6988,7 @@ TRANSCRIPT
 
 ---
 
-<sub>Generated by GitHub Copilot CLI</sub>
+<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>
 TRANSCRIPT
     } > "${share_path}"
     cat <<'REPORT'
@@ -6405,6 +7018,35 @@ chmod +x \
     "${mock_bin}/python3" \
     "${mock_bin}/copilot" \
     "${mock_bin}/curl"
+
+mock_repair_control_root="${mock_bin}/report-repair-control"
+mkdir -p -- "${mock_repair_control_root}"
+configure_mock_repair() {
+    local log_path="$1"
+    local reply_mode="${2:-valid}"
+    local block="${3:-0}"
+    local pid_file="${4-}"
+    local child_pid_file="${5-}"
+
+    printf '%s\n' "${log_path}" \
+        > "${mock_repair_control_root}/log-path"
+    printf '%s\n' "${reply_mode}" \
+        > "${mock_repair_control_root}/reply-mode"
+    printf '%s\n' "${block}" \
+        > "${mock_repair_control_root}/block"
+    if [[ -n "${pid_file}" ]]; then
+        printf '%s\n' "${pid_file}" \
+            > "${mock_repair_control_root}/pid-file"
+    else
+        rm -f -- "${mock_repair_control_root}/pid-file"
+    fi
+    if [[ -n "${child_pid_file}" ]]; then
+        printf '%s\n' "${child_pid_file}" \
+            > "${mock_repair_control_root}/child-pid-file"
+    else
+        rm -f -- "${mock_repair_control_root}/child-pid-file"
+    fi
+}
 
 copilot_guard_bin="${fixture_dir}/copilot-guard-bin"
 mkdir -p -- "${copilot_guard_bin}"
@@ -7642,7 +8284,7 @@ function assertKeys(object, expectedKeys, label) {
 
 for (const key of [
   "Provider", "Scope", "Session", "Paths", "Artifacts", "Research",
-  "ResearchTransport",
+  "ResearchTransport", "ReportRepair",
 ]) {
   if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
     throw new Error(`repository state ${key} is not an object`);
@@ -7685,7 +8327,18 @@ if (state.SchemaVersion !== 6 ||
     state.Research?.PrivateEvidence !== privateDirectory ||
     state.Research?.State !== researchStatePath ||
     state.ResearchTransport?.Enabled !== true ||
-    state.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral") {
+    state.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+    state.ReportRepair?.Status !== "NotNeeded" ||
+    state.ReportRepair?.AttemptLimit !== 1 ||
+    state.ReportRepair?.AttemptCount !== 0 ||
+    state.ReportRepair?.InitialDiagnostic !== "" ||
+    state.ReportRepair?.FinalDiagnostic !== "" ||
+    state.ReportRepair?.PreservationCheck !== "NotRun" ||
+    state.ReportRepair?.FinalValidation !== "Passed" ||
+    state.ReportRepair?.Cleanup !== "NotRun" ||
+    state.ReportRepair?.CanonicalPromoted !== true ||
+    Object.values(state.ReportRepair?.Artifacts ?? {}).some(Boolean) ||
+    fs.existsSync(path.join(repository, "report-repair"))) {
   throw new Error("repository state lost remote source metadata");
 }
 if (state.Artifacts?.PlainText !== path.join(repository, "review.txt") ||
@@ -7722,6 +8375,7 @@ assertKeys(reviewPlan, [
   "Provider",
   "ProvenanceWindow",
   "ReasoningEffort",
+  "ReportRepairPolicy",
   "ResearchTransport",
   "ReviewDate",
   "RememberPreferences",
@@ -7781,6 +8435,11 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.FleetMode !== "native" ||
     reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
+    reviewPlan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||
+    reviewPlan.ReportRepairPolicy?.ProtocolVersion !== 1 ||
+    reviewPlan.ReportRepairPolicy?.AttemptLimit !== 1 ||
+    reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
+      Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
     reviewPlan.ResearchTransport?.Enabled !== true ||
     reviewPlan.ResearchTransport?.Mode !==
       "dedicated-worker-local-stdio-mcp" ||
@@ -7851,6 +8510,10 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("dedicated-worker-local-stdio-mcp") ||
     !reviewPlanText.includes("Research cookies:") ||
     !reviewPlanText.includes("ephemeral") ||
+    !reviewPlanText.includes("Report repair:") ||
+    !reviewPlanText.includes(
+      "1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
+    ) ||
     !reviewPlanText.includes("Raw Set-Cookie:") ||
     !reviewPlanText.includes("private per-repository ledger") ||
     !reviewPlanText.includes("General web search:") ||
@@ -7872,7 +8535,11 @@ if (!stdout.includes("Generated at (UTC):") ||
     !stdout.includes("Prior-art window (local calendar):") ||
     !stdout.includes("Provenance window (local calendar):") ||
     !stdout.includes("Research transport:") ||
-    !stdout.includes("Research cookies:")) {
+    !stdout.includes("Research cookies:") ||
+    !stdout.includes("Report repair:") ||
+    !stdout.includes(
+      "1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
+    )) {
   throw new Error("run stdout is missing expected review-plan labels");
 }
 for (const line of [
@@ -7902,7 +8569,9 @@ if (manifest[0].SchemaVersion !== 6 ||
     manifest[0].ReasoningEffort !== state.ReasoningEffort ||
     manifest[0].ContextTier !== state.ContextTier ||
     manifest[0].Provider?.Id !== state.Provider?.Id ||
-    manifest[0].Research?.Status !== "Completed") {
+    manifest[0].Research?.Status !== "Completed" ||
+    JSON.stringify(manifest[0].ReportRepair) !==
+      JSON.stringify(state.ReportRepair)) {
   throw new Error("manifest entry lost schema version 6 research state");
 }
 assertProvenanceWindow(
@@ -7913,6 +8582,7 @@ assertProvenanceWindow(
 );
 for (const key of [
   "Provider", "Scope", "Paths", "Artifacts", "ResearchTransport",
+  "ReportRepairPolicy",
 ]) {
   if (!runState[key] || typeof runState[key] !== "object") {
     throw new Error(`run state ${key} is not an object`);
@@ -7933,10 +8603,14 @@ if (runState.SchemaVersion !== 6 ||
     runState.Scope?.ProvenanceResearch !== true ||
     runState.ResearchTransport?.Enabled !== true ||
     runState.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+    JSON.stringify(runState.ReportRepairPolicy) !==
+      JSON.stringify(reviewPlan.ReportRepairPolicy) ||
     runState.Repositories[0].Source?.Kind !== "RemoteUrl" ||
     runState.Repositories[0].RequestedCommit !== state.RequestedCommit ||
     runState.Repositories[0].ResearchStatus !== "Completed" ||
-    runState.Repositories[0].ResearchDirectory !== researchDirectory) {
+    runState.Repositories[0].ResearchDirectory !== researchDirectory ||
+    JSON.stringify(runState.Repositories[0].ReportRepair) !==
+      JSON.stringify(state.ReportRepair)) {
   throw new Error("run state lost source-aware schema metadata");
 }
 if (runState.Paths?.ReadOnlyWorkspace !== path.join(expectedWorkspaceRoot, runId) ||
@@ -8135,6 +8809,7 @@ for (const fragment of [
   "Provider:\n\n    ID: github-copilot",
   "    Host: managed-provider",
   "    Forwarded environment variable names: COPILOT_GITHUB_TOKEN",
+  "Report repair summary:\n\n    NotNeeded; attempts 0/1; preservation NotRun; validation Passed; cleanup NotRun",
   "Resume policy:\n\n    Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.",
 ]) {
   if (!handoff.includes(fragment)) {
@@ -8172,6 +8847,8 @@ for (const fragment of [
   "Provider:\n\n    ID: github-copilot",
   "    Host: managed-provider",
   "    Forwarded environment variable names: COPILOT_GITHUB_TOKEN",
+  "Report repair policy:\n\n    1 isolated confidence edit; 300s; no research rerun",
+  "Report repair:\n\n    NotNeeded; attempts 0/1; preservation NotRun; validation Passed; cleanup NotRun",
   "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.",
 ]) {
   if (!runHandoff.includes(fragment)) {
@@ -8190,6 +8867,12 @@ for (const fragment of [
   }
 }
 const indexHtml = fs.readFileSync(htmlIndexPath, "utf8");
+if (!indexHtml.includes("<th>Report repair</th>") ||
+    !indexHtml.includes(
+      "NotNeeded; attempts 0/1; preservation NotRun; validation Passed; cleanup NotRun",
+    )) {
+  throw new Error("run HTML index lost the report-repair summary");
+}
 for (const href of [
   'href=\"review-plan.txt\"',
   'href=\"review-plan.json\"',
@@ -8689,8 +9372,18 @@ if (state.Status !== "AccessPreflightFailed" ||
     state.Commit !== "" ||
     state.Paths.ReadOnlyCheckout !== "" ||
     state.Paths.VerificationClone !== "" ||
+    state.ReportRepair?.Status !== "NotReached" ||
+    state.ReportRepair?.AttemptLimit !== 1 ||
+    state.ReportRepair?.AttemptCount !== 0 ||
+    state.ReportRepair?.PreservationCheck !== "NotRun" ||
+    state.ReportRepair?.FinalValidation !== "NotRun" ||
+    state.ReportRepair?.Cleanup !== "NotRun" ||
+    state.ReportRepair?.CanonicalPromoted !== false ||
+    Object.values(state.ReportRepair?.Artifacts ?? {}).some(Boolean) ||
     runState.Status !== "Failed" ||
     runState.Repositories[0].Status !== "AccessPreflightFailed" ||
+    JSON.stringify(runState.Repositories[0].ReportRepair) !==
+      JSON.stringify(state.ReportRepair) ||
     !report.includes("Anonymous repository accessibility preflight failed.") ||
     !report.includes("does not attempt authentication") ||
     !errors.includes("Git command: git ls-remote --symref --exit-code -- https://github.com/octocat/Private-World HEAD") ||
@@ -8860,6 +9553,8 @@ if ! MOCK_TRANSCRIPT_FALLBACK=1 \
         --non-interactive \
         --no-open-html >"${fallback_stdout}" \
         2>"${fallback_stderr}"; then
+    cat "${fallback_stdout}" >&2
+    cat "${fallback_stderr}" >&2
     fail 'Mock transcript-fallback review did not complete.'
 fi
 grep -Fq 'complete report recovered from sanitized session transcript' \
@@ -8883,11 +9578,543 @@ if (state.Status !== "Completed" ||
     state.Research?.Status !== "Disabled" ||
     fs.existsSync(path.join(repository, "research")) ||
     !report.includes("The deterministic fixture satisfies the canonical report contract.") ||
-    report.includes("Generated by GitHub Copilot CLI") ||
+    report.includes("Generated by [GitHub Copilot CLI]") ||
     errors.trim() !== "") {
   throw new Error("complete transcript fallback was not finalized truthfully");
 }
 JS
+
+valid_menu_text_output="${fixture_dir}/valid-menu-text-output"
+valid_menu_text_workspace="${fixture_dir}/valid-menu-text-workspace"
+valid_menu_text_stdout="${fixture_dir}/valid-menu-text.stdout"
+valid_menu_text_stderr="${fixture_dir}/valid-menu-text.stderr"
+: > "${mock_log}"
+: > "${mock_git_log}"
+if ! MOCK_VALID_MENU_TEXT=1 \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${valid_menu_text_output}" \
+        --workspace-root "${valid_menu_text_workspace}" \
+        --non-interactive \
+        --no-open-html >"${valid_menu_text_stdout}" \
+        2>"${valid_menu_text_stderr}"; then
+    cat "${valid_menu_text_stdout}" >&2
+    cat "${valid_menu_text_stderr}" >&2
+    fail 'Legitimate menu-like report text was rejected.'
+fi
+valid_menu_text_run="$(
+    find "${valid_menu_text_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - "${valid_menu_text_run}" "${mock_log}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+if (state.Status !== "Completed" ||
+    runState.Status !== "Completed" ||
+    state.ReportRepair?.Status !== "NotNeeded" ||
+    state.ReportRepair?.AttemptCount !== 0 ||
+    state.ReportRepair?.CanonicalPromoted !== true ||
+    !report.includes(
+      "I cannot verify the commit beyond the bounded fixture evidence.",
+    ) ||
+    !report.includes(
+      "Fix all issues reported by CodeQL remains descriptive evidence.",
+    ) ||
+    errors.trim() !== "" ||
+    fs.existsSync(path.join(repository, "report-repair")) ||
+    mockLog.split("\n").some(
+      (line) => line === "PHASE=report-repair",
+    )) {
+  throw new Error("legitimate menu-like report text was not preserved safely");
+}
+JS
+
+observed_repair_confidence='High for the two observed constructs; Medium for absence outside normalized text.'
+for repair_scope in 1 2 3; do
+    repair_success_root="${fixture_dir}/repair-success-scope-${repair_scope}"
+    repair_success_output="${repair_success_root}/output"
+    repair_success_workspace="${repair_success_root}/workspace"
+    repair_success_stdout="${repair_success_root}/stdout.txt"
+    repair_success_stderr="${repair_success_root}/stderr.txt"
+    repair_success_log="${repair_success_root}/copilot.log"
+    repair_success_runtime_log="${repair_success_root}/runtime-homes.txt"
+    repair_success_host_cache="${repair_success_root}/host-cache"
+    repair_success_mode='valid'
+    if [[ "${repair_scope}" == "2" ]]; then
+        repair_success_mode='transcript-valid'
+    fi
+    mkdir -p -- "${repair_success_root}" "${repair_success_host_cache}"
+    printf '%s\n' 'host-cli-cache-sentinel' \
+        > "${repair_success_host_cache}/version-cache.txt"
+    : > "${repair_success_log}"
+    : > "${repair_success_runtime_log}"
+    : > "${mock_git_log}"
+    configure_mock_repair \
+        "${repair_success_log}" "${repair_success_mode}"
+    repair_success_arguments=(
+        --repo https://github.com/octocat/Hello-World
+        --scope "${repair_scope}"
+        --output-root "${repair_success_output}"
+        --workspace-root "${repair_success_workspace}"
+        --non-interactive
+        --no-open-html
+    )
+    if [[ "${repair_scope}" != "1" ]]; then
+        repair_success_arguments+=(--research-cookies off)
+    fi
+    if ! MOCK_MALFORMED_CONFIDENCE=1 \
+        MOCK_LOG="${repair_success_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_RUNTIME_LOG="${repair_success_runtime_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        XDG_CACHE_HOME="${repair_success_host_cache}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            "${repair_success_arguments[@]}" \
+            >"${repair_success_stdout}" \
+            2>"${repair_success_stderr}"; then
+        cat "${repair_success_stdout}" >&2
+        cat "${repair_success_stderr}" >&2
+        fail "Scope ${repair_scope} bounded report repair unexpectedly failed."
+    fi
+    [[ ! -s "${repair_success_stderr}" ]] ||
+        fail "Scope ${repair_scope} bounded report repair wrote unexpected stderr."
+    repair_success_run="$(
+        find "${repair_success_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    repair_success_repository="${repair_success_run}/github--octocat--hello-world"
+    repair_success_initial="${repair_success_repository}/report-repair/initial-candidate.txt"
+    repair_success_report="${repair_success_repository}/review.txt"
+    if validate_review_report_contract \
+        "${repair_success_initial}" "${repair_scope}" >/dev/null 2>&1; then
+        fail "Scope ${repair_scope} initial repair candidate passed strict validation."
+    fi
+    validate_review_report_contract \
+        "${repair_success_report}" "${repair_scope}" >/dev/null ||
+        fail "Scope ${repair_scope} repaired report failed unchanged strict validation."
+    python3 - \
+        "${repair_success_initial}" \
+        "${repair_success_report}" \
+        "${observed_repair_confidence}" <<'PY'
+import pathlib
+import sys
+
+initial_path, report_path, original_value = sys.argv[1:]
+initial = pathlib.Path(initial_path).read_bytes()
+report = pathlib.Path(report_path).read_bytes()
+needle = f"Confidence: {original_value}".encode()
+replacement = (
+    "Confidence: Medium - Original confidence detail: "
+    f"{original_value}"
+).encode()
+if initial.count(needle) != 1:
+    raise SystemExit("initial repair candidate did not contain one exact incident value")
+if initial.replace(needle, replacement, 1) != report:
+    raise SystemExit("successful report repair changed non-target report bytes")
+PY
+    node - \
+        "${repair_success_run}" \
+        "${repair_success_log}" \
+        "${repair_scope}" \
+        "${observed_repair_confidence}" \
+        "${repair_success_mode}" \
+        "${repair_success_host_cache}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, scopeText, originalValue, replyMode, hostCache] =
+  process.argv.slice(2);
+const scope = Number.parseInt(scopeText, 10);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const repairState = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "state.json"),
+  "utf8",
+));
+const manifest = JSON.parse(fs.readFileSync(
+  path.join(run, "manifest.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const reviewPlan = JSON.parse(fs.readFileSync(
+  path.join(run, "review-plan.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const initialDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "initial-diagnostic.txt"),
+  "utf8",
+).trim();
+const finalDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-diagnostic.txt"),
+  "utf8",
+).trim();
+const request = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-request.txt"),
+  "utf8",
+);
+const edit = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-edit.json"),
+  "utf8",
+));
+const candidate = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-candidate.txt"),
+  "utf8",
+);
+const timeline = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-timeline.txt"),
+  "utf8",
+);
+const transcript = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-session.md"),
+  "utf8",
+);
+const repositoryHandoff = fs.readFileSync(
+  path.join(repository, "handoff.md"),
+  "utf8",
+);
+const runHandoff = fs.readFileSync(path.join(run, "handoff.md"), "utf8");
+const indexHtml = fs.readFileSync(path.join(run, "index.html"), "utf8");
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const reviewArgumentsPath =
+  `${mockLogPath}.rhyolite-repo-review-worker`;
+const repairArgumentsPath = `${mockLogPath}.report-repair`;
+const reviewArguments = fs.readFileSync(reviewArgumentsPath, "utf8")
+  .trimEnd().split("\n");
+const repairArguments = fs.readFileSync(repairArgumentsPath, "utf8")
+  .trimEnd().split("\n");
+const reviewHome = fs.readFileSync(
+  `${mockLogPath}.rhyolite-repo-review-worker.home`,
+  "utf8",
+).trim();
+const repairHome = fs.readFileSync(
+  `${mockLogPath}.report-repair.home`,
+  "utf8",
+).trim();
+const repairWorkdir = fs.readFileSync(
+  `${mockLogPath}.report-repair.working-directory`,
+  "utf8",
+).trim();
+const repairRequest = fs.readFileSync(
+  `${mockLogPath}.report-repair-request`,
+  "utf8",
+);
+const readEnvironment = (environmentPath) =>
+  Object.fromEntries(
+    fs.readFileSync(environmentPath, "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+const reviewEnvironment = readEnvironment(
+  `${mockLogPath}.rhyolite-repo-review-worker.environment`,
+);
+const repairEnvironment = readEnvironment(
+  `${mockLogPath}.report-repair.environment`,
+);
+
+function countExactLine(text, expected) {
+  return text.split("\n").filter((line) => line === expected).length;
+}
+
+function argumentValue(argumentsList, flag) {
+  const index = argumentsList.indexOf(flag);
+  if (index < 0 || index + 1 >= argumentsList.length) {
+    throw new Error(`missing argument ${flag}`);
+  }
+  return argumentsList[index + 1];
+}
+
+function hasPair(argumentsList, flag, value) {
+  return argumentsList.some(
+    (argument, index) =>
+      argument === flag && argumentsList[index + 1] === value,
+  );
+}
+
+function assertRepairObject(value, label) {
+  const expectedArtifacts = {
+    Directory: repairDirectory,
+    InitialCandidate: path.join(repairDirectory, "initial-candidate.txt"),
+    InitialDiagnostic: path.join(repairDirectory, "initial-diagnostic.txt"),
+    Request: path.join(repairDirectory, "attempt-1-request.txt"),
+    Edit: path.join(repairDirectory, "attempt-1-edit.json"),
+    Candidate: path.join(repairDirectory, "attempt-1-candidate.txt"),
+    FinalDiagnostic: path.join(
+      repairDirectory,
+      "attempt-1-diagnostic.txt",
+    ),
+    Timeline: path.join(repairDirectory, "attempt-1-timeline.txt"),
+    Transcript: path.join(repairDirectory, "attempt-1-session.md"),
+  };
+  if (value?.Status !== "Succeeded" ||
+      value.AttemptLimit !== 1 ||
+      value.AttemptCount !== 1 ||
+      !value.InitialDiagnostic.includes(originalValue) ||
+      value.FinalDiagnostic !==
+        "Strict validation and exact content preservation passed." ||
+      value.PreservationCheck !== "Passed" ||
+      value.FinalValidation !== "Passed" ||
+      value.Cleanup !== "Passed" ||
+      value.CanonicalPromoted !== true ||
+      JSON.stringify(value.Artifacts) !==
+        JSON.stringify(expectedArtifacts)) {
+    throw new Error(`${label} report-repair state is invalid: ${
+      JSON.stringify(value)
+    }`);
+  }
+}
+
+assertRepairObject(state.ReportRepair, "repository");
+assertRepairObject(repairState, "repair artifact");
+assertRepairObject(manifest[0]?.ReportRepair, "manifest");
+assertRepairObject(
+  runState.Repositories?.[0]?.ReportRepair,
+  "run repository",
+);
+if (reviewPlan.ReportRepairPolicy?.Mode !==
+      "isolated-confidence-edit" ||
+    reviewPlan.ReportRepairPolicy?.ProtocolVersion !== 1 ||
+    reviewPlan.ReportRepairPolicy?.AttemptLimit !== 1 ||
+    reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
+      Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
+    JSON.stringify(runState.ReportRepairPolicy) !==
+      JSON.stringify(reviewPlan.ReportRepairPolicy)) {
+  throw new Error("approval-bound report-repair policy is invalid");
+}
+if (state.Status !== "Completed" ||
+    runState.Status !== "Completed" ||
+    manifest.length !== 1 ||
+    report !== candidate ||
+    !initial.includes(`Confidence: ${originalValue}`) ||
+    !report.includes(
+      `Confidence: Medium - Original confidence detail: ${originalValue}`,
+    ) ||
+    report.includes(`Confidence: ${originalValue}`) ||
+    initialDiagnostic !==
+      "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: " +
+        originalValue ||
+    finalDiagnostic !==
+      "Strict validation and exact content preservation passed.") {
+  throw new Error("successful repair did not preserve diagnostics and report");
+}
+const markerLines = repairRequest.split("\n");
+const markerIndex = markerLines.indexOf("EXPECTED CONFIDENCE EDIT");
+if (markerIndex < 0 || markerIndex + 1 >= markerLines.length) {
+  throw new Error("repair request omitted the exact descriptor marker");
+}
+const requestDescriptor = JSON.parse(markerLines[markerIndex + 1]);
+const expectedDescriptorKeys = [
+  "ConservativeLevel",
+  "Field",
+  "Occurrence",
+  "OriginalValueSha256",
+  "ProtocolVersion",
+  "Section",
+];
+if (Object.keys(requestDescriptor).sort().join(",") !==
+      expectedDescriptorKeys.join(",") ||
+    JSON.stringify(requestDescriptor) !== JSON.stringify(edit) ||
+    requestDescriptor.ProtocolVersion !== 1 ||
+    requestDescriptor.Field !== "Confidence:" ||
+    requestDescriptor.ConservativeLevel !== "Medium" ||
+    !Number.isInteger(requestDescriptor.Occurrence) ||
+    !/^[0-9a-f]{64}$/.test(requestDescriptor.OriginalValueSha256)) {
+  throw new Error("repair request or reply descriptor is invalid");
+}
+if (countExactLine(mockLog, "AGENT=rhyolite:repo-review-worker") !== 1 ||
+    countExactLine(mockLog, "PHASE=report-repair") !== 1 ||
+    countExactLine(mockLog, "AGENT=rhyolite:repo-research-worker") !==
+      (scope === 1 ? 0 : 1)) {
+  throw new Error("successful repair used the wrong worker count");
+}
+for (const flag of [
+  "--model",
+  "--reasoning-effort",
+  "--context",
+  "--secret-env-vars",
+]) {
+  if (argumentValue(repairArguments, flag) !==
+      argumentValue(reviewArguments, flag)) {
+    throw new Error(`repair changed approved ${flag}`);
+  }
+}
+if (repairArguments.includes("--agent") ||
+    repairArguments.includes("--plugin-dir") ||
+    repairArguments.includes("--additional-mcp-config") ||
+    repairArguments.includes("--available-tools") ||
+    repairArguments.includes("--allow-tool") ||
+    repairArguments.some((value) =>
+      /--resume|--allow-all|--fleet/.test(value)) ||
+    (() => {
+      const excludedIndex = repairArguments.indexOf("--excluded-tools");
+      return excludedIndex < 0 ||
+        JSON.stringify(repairArguments.slice(
+          excludedIndex + 1,
+          excludedIndex + 4,
+        )) !== JSON.stringify(["builtin:*", "mcp:*", "custom:*"]) ||
+        repairArguments[excludedIndex + 4] !== "--deny-tool";
+    })() ||
+    repairArguments.join("\n").includes("repo-reviewer-secret-sentinel") ||
+    repairArguments.includes("mock-token") ||
+    repairArguments.includes("keychain-user") ||
+    !["read", "write", "shell", "url"].every((tool) =>
+      hasPair(repairArguments, "--deny-tool", tool))) {
+  throw new Error("repair invocation regained tools, plugins, or continuation");
+}
+for (const environmentName of [
+  "HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+]) {
+  if (repairEnvironment[environmentName] !==
+      reviewEnvironment[environmentName]) {
+    throw new Error(`repair changed host environment ${environmentName}`);
+  }
+}
+if (reviewEnvironment.COPILOT_HOME !== reviewHome ||
+    repairEnvironment.COPILOT_HOME !== repairHome ||
+    repairEnvironment.HOME === repairHome ||
+    repairEnvironment.XDG_CONFIG_HOME === repairHome ||
+    repairEnvironment.XDG_CACHE_HOME === `${repairHome}/cache` ||
+    repairEnvironment.XDG_DATA_HOME === `${repairHome}/data` ||
+    repairEnvironment.XDG_STATE_HOME === `${repairHome}/state` ||
+    repairEnvironment.XDG_CACHE_HOME !== hostCache ||
+    fs.readFileSync(
+      path.join(hostCache, "version-cache.txt"),
+      "utf8",
+    ).trim() !== "host-cli-cache-sentinel") {
+  throw new Error("repair did not preserve host HOME/cache with fresh COPILOT_HOME");
+}
+if (reviewHome === repairHome ||
+    !path.basename(reviewHome).startsWith("rhyolite-repo-review-copilot.") ||
+    !path.basename(repairHome).startsWith("rhyolite-report-repair-copilot.") ||
+    !path.basename(repairWorkdir).startsWith("rhyolite-report-repair.") ||
+    fs.existsSync(reviewHome) ||
+    fs.existsSync(repairHome) ||
+    fs.existsSync(repairWorkdir)) {
+  throw new Error("repair runtime was reused or not cleaned");
+}
+const forbiddenRepairValues = [
+  state.Paths?.ReadOnlyCheckout,
+  state.Paths?.VerificationClone,
+  state.Research?.Directory,
+  state.Research?.Dossier,
+  state.Research?.NetworkSummary,
+  state.Research?.NetworkEvents,
+  state.Research?.PrivateEvidence,
+  "cookies.jsonl",
+  "body-manifest.jsonl",
+].filter(Boolean);
+const repairSurfaces = [
+  repairRequest,
+  repairArguments.join("\n"),
+  timeline,
+  transcript,
+].join("\n");
+for (const forbidden of forbiddenRepairValues) {
+  if (repairSurfaces.includes(forbidden)) {
+    throw new Error(`repair surface exposed forbidden evidence: ${forbidden}`);
+  }
+}
+const expectedResearchStatus = scope === 1 ? "Disabled" : "Completed";
+if (state.Research?.Status !== expectedResearchStatus ||
+    (scope === 1 && fs.existsSync(path.join(repository, "research"))) ||
+    (scope !== 1 && !fs.existsSync(path.join(repository, "research")))) {
+  throw new Error("repair reran, omitted, or broadened research");
+}
+const successSummary =
+  "Succeeded; attempts 1/1; preservation Passed; validation Passed; cleanup Passed";
+if (!repositoryHandoff.includes(successSummary) ||
+    !runHandoff.includes(successSummary) ||
+    !indexHtml.includes(successSummary)) {
+  throw new Error("repair success summary did not roll up");
+}
+for (const artifactPath of Object.values(state.ReportRepair.Artifacts)) {
+  if (!fs.existsSync(artifactPath)) {
+    throw new Error(`missing repair artifact ${artifactPath}`);
+  }
+}
+if ((fs.statSync(repairDirectory).mode & 0o777) !== 0o700) {
+  throw new Error("report-repair directory is not mode 700");
+}
+for (const artifactPath of Object.values(state.ReportRepair.Artifacts)
+  .filter((artifactPath) => artifactPath !== repairDirectory)) {
+  if ((fs.statSync(artifactPath).mode & 0o777) !== 0o600) {
+    throw new Error(`report-repair artifact is not mode 600: ${artifactPath}`);
+  }
+}
+if (replyMode === "transcript-valid") {
+  const unsafeEmail = ["repair-transcript", "@example.org"].join("");
+  if (!timeline.includes("[credential omitted]") ||
+      !timeline.includes("[email omitted]") ||
+      timeline.includes("repair-transcript-secret") ||
+      timeline.includes(unsafeEmail) ||
+      !transcript.includes('"ProtocolVersion":1') ||
+      !transcript.includes(
+        "Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)",
+      )) {
+    throw new Error("repair transcript fallback was not sanitized and extracted");
+  }
+}
+JS
+    grep -Fq \
+        'RHYOLITE PROGRESS | github--octocat--hello-world | report validation | strict contract rejected a noncanonical candidate; checking bounded repair eligibility' \
+        "${repair_success_stdout}" &&
+        grep -Fq \
+            'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | validation failed; isolated tool-less confidence edit attempt 1/1; research is not rerun' \
+            "${repair_success_stdout}" &&
+        grep -Fq \
+            'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | strict revalidation passed; unchanged findings promoted to canonical report' \
+            "${repair_success_stdout}" ||
+        fail "Scope ${repair_scope} repair progress milestones are incomplete."
+done
 
 for report_contract_case in \
     missing-agent-targeting \
@@ -8914,6 +10141,9 @@ for report_contract_case in \
     report_contract_workspace="${fixture_dir}/${report_contract_case}-workspace"
     report_contract_stdout="${fixture_dir}/${report_contract_case}.stdout"
     report_contract_stderr="${fixture_dir}/${report_contract_case}.stderr"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    configure_mock_repair "${mock_log}" valid
     if env \
         "${report_contract_flag}" \
         MOCK_LOG="${mock_log}" \
@@ -8938,33 +10168,489 @@ for report_contract_case in \
     )"
     node - \
         "${report_contract_run}" \
-        "${report_contract_detail}" <<'JS'
+        "${report_contract_detail}" \
+        "${mock_log}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
-const [run, expectedDetail] = process.argv.slice(2);
+const [run, expectedDetail, mockLogPath] = process.argv.slice(2);
 const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
 const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const repairState = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "state.json"),
+  "utf8",
+));
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const diagnostic = fs.readFileSync(
+  path.join(repairDirectory, "initial-diagnostic.txt"),
+  "utf8",
+);
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
 if (state.Status !== "ReviewFailed" ||
     runState.Status !== "Failed" ||
     !errors.includes("Final report contract validation failed:") ||
-    !errors.includes(expectedDetail)) {
+    !errors.includes(expectedDetail) ||
+    !report.includes("No canonical review was produced.") ||
+    report.includes(expectedDetail) ||
+    initial === report ||
+    !diagnostic.includes(expectedDetail) ||
+    state.ReportRepair?.Status !== "NotEligible" ||
+    state.ReportRepair?.AttemptLimit !== 1 ||
+    state.ReportRepair?.AttemptCount !== 0 ||
+    !state.ReportRepair?.InitialDiagnostic.includes(expectedDetail) ||
+    !state.ReportRepair?.FinalDiagnostic.includes(
+      "report repair unsupported:",
+    ) ||
+    state.ReportRepair?.PreservationCheck !== "NotRun" ||
+    state.ReportRepair?.FinalValidation !== "NotRun" ||
+    state.ReportRepair?.Cleanup !== "NotRun" ||
+    state.ReportRepair?.CanonicalPromoted !== false ||
+    state.ReportRepair?.Artifacts?.Directory !== repairDirectory ||
+    state.ReportRepair?.Artifacts?.InitialCandidate !==
+      path.join(repairDirectory, "initial-candidate.txt") ||
+    state.ReportRepair?.Artifacts?.InitialDiagnostic !==
+      path.join(repairDirectory, "initial-diagnostic.txt") ||
+    state.ReportRepair?.Artifacts?.Request !== "" ||
+    state.ReportRepair?.Artifacts?.Edit !== "" ||
+    state.ReportRepair?.Artifacts?.Candidate !== "" ||
+    state.ReportRepair?.Artifacts?.FinalDiagnostic !==
+      path.join(repairDirectory, "attempt-1-diagnostic.txt") ||
+    state.ReportRepair?.Artifacts?.Timeline !== "" ||
+    state.ReportRepair?.Artifacts?.Transcript !== "" ||
+    JSON.stringify(repairState) !==
+      JSON.stringify(state.ReportRepair) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(state.ReportRepair) ||
+    mockLog.split("\n").some((line) => line === "PHASE=report-repair")) {
   throw new Error(JSON.stringify({
     expectedDetail,
     repositoryStatus: state.Status,
     runStatus: runState.Status,
     errors,
+    reportRepair: state.ReportRepair,
   }));
 }
 JS
 done
 
+for repair_failure_mode in \
+    extra-field \
+    full-report \
+    substantive-edit \
+    inflated-level \
+    wrong-hash \
+    wrong-target; do
+    repair_failure_root="${fixture_dir}/repair-failure-${repair_failure_mode}"
+    repair_failure_output="${repair_failure_root}/output"
+    repair_failure_workspace="${repair_failure_root}/workspace"
+    repair_failure_stdout="${repair_failure_root}/stdout.txt"
+    repair_failure_stderr="${repair_failure_root}/stderr.txt"
+    repair_failure_log="${repair_failure_root}/copilot.log"
+    repair_failure_scope=1
+    if [[ "${repair_failure_mode}" == "wrong-hash" ]]; then
+        repair_failure_scope=2
+    fi
+    mkdir -p -- "${repair_failure_root}"
+    : > "${repair_failure_log}"
+    : > "${mock_git_log}"
+    configure_mock_repair \
+        "${repair_failure_log}" "${repair_failure_mode}"
+    repair_failure_arguments=(
+        --repo https://github.com/octocat/Hello-World
+        --scope "${repair_failure_scope}"
+        --output-root "${repair_failure_output}"
+        --workspace-root "${repair_failure_workspace}"
+        --non-interactive
+        --no-open-html
+    )
+    if [[ "${repair_failure_scope}" != "1" ]]; then
+        repair_failure_arguments+=(--research-cookies off)
+    fi
+    if MOCK_MALFORMED_CONFIDENCE=1 \
+        MOCK_LOG="${repair_failure_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            "${repair_failure_arguments[@]}" >"${repair_failure_stdout}" \
+            2>"${repair_failure_stderr}"; then
+        fail "Mock ${repair_failure_mode} report repair unexpectedly succeeded."
+    fi
+    repair_failure_run="$(
+        find "${repair_failure_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${repair_failure_run}" \
+        "${repair_failure_log}" \
+        "${repair_failure_mode}" \
+        "${repair_failure_scope}" \
+        "${observed_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, mode, scopeText, originalValue] =
+  process.argv.slice(2);
+const scope = Number.parseInt(scopeText, 10);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const repairState = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "state.json"),
+  "utf8",
+));
+const manifest = JSON.parse(fs.readFileSync(
+  path.join(run, "manifest.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const timeline = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-timeline.txt"),
+  "utf8",
+);
+const repositoryHandoff = fs.readFileSync(
+  path.join(repository, "handoff.md"),
+  "utf8",
+);
+const runHandoff = fs.readFileSync(path.join(run, "handoff.md"), "utf8");
+const indexHtml = fs.readFileSync(path.join(run, "index.html"), "utf8");
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const extractionFailure =
+  mode === "full-report" || mode === "substantive-edit";
+const expectedPreservation = extractionFailure ? "NotRun" : "Failed";
+const repairHome = fs.readFileSync(
+  `${mockLogPath}.report-repair.home`,
+  "utf8",
+).trim();
+const repairWorkdir = fs.readFileSync(
+  `${mockLogPath}.report-repair.working-directory`,
+  "utf8",
+).trim();
+
+function countExactLine(text, expected) {
+  return text.split("\n").filter((line) => line === expected).length;
+}
+
+function assertFailedRepair(value, label) {
+  if (value?.Status !== "Failed" ||
+      value.AttemptLimit !== 1 ||
+      value.AttemptCount !== 1 ||
+      !value.InitialDiagnostic.includes(originalValue) ||
+      !value.FinalDiagnostic ||
+      value.PreservationCheck !== expectedPreservation ||
+      value.FinalValidation !== "NotRun" ||
+      value.Cleanup !== "Passed" ||
+      value.CanonicalPromoted !== false ||
+      value.Artifacts?.Directory !== repairDirectory ||
+      value.Artifacts?.InitialCandidate !==
+        path.join(repairDirectory, "initial-candidate.txt") ||
+      value.Artifacts?.InitialDiagnostic !==
+        path.join(repairDirectory, "initial-diagnostic.txt") ||
+      value.Artifacts?.Request !==
+        path.join(repairDirectory, "attempt-1-request.txt") ||
+      value.Artifacts?.Edit !==
+        path.join(repairDirectory, "attempt-1-edit.json") ||
+      value.Artifacts?.Candidate !==
+        path.join(repairDirectory, "attempt-1-candidate.txt") ||
+      value.Artifacts?.FinalDiagnostic !==
+        path.join(repairDirectory, "attempt-1-diagnostic.txt") ||
+      value.Artifacts?.Timeline !==
+        path.join(repairDirectory, "attempt-1-timeline.txt") ||
+      value.Artifacts?.Transcript !==
+        path.join(repairDirectory, "attempt-1-session.md")) {
+    throw new Error(`${label} failed repair state is invalid: ${
+      JSON.stringify(value)
+    }`);
+  }
+}
+
+assertFailedRepair(state.ReportRepair, "repository");
+assertFailedRepair(repairState, "repair artifact");
+assertFailedRepair(manifest[0]?.ReportRepair, "manifest");
+assertFailedRepair(
+  runState.Repositories?.[0]?.ReportRepair,
+  "run repository",
+);
+if (state.Status !== "ReviewFailed" ||
+    runState.Status !== "Failed" ||
+    state.Research?.Status !== (scope === 1 ? "Disabled" : "Completed") ||
+    fs.existsSync(path.join(repository, "research")) !== (scope !== 1) ||
+    !initial.includes(`Confidence: ${originalValue}`) ||
+    !report.includes("No canonical review was produced.") ||
+    !report.includes("noncanonical evidence") ||
+    report.includes(originalValue) ||
+    !errors.includes("Final report contract validation failed:") ||
+    !errors.includes("Report repair exhausted:") ||
+    countExactLine(mockLog, "AGENT=rhyolite:repo-review-worker") !== 1 ||
+    countExactLine(mockLog, "PHASE=report-repair") !== 1 ||
+    countExactLine(mockLog, "AGENT=rhyolite:repo-research-worker") !==
+      (scope === 1 ? 0 : 1) ||
+    fs.existsSync(path.join(repairDirectory, "attempt-1-candidate.txt")) ||
+    fs.existsSync(repairHome) ||
+    fs.existsSync(repairWorkdir)) {
+  throw new Error("failed repair became canonical or lost truthful evidence");
+}
+const editPath = path.join(repairDirectory, "attempt-1-edit.json");
+if (fs.existsSync(editPath) === extractionFailure) {
+  throw new Error("failed repair edit artifact does not match extraction result");
+}
+if (mode === "full-report" &&
+    !timeline.includes("full report instead of one edit descriptor")) {
+  throw new Error("full-report reply was not retained as noncanonical evidence");
+}
+if (mode === "substantive-edit" &&
+    !timeline.includes("attempted to replace substantive report content")) {
+  throw new Error("substantive edit attempt was not retained as evidence");
+}
+const failedSummary =
+  `Failed; attempts 1/1; preservation ${expectedPreservation}; ` +
+  "validation NotRun; cleanup Passed";
+if (!repositoryHandoff.includes(failedSummary) ||
+    !runHandoff.includes(failedSummary) ||
+    !indexHtml.includes(failedSummary)) {
+  throw new Error("failed repair summary did not roll up");
+}
+JS
+    if ! { grep -Fq \
+        'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | Failed; one attempt exhausted; noncanonical evidence preserved' \
+        "${repair_failure_stdout}" &&
+        grep -Fq 'Stage: report repair' "${repair_failure_stdout}" &&
+        grep -Fq \
+            'Bounded report-only recovery did not produce a fully valid, content-preserving report.' \
+            "${repair_failure_stdout}"; }; then
+        cat -- "${repair_failure_stdout}" "${repair_failure_stderr}"
+        fail "Mock ${repair_failure_mode} repair did not report exhaustion."
+    fi
+done
+
+repair_revalidation_root="${fixture_dir}/repair-revalidation-failure"
+repair_revalidation_output="${repair_revalidation_root}/output"
+repair_revalidation_workspace="${repair_revalidation_root}/workspace"
+repair_revalidation_stdout="${repair_revalidation_root}/stdout.txt"
+repair_revalidation_stderr="${repair_revalidation_root}/stderr.txt"
+repair_revalidation_log="${repair_revalidation_root}/copilot.log"
+mkdir -p -- "${repair_revalidation_root}"
+: > "${repair_revalidation_log}"
+: > "${mock_git_log}"
+configure_mock_repair "${repair_revalidation_log}" valid
+if MOCK_MALFORMED_CONFIDENCE=1 \
+    MOCK_REVALIDATION_FAILURE=1 \
+    MOCK_LOG="${repair_revalidation_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${repair_revalidation_output}" \
+        --workspace-root "${repair_revalidation_workspace}" \
+        --non-interactive \
+        --no-open-html >"${repair_revalidation_stdout}" \
+        2>"${repair_revalidation_stderr}"; then
+    fail 'Mock report repair with a second contract error unexpectedly succeeded.'
+fi
+repair_revalidation_run="$(
+    find "${repair_revalidation_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${repair_revalidation_run}" \
+    "${observed_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, originalValue] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const candidate = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-candidate.txt"),
+  "utf8",
+);
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const expectedCandidate = initial.replace(
+  `Confidence: ${originalValue}`,
+  `Confidence: Medium - Original confidence detail: ${originalValue}`,
+);
+if (state.Status !== "ReviewFailed" ||
+    runState.Status !== "Failed" ||
+    state.ReportRepair?.Status !== "Failed" ||
+    state.ReportRepair?.AttemptCount !== 1 ||
+    state.ReportRepair?.PreservationCheck !== "Passed" ||
+    state.ReportRepair?.FinalValidation !== "Failed" ||
+    state.ReportRepair?.Cleanup !== "Passed" ||
+    state.ReportRepair?.CanonicalPromoted !== false ||
+    state.ReportRepair?.FinalDiagnostic !==
+      "Final report contains a prohibited action menu or implementation offer." ||
+    candidate !== expectedCandidate ||
+    !candidate.includes("Fix all issues") ||
+    !report.includes("No canonical review was produced.") ||
+    report.includes(originalValue) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(state.ReportRepair)) {
+  throw new Error("revalidation failure did not remain noncanonical");
+}
+JS
+
+repair_timeout_root="${fixture_dir}/repair-timeout"
+repair_timeout_output="${repair_timeout_root}/output"
+repair_timeout_workspace="${repair_timeout_root}/workspace"
+repair_timeout_stdout="${repair_timeout_root}/stdout.txt"
+repair_timeout_stderr="${repair_timeout_root}/stderr.txt"
+repair_timeout_log="${repair_timeout_root}/copilot.log"
+mkdir -p -- "${repair_timeout_root}"
+: > "${repair_timeout_log}"
+: > "${mock_git_log}"
+configure_mock_repair "${repair_timeout_log}" timeout
+if MOCK_MALFORMED_CONFIDENCE=1 \
+    MOCK_LOG="${repair_timeout_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --timeout-minutes 1 \
+        --output-root "${repair_timeout_output}" \
+        --workspace-root "${repair_timeout_workspace}" \
+        --non-interactive \
+        --no-open-html >"${repair_timeout_stdout}" \
+        2>"${repair_timeout_stderr}"; then
+    fail 'Mock report-repair timeout unexpectedly succeeded.'
+fi
+repair_timeout_run="$(
+    find "${repair_timeout_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${repair_timeout_run}" \
+    "${repair_timeout_log}" \
+    "${observed_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, originalValue] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const reviewPlan = JSON.parse(fs.readFileSync(
+  path.join(run, "review-plan.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const timeoutPhase = fs.readFileSync(
+  `${mockLogPath}.timeout-phase`,
+  "utf8",
+).trim();
+const repairHome = fs.readFileSync(
+  `${mockLogPath}.report-repair.home`,
+  "utf8",
+).trim();
+const repairWorkdir = fs.readFileSync(
+  `${mockLogPath}.report-repair.working-directory`,
+  "utf8",
+).trim();
+if (state.Status !== "ReviewFailed" ||
+    runState.Status !== "Failed" ||
+    state.ReportRepair?.Status !== "TimedOut" ||
+    state.ReportRepair?.AttemptLimit !== 1 ||
+    state.ReportRepair?.AttemptCount !== 1 ||
+    state.ReportRepair?.PreservationCheck !== "NotRun" ||
+    state.ReportRepair?.FinalValidation !== "NotRun" ||
+    state.ReportRepair?.Cleanup !== "Passed" ||
+    state.ReportRepair?.CanonicalPromoted !== false ||
+    state.ReportRepair?.FinalDiagnostic !==
+      "Report repair exceeded 60 seconds." ||
+    reviewPlan.SessionTimeoutMinutes !== 1 ||
+    reviewPlan.ReportRepairPolicy?.TimeoutSeconds !== 60 ||
+    JSON.stringify(runState.ReportRepairPolicy) !==
+      JSON.stringify(reviewPlan.ReportRepairPolicy) ||
+    !initial.includes(originalValue) ||
+    !report.includes("No canonical review was produced.") ||
+    report.includes(originalValue) ||
+    timeoutPhase !== "report-repair" ||
+    mockLog.split("\n").filter(
+      (line) => line === "PHASE=report-repair",
+    ).length !== 1 ||
+    fs.existsSync(repairHome) ||
+    fs.existsSync(repairWorkdir) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(state.ReportRepair)) {
+  throw new Error("report-repair timeout state or cleanup is invalid");
+}
+JS
+grep -Fq \
+    'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | TimedOut; one attempt exhausted; noncanonical evidence preserved' \
+    "${repair_timeout_stdout}" &&
+    grep -Fq \
+        '1 isolated, tool-less confidence edit; 60s maximum; no research rerun' \
+        "${repair_timeout_stdout}" ||
+    fail 'Report-repair timeout did not surface bounded exhaustion.'
+
 invalid_utf8_output="${fixture_dir}/invalid-utf8-output"
 invalid_utf8_workspace="${fixture_dir}/invalid-utf8-workspace"
 invalid_utf8_stdout="${fixture_dir}/invalid-utf8.stdout"
 invalid_utf8_stderr="${fixture_dir}/invalid-utf8.stderr"
+: > "${mock_log}"
+: > "${mock_git_log}"
+configure_mock_repair "${mock_log}" valid
 if MOCK_INVALID_UTF8=1 \
     MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
@@ -8982,8 +10668,11 @@ if MOCK_INVALID_UTF8=1 \
         2>"${invalid_utf8_stderr}"; then
     fail 'Mock invalid-UTF-8 report unexpectedly completed.'
 fi
-grep -Fq 'Stage: report validation' "${invalid_utf8_stdout}" ||
+if ! grep -Fq 'Stage: report validation' "${invalid_utf8_stdout}"; then
+    cat "${invalid_utf8_stdout}" >&2
+    cat "${invalid_utf8_stderr}" >&2
     fail 'Invalid-UTF-8 report did not surface report validation failure.'
+fi
 invalid_utf8_run="$(
     find "${invalid_utf8_output}" -mindepth 1 -maxdepth 1 -type d |
         head -n 1
@@ -8995,20 +10684,52 @@ import sys
 
 run = pathlib.Path(sys.argv[1])
 repository = run / "github--octocat--hello-world"
+repair_directory = repository / "report-repair"
 state = json.loads((repository / "state.json").read_text(encoding="utf-8"))
 errors = (repository / "errors.txt").read_text(encoding="utf-8")
 report = (repository / "review.txt").read_text(encoding="utf-8")
 markdown = (repository / "review.md").read_text(encoding="utf-8")
+(repository / "report-repair" / "state.json").read_text(encoding="utf-8")
 (repository / "review.html").read_text(encoding="utf-8")
+initial = (repair_directory / "initial-candidate.txt").read_bytes()
+initial_diagnostic = (
+    repair_directory / "initial-diagnostic.txt"
+).read_text(encoding="utf-8")
+final_diagnostic = (
+    repair_directory / "attempt-1-diagnostic.txt"
+).read_text(encoding="utf-8")
 if (
     state.get("Status") != "ReviewFailed"
-    or "Final report UTF-8 finalization failed:" not in errors
-    or "invalid UTF-8 at byte offset" not in errors
-    or "\ufffd" not in report
+    or state.get("ReportRepair", {}).get("Status") != "Failed"
+    or state.get("ReportRepair", {}).get("AttemptCount") != 0
+    or state.get("ReportRepair", {}).get("CanonicalPromoted") is not False
+    or state.get("ReportRepair", {}).get("PreservationCheck") != "NotRun"
+    or state.get("ReportRepair", {}).get("FinalValidation") != "NotRun"
+    or state.get("ReportRepair", {}).get("Cleanup") != "NotRun"
+    or "Final report contract validation failed:" not in errors
+    or "not valid UTF-8 at byte offset" not in errors
+    or "not valid UTF-8 at byte offset" not in initial_diagnostic
+    or "report repair helper error:" not in final_diagnostic
+    or b"\xff" not in initial
+    or "No canonical review was produced." not in report
+    or "\ufffd" in report
+    or "Recovered but incomplete" in report
     or "## Canonical report" not in markdown
+    or (repair_directory / "attempt-1-candidate.txt").exists()
 ):
-    raise SystemExit("invalid UTF-8 report was not finalized explicitly and safely")
+    raise SystemExit(json.dumps({
+        "failure": "invalid UTF-8 report was not finalized explicitly and safely",
+        "status": state.get("Status"),
+        "repair": state.get("ReportRepair"),
+        "initial_diagnostic": initial_diagnostic,
+        "final_diagnostic": final_diagnostic,
+        "initial_has_invalid_byte": b"\xff" in initial,
+        "failure_summary": report,
+        "has_canonical_heading": "## Canonical report" in markdown,
+    }))
 PY
+! grep -Fq 'PHASE=report-repair' "${mock_log}" ||
+    fail 'Invalid-UTF-8 report unexpectedly started a repair worker.'
 
 finalization_downgrade_output="${fixture_dir}/finalization-downgrade-output"
 finalization_downgrade_workspace="${fixture_dir}/finalization-downgrade-workspace"
@@ -9058,6 +10779,9 @@ incomplete_output="${fixture_dir}/incomplete-output"
 incomplete_workspace="${fixture_dir}/incomplete-workspace"
 incomplete_stdout="${fixture_dir}/incomplete.stdout"
 incomplete_stderr="${fixture_dir}/incomplete.stderr"
+: > "${mock_log}"
+: > "${mock_git_log}"
+configure_mock_repair "${mock_log}" valid
 if MOCK_UNTERMINATED=1 \
     MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
@@ -9090,19 +10814,49 @@ const path = require("path");
 
 const run = process.argv[2];
 const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
 const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
 const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const initialDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "initial-diagnostic.txt"),
+  "utf8",
+);
+const finalDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-diagnostic.txt"),
+  "utf8",
+);
 if (state.Status !== "ReviewFailed" ||
+    runState.Status !== "Failed" ||
     state.SchemaVersion !== 6 ||
     state.ProvenanceWindow !== null ||
     state.ResearchTransport?.Enabled !== false ||
     state.Research?.Status !== "Disabled" ||
-    !report.includes("Recovered but incomplete") ||
-    !errors.includes("Incomplete report:")) {
+    state.ReportRepair?.Status !== "NotEligible" ||
+    state.ReportRepair?.AttemptCount !== 0 ||
+    state.ReportRepair?.CanonicalPromoted !== false ||
+    state.ReportRepair?.PreservationCheck !== "NotRun" ||
+    state.ReportRepair?.FinalValidation !== "NotRun" ||
+    state.ReportRepair?.Cleanup !== "NotRun" ||
+    !initial.includes("Recovered but incomplete") ||
+    !initialDiagnostic.includes("Incomplete report:") ||
+    !finalDiagnostic.includes("report repair unsupported:") ||
+    !report.includes("No canonical review was produced.") ||
+    report.includes("Recovered but incomplete") ||
+    !errors.includes("Incomplete report:") ||
+    fs.existsSync(path.join(repairDirectory, "attempt-1-candidate.txt")) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(state.ReportRepair)) {
   throw new Error("unterminated report was not preserved and marked failed");
 }
 JS
+! grep -Fq 'PHASE=report-repair' "${mock_log}" ||
+    fail 'Incomplete report unexpectedly started a repair worker.'
 
 for failure_case in worker timeout; do
     case "${failure_case}" in
@@ -9165,6 +10919,351 @@ if (state.Status !== expectedStatus ||
 }
 JS
 done
+
+repair_interrupt_root="${fixture_dir}/repair-interrupt"
+repair_interrupt_output="${repair_interrupt_root}/output"
+repair_interrupt_workspace="${repair_interrupt_root}/workspace"
+repair_interrupt_stdout="${repair_interrupt_root}/stdout.txt"
+repair_interrupt_stderr="${repair_interrupt_root}/stderr.txt"
+repair_interrupt_log="${repair_interrupt_root}/copilot.log"
+repair_interrupt_pid_file="${repair_interrupt_root}/repair.pid"
+repair_interrupt_child_pid_file="${repair_interrupt_root}/repair-child.pid"
+mkdir -p -- "${repair_interrupt_root}"
+: > "${repair_interrupt_log}"
+: > "${mock_git_log}"
+configure_mock_repair \
+    "${repair_interrupt_log}" \
+    valid \
+    1 \
+    "${repair_interrupt_pid_file}" \
+    "${repair_interrupt_child_pid_file}"
+MOCK_MALFORMED_CONFIDENCE=1 \
+    MOCK_LOG="${repair_interrupt_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --research-cookies off \
+        --output-root "${repair_interrupt_output}" \
+        --workspace-root "${repair_interrupt_workspace}" \
+        --non-interactive \
+        --no-open-html >"${repair_interrupt_stdout}" \
+        2>"${repair_interrupt_stderr}" &
+repair_interrupt_runner_pid=$!
+repair_interrupt_ready=0
+for attempt in $(seq 1 30); do
+    if [[ -s "${repair_interrupt_pid_file}" &&
+        -s "${repair_interrupt_child_pid_file}" ]]; then
+        repair_interrupt_ready=1
+        break
+    fi
+    if ! kill -0 "${repair_interrupt_runner_pid}" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if ((repair_interrupt_ready == 0)); then
+    kill "${repair_interrupt_runner_pid}" 2>/dev/null || true
+    wait "${repair_interrupt_runner_pid}" 2>/dev/null || true
+    fail 'Report-repair interrupt fixture did not reach the isolated repair child.'
+fi
+set +e
+kill -TERM "${repair_interrupt_runner_pid}"
+wait "${repair_interrupt_runner_pid}"
+repair_interrupt_exit=$?
+set -e
+[[ "${repair_interrupt_exit}" -eq 143 ]] ||
+    fail "Interrupted report repair returned ${repair_interrupt_exit}, expected 143."
+for pid_file in \
+    "${repair_interrupt_pid_file}" \
+    "${repair_interrupt_child_pid_file}"; do
+    read -r interrupted_process_id < "${pid_file}"
+    if kill -0 "${interrupted_process_id}" 2>/dev/null; then
+        fail "Interrupted report repair left process ${interrupted_process_id} alive."
+    fi
+done
+repair_interrupt_run="$(
+    find "${repair_interrupt_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${repair_interrupt_run}" \
+    "${repair_interrupt_log}" \
+    "${observed_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, originalValue] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const repairState = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "state.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const request = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-request.txt"),
+  "utf8",
+);
+const finalDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-diagnostic.txt"),
+  "utf8",
+).trim();
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const repairHome = fs.readFileSync(
+  `${mockLogPath}.report-repair.home`,
+  "utf8",
+).trim();
+const repairWorkdir = fs.readFileSync(
+  `${mockLogPath}.report-repair.working-directory`,
+  "utf8",
+).trim();
+const repair = state.ReportRepair;
+if (runState.Status !== "Interrupted" ||
+    state.Status !== "Interrupted" ||
+    state.ExitCode !== 143 ||
+    state.Research?.Status !== "Completed" ||
+    repair?.Status !== "Interrupted" ||
+    repair.AttemptLimit !== 1 ||
+    repair.AttemptCount !== 1 ||
+    !repair.InitialDiagnostic.includes(originalValue) ||
+    repair.FinalDiagnostic !== "Report repair interrupted by TERM." ||
+    repair.PreservationCheck !== "NotRun" ||
+    repair.FinalValidation !== "NotRun" ||
+    repair.Cleanup !== "Passed" ||
+    repair.CanonicalPromoted !== false ||
+    JSON.stringify(repairState) !== JSON.stringify(repair) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(repair) ||
+    !initial.includes(originalValue) ||
+    !request.includes("EXPECTED CONFIDENCE EDIT") ||
+    finalDiagnostic !== "Report repair interrupted by TERM." ||
+    !report.includes(
+      "Repository review interrupted during bounded report repair.",
+    ) ||
+    report.includes(originalValue) ||
+    !fs.existsSync(path.join(repository, "research", "research.txt")) ||
+    !fs.existsSync(path.join(
+      repository,
+      "research",
+      "network",
+      "summary.json",
+    )) ||
+    mockLog.split("\n").filter(
+      (line) => line === "AGENT=rhyolite:repo-research-worker",
+    ).length !== 1 ||
+    mockLog.split("\n").filter(
+      (line) => line === "AGENT=rhyolite:repo-review-worker",
+    ).length !== 1 ||
+    mockLog.split("\n").filter(
+      (line) => line === "PHASE=report-repair",
+    ).length !== 1 ||
+    fs.existsSync(repairHome) ||
+    fs.existsSync(repairWorkdir)) {
+  throw new Error("repair interruption did not preserve truthful isolated state");
+}
+for (const artifact of [
+  repair.Artifacts.InitialCandidate,
+  repair.Artifacts.InitialDiagnostic,
+  repair.Artifacts.Request,
+  repair.Artifacts.FinalDiagnostic,
+  repair.Artifacts.Timeline,
+  repair.Artifacts.Transcript,
+]) {
+  if (!fs.existsSync(artifact)) {
+    throw new Error(`repair interruption lost artifact ${artifact}`);
+  }
+}
+JS
+grep -Fq 'Stage: user interruption' "${repair_interrupt_stdout}" &&
+    grep -Fq 'Status Interrupted; exit code 143' \
+        "${repair_interrupt_stdout}" &&
+    grep -Fq 'report repair' "${repair_interrupt_stdout}" ||
+    fail 'Interrupted report repair terminal output lost its repair boundary.'
+
+repair_post_success_root="${fixture_dir}/repair-post-success-interrupt"
+repair_post_success_output="${repair_post_success_root}/output"
+repair_post_success_workspace="${repair_post_success_root}/workspace"
+repair_post_success_stdout="${repair_post_success_root}/stdout.txt"
+repair_post_success_stderr="${repair_post_success_root}/stderr.txt"
+repair_post_success_log="${repair_post_success_root}/copilot.log"
+repair_post_success_git_pid_file="${repair_post_success_root}/git-status.pid"
+repair_post_success_git_child_pid_file="${repair_post_success_root}/git-status-child.pid"
+mkdir -p -- "${repair_post_success_root}"
+: > "${repair_post_success_log}"
+: > "${mock_git_log}"
+configure_mock_repair "${repair_post_success_log}" valid
+MOCK_MALFORMED_CONFIDENCE=1 \
+    MOCK_BLOCK_GIT_STATUS_AFTER_REPAIR=1 \
+    MOCK_FINALIZATION_OUTPUT_ROOT="${repair_post_success_output}" \
+    MOCK_GIT_STATUS_PID_FILE="${repair_post_success_git_pid_file}" \
+    MOCK_GIT_STATUS_CHILD_PID_FILE="${repair_post_success_git_child_pid_file}" \
+    MOCK_LOG="${repair_post_success_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${repair_post_success_output}" \
+        --workspace-root "${repair_post_success_workspace}" \
+        --non-interactive \
+        --no-open-html >"${repair_post_success_stdout}" \
+        2>"${repair_post_success_stderr}" &
+repair_post_success_runner_pid=$!
+repair_post_success_ready=0
+for attempt in $(seq 1 30); do
+    if [[ -s "${repair_post_success_git_pid_file}" &&
+        -s "${repair_post_success_git_child_pid_file}" ]]; then
+        repair_post_success_ready=1
+        break
+    fi
+    if ! kill -0 "${repair_post_success_runner_pid}" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if ((repair_post_success_ready == 0)); then
+    kill "${repair_post_success_runner_pid}" 2>/dev/null || true
+    wait "${repair_post_success_runner_pid}" 2>/dev/null || true
+    cat "${repair_post_success_stdout}" >&2
+    cat "${repair_post_success_stderr}" >&2
+    fail 'Post-success repair interrupt fixture did not reach Git status.'
+fi
+set +e
+kill -TERM "${repair_post_success_runner_pid}"
+wait "${repair_post_success_runner_pid}"
+repair_post_success_exit=$?
+set -e
+[[ "${repair_post_success_exit}" -eq 143 ]] ||
+    fail "Post-success repair interruption returned ${repair_post_success_exit}, expected 143."
+for pid_file in \
+    "${repair_post_success_git_pid_file}" \
+    "${repair_post_success_git_child_pid_file}"; do
+    read -r interrupted_process_id < "${pid_file}"
+    if kill -0 "${interrupted_process_id}" 2>/dev/null; then
+        fail "Post-success repair interruption left process ${interrupted_process_id} alive."
+    fi
+done
+repair_post_success_run="$(
+    find "${repair_post_success_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - \
+    "${repair_post_success_run}" \
+    "${repair_post_success_log}" \
+    "${observed_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, originalValue] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const repairState = JSON.parse(fs.readFileSync(
+  path.join(repairDirectory, "state.json"),
+  "utf8",
+));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const candidate = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-candidate.txt"),
+  "utf8",
+);
+const finalDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-diagnostic.txt"),
+  "utf8",
+).trim();
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const repairHome = fs.readFileSync(
+  `${mockLogPath}.report-repair.home`,
+  "utf8",
+).trim();
+const repairWorkdir = fs.readFileSync(
+  `${mockLogPath}.report-repair.working-directory`,
+  "utf8",
+).trim();
+const repair = state.ReportRepair;
+if (runState.Status !== "Interrupted" ||
+    state.Status !== "Interrupted" ||
+    state.ExitCode !== 143 ||
+    state.Research?.Status !== "Disabled" ||
+    repair?.Status !== "Interrupted" ||
+    repair.AttemptLimit !== 1 ||
+    repair.AttemptCount !== 1 ||
+    repair.FinalDiagnostic !== "Report repair interrupted by TERM." ||
+    repair.PreservationCheck !== "Passed" ||
+    repair.FinalValidation !== "Passed" ||
+    repair.Cleanup !== "Passed" ||
+    repair.CanonicalPromoted !== false ||
+    JSON.stringify(repairState) !== JSON.stringify(repair) ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(repair) ||
+    !initial.includes(`Confidence: ${originalValue}`) ||
+    !candidate.includes(
+      `Confidence: Medium - Original confidence detail: ${originalValue}`,
+    ) ||
+    finalDiagnostic !== "Report repair interrupted by TERM." ||
+    !report.includes(
+      "Repository review interrupted during bounded report repair.",
+    ) ||
+    report.includes(originalValue) ||
+    report.includes("Original confidence detail") ||
+    mockLog.split("\n").filter(
+      (line) => line === "AGENT=rhyolite:repo-review-worker",
+    ).length !== 1 ||
+    mockLog.split("\n").filter(
+      (line) => line === "PHASE=report-repair",
+    ).length !== 1 ||
+    mockLog.split("\n").some(
+      (line) => line === "AGENT=rhyolite:repo-research-worker",
+    ) ||
+    fs.existsSync(repairHome) ||
+    fs.existsSync(repairWorkdir)) {
+  throw new Error("post-success repair interruption published stale success state");
+}
+JS
+grep -Fq \
+    'strict revalidation passed; unchanged findings promoted to canonical report' \
+    "${repair_post_success_stdout}" &&
+    grep -Fq 'Stage: user interruption' "${repair_post_success_stdout}" &&
+    grep -Fq 'Status Interrupted; exit code 143' \
+        "${repair_post_success_stdout}" ||
+    fail 'Post-success repair interruption lost its safe rollback boundary.'
 
 interrupt_output="${fixture_dir}/interrupt-output"
 interrupt_workspace="${fixture_dir}/interrupt-workspace"

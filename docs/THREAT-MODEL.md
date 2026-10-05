@@ -295,6 +295,21 @@
 - Scope-based default timeouts match the published planning ranges.
 - Reports require exact source references and evidence/confidence
   separation.
+- A malformed confidence field can trigger only the approval-bound, single
+  report-repair attempt. Its fresh Copilot home and empty work directory have
+  hooks, memory, custom instructions, IDE integration, skills, MCP, and
+  model-visible tools disabled. Only the approved provider's model transport
+  remains; no target, research, or arbitrary network access is granted.
+  Its fresh `COPILOT_HOME` isolates model/session state without changing the
+  analysis worker's authentication, provider/offline configuration, or trusted
+  CLI cache/version resolution. Authentication stays in the environment or
+  private bridge, never in process arguments.
+  The child sees sanitized report text and a fixed diagnostic/edit protocol,
+  never snapshot files, private research evidence, credentials, or prior
+  sessions. Its reply cannot replace report text: an exact descriptor is
+  checked against the original value hash and conservative confidence level.
+  Every other report byte is preserved, strict validation reruns, and failed
+  cleanup or exhausted repair prevents canonical promotion.
 - Every scope requires an exact
   `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` with explicit coverage
   of prompt injection, reviewer-directed instructions, metadata/dataset/

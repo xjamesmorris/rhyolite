@@ -43,8 +43,11 @@ required_contract_functions=(
     harness_prepare_worker_home
     harness_worker_argv
     harness_worker_env
+    harness_report_repair_argv
+    harness_report_repair_env
     harness_render_request
     harness_extract_final_report
+    harness_extract_report_repair
     harness_verify_isolation
     harness_persist_agent_state
     harness_sanitize_runtime_home
@@ -200,7 +203,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '3' \
+assert_equal '4' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 production_registry_path=''
@@ -235,7 +238,7 @@ assert_equal \
 
 for function_name in "${required_contract_functions[@]}"; do
     declare -F "${function_name}" >/dev/null ||
-        fail "Copilot adapter is missing Contract-v3 function: ${function_name}"
+        fail "Copilot adapter is missing Contract-v4 function: ${function_name}"
 done
 [[ "${RHYOLITE_HARNESS_REQUIRED_FUNCTIONS[*]}" == \
     "${required_contract_functions[*]}" ]] ||
@@ -429,7 +432,7 @@ rhyolite_write_preference \
     max \
     long_context \
     "${preference_contract_root}" ||
-    fail 'Contract-v3 preference write failed.'
+    fail 'Contract-v4 preference write failed.'
 preference_contract_path="$(
     rhyolite_preference_path \
         "${preference_contract_repository}" \
@@ -442,7 +445,7 @@ preference_contract_peer_path="$(
         "${preference_contract_root}"
 )"
 [[ "${preference_contract_path}" != "${preference_contract_peer_path}" ]] ||
-    fail 'Contract-v3 preferences merged .git and non-.git source identities.'
+    fail 'Contract-v4 preferences merged .git and non-.git source identities.'
 rhyolite_write_preference \
     "${preference_contract_peer}" \
     copilot \
@@ -451,7 +454,7 @@ rhyolite_write_preference \
     xhigh \
     default \
     "${preference_contract_root}" ||
-    fail 'Contract-v3 non-.git peer preference write failed.'
+    fail 'Contract-v4 non-.git peer preference write failed.'
 python3 - "${preference_contract_path}" <<'PY'
 import json
 import pathlib
@@ -485,23 +488,23 @@ rhyolite_read_preference \
     "${preference_contract_repository}" \
     copilot \
     "${preference_contract_root}" ||
-    fail 'Contract-v3 preference read failed.'
+    fail 'Contract-v4 preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
     "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == max &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == long_context ]] ||
-    fail 'Contract-v3 preference values did not round-trip.'
+    fail 'Contract-v4 preference values did not round-trip.'
 rhyolite_read_preference \
     "${preference_contract_peer}" \
     copilot \
     "${preference_contract_root}" ||
-    fail 'Contract-v3 non-.git peer preference read failed.'
+    fail 'Contract-v4 non-.git peer preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == standard &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == xhigh &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == default ]] ||
-    fail 'Contract-v3 .git and non-.git preferences were not independent.'
+    fail 'Contract-v4 .git and non-.git preferences were not independent.'
 if rhyolite_read_preference \
     "${preference_contract_repository}" \
     codex \
@@ -759,10 +762,193 @@ for worker_vector in \
     done
 done
 
+repair_workdir="${fixture_root}/report-repair-workdir"
+repair_transcript="${fixture_root}/report-repair/session.md"
+repair_session_name='repair-fixture-run'
+repair_session_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+mkdir -p -- "${repair_workdir}" "$(dirname -- "${repair_transcript}")"
+declare -a repair_arguments=()
+harness_report_repair_argv \
+    repair_arguments \
+    "${repair_workdir}" \
+    "${repair_session_name}" \
+    "${repair_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    "${authentication_variables_csv}" \
+    "${repair_transcript}" ||
+    fail 'Copilot adapter could not build report-repair argv.'
+expected_repair_arguments=(
+    -C "${repair_workdir}"
+    --name "${repair_session_name}"
+    --session-id "${repair_session_id}"
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --mode interactive
+    --no-ask-user
+    --no-color
+    --no-custom-instructions
+    --disable-builtin-mcps
+    --disallow-temp-dir
+    --no-remote-export
+    --no-bash-env
+    --no-auto-update
+    --no-experimental
+    --dynamic-retrieval skills=off
+    --secret-env-vars "${authentication_variables_csv}"
+    --excluded-tools 'builtin:*' 'mcp:*' 'custom:*'
+    --deny-tool read
+    --deny-tool write
+    --deny-tool shell
+    --deny-tool url
+    --stream off
+    --share "${repair_transcript}"
+    --silent
+)
+repair_arguments_vector="${fixture_root}/report-repair-argv.vector"
+expected_repair_arguments_vector="${fixture_root}/report-repair-argv-expected.vector"
+printf '%s\0' "${repair_arguments[@]}" > "${repair_arguments_vector}"
+printf '%s\0' \
+    "${expected_repair_arguments[@]}" \
+    > "${expected_repair_arguments_vector}"
+cmp -s \
+    "${expected_repair_arguments_vector}" \
+    "${repair_arguments_vector}" ||
+    fail 'Copilot report-repair argv changed from the Contract-v4 zero-tool vector.'
+for forbidden_repair_argument in \
+    --allow-all \
+    --allow-all-tools \
+    --allow-all-paths \
+    --allow-all-urls \
+    --allow-tool \
+    --available-tools \
+    --plugin-dir \
+    --agent \
+    --additional-mcp-config \
+    --attachment \
+    --add-dir \
+    --fleet \
+    --autopilot \
+    --resume \
+    --continue; do
+    for captured_repair_argument in "${repair_arguments[@]}"; do
+        [[ "${captured_repair_argument}" != \
+            "${forbidden_repair_argument}" &&
+            "${captured_repair_argument}" != \
+            "${forbidden_repair_argument}="* ]] ||
+            fail "Copilot report repair gained forbidden argument ${forbidden_repair_argument}."
+    done
+done
+
+for path_isolation_fragment in \
+    'canonicalize_directory_path "${report_repair_workdir}"' \
+    'canonicalize_directory_path "${report_repair_runtime_home}"' \
+    'require_outside_git_repository "${report_repair_workdir}"' \
+    'require_outside_git_repository "${report_repair_runtime_home}"' \
+    'directory_contains_physical "${RUN_WORKSPACE}" "${report_repair_workdir}"' \
+    'directory_contains_physical "${RUN_RESULTS}" "${report_repair_workdir}"' \
+    'directory_contains_physical "${RUN_WORKSPACE}" "${report_repair_runtime_home}"' \
+    'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"'; do
+    assert_contains \
+        "${RUNNER}" \
+        "${path_isolation_fragment}" \
+        'Report-repair runtime path isolation'
+done
+repair_path_validation_line="$(
+    grep -nF \
+        'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"' \
+        "${RUNNER}" |
+        head -n 1 |
+        cut -d: -f1
+)"
+repair_home_preparation_line="$(
+    grep -nF \
+        '! rhyolite_harness_invoke harness_prepare_worker_home \' \
+        "${RUNNER}" |
+        head -n 1 |
+        cut -d: -f1
+)"
+repair_environment_application_line="$(
+    grep -nF \
+        'env "${repair_environment[@]}" \' \
+        "${RUNNER}" |
+        head -n 1 |
+        cut -d: -f1
+)"
+repair_timeout_invocation_line="$(
+    grep -nF \
+        'timeout --signal=TERM --kill-after=30s \' \
+        "${RUNNER}" |
+        head -n 1 |
+        cut -d: -f1
+)"
+repair_worker_invocation_line="$(
+    grep -nF \
+        '"${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \' \
+        "${RUNNER}" |
+        head -n 1 |
+        cut -d: -f1
+)"
+[[ "${repair_path_validation_line}" =~ ^[0-9]+$ &&
+    "${repair_home_preparation_line}" =~ ^[0-9]+$ &&
+    "${repair_environment_application_line}" =~ ^[0-9]+$ &&
+    "${repair_timeout_invocation_line}" =~ ^[0-9]+$ &&
+    "${repair_worker_invocation_line}" =~ ^[0-9]+$ &&
+    repair_path_validation_line -lt repair_home_preparation_line &&
+    repair_home_preparation_line -lt repair_environment_application_line &&
+    repair_environment_application_line -lt repair_timeout_invocation_line &&
+    repair_timeout_invocation_line -lt repair_worker_invocation_line ]] ||
+    fail 'Report-repair path isolation and environment application no longer precede timeout and worker invocation.'
+
+if harness_report_repair_argv \
+    'bad[destination]' \
+    "${repair_workdir}" \
+    "${repair_session_name}" \
+    "${repair_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    "${authentication_variables_csv}" \
+    "${repair_transcript}" >/dev/null 2>&1; then
+    fail 'Copilot report-repair argv accepted an unsafe array destination.'
+fi
+printf 'not empty\n' > "${repair_workdir}/forbidden"
+if harness_report_repair_argv \
+    repair_arguments \
+    "${repair_workdir}" \
+    "${repair_session_name}" \
+    "${repair_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    "${authentication_variables_csv}" \
+    "${repair_transcript}" >/dev/null 2>&1; then
+    fail 'Copilot report-repair argv accepted a nonempty working directory.'
+fi
+rm -f -- "${repair_workdir}/forbidden"
+if harness_report_repair_argv \
+    repair_arguments \
+    "${repair_workdir}" \
+    "${repair_session_name}" \
+    "${repair_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    'COPILOT_GITHUB_TOKEN,unsafe-name!' \
+    "${repair_transcript}" >/dev/null 2>&1; then
+    fail 'Copilot report-repair argv accepted an invalid protected-name list.'
+fi
+
 source_copilot_home="${fixture_root}/source-copilot-home"
 runtime_home="${fixture_root}/runtime-copilot-home"
+repair_runtime_home="${fixture_root}/runtime-copilot-report-repair"
 agent_state="${fixture_root}/agent-state"
-mkdir -m 700 -- "${source_copilot_home}" "${runtime_home}"
+mkdir -m 700 -- \
+    "${source_copilot_home}" \
+    "${runtime_home}" \
+    "${repair_runtime_home}"
 cat > "${source_copilot_home}/config.json" <<'EOF'
 {
   "lastLoggedInUser": "fixture-user",
@@ -834,6 +1020,48 @@ assert_not_contains \
     "${runtime_home}/config.json" \
     'must-not-bridge' \
     'Copilot auth bridge allowlist'
+harness_prepare_worker_home \
+    "${repair_runtime_home}" max long_context report-repair ||
+    fail 'Copilot adapter could not prepare the report-repair home.'
+for private_file in \
+    "${repair_runtime_home}/settings.json" \
+    "${repair_runtime_home}/config.json"; do
+    [[ "$(stat -c '%a' "${private_file}")" == 600 ]] ||
+        fail "Copilot report-repair runtime file is not mode 600: ${private_file}"
+done
+assert_contains \
+    "${repair_runtime_home}/settings.json" \
+    '"disableAllHooks": true' \
+    'Copilot report-repair hook isolation'
+assert_contains \
+    "${repair_runtime_home}/settings.json" \
+    '"memory": false' \
+    'Copilot report-repair memory isolation'
+assert_contains \
+    "${repair_runtime_home}/settings.json" \
+    '"autoConnect": false' \
+    'Copilot report-repair IDE isolation'
+assert_not_contains \
+    "${repair_runtime_home}/settings.json" \
+    '"subagents"' \
+    'Copilot report-repair subagent isolation'
+assert_not_contains \
+    "${repair_runtime_home}/settings.json" \
+    '"customAgents"' \
+    'Copilot report-repair custom-agent isolation'
+assert_contains \
+    "${repair_runtime_home}/config.json" \
+    '"copilotTokens":{"fixture-user":"bridge-secret"}' \
+    'Copilot report-repair narrow authentication bridge'
+invalid_phase_home="${fixture_root}/runtime-copilot-invalid-phase"
+mkdir -m 700 -- "${invalid_phase_home}"
+if harness_prepare_worker_home \
+    "${invalid_phase_home}" max long_context unsupported \
+    >/dev/null 2>&1; then
+    fail 'Copilot adapter accepted an unsupported runtime-home phase.'
+fi
+[[ -z "$(find "${invalid_phase_home}" -mindepth 1 -print -quit)" ]] ||
+    fail 'Unsupported Copilot runtime-home phase wrote configuration.'
 
 metadata_copilot_home="${fixture_root}/metadata-copilot-home"
 metadata_runtime_home="${fixture_root}/metadata-runtime-home"
@@ -960,6 +1188,135 @@ cmp -s \
     "${worker_environment_vector}" ||
     fail 'Copilot worker environment changed from the I1a baseline.'
 
+repair_environment_vector="${fixture_root}/report-repair-environment.vector"
+repair_reference_environment_vector="${fixture_root}/report-repair-reference-environment.vector"
+repair_process_bin="${fixture_root}/report-repair-process-bin"
+repair_process_capture="${fixture_root}/report-repair-process-capture"
+repair_parent_home="${fixture_root}/report-repair-parent-home"
+repair_parent_config="${fixture_root}/report-repair-parent-config"
+repair_parent_cache="${fixture_root}/report-repair-parent-cache"
+repair_parent_data="${fixture_root}/report-repair-parent-data"
+repair_parent_state="${fixture_root}/report-repair-parent-state"
+repair_fake_auth='fixture-report-repair-auth-value-must-not-enter-argv'
+repair_fake_provider='fixture-report-repair-provider-value-must-not-enter-argv'
+repair_expected_loader="$(command -v copilot)"
+mkdir -p -- \
+    "${repair_process_bin}" \
+    "${repair_process_capture}" \
+    "${repair_parent_home}" \
+    "${repair_parent_config}" \
+    "${repair_parent_cache}" \
+    "${repair_parent_data}" \
+    "${repair_parent_state}"
+cat > "${repair_process_bin}/timeout" <<'REPAIR_PROCESS_PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${RHYOLITE_REPAIR_PROCESS_CAPTURE:?}"
+tr '\0' '\n' < "/proc/$$/cmdline" \
+    > "${RHYOLITE_REPAIR_PROCESS_CAPTURE}/cmdline.txt"
+env | LC_ALL=C sort \
+    > "${RHYOLITE_REPAIR_PROCESS_CAPTURE}/environment.txt"
+command -v copilot \
+    > "${RHYOLITE_REPAIR_PROCESS_CAPTURE}/copilot-loader.txt"
+REPAIR_PROCESS_PROBE
+chmod +x "${repair_process_bin}/timeout"
+(
+    export HOME="${repair_parent_home}"
+    export XDG_CONFIG_HOME="${repair_parent_config}"
+    export XDG_CACHE_HOME="${repair_parent_cache}"
+    export XDG_DATA_HOME="${repair_parent_data}"
+    export XDG_STATE_HOME="${repair_parent_state}"
+    export COPILOT_HOME="${source_copilot_home}"
+    export COPILOT_GITHUB_TOKEN="${repair_fake_auth}"
+    export COPILOT_PROVIDER_API_KEY="${repair_fake_provider}"
+    export COPILOT_OFFLINE=true
+    export COPILOT_ALLOW_ALL=true
+    export COPILOT_SKILLS_DIRS='/forbidden/skills'
+    export COPILOT_CUSTOM_INSTRUCTIONS_DIRS='/forbidden/instructions'
+    export COPILOT_DYNAMIC_RETRIEVAL_SKILLS=true
+    export COPILOT_EMBEDDING_ONLY_SKILLS=true
+    export RHYOLITE_REPAIR_PROCESS_CAPTURE="${repair_process_capture}"
+    declare -a repair_environment=()
+    declare -a reference_environment=()
+    original_runtime_home="${COPILOT_RUNTIME_HOME}"
+    COPILOT_RUNTIME_HOME="${repair_runtime_home}"
+    harness_worker_env reference_environment
+    COPILOT_RUNTIME_HOME="${original_runtime_home}"
+    harness_report_repair_env \
+        repair_environment "${repair_runtime_home}"
+    printf '%s\0' "${repair_environment[@]}" \
+        > "${repair_environment_vector}"
+    printf '%s\0' "${reference_environment[@]}" \
+        > "${repair_reference_environment_vector}"
+    env "${repair_environment[@]}" \
+        "${repair_process_bin}/timeout" \
+        --signal=TERM --kill-after=30s 60s copilot repair
+)
+expected_repair_environment=(
+    -u COPILOT_ALLOW_ALL
+    -u COPILOT_SKILLS_DIRS
+    -u COPILOT_CUSTOM_INSTRUCTIONS_DIRS
+    -u COPILOT_DYNAMIC_RETRIEVAL_SKILLS
+    -u COPILOT_EMBEDDING_ONLY_SKILLS
+    "COPILOT_HOME=${repair_runtime_home}"
+)
+expected_repair_environment_vector="${fixture_root}/report-repair-environment-expected.vector"
+printf '%s\0' \
+    "${expected_repair_environment[@]}" \
+    > "${expected_repair_environment_vector}"
+cmp -s \
+    "${expected_repair_environment_vector}" \
+    "${repair_environment_vector}" ||
+    fail 'Copilot report-repair environment diverged from normal worker clearing semantics.'
+cmp -s \
+    "${repair_reference_environment_vector}" \
+    "${repair_environment_vector}" ||
+    fail 'Copilot report-repair and normal worker environment vectors differ.'
+for secret_value in \
+    "${repair_fake_auth}" \
+    "${repair_fake_provider}"; do
+    for nonsecret_vector in \
+        "${repair_arguments_vector}" \
+        "${repair_environment_vector}" \
+        "${repair_process_capture}/cmdline.txt"; do
+        assert_not_contains \
+            "${nonsecret_vector}" \
+            "${secret_value}" \
+            'Report-repair process argv secret safety'
+    done
+done
+for inherited_environment_line in \
+    "HOME=${repair_parent_home}" \
+    "XDG_CONFIG_HOME=${repair_parent_config}" \
+    "XDG_CACHE_HOME=${repair_parent_cache}" \
+    "XDG_DATA_HOME=${repair_parent_data}" \
+    "XDG_STATE_HOME=${repair_parent_state}" \
+    "COPILOT_HOME=${repair_runtime_home}" \
+    "COPILOT_GITHUB_TOKEN=${repair_fake_auth}" \
+    "COPILOT_PROVIDER_API_KEY=${repair_fake_provider}" \
+    'COPILOT_OFFLINE=true'; do
+    assert_contains \
+        "${repair_process_capture}/environment.txt" \
+        "${inherited_environment_line}" \
+        'Report-repair inherited environment'
+done
+for cleared_environment_name in \
+    COPILOT_ALLOW_ALL \
+    COPILOT_SKILLS_DIRS \
+    COPILOT_CUSTOM_INSTRUCTIONS_DIRS \
+    COPILOT_DYNAMIC_RETRIEVAL_SKILLS \
+    COPILOT_EMBEDDING_ONLY_SKILLS; do
+    assert_not_contains \
+        "${repair_process_capture}/environment.txt" \
+        "${cleared_environment_name}=" \
+        'Report-repair environment clearing'
+done
+assert_equal \
+    "${repair_expected_loader}" \
+    "$(tr -d '\r\n' < "${repair_process_capture}/copilot-loader.txt")" \
+    'Report-repair inherited Copilot loader'
+
 rendered_request="${fixture_root}/rendered-request.txt"
 harness_render_request \
     "${PROMPT}" \
@@ -1064,15 +1421,53 @@ Return the canonical report.
 
 ### Copilot
 
+An earlier response must not be selected.
+
+### `view`
+
+Tool output must not be selected as the assistant reply.
+
+### Info
+
+Informational transcript blocks must not be selected.
+
+### Copilot
+
 ================================================================================
 REPOSITORY REVIEW REPORT
 Complete deterministic report recovered from the transcript.
+### `view`
+This real tool-shaped heading remains assistant report content in main mode.
+### `view` — Failed
+This real failed-tool heading remains assistant report content in main mode.
+### task (Completed)
+This real task-status heading remains assistant report content in main mode.
+### Info
+This information heading remains assistant report content in main mode.
+### Alert 1
+This internal assistant-report heading must remain part of the final response.
 ================================================================================
 
 ---
 
-<sub>Generated by GitHub Copilot CLI</sub>
+<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>
 EOF
+fallback_main_reply="${fixture_root}/fallback-main-reply.txt"
+copilot_extract_latest_assistant_reply \
+    "${fallback_transcript}" > "${fallback_main_reply}" ||
+    fail 'Copilot main reply extraction failed.'
+for preserved_main_heading in \
+    '### `view`' \
+    '### `view` — Failed' \
+    '### task (Completed)' \
+    '### Info' \
+    '### Alert 1' \
+    '<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>'; do
+    assert_contains \
+        "${fallback_main_reply}" \
+        "${preserved_main_heading}" \
+        'Copilot main extraction through EOF'
+done
 harness_extract_final_report \
     "${fallback_timeline}" \
     "${fallback_transcript}" \
@@ -1085,8 +1480,150 @@ assert_contains \
     'Copilot transcript report fallback'
 report_has_closing_delimiter "${fallback_report}" ||
     fail 'Copilot transcript fallback report lost its closing delimiter.'
+assert_contains \
+    "${fallback_report}" \
+    '### Alert 1' \
+    'Copilot main extraction internal heading preservation'
+for preserved_report_heading in \
+    '### `view`' \
+    '### `view` — Failed' \
+    '### task (Completed)' \
+    '### Info'; do
+    assert_contains \
+        "${fallback_report}" \
+        "${preserved_report_heading}" \
+        'Copilot main report heading preservation'
+done
 [[ ! -e "${fallback_final_message}" ]] ||
     fail 'Copilot transcript fallback left a temporary final-message file.'
+
+repair_descriptor_stdout='{"ProtocolVersion":1,"Section":"OVERALL ASSESSMENT","Field":"Confidence:","Occurrence":1,"OriginalValueSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ConservativeLevel":"Low"}'
+repair_descriptor_transcript='{"ProtocolVersion":1,"Section":"OVERALL ASSESSMENT","Field":"Confidence:","Occurrence":1,"OriginalValueSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ConservativeLevel":"Medium"}'
+repair_timeline="${fixture_root}/repair-extraction-timeline.txt"
+repair_extraction_transcript="${fixture_root}/repair-extraction-transcript.md"
+repair_reply="${fixture_root}/repair-extraction-reply.json"
+printf '%s\n' "${repair_descriptor_stdout}" > "${repair_timeline}"
+cat > "${repair_extraction_transcript}" <<EOF
+# Copilot report-repair session
+
+### User
+
+${repair_descriptor_stdout}
+
+### Copilot
+
+An earlier assistant response must not be selected.
+
+### \`view\`
+
+${repair_descriptor_stdout}
+
+### Info
+
+Tool and informational blocks are not assistant replies.
+
+### Copilot
+
+${repair_descriptor_transcript}
+
+---
+
+<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>
+EOF
+harness_extract_report_repair \
+    "${repair_timeline}" \
+    "${repair_extraction_transcript}" \
+    "${repair_reply}" ||
+    fail 'Copilot report-repair stdout extraction failed.'
+assert_equal \
+    "${repair_descriptor_stdout}" \
+    "$(cat -- "${repair_reply}")" \
+    'Copilot report-repair stdout precedence'
+
+printf '%s\n' 'sanitized non-descriptor worker output' \
+    > "${repair_timeline}"
+harness_extract_report_repair \
+    "${repair_timeline}" \
+    "${repair_extraction_transcript}" \
+    "${repair_reply}" ||
+    fail 'Copilot report-repair transcript fallback failed.'
+assert_equal \
+    "${repair_descriptor_transcript}" \
+    "$(cat -- "${repair_reply}")" \
+    'Copilot report-repair latest assistant reply'
+
+repair_boundary_markers=(
+    '### System'
+    '### `view`'
+    '### `view` — Failed'
+    '### task (Completed)'
+    '### Info'
+    '### User'
+)
+for assistant_boundary in "${repair_boundary_markers[@]}"; do
+    cat > "${repair_extraction_transcript}" <<EOF
+# Copilot report-repair session
+
+### Copilot
+
+${repair_descriptor_transcript}
+
+${assistant_boundary}
+
+${repair_descriptor_stdout}
+EOF
+    harness_extract_report_repair \
+        "${repair_timeline}" \
+        "${repair_extraction_transcript}" \
+        "${repair_reply}" ||
+        fail "Copilot report-repair boundary extraction failed: ${assistant_boundary}"
+    assert_equal \
+        "${repair_descriptor_transcript}" \
+        "$(cat -- "${repair_reply}")" \
+        "Copilot report-repair assistant boundary ${assistant_boundary}"
+done
+
+for nonassistant_marker in "${repair_boundary_markers[@]}"; do
+    cat > "${repair_extraction_transcript}" <<EOF
+# Copilot report-repair session
+
+${nonassistant_marker}
+
+${repair_descriptor_stdout}
+EOF
+    set +e
+    harness_extract_report_repair \
+        "${repair_timeline}" \
+        "${repair_extraction_transcript}" \
+        "${repair_reply}" >/dev/null
+    repair_extraction_status=$?
+    set -e
+    [[ "${repair_extraction_status}" -eq 42 ]] ||
+        fail "Copilot non-assistant repair extraction returned ${repair_extraction_status}, expected 42: ${nonassistant_marker}"
+    [[ ! -e "${repair_reply}" ]] ||
+        fail "Copilot non-assistant repair extraction left a reply file: ${nonassistant_marker}"
+    assert_equal \
+        'Copilot report repair did not return a supported confidence-edit descriptor.' \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        "Copilot report-repair missing descriptor detail ${nonassistant_marker}"
+done
+
+printf '%s\n%s\n' \
+    'stdout prefix' \
+    "${repair_descriptor_stdout}" > "${repair_timeline}"
+printf '# Transcript without a Copilot assistant reply\n' \
+    > "${repair_extraction_transcript}"
+set +e
+rhyolite_harness_invoke \
+    harness_extract_report_repair \
+    "${repair_timeline}" \
+    "${repair_extraction_transcript}" \
+    "${repair_reply}" >/dev/null
+repair_invoke_status=$?
+set -e
+[[ "${repair_invoke_status}" -eq 1 &&
+    "${RHYOLITE_HARNESS_LAST_STATUS}" -eq 42 ]] ||
+    fail 'Guarded report-repair extraction did not preserve adapter status 42.'
 
 missing_section_transcript="${fixture_root}/missing-section-transcript.md"
 missing_section_temp="${fixture_root}/missing-section-final-message.txt"
@@ -1157,6 +1694,12 @@ harness_sanitize_runtime_home "${runtime_home}" ||
     fail 'Copilot adapter left the runtime home after cleanup.'
 harness_sanitize_runtime_home "${runtime_home}" ||
     fail 'Copilot runtime-home cleanup is not idempotent.'
+harness_sanitize_runtime_home "${repair_runtime_home}" ||
+    fail 'Copilot adapter could not remove the report-repair runtime home.'
+[[ ! -e "${repair_runtime_home}" ]] ||
+    fail 'Copilot adapter left the report-repair runtime home after cleanup.'
+harness_sanitize_runtime_home "${repair_runtime_home}" ||
+    fail 'Copilot report-repair runtime-home cleanup is not idempotent.'
 
 for shim_root in "${AGENT_ROOT}" "${SKILL_ROOT}"; do
     while IFS= read -r shim_path; do
@@ -1180,6 +1723,7 @@ plan_default="${fixture_root}/plan-default.json"
 plan_environment="${fixture_root}/plan-environment.json"
 plan_explicit="${fixture_root}/plan-explicit.json"
 plan_override="${fixture_root}/plan-override.json"
+plan_timeout_one="${fixture_root}/plan-timeout-one.json"
 plan_stderr="${fixture_root}/plan.stderr"
 plan_mock_bin="${fixture_root}/plan-mock-bin"
 mkdir -p -- "${plan_mock_bin}"
@@ -1215,12 +1759,21 @@ for hash_fragment in \
     'PlanSchemaVersion=%s' \
     'Harness=%s' \
     'ReasoningEffort=%s' \
-    'Provider=%s'; do
+    'Provider=%s' \
+    'ReportRepairPolicy=%s'; do
     assert_contains \
         "${RUNNER}" \
         "${hash_fragment}" \
         'Harness identity approval-hash material'
 done
+assert_contains \
+    "${RUNNER}" \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+    'Report-repair policy compact key order'
+assert_contains \
+    "${RUNNER}" \
+    '"${REPORT_REPAIR_TIMEOUT_SECONDS}s"' \
+    'Report-repair runtime uses the effective timeout bound'
 
 env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     PATH="${plan_mock_bin}:${PATH}" \
@@ -1256,6 +1809,14 @@ env \
     fail 'Explicit Copilot did not override RHYOLITE_HARNESS within matching launcher context.'
 [[ ! -s "${plan_stderr}" ]] ||
     fail 'Explicit-over-environment Copilot launcher-context plan wrote stderr.'
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${plan_mock_bin}:${PATH}" \
+    "${RUNNER}" "${plan_arguments[@]}" \
+    --timeout-minutes 1 \
+    >"${plan_timeout_one}" 2>"${plan_stderr}" ||
+    fail 'One-minute Copilot plan-only invocation failed.'
+[[ ! -s "${plan_stderr}" ]] ||
+    fail 'One-minute Copilot plan-only invocation wrote stderr.'
 [[ ! -e "${plan_mock_bin}/curl.log" ]] ||
     fail 'Plan-only harness selection invoked repository transport discovery.'
 
@@ -1263,13 +1824,17 @@ python3 - \
     "${plan_default}" \
     "${plan_environment}" \
     "${plan_explicit}" \
-    "${plan_override}" <<'PY'
+    "${plan_override}" \
+    "${plan_timeout_one}" <<'PY'
 import json
 import pathlib
 import sys
 
 plans = [json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-         for path in sys.argv[1:]]
+         for path in sys.argv[1:5]]
+timeout_one = json.loads(
+    pathlib.Path(sys.argv[5]).read_text(encoding="utf-8")
+)
 for index, plan in enumerate(plans):
     if plan.get("SchemaVersion") != 5:
         raise SystemExit(f"plan {index} did not use harness-aware schema 5")
@@ -1279,6 +1844,13 @@ for index, plan in enumerate(plans):
         raise SystemExit(f"plan {index} lost resolved reasoning effort")
     if plan.get("ContextTier") != "long_context":
         raise SystemExit(f"plan {index} lost resolved context tier")
+    if plan.get("ReportRepairPolicy") != {
+        "Mode": "isolated-confidence-edit",
+        "ProtocolVersion": 1,
+        "AttemptLimit": 1,
+        "TimeoutSeconds": 300,
+    }:
+        raise SystemExit(f"plan {index} changed the fixed report-repair policy")
     provider = plan.get("Provider")
     if not isinstance(provider, dict) or set(provider) != {
         "Id", "Host", "ForwardedEnvVarNames"
@@ -1308,7 +1880,28 @@ for index, plan in enumerate(plans):
 hashes = {plan["ApprovalHash"] for plan in plans}
 if len(hashes) != 1:
     raise SystemExit("default, environment, explicit, and overriding Copilot plans changed ApprovalHash")
+if timeout_one.get("SchemaVersion") != 5:
+    raise SystemExit("one-minute plan changed schema")
+if timeout_one.get("SessionTimeoutMinutes") != 1:
+    raise SystemExit("one-minute plan lost its approved session timeout")
+if timeout_one.get("ReportRepairPolicy") != {
+    "Mode": "isolated-confidence-edit",
+    "ProtocolVersion": 1,
+    "AttemptLimit": 1,
+    "TimeoutSeconds": 60,
+}:
+    raise SystemExit("one-minute plan did not cap report repair at 60 seconds")
+if timeout_one.get("ApprovalHash") in hashes:
+    raise SystemExit("one-minute repair bound did not change approval identity")
 PY
+assert_contains \
+    "${plan_default}" \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":300}' \
+    'Default report-repair policy JSON'
+assert_contains \
+    "${plan_timeout_one}" \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60}' \
+    'Capped report-repair policy JSON'
 
 copy_identity_fixture() {
     local name="$1"
@@ -2133,7 +2726,7 @@ if (state.SchemaVersion !== 6 ||
     ]) ||
     state.Session.ResumePolicy !==
       "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.") {
-  throw new Error("runner seam state lost harness contract-v3 identity");
+  throw new Error("runner seam state lost harness contract-v4 identity");
 }
 for (const value of [
   state.Session.Name,
@@ -2307,6 +2900,12 @@ for (const [index, plan] of plans.entries()) {
       plan.Model !== "gpt-5.6-sol" ||
       plan.ReasoningEffort !== "max" ||
       plan.ContextTier !== "long_context" ||
+      JSON.stringify(plan.ReportRepairPolicy) !== JSON.stringify({
+        Mode: "isolated-confidence-edit",
+        ProtocolVersion: 1,
+        AttemptLimit: 1,
+        TimeoutSeconds: 300,
+      }) ||
       plan.Provider?.Id !== "github-copilot" ||
       plan.Provider?.Host !== "managed-provider" ||
       !Array.isArray(plan.Provider?.ForwardedEnvVarNames)) {
@@ -2486,6 +3085,255 @@ PY
     fi
 )
 
+noop_repair_descriptor='{"ProtocolVersion":1,"Section":"OVERALL ASSESSMENT","Field":"Confidence:","Occurrence":1,"OriginalValueSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","ConservativeLevel":"Low"}'
+(
+    PATH="${noop_worker_bin}:/usr/bin:/bin"
+    export PATH
+    unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+    # shellcheck source=/dev/null
+    source "${noop_test_plugin}/lib/harness/common.sh"
+    rhyolite_harness_load "${noop_test_plugin}" noop ||
+        fail 'Development no-op repair adapter did not load.'
+    harness_require_cli ||
+        fail 'Development no-op repair worker was unavailable.'
+    harness_prepare_run ||
+        fail 'Development no-op repair run preparation failed.'
+
+    run_noop_repair_fixture() {
+        local response_mode="$1"
+        local expect_success="$2"
+        local case_root="${fixture_root}/noop-repair-${response_mode}"
+        local workdir="${case_root}/workdir"
+        local runtime_home="${case_root}/runtime-home"
+        local transcript="${case_root}/artifacts/session.md"
+        local request="${case_root}/artifacts/request.txt"
+        local timeline="${case_root}/artifacts/timeline.txt"
+        local reply="${case_root}/artifacts/reply.json"
+        local capture="${case_root}/capture"
+        local session_name="noop-repair-${response_mode}"
+        local session_id='11111111-2222-4333-8444-555555555555'
+        local status=0
+        local -a repair_arguments=()
+        local -a repair_environment=()
+
+        mkdir -m 700 -- \
+            "${case_root}" \
+            "${workdir}" \
+            "${runtime_home}" \
+            "${case_root}/artifacts" \
+            "${capture}"
+        RHYOLITE_NOOP_CAPTURE_ROOT="${capture}"
+        RHYOLITE_NOOP_REPAIR_RESPONSE_MODE="${response_mode}"
+        harness_prepare_worker_home \
+            "${runtime_home}" max long_context report-repair ||
+            fail "No-op report-repair home preparation failed: ${response_mode}"
+        harness_report_repair_argv \
+            repair_arguments \
+            "${workdir}" \
+            "${session_name}" \
+            "${session_id}" \
+            noop-fixture-model \
+            max \
+            long_context \
+            '' \
+            "${transcript}" ||
+            fail "No-op report-repair argv failed: ${response_mode}"
+        harness_report_repair_env \
+            repair_environment "${runtime_home}" ||
+            fail "No-op report-repair environment failed: ${response_mode}"
+
+        if [[ "${response_mode}" == stdout ]]; then
+            local -a expected_arguments=(
+                --fixture-contract 4
+                --fixture-mode report-repair
+                --workdir "${workdir}"
+                --session-name "${session_name}"
+                --session-id "${session_id}"
+                --model noop-fixture-model
+                --reasoning-effort max
+                --context long_context
+                --transcript "${transcript}"
+            )
+            local -a expected_environment=(
+                -i
+                "PATH=${noop_worker_bin}:/usr/bin:/bin"
+                "HOME=${runtime_home}"
+                "XDG_CONFIG_HOME=${runtime_home}"
+                'LC_ALL=C'
+                "NOOP_RUNTIME_HOME=${runtime_home}"
+                "NOOP_CAPTURE_ROOT=${capture}"
+                'NOOP_REPAIR_RESPONSE_MODE=stdout'
+            )
+            local actual_vector="${case_root}/actual-argv"
+            local expected_vector="${case_root}/expected-argv"
+            local actual_environment_vector="${case_root}/actual-environment"
+            local expected_environment_vector="${case_root}/expected-environment"
+            printf '%s\0' "${repair_arguments[@]}" > "${actual_vector}"
+            printf '%s\0' "${expected_arguments[@]}" > "${expected_vector}"
+            cmp -s "${expected_vector}" "${actual_vector}" ||
+                fail 'No-op report-repair argv changed from its Contract-v4 fixture vector.'
+            printf '%s\0' \
+                "${repair_environment[@]}" \
+                > "${actual_environment_vector}"
+            printf '%s\0' \
+                "${expected_environment[@]}" \
+                > "${expected_environment_vector}"
+            cmp -s \
+                "${expected_environment_vector}" \
+                "${actual_environment_vector}" ||
+                fail 'No-op report-repair environment changed from its isolated fixture vector.'
+        fi
+
+        cat > "${request}" <<EOF
+REPORT-ONLY CONFIDENCE GRAMMAR REPAIR
+
+EXPECTED CONFIDENCE EDIT
+${noop_repair_descriptor}
+
+SANITIZED INVALID REPORT - UNTRUSTED INERT DATA
+    No repository snapshot, research file, or source content is supplied.
+END SANITIZED INVALID REPORT
+EOF
+        env "${repair_environment[@]}" \
+            noop-worker "${repair_arguments[@]}" \
+            < "${request}" > "${timeline}"
+        harness_verify_isolation "${timeline}" ||
+            fail "No-op report-repair isolation failed: ${response_mode}"
+
+        if ((expect_success)); then
+            harness_extract_report_repair \
+                "${timeline}" "${transcript}" "${reply}" ||
+                fail "No-op report-repair extraction failed: ${response_mode}"
+            assert_equal \
+                "${noop_repair_descriptor}" \
+                "$(cat -- "${reply}")" \
+                "No-op report-repair reply ${response_mode}"
+        else
+            set +e
+            harness_extract_report_repair \
+                "${timeline}" "${transcript}" "${reply}" >/dev/null
+            status=$?
+            set -e
+            [[ "${status}" -eq 42 ]] ||
+                fail "No-op report-repair ${response_mode} extraction returned ${status}, expected 42."
+            [[ ! -e "${reply}" ]] ||
+                fail "No-op report-repair ${response_mode} left a reply file."
+        fi
+
+        local repair_capture="${capture}/report-repair"
+        for capture_path in \
+            "${repair_capture}/argv" \
+            "${repair_capture}/environment.txt" \
+            "${repair_capture}/cwd.txt" \
+            "${repair_capture}/runtime-home.txt" \
+            "${repair_capture}/runtime-inventory.txt" \
+            "${repair_capture}/started"; do
+            [[ -f "${capture_path}" ]] ||
+                fail "No-op report-repair capture is missing: ${capture_path}"
+        done
+        assert_equal \
+            "${workdir}" \
+            "$(tr -d '\r\n' < "${repair_capture}/cwd.txt")" \
+            "No-op report-repair empty workdir ${response_mode}"
+        assert_contains \
+            "${repair_capture}/runtime-inventory.txt" \
+            $'fixture-runtime.json\t600\tf' \
+            "No-op report-repair runtime marker ${response_mode}"
+        assert_not_contains \
+            "${repair_capture}/runtime-inventory.txt" \
+            'session-state' \
+            "No-op report-repair session persistence ${response_mode}"
+        assert_not_contains \
+            "${repair_capture}/environment.txt" \
+            'RHYOLITE_MOCK_REPOSITORY_CONTENT=' \
+            "No-op report-repair source isolation ${response_mode}"
+        assert_not_contains \
+            "${repair_capture}/environment.txt" \
+            'RESEARCH_' \
+            "No-op report-repair research isolation ${response_mode}"
+        [[ -z "$(find "${workdir}" -mindepth 1 -print -quit)" ]] ||
+            fail "No-op report-repair worker wrote into its empty workdir: ${response_mode}"
+        harness_sanitize_runtime_home "${runtime_home}" ||
+            fail "No-op report-repair cleanup failed: ${response_mode}"
+        [[ ! -e "${runtime_home}" ]] ||
+            fail "No-op report-repair runtime home survived cleanup: ${response_mode}"
+    }
+
+    run_noop_repair_fixture stdout 1
+    run_noop_repair_fixture transcript 1
+    run_noop_repair_fixture missing 0
+    run_noop_repair_fixture user-only 0
+    run_noop_repair_fixture system-only 0
+    run_noop_repair_fixture view-only 0
+    run_noop_repair_fixture view-failed 0
+    run_noop_repair_fixture task-completed 0
+    run_noop_repair_fixture info-only 0
+
+    failure_root="${fixture_root}/noop-repair-function-failures"
+    failure_workdir="${failure_root}/workdir"
+    failure_runtime="${failure_root}/runtime"
+    failure_transcript="${failure_root}/session.md"
+    failure_timeline="${failure_root}/timeline.txt"
+    failure_reply="${failure_root}/reply.json"
+    mkdir -p -- "${failure_workdir}" "${failure_runtime}"
+    printf '%s\n' "${noop_repair_descriptor}" > "${failure_timeline}"
+    harness_prepare_worker_home \
+        "${failure_runtime}" max long_context report-repair ||
+        fail 'No-op failure fixture could not prepare its repair home.'
+    declare -a failure_arguments=()
+    declare -a failure_environment=()
+    for failure_function in \
+        harness_report_repair_argv \
+        harness_report_repair_env \
+        harness_extract_report_repair; do
+        RHYOLITE_NOOP_FAIL_FUNCTION="${failure_function}"
+        set +e
+        case "${failure_function}" in
+            harness_report_repair_argv)
+                harness_report_repair_argv \
+                    failure_arguments \
+                    "${failure_workdir}" \
+                    noop-repair-failure \
+                    99999999-8888-4777-8666-555555555555 \
+                    noop-fixture-model \
+                    max \
+                    long_context \
+                    '' \
+                    "${failure_transcript}" >/dev/null
+                ;;
+            harness_report_repair_env)
+                harness_report_repair_env \
+                    failure_environment "${failure_runtime}" >/dev/null
+                ;;
+            harness_extract_report_repair)
+                harness_extract_report_repair \
+                    "${failure_timeline}" \
+                    "${failure_transcript}" \
+                    "${failure_reply}" >/dev/null
+                ;;
+        esac
+        failure_status=$?
+        set -e
+        ((failure_status != 0)) ||
+            fail "No-op injected ${failure_function} failure unexpectedly succeeded."
+        assert_equal \
+            "Development-only no-op fixture injected failure in ${failure_function}." \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            "No-op injected ${failure_function} detail"
+    done
+    unset RHYOLITE_NOOP_FAIL_FUNCTION
+
+    RHYOLITE_NOOP_FAIL_FUNCTION=harness_sanitize_runtime_home
+    if harness_sanitize_runtime_home "${failure_runtime}" >/dev/null 2>&1; then
+        fail 'No-op injected report-repair cleanup failure unexpectedly succeeded.'
+    fi
+    [[ -d "${failure_runtime}" ]] ||
+        fail 'No-op injected report-repair cleanup failure lost runtime evidence.'
+    unset RHYOLITE_NOOP_FAIL_FUNCTION
+    harness_sanitize_runtime_home "${failure_runtime}" ||
+        fail 'No-op report-repair runtime cleanup did not recover after injected failure.'
+)
+
 noop_runner="${noop_test_scripts}/run-parallel-reviews.sh"
 copied_copilot_plan="${fixture_root}/copied-copilot-plan.json"
 noop_plan="${fixture_root}/noop-plan.json"
@@ -2527,6 +3375,13 @@ if noop.get("Model") != "noop-fixture-model":
     raise SystemExit("no-op plan lost adapter-owned model identity")
 if noop.get("ReasoningEffort") != "max":
     raise SystemExit("no-op plan lost adapter-owned reasoning effort")
+if noop.get("ReportRepairPolicy") != {
+    "Mode": "isolated-confidence-edit",
+    "ProtocolVersion": 1,
+    "AttemptLimit": 1,
+    "TimeoutSeconds": 300,
+}:
+    raise SystemExit("no-op plan changed the fixed report-repair policy")
 if noop.get("Provider") != {
     "Id": "fixture-noop",
     "Host": "fixture.invalid",
@@ -3165,7 +4020,7 @@ fixture_adapter_failure() {
 FIXTURE_FAILURE_HELPER
 
     case "${failure_function}" in
-        harness_require_cli|harness_prepare_run|harness_prepare_worker_home|harness_worker_env|harness_render_request|harness_verify_isolation|harness_persist_agent_state|harness_extract_final_report)
+        harness_require_cli|harness_prepare_run|harness_prepare_worker_home|harness_worker_env|harness_report_repair_env|harness_render_request|harness_verify_isolation|harness_persist_agent_state|harness_extract_final_report|harness_extract_report_repair)
             cat >> "${fixture_plugin}/lib/harness/copilot.sh" <<EOF
 
 ${failure_function}() {
@@ -3173,10 +4028,10 @@ ${failure_function}() {
 }
 EOF
             ;;
-        harness_worker_argv)
-            cat >> "${fixture_plugin}/lib/harness/copilot.sh" <<'EOF'
+        harness_worker_argv|harness_report_repair_argv)
+            cat >> "${fixture_plugin}/lib/harness/copilot.sh" <<EOF
 
-harness_worker_argv() {
+${failure_function}() {
     fixture_adapter_failure
 }
 EOF

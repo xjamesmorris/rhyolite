@@ -1,7 +1,7 @@
 # Adding a review harness
 
 This is the implementation playbook for the target Rhyolite Harness Contract
-version 3. It is written for contributors and coding agents that must change
+version 4. It is written for contributors and coding agents that must change
 the harness seam without weakening Rhyolite's read-only repository-review
 boundary.
 
@@ -10,7 +10,7 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v3.
+- The implemented production seam is Contract v4.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production remains GitHub Copilot-only. A contract refactor does not itself
   add another supported harness.
@@ -52,7 +52,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v3 function and every negative and
+12. The adapter can satisfy every Contract-v4 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -75,9 +75,10 @@ Harness work crosses a strict set of surfaces:
 - User and contributor documentation, packaging, release metadata, and
   publication checks when production support changes.
 
-Contract v3 must land as one coordinated behavior change. Do not ship a plan
-schema bump without state consumers, add provider fields without hashing them,
-or register an adapter before validation understands its complete lifecycle.
+Contract v4 must land as one coordinated behavior change. It retains plan
+schema 5, state schema 6, provider identity, preferences, and the Copilot-only
+registry while adding the complete bounded-repair lifecycle. Do not register
+an adapter before validation understands its complete lifecycle.
 
 ## Fixed registry procedure
 
@@ -115,12 +116,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v3 boundary
+## Contract-v4 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=3
+RHYOLITE_HARNESS_CONTRACT_VERSION=4
 ```
 
 The shared loader must require all functions in this document before calling
@@ -170,7 +171,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v3 capability keys remain:
+Contract-v4 capability keys remain:
 
 ```text
 fleet
@@ -277,6 +278,8 @@ release artifacts.
 | `harness_render_request` | Template path, request path, repository URL, snapshot path, exact commit, review dates/windows, scope, output path, bounded metadata, research instructions, dossier path, network-summary path, and transport instructions. Status only. | Write the request file without evaluating template or repository content. |
 | `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
 | `harness_worker_env` | Destination array name. Status only. | Populate the exact ordered `env` argument array, including unsets and the isolated home binding. |
+| `harness_report_repair_argv` | Destination array name, empty trusted workdir, fresh session name, fresh session ID, approved model, approved reasoning effort, approved context tier, comma-separated protected variable names, and fresh transcript path. Status only. | Populate the exact ordered tool-less repair argument array. |
+| `harness_report_repair_env` | Destination array name and fresh runtime-home path. Status only. | Populate the repair `env` data array using normal worker clearing semantics and a fresh `COPILOT_HOME`, without serializing authentication values. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -329,11 +332,48 @@ Worker environment must:
   anonymous Git or research boundaries;
 - contain no test-only override in production.
 
+Report-repair argv is a separate golden vector. It must:
+
+- use a fresh session name and ID and a runner-created empty trusted workdir;
+- use the approved model, reasoning effort, and context unchanged;
+- pass the protected authentication-name CSV as one literal argument;
+- exclude all supported inventory categories with the literal ordered vector
+  `--excluded-tools builtin:* mcp:* custom:*`;
+- explicitly deny read, write, shell, and URL permissions;
+- contain no `--allow-tool`, allow-all flag, plugin, agent, MCP, skill,
+  attachment, add-directory, fleet, autopilot, resume, or continue grant;
+- disable custom instructions, built-in MCPs, temporary-directory access,
+  remote export/control, Bash environment import, automatic update,
+  experimental behavior, and dynamic skill retrieval;
+- force interactive mode so inherited plan/autopilot settings cannot apply;
+- write only the fresh transcript and return its reply on standard output.
+
+Do not pass a zero-value `--available-tools`. In Copilot CLI 1.0.91 it parses
+as boolean `true`, is normalized to an unspecified filter, and leaves every
+tool visible. A bare `*` exclusion is also not a supported wildcard. The three
+category patterns above are the supported exhaustive visibility filter;
+permission denials remain separate defense in depth.
+
+Report-repair environment must:
+
+- match normal worker clearing semantics: unset inherited Copilot allow-all
+  and skill/custom-instruction discovery variables;
+- bind only the harness-specific home (`COPILOT_HOME` for Copilot) to the fresh
+  repair runtime home;
+- contain no authentication, provider-key, token, or credential value;
+- preserve inherited `HOME`, XDG/cache paths, `PATH`, provider selection,
+  offline mode, and authentication environment so BYOK, GitHub CLI fallback,
+  offline behavior, and the resolved CLI loader remain unchanged;
+- be applied by the runner before `timeout`, never as `env NAME=value`
+  arguments inside the long-lived timeout command;
+- keep source snapshots, research files, target metadata, and analysis runtime
+  homes out of both the data vector and repair workdir.
+
 ### Runtime home, persistence, cleanup, and isolation
 
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
-| `harness_prepare_worker_home` | Runner-created runtime-home path, reasoning effort, and context tier. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data using the approved settings. |
+| `harness_prepare_worker_home` | Runner-created runtime-home path, reasoning effort, context tier, and optional phase. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data. Omitted phase preserves normal behavior; `report-repair` writes repair-only settings. |
 | `harness_persist_agent_state` | Runtime-home path and destination agent-state directory. Status only. | Copy only an explicit sanitized continuation allowlist. |
 | `harness_sanitize_runtime_home` | Runtime-home path. Status only. | Remove or sanitize the entire temporary home; be safe when called by normal flow or the exit trap. |
 | `harness_verify_isolation` | Sanitized timeline path. Status only. | Perform adapter-specific post-run isolation checks. An explicit no-op is allowed only when the adapter has no additional invariant to verify. |
@@ -342,6 +382,10 @@ Worker environment must:
 Runtime-home requirements:
 
 - The runner creates the unique directory under a trusted temporary root.
+- Before home preparation or child invocation, the runner canonicalizes the
+  repair workdir and runtime home, proves both are non-Git, rejects control
+  characters, and verifies both are physically disjoint from `RUN_WORKSPACE`
+  and `RUN_RESULTS`.
 - The adapter verifies and sets mode 0700 before use.
 - Configuration and bridge files are mode 0600.
 - The home contains no target checkout, writable report output, arbitrary user
@@ -349,6 +393,11 @@ Runtime-home requirements:
 - The child has hooks disabled and only the required local bundled agent
   discovery.
 - Authentication bridge material is ephemeral and never persisted.
+- A `report-repair` home keeps hooks disabled, writes `memory: false` and
+  `ide.autoConnect: false`, omits review-agent/subagent settings, and retains
+  only the same narrow ephemeral authentication bridge.
+- The repair home is fresh. It is never initialized by copying the analysis
+  home and is never passed to `harness_persist_agent_state`.
 
 Persistence requirements:
 
@@ -382,6 +431,7 @@ only harness-specific checks.
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
 | `harness_extract_final_report` | Sanitized timeline path, sanitized transcript path, temporary final-message path, and destination report path. Status only. | Recover a candidate canonical report from the harness-specific final response and remove temporary extraction files. |
+| `harness_extract_report_repair` | Sanitized repair stdout timeline, sanitized fresh repair transcript, and destination reply path. Status only. | Write only one raw compact confidence-edit reply, preferring pure JSON stdout and otherwise using only the latest assistant transcript reply. |
 
 The runner first attempts extraction from sanitized stdout. The adapter
 fallback runs only when stdout is absent or incomplete. It must:
@@ -399,6 +449,65 @@ fallback runs only when stdout is absent or incomplete. It must:
 A harness with a dedicated final-message file still implements this function.
 Its capability may be `yes`, but the file remains untrusted and must pass the
 same sanitization and canonical report validation.
+
+Repair extraction is not report generation. The model may return only one
+compact JSON object with exactly these keys:
+
+```json
+{"ProtocolVersion":1,"Section":"OVERALL ASSESSMENT","Field":"Confidence:","Occurrence":1,"OriginalValueSha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","ConservativeLevel":"Low"}
+```
+
+The adapter performs only response selection. It must:
+
+- prefer stdout only when the sanitized stdout is one pure JSON-looking
+  descriptor and no surrounding prose or framing;
+- otherwise select only the latest assistant reply from the fresh sanitized
+  transcript;
+- recognize Copilot CLI 1.0.91 assistant framing at `### Copilot`; stop before
+  exact `### User`, `### Info`, `### System`, or `### Copilot`; backticked
+  headings with optional status suffixes such as `### \`view\`` and
+  `### \`view\` — Failed`; or named status headings such as
+  `### task (Completed)`; and
+  remove the trailing `---` plus linked GitHub Copilot CLI footer;
+- reject user, tool, information, system, earlier-assistant, transcript-frame,
+  fenced, or prose content as the response;
+- write the selected reply as raw text without constructing or rewriting a
+  report;
+- fail nonzero with sanitized detail when the format is unsupported or no
+  descriptor-like reply exists;
+- remove partial reply files on failure.
+
+Keep this boundary parser repair-only. Main final-report fallback must preserve
+the historical last-`### Copilot`-through-EOF behavior; do not stop it at a
+catch-all `### ` heading because canonical assistant reports may contain
+internal headings such as `### Alert 1`.
+
+The runner-owned output helper validates JSON syntax, the exact key set,
+`ProtocolVersion=1`, `Field="Confidence:"`, occurrence/hash/level values, and
+equality to the expected descriptor. It alone constructs the deterministic
+candidate report and proves exact preservation before promotion.
+
+### Repair policy and timeout
+
+The runner permits one repair attempt. The effective repair timeout is:
+
+```text
+min(300, SessionTimeoutMinutes * 60)
+```
+
+Default scope timeouts therefore retain a 300-second repair maximum, while an
+approved `--timeout-minutes 1` plan uses 60 seconds. The compact policy object
+keeps exact key order:
+
+```json
+{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60}
+```
+
+`TimeoutSeconds` is the effective returned bound, not a constant. The complete
+policy object is approval-hash material and appears consistently in plan/run
+state. Timeout selection and the timer remain runner-owned; do not add timeout
+arguments to any harness API or hard-code 300 seconds in a repair-aware
+timeout fixture.
 
 ## Capability and feature decisions
 
@@ -432,8 +541,8 @@ deterministically implied by the approved harness and contract version.
 
 ## Plan schema 5 and approval hash
 
-Contract v3 promotes validated runtime selection into the effective plan. Plan
-schema 5 includes these exact top-level fields:
+Contract v4 retains the Contract-v3 approved runtime selection and plan
+schema 5. It includes these exact top-level fields:
 
 ```json
 {
@@ -566,6 +675,15 @@ The fixture should:
 - persist only explicit harmless fixture state, or explicitly persist
   nothing;
 - verify its fixture isolation invariant;
+- expose a distinct `report-repair` invocation mode that receives the request
+  on stdin, extracts the one expected descriptor embedded in that trusted
+  prompt, and returns that exact object by default;
+- keep the repair workdir empty, write no source/research artifact, create no
+  resumable fixture session state, and capture repair argv/environment/runtime
+  inventory separately from the normal review worker;
+- provide deterministic response controls for pure-stdout, transcript
+  fallback, missing, user-only, system-only, info-only, backticked-tool,
+  failed-tool, and task-status replies;
 - support injected failures for every lifecycle function.
 
 The fixture must not:
@@ -643,6 +761,17 @@ At minimum, add deterministic coverage for:
   extraction fallback;
 - timeout, interruption, incomplete report, and isolation-verification
   failure.
+- exact zero-tool report-repair argv and normal-clearing environment vectors;
+- fake authentication/provider values remaining inherited process environment
+  while absent from repair argv, environment-data arrays, and timeout argv;
+- default 300-second and one-minute/60-second repair-policy plans, including
+  distinct approval identity for the effective bound;
+- repair-phase settings and runtime inventory, including no persisted session
+  state or copied analysis home;
+- stdout precedence, latest-assistant transcript fallback, and rejection of
+  user/tool/transcript text;
+- injected repair-argv, repair-env, repair-extraction, and cleanup failures;
+- cleanup success, idempotence, and promotion blocked on cleanup failure.
 
 ### Packaging and support boundaries
 
@@ -673,7 +802,10 @@ generic seam:
 9. Verify sanitization with terminal controls, credentials, URL userinfo,
    authorization values, tokens, email addresses, and hostile transcript
    content.
-10. Run the full Fedora gate:
+10. Exercise one fresh, tool-less bounded repair, exact descriptor extraction,
+    deterministic application, full report revalidation, and cleanup without
+    resuming or persisting the repair session.
+11. Run the full Fedora gate:
 
 ```bash
 bash ./tests/validate-all.sh
@@ -729,6 +861,9 @@ fixtures.
 - Granting child write/shell tools, inherited allow-all state, custom
   instructions, hooks, broad URLs, remote export, or temporary-directory
   access.
+- Letting report repair use any tool grant, plugin, agent, MCP, skill,
+  attachment, source snapshot, research artifact, analysis home, resume path,
+  or complete-report rewrite.
 - Scope downgrade, model substitution, effort downgrade, or research fallback
   without a new approved plan.
 - Schema changes without synchronized writers, readers, fixtures,
@@ -745,11 +880,13 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v3 function inventory for the adapter;
+- the complete Contract-v4 function inventory for the adapter;
 - a capability decision table with evidence;
 - model, effort, authentication, and provider-summary examples;
 - exact argv and environment captures;
 - runtime-home and persisted-state file/permission inventories;
+- exact report-repair argv/env vectors, repair-home inventory, raw descriptor
+  extraction cases, and cleanup/failure evidence;
 - plan schema 5 and state schema 6 examples;
 - approval-hash tests showing every new field is bound;
 - default/explicit selection equivalence;

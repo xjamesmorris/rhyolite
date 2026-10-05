@@ -58,7 +58,7 @@ harness. The harness abstraction is a fixed, fail-closed internal seam; it
 does not make other CLIs supported. Contributor and coding-agent guidance is
 canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
-Contract-v3 implementation playbook in
+Contract-v4 implementation playbook in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
@@ -538,6 +538,17 @@ creation, finalization, and completion. `/rhyolite:status` reflects the
 latest known stage. For current progress, use exact `/rhyolite:status`; bare
 `status` remains only the in-agent setup intent/fallback.
 
+If a complete report has an eligible malformed confidence field, finalization
+may make one fresh, tool-less report-repair attempt, bounded to at most 300 seconds
+and capped by the session timeout,
+under the already-approved model, effort, and context. The child returns only
+an exact edit descriptor. The runner preserves the original confidence detail,
+uses its lowest explicitly stated level, and changes no other report bytes.
+Research is not rerun. The unchanged strict validator checks the candidate
+again; unsupported errors, invalid edits, timeout, or cleanup failure remain
+explicit failures. `RHYOLITE PROGRESS` distinguishes validation, repair, and
+successful revalidation or exhaustion.
+
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material
 limitations, then lists artifact paths including the run-level HTML index and
@@ -652,6 +663,11 @@ After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
 runtime home.
 
+The report-repair child preserves that same authentication/provider/offline
+path and CLI cache resolution while using a separate fresh `COPILOT_HOME`.
+It does not copy or persist the analysis session, has no model-visible tools,
+and never places authentication values in process arguments.
+
 The Bash runner also requires Python 3 for public DNS classification and the
 bundled stdio research broker, plus curl for trusted-runner-only anonymous
 smart-Git execution preflight. curl does not grant child agents web access or
@@ -723,11 +739,16 @@ Each repository output directory creates:
 - `request.txt`: exact rendered request.
 - `errors.txt`: sanitized standard error output.
 - `state.json`: source kind, public remote URL, requested and resolved
-  commits, status, scope, `ResearchTransport`, research status/paths, and
+  commits, status, scope, `ResearchTransport`, `ReportRepair`, research status/paths, and
   saved session IDs.
 - `handoff.md`: safe continuation guidance, research/private-evidence
   warning, and artifact inventory.
 - `agent-state/`: isolated Copilot home and persisted session state.
+- `report-repair/`, only after report validation fails: mode-0700
+  noncanonical evidence with mode-0600 initial candidate, exact diagnostic,
+  any repair request/reply/candidate, sanitized repair timeline/transcript,
+  and repair state. Invalid candidates are never presented as canonical
+  reviews; failed runs retain a failure summary in the sibling review formats.
 - `research/` for scope `2`/`3`:
   - canonical plain-text `research.txt`, plus `research-timeline.txt`,
     `research-session.md`,
@@ -744,6 +765,11 @@ Each repository output directory creates:
 The run directory adds `manifest.json`, `state.json`, `handoff.md`, and
 `index.html`, plus any run-level review-plan artifacts emitted by the
 installed runner during guided setup.
+
+The additive `ReportRepair` object is consistent across repository state,
+manifest entries, run-state repositories, handoffs, and the HTML index. The
+fixed `ReportRepairPolicy` is disclosed by the effective plan and included
+in its approval hash.
 
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot

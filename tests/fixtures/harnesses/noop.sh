@@ -3,6 +3,14 @@
 NOOP_RUNTIME_HOME=''
 NOOP_WORKER_DIRECTORY=''
 
+noop_fixture_require_array_destination() {
+    if [[ ! "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        rhyolite_harness_set_error \
+            'The development-only no-op fixture array destination is invalid.'
+        return 1
+    fi
+}
+
 noop_fixture_require_success() {
     local function_name="$1"
 
@@ -148,10 +156,19 @@ harness_prepare_worker_home() {
     local runtime_home="$1"
     local reasoning_effort="$2"
     local context_tier="$3"
+    local phase="${4:-review}"
 
     noop_fixture_require_success harness_prepare_worker_home || return 1
     [[ "${reasoning_effort}" == max && "${context_tier}" == long_context ]] ||
         return 1
+    case "${phase}" in
+        review|report-repair) ;;
+        *)
+            rhyolite_harness_set_error \
+                'The no-op fixture runtime-home phase is unsupported.'
+            return 1
+            ;;
+    esac
     [[ -d "${runtime_home}" ]] || {
         rhyolite_harness_set_error \
             'The no-op fixture runtime home was not created by the runner.'
@@ -162,7 +179,8 @@ harness_prepare_worker_home() {
             'Could not restrict the no-op fixture runtime home.'
         return 1
     }
-    printf '%s\n' '{"Fixture":"noop","Purpose":"contract-proof"}' \
+    printf '{"Fixture":"noop","Purpose":"contract-proof","Phase":"%s"}\n' \
+        "${phase}" \
         > "${runtime_home}/fixture-runtime.json" || {
         rhyolite_harness_set_error \
             'Could not write the no-op fixture runtime marker.'
@@ -223,6 +241,112 @@ harness_worker_env() {
     )
 }
 
+harness_report_repair_argv() {
+    local destination_name="$1"
+    local trusted_workdir="$2"
+    local session_name="$3"
+    local session_id="$4"
+    local model="$5"
+    local reasoning_effort="$6"
+    local context_tier="$7"
+    local authentication_variables="$8"
+    local transcript_path="$9"
+    local first_workdir_entry
+
+    noop_fixture_require_success harness_report_repair_argv || return 1
+    noop_fixture_require_array_destination "${destination_name}" || return 1
+    local -n output_arguments="${destination_name}"
+
+    [[ -z "${authentication_variables}" ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture received an unexpected report-repair authentication allowlist.'
+        return 1
+    }
+    [[ -d "${trusted_workdir}" && ! -L "${trusted_workdir}" ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair working directory is unavailable.'
+        return 1
+    }
+    if ! first_workdir_entry="$(
+        find "${trusted_workdir}" -mindepth 1 -print -quit 2>/dev/null
+    )"; then
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair working directory could not be verified.'
+        return 1
+    fi
+    [[ -z "${first_workdir_entry}" ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair working directory is not empty.'
+        return 1
+    }
+    [[ -n "${session_name}" && -n "${session_id}" ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair session identity is missing.'
+        return 1
+    }
+    [[ "${model}" == noop-fixture-model &&
+        "${reasoning_effort}" == max &&
+        "${context_tier}" == long_context ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair model settings are invalid.'
+        return 1
+    }
+    [[ "${transcript_path}" == /* ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair transcript path is invalid.'
+        return 1
+    }
+
+    output_arguments=(
+        --fixture-contract 4
+        --fixture-mode report-repair
+        --workdir "${trusted_workdir}"
+        --session-name "${session_name}"
+        --session-id "${session_id}"
+        --model "${model}"
+        --reasoning-effort "${reasoning_effort}"
+        --context "${context_tier}"
+        --transcript "${transcript_path}"
+    )
+}
+
+harness_report_repair_env() {
+    local destination_name="$1"
+    local runtime_home="$2"
+    local response_mode="${RHYOLITE_NOOP_REPAIR_RESPONSE_MODE:-stdout}"
+
+    noop_fixture_require_success harness_report_repair_env || return 1
+    noop_fixture_require_array_destination "${destination_name}" || return 1
+    local -n output_environment="${destination_name}"
+
+    [[ -n "${NOOP_WORKER_DIRECTORY}" ]] || {
+        noop_fixture_resolve_worker || return 1
+    }
+    [[ -d "${runtime_home}" && ! -L "${runtime_home}" ]] || {
+        rhyolite_harness_set_error \
+            'The no-op fixture report-repair runtime home is unavailable.'
+        return 1
+    }
+    case "${response_mode}" in
+        stdout|transcript|missing|user-only|system-only|view-only|view-failed|task-completed|info-only) ;;
+        *)
+            rhyolite_harness_set_error \
+                'The no-op fixture report-repair response mode is unsupported.'
+            return 1
+            ;;
+    esac
+    output_environment=(
+        -i
+        "PATH=${NOOP_WORKER_DIRECTORY}:/usr/bin:/bin"
+        "HOME=${runtime_home}"
+        "XDG_CONFIG_HOME=${runtime_home}"
+        'LC_ALL=C'
+        "NOOP_RUNTIME_HOME=${runtime_home}"
+        "NOOP_CAPTURE_ROOT=${RHYOLITE_NOOP_CAPTURE_ROOT:-}"
+        "NOOP_REPAIR_RESPONSE_MODE=${response_mode}"
+    )
+}
+
 harness_render_request() {
     local request_path="$2"
 
@@ -275,17 +399,147 @@ harness_extract_final_report() {
     return "${extraction_status}"
 }
 
+noop_fixture_write_pure_report_repair_descriptor() {
+    local source_path="$1"
+    local destination_path="$2"
+
+    awk '
+        /^[[:space:]]*$/ {
+            next
+        }
+        {
+            count++
+            if (count == 1) {
+                candidate = $0
+                sub(/^[[:space:]]+/, "", candidate)
+                sub(/[[:space:]]+$/, "", candidate)
+            }
+        }
+        END {
+            if (count != 1 ||
+                candidate !~ /^\{.*\}$/ ||
+                index(candidate, "\"ProtocolVersion\"") == 0 ||
+                index(candidate, "\"Section\"") == 0 ||
+                index(candidate, "\"Field\"") == 0 ||
+                index(candidate, "\"Confidence:\"") == 0 ||
+                index(candidate, "\"Occurrence\"") == 0 ||
+                index(candidate, "\"OriginalValueSha256\"") == 0 ||
+                index(candidate, "\"ConservativeLevel\"") == 0) {
+                exit 1
+            }
+            print candidate
+        }
+    ' "${source_path}" > "${destination_path}"
+}
+
+noop_fixture_extract_latest_assistant_reply() {
+    local transcript="$1"
+
+    awk '
+        { lines[NR] = $0 }
+        END {
+            start = 0
+            for (i = 1; i <= NR; i++) {
+                marker = lines[i]
+                sub(/^[[:space:]]+/, "", marker)
+                sub(/[[:space:]]+$/, "", marker)
+                if (marker == "### Copilot") {
+                    start = i + 1
+                }
+            }
+            if (start == 0) {
+                exit 42
+            }
+
+            end = NR
+            for (i = start; i <= NR; i++) {
+                marker = lines[i]
+                sub(/^[[:space:]]+/, "", marker)
+                sub(/[[:space:]]+$/, "", marker)
+                if (marker == "### User" ||
+                    marker == "### System" ||
+                    marker == "### Info" ||
+                    marker == "### Copilot" ||
+                    marker ~ /^### `[^`]+`([[:space:]]+—[[:space:]]+.+)?$/ ||
+                    marker ~ /^### task[[:space:]]+\([^()]+\)$/) {
+                    end = i - 1
+                    break
+                }
+            }
+
+            last = end
+            while (last >= start && lines[last] ~ /^[[:space:]]*$/) {
+                last--
+            }
+            footer_marker = lines[last]
+            sub(/^[[:space:]]+/, "", footer_marker)
+            sub(/[[:space:]]+$/, "", footer_marker)
+            if (last >= start &&
+                footer_marker == "<sub>Generated by [GitHub Copilot CLI](https://github.com/features/copilot/cli)</sub>") {
+                footer = last - 1
+                while (footer >= start &&
+                    lines[footer] ~ /^[[:space:]]*$/) {
+                    footer--
+                }
+                if (footer >= start && lines[footer] == "---") {
+                    end = footer - 1
+                }
+            }
+
+            for (i = start; i <= end; i++) {
+                print lines[i]
+            }
+        }
+    ' "${transcript}"
+}
+
+harness_extract_report_repair() {
+    local timeline="$1"
+    local transcript="$2"
+    local reply_output="$3"
+    local assistant_candidate="${reply_output}.assistant.$$"
+
+    noop_fixture_require_success harness_extract_report_repair || return 1
+    rm -f -- "${reply_output}" "${assistant_candidate}"
+    if [[ -f "${timeline}" ]] &&
+        noop_fixture_write_pure_report_repair_descriptor \
+            "${timeline}" "${reply_output}"; then
+        return 0
+    fi
+    rm -f -- "${reply_output}"
+
+    if [[ -f "${transcript}" ]] &&
+        noop_fixture_extract_latest_assistant_reply \
+            "${transcript}" > "${assistant_candidate}"; then
+        if noop_fixture_write_pure_report_repair_descriptor \
+            "${assistant_candidate}" "${reply_output}"; then
+            rm -f -- "${assistant_candidate}"
+            return 0
+        fi
+    fi
+    rm -f -- "${reply_output}" "${assistant_candidate}"
+    rhyolite_harness_set_error \
+        'The no-op fixture report repair did not return a supported confidence-edit descriptor.'
+    return 42
+}
+
 harness_verify_isolation() {
     local timeline="$1"
 
     noop_fixture_require_success harness_verify_isolation || return 1
-    grep -Fq \
+    if ! grep -Fq \
         'NOOP FIXTURE: repository analysis intentionally skipped.' \
-        "${timeline}" || {
+        "${timeline}" &&
+        ! grep -Fq \
+            'NOOP FIXTURE: repair reply is not present as pure standard output.' \
+            "${timeline}" &&
+        ! grep -Eq \
+            '^[[:space:]]*\{"ProtocolVersion":1,"Section":.*"Field":"Confidence:".*"Occurrence":.*"OriginalValueSha256":.*"ConservativeLevel":.*\}[[:space:]]*$' \
+            "${timeline}"; then
         rhyolite_harness_set_error \
             'The no-op fixture diagnostic marker was missing from sanitized output.'
         return 1
-    }
+    fi
     if [[ -n "${RHYOLITE_NOOP_FORBIDDEN_TEXT:-}" ]] &&
         grep -Fq -- "${RHYOLITE_NOOP_FORBIDDEN_TEXT}" "${timeline}"; then
         rhyolite_harness_set_error \

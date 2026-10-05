@@ -59,6 +59,8 @@ PROVENANCE_LOOKBACK_MONTHS=""
 PROVENANCE_START_DATE=""
 PROVENANCE_LOOKBACK_SPECIFIED=0
 STATE_SCHEMA_VERSION=6
+REPORT_REPAIR_ATTEMPT_LIMIT=1
+REPORT_REPAIR_TIMEOUT_SECONDS=300
 NON_INTERACTIVE=0
 OPEN_HTML=0
 NO_OPEN_HTML=0
@@ -209,6 +211,35 @@ interrupt_repository_process() {
     if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
         terminate_process_tree "${RHYOLITE_ACTIVE_CHILD_PID}"
     fi
+    if [[ "${REPORT_REPAIR_STATUS-}" == 'Running' ||
+        "${REPORT_REPAIR_STATUS-}" == 'Succeeded' ]]; then
+        REPORT_REPAIR_STATUS='Interrupted'
+        REPORT_REPAIR_PROMOTED=0
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair interrupted by ${signal_name}."
+        sanitize_report_repair_output
+        cleanup_report_repair_runtime || true
+        if [[ -n "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH:-}" ]] &&
+            ! {
+                printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+                    > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}" &&
+                chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+            } 2>> "${RHYOLITE_REPOSITORY_ERROR_PATH}"; then
+            printf '%s\n' \
+                'Report repair interruption diagnostic could not be finalized.' \
+                >> "${RHYOLITE_REPOSITORY_ERROR_PATH}"
+        fi
+        write_report_repair_state
+        write_failed_review_report "${report_path}" \
+            'Repository review interrupted during bounded report repair.'
+        finalize_repository_artifacts \
+            "${state_path}" "${slug}" "${repository}" "${session_name}" \
+            "${commit}" 'Interrupted' "${interrupt_exit_code}" \
+            "${review_path}" "${result_path}" "${report_path}" \
+            "${markdown_path}" "${html_path}" "${timeline_path}" \
+            "${transcript_path}" "${request_path}" "${error_path}" \
+            "${handoff_path}" "${started_at}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
     exit "${interrupt_exit_code}"
 }
 
@@ -251,6 +282,25 @@ load_repository_support_links() {
     done
     RHYOLITE_SUPPORT_TEXT="${issues_url}"
     RHYOLITE_CONTRIBUTE_TEXT="${pulls_url}"
+}
+
+report_repair_attempted() {
+    local state_path="$1"
+
+    [[ -f "${state_path}" ]] || return 1
+    python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    repair = json.load(stream).get("ReportRepair")
+if repair is None:
+    raise SystemExit(1)
+if not isinstance(repair, dict):
+    raise SystemExit("Invalid report-repair state")
+count = repair.get("AttemptCount")
+if type(count) is not int or count not in (0, 1):
+    raise SystemExit("Invalid report-repair attempt count")
+raise SystemExit(0 if count == 1 else 1)
+' "${state_path}"
 }
 
 repository_failure_stage() {
@@ -313,6 +363,9 @@ repository_failure_stage() {
                 'temporary harness runtime home|cleanup' \
                 "${errors_path}" 2>/dev/null; then
                 printf 'cleanup'
+            elif report_repair_attempted \
+                "${errors_path%/errors.txt}/state.json"; then
+                printf 'report repair'
             elif grep -Eq \
                 'Incomplete report|Final report extraction failed|Final report header|Markdown table|Final report contract validation failed|Final report UTF-8 finalization failed' \
                 "${errors_path}" 2>/dev/null; then
@@ -376,6 +429,9 @@ repository_failure_summary() {
                     ;;
                 'report validation')
                     printf 'The worker response did not satisfy the complete canonical report contract.'
+                    ;;
+                'report repair')
+                    printf 'Bounded report-only recovery did not produce a fully valid, content-preserving report.'
                     ;;
                 harness\ *)
                     printf 'The selected review harness failed while preparing, running, or finalizing the worker session.'
@@ -453,6 +509,10 @@ repository_failure_remediation() {
                 'report validation')
                     printf '%s' \
                         'Rerun the review; use the saved timeline and errors artifacts to diagnose repeated incomplete output.'
+                    ;;
+                'report repair')
+                    printf '%s' \
+                        'Inspect the preserved report-repair candidates, diagnostics, and state. Recovery is exhausted; do not bypass report validation or resume the child directly.'
                     ;;
                 harness\ *)
                     printf '%s' \
@@ -896,6 +956,8 @@ write_approval_hash_material() {
     fi
     printf 'ResearchTransport=%s\n' \
         "$(approval_hash_string "$(research_transport_json '')")"
+    printf 'ReportRepairPolicy=%s\n' \
+        "$(approval_hash_string "$(report_repair_policy_json)")"
     printf 'SessionTimeoutMinutes=%s\n' "${SESSION_TIMEOUT_MINUTES}"
     printf 'ThrottleLimit=%s\n' "${THROTTLE_LIMIT}"
     printf 'MaxRepositories=%s\n' "${MAX_REPOSITORIES}"
@@ -932,6 +994,11 @@ sha256_hex() {
 
 compute_approval_hash() {
     write_approval_hash_material | sha256_hex
+}
+
+report_repair_policy_json() {
+    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+        "${REPORT_REPAIR_ATTEMPT_LIMIT}" "${REPORT_REPAIR_TIMEOUT_SECONDS}"
 }
 
 prior_art_window_json() {
@@ -1116,6 +1183,7 @@ write_review_plan_json() {
   "PriorArtWindow": $(prior_art_window_json),
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
+  "ReportRepairPolicy": $(report_repair_policy_json),
   "SessionTimeoutMinutes": ${SESSION_TIMEOUT_MINUTES},
   "ThrottleLimit": ${THROTTLE_LIMIT},
   "MaxRepositories": ${MAX_REPOSITORIES},
@@ -1196,6 +1264,8 @@ write_review_plan_text() {
         printf '%-20s %s\n' 'Research artifacts:' 'disabled'
     fi
     printf '%-20s %s minutes\n' 'Session timeout:' "${SESSION_TIMEOUT_MINUTES}"
+    printf '%-20s %s\n' 'Report repair:' \
+        "${REPORT_REPAIR_ATTEMPT_LIMIT} isolated, tool-less confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s maximum; no research rerun"
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
@@ -1941,6 +2011,9 @@ if ((SESSION_TIMEOUT_MINUTES == 0)); then
         2) SESSION_TIMEOUT_MINUTES=120 ;;
         3) SESSION_TIMEOUT_MINUTES=240 ;;
     esac
+fi
+if ((10#${SESSION_TIMEOUT_MINUTES} * 60 < REPORT_REPAIR_TIMEOUT_SECONDS)); then
+    REPORT_REPAIR_TIMEOUT_SECONDS=$((10#${SESSION_TIMEOUT_MINUTES} * 60))
 fi
 
 default_output_root() {
@@ -3164,6 +3237,488 @@ resolve_repository_transport() {
     done
 }
 
+report_repair_json() {
+    cat <<EOF
+{
+  "Status": "$(json_escape "${REPORT_REPAIR_STATUS:-NotReached}")",
+  "AttemptLimit": ${REPORT_REPAIR_ATTEMPT_LIMIT},
+  "AttemptCount": ${REPORT_REPAIR_ATTEMPT_COUNT:-0},
+  "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC:-}")",
+  "FinalDiagnostic": "$(json_escape "${REPORT_REPAIR_FINAL_DIAGNOSTIC:-}")",
+  "PreservationCheck": "$(json_escape "${REPORT_REPAIR_PRESERVATION:-NotRun}")",
+  "FinalValidation": "$(json_escape "${REPORT_REPAIR_VALIDATION:-NotRun}")",
+  "Cleanup": "$(json_escape "${REPORT_REPAIR_CLEANUP:-NotRun}")",
+  "CanonicalPromoted": $(json_boolean "${REPORT_REPAIR_PROMOTED:-0}"),
+  "Artifacts": {
+    "Directory": "$(json_escape "${REPORT_REPAIR_DIRECTORY:-}")",
+    "InitialCandidate": "$(json_escape "${REPORT_REPAIR_INITIAL_PATH:-}")",
+    "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH:-}")",
+    "Request": "$(json_escape "${REPORT_REPAIR_REQUEST_PATH:-}")",
+    "Edit": "$(json_escape "${REPORT_REPAIR_EDIT_PATH:-}")",
+    "Candidate": "$(json_escape "${REPORT_REPAIR_CANDIDATE_PATH:-}")",
+    "FinalDiagnostic": "$(json_escape "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH:-}")",
+    "Timeline": "$(json_escape "${REPORT_REPAIR_TIMELINE_PATH:-}")",
+    "Transcript": "$(json_escape "${REPORT_REPAIR_TRANSCRIPT_PATH:-}")"
+  }
+}
+EOF
+}
+
+write_report_repair_state() {
+    [[ -n "${REPORT_REPAIR_DIRECTORY:-}" ]] || return 0
+    report_repair_json > "${REPORT_REPAIR_DIRECTORY}/state.json.tmp" ||
+        return 1
+    chmod 600 -- "${REPORT_REPAIR_DIRECTORY}/state.json.tmp" || return 1
+    mv -- "${REPORT_REPAIR_DIRECTORY}/state.json.tmp" \
+        "${REPORT_REPAIR_DIRECTORY}/state.json"
+}
+
+report_repair_saved_json() {
+    local output_directory="$1"
+    local repair_state="${output_directory}/report-repair/state.json"
+
+    if [[ -n "${REPORT_REPAIR_STATUS-}" ]]; then
+        report_repair_json
+    elif [[ -f "${repair_state}" ]]; then
+        cat -- "${repair_state}"
+    else
+        report_repair_json
+    fi
+}
+
+report_repair_summary() {
+    report_repair_saved_json "$1" |
+        python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+statuses = {"NotReached", "NotNeeded", "NotEligible", "Running",
+            "Succeeded", "Failed", "TimedOut", "Interrupted"}
+checks = {"NotRun", "Passed", "Failed"}
+if (data["Status"] not in statuses or
+    any(data[key] not in checks for key in
+        ("PreservationCheck", "FinalValidation", "Cleanup")) or
+    type(data["AttemptCount"]) is not int or
+    type(data["AttemptLimit"]) is not int or
+    not 0 <= data["AttemptCount"] <= data["AttemptLimit"] == 1):
+    raise SystemExit("Invalid trusted report-repair state")
+print("{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".format(
+    data["Status"], data["AttemptCount"], data["AttemptLimit"],
+    data["PreservationCheck"], data["FinalValidation"], data["Cleanup"]))
+'
+}
+
+validate_final_review_report() {
+    local candidate="$1"
+    local scope="$2"
+
+    if ! report_has_closing_delimiter "${candidate}"; then
+        printf '%s\n' 'Incomplete report: final closing delimiter was missing.'
+        return 1
+    fi
+    if grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${candidate}"; then
+        printf '%s\n' 'Final report contains a Markdown table.'
+        return 1
+    fi
+    validate_review_report_contract "${candidate}" "${scope}" || return
+    if grep -Eq \
+        '^[[:space:]]*(([-*+]|[0-9]+[.)])[[:space:]]*)?(Fix highest severity issues|Fix all issues|Commit a summary of findings)[[:space:]]*$' \
+        "${candidate}"; then
+        printf '%s\n' 'Final report contains a prohibited action menu or implementation offer.'
+        return 1
+    fi
+    return 0
+}
+
+write_failed_review_report() {
+    local path="$1"
+    local detail="$2"
+
+    cat > "${path}" <<EOF
+================================================================================
+REPOSITORY REVIEW REPORT
+${detail}
+No canonical review was produced. See errors.txt and analysis-timeline.txt.
+Any extracted candidate and repair diagnostics are noncanonical evidence
+under report-repair/.
+================================================================================
+EOF
+}
+
+sanitize_report_repair_output() {
+    if [[ -f "${report_repair_raw_output:-}" ]]; then
+        tr -d '\r' < "${report_repair_raw_output}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${REPORT_REPAIR_TIMELINE_PATH}"
+        rm -f -- "${report_repair_raw_output}"
+    fi
+    if [[ -s "${report_repair_errors_path:-}" ]]; then
+        tr -d '\r' < "${report_repair_errors_path}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${report_repair_errors_path}.tmp"
+        mv -- "${report_repair_errors_path}.tmp" \
+            "${report_repair_errors_path}"
+    fi
+    if [[ -n "${report_repair_transcript_plain:-}" &&
+        -f "${REPORT_REPAIR_TRANSCRIPT_PATH:-}" &&
+        ! -f "${report_repair_transcript_plain:-}" ]]; then
+        tr -d '\r' < "${REPORT_REPAIR_TRANSCRIPT_PATH}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${report_repair_transcript_plain}"
+        write_safe_markdown_document \
+            "${HARNESS_DISPLAY_NAME} Report Repair Transcript" \
+            "${report_repair_transcript_plain}" \
+            "${REPORT_REPAIR_TRANSCRIPT_PATH}.tmp"
+        mv -- "${REPORT_REPAIR_TRANSCRIPT_PATH}.tmp" \
+            "${REPORT_REPAIR_TRANSCRIPT_PATH}"
+    fi
+}
+
+cleanup_report_repair_runtime() {
+    local cleanup_failed=0
+
+    if [[ -n "${report_repair_runtime_home:-}" ]]; then
+        if rhyolite_harness_invoke harness_sanitize_runtime_home \
+            "${report_repair_runtime_home}" \
+            >/dev/null 2>> "${error_path}"; then
+            report_repair_runtime_home=""
+        else
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
+                'Report repair runtime cleanup failed.' >> "${error_path}"
+            cleanup_failed=1
+        fi
+    fi
+    if [[ -n "${report_repair_workdir:-}" ]]; then
+        if [[ ! -e "${report_repair_workdir}" ]] ||
+            rmdir -- "${report_repair_workdir}" 2>> "${error_path}"; then
+            report_repair_workdir=""
+        else
+            printf '%s\n' \
+                'Report repair work directory cleanup failed.' \
+                >> "${error_path}"
+            cleanup_failed=1
+        fi
+    fi
+    if [[ -n "${report_repair_transcript_plain:-}" ]]; then
+        rm -f -- "${report_repair_transcript_plain}"
+    fi
+    if ((cleanup_failed)); then
+        REPORT_REPAIR_CLEANUP='Failed'
+        return 1
+    fi
+    if [[ "${REPORT_REPAIR_CLEANUP:-NotRun}" != 'Failed' ]]; then
+        REPORT_REPAIR_CLEANUP='Passed'
+    fi
+}
+
+run_report_repair() {
+    local initial_candidate="$1"
+    local initial_diagnostic="$2"
+    local request_status=0
+    local repair_exit_code=1
+    local repair_ready=1
+    local repair_candidate_valid=0
+    local report_repair_runtime_home=""
+    local report_repair_workdir=""
+    local report_repair_raw_output=""
+    local report_repair_errors_path=""
+    local report_repair_transcript_plain=""
+    local repair_session_id
+    local repair_session_name
+    local repair_authentication_names
+    local -a repair_arguments=()
+    local -a repair_environment=()
+
+    REPORT_REPAIR_DIRECTORY="${result_path}/report-repair"
+    REPORT_REPAIR_INITIAL_PATH="${REPORT_REPAIR_DIRECTORY}/initial-candidate.txt"
+    REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH="${REPORT_REPAIR_DIRECTORY}/initial-diagnostic.txt"
+    if ! {
+        mkdir -m 700 -- "${REPORT_REPAIR_DIRECTORY}" &&
+        mv -- "${initial_candidate}" "${REPORT_REPAIR_INITIAL_PATH}" &&
+        printf '%s\n' "${initial_diagnostic}" \
+            > "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" &&
+        chmod 600 -- "${REPORT_REPAIR_INITIAL_PATH}" \
+            "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}"
+    } 2>> "${error_path}"; then
+        REPORT_REPAIR_STATUS='Failed'
+        printf '%s\n' 'Report repair could not preserve the invalid candidate.' \
+            >> "${error_path}"
+        return 1
+    fi
+    REPORT_REPAIR_INITIAL_DIAGNOSTIC="${initial_diagnostic}"
+    REPORT_REPAIR_REQUEST_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-request.txt"
+    REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-diagnostic.txt"
+
+    prepare_review_report_repair \
+        "${REPORT_REPAIR_INITIAL_PATH}" "${SCOPE}" \
+        "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" \
+        "${REPORT_REPAIR_REQUEST_PATH}" \
+        2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}" || request_status=$?
+    if ((request_status != 0)); then
+        REPORT_REPAIR_REQUEST_PATH=""
+        if ((request_status == 42)); then
+            REPORT_REPAIR_STATUS='NotEligible'
+        else
+            REPORT_REPAIR_STATUS='Failed'
+        fi
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        )"
+        printf 'Report repair %s: %s\n' \
+            "${REPORT_REPAIR_STATUS}" "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            >> "${error_path}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report validation' \
+            'candidate rejected; no eligible content-preserving correction'
+        return 1
+    fi
+
+    REPORT_REPAIR_STATUS='Running'
+    REPORT_REPAIR_ATTEMPT_COUNT=1
+    REPORT_REPAIR_EDIT_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-edit.json"
+    REPORT_REPAIR_CANDIDATE_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-candidate.txt"
+    REPORT_REPAIR_TIMELINE_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-timeline.txt"
+    REPORT_REPAIR_TRANSCRIPT_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-session.md"
+    report_repair_raw_output="${REPORT_REPAIR_DIRECTORY}/attempt-1-output.raw"
+    report_repair_errors_path="${REPORT_REPAIR_DIRECTORY}/attempt-1-errors.txt"
+    report_repair_transcript_plain="${REPORT_REPAIR_TRANSCRIPT_PATH}.plain"
+    : > "${REPORT_REPAIR_TIMELINE_PATH}"
+    : > "${report_repair_errors_path}"
+    : > "${REPORT_REPAIR_EDIT_PATH}"
+    chmod 600 -- \
+        "${REPORT_REPAIR_REQUEST_PATH}" \
+        "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}" \
+        "${REPORT_REPAIR_TIMELINE_PATH}" \
+        "${report_repair_errors_path}" \
+        "${REPORT_REPAIR_EDIT_PATH}"
+    write_report_repair_state
+    review_progress "${slug}" 'report repair' \
+        'validation failed; isolated tool-less confidence edit attempt 1/1; research is not rerun'
+
+    if ! {
+        report_repair_workdir="$(
+            mktemp -d "${TMPDIR:-/tmp}/rhyolite-report-repair.XXXXXXXX"
+        )" &&
+        report_repair_runtime_home="$(
+            mktemp -d "${TMPDIR:-/tmp}/rhyolite-report-repair-${HARNESS}.XXXXXXXX"
+        )" &&
+        report_repair_workdir="$(
+            canonicalize_directory_path "${report_repair_workdir}"
+        )" &&
+        report_repair_runtime_home="$(
+            canonicalize_directory_path "${report_repair_runtime_home}"
+        )" &&
+        chmod 700 -- "${report_repair_workdir}" "${report_repair_runtime_home}"
+    } 2>> "${error_path}"; then
+        printf '%s\n' 'Report repair could not create isolated runtime directories.' \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+    if ((repair_ready)) &&
+        ! {
+            require_control_free_paths \
+                "${report_repair_workdir}" "${report_repair_runtime_home}" &&
+            require_outside_git_repository "${report_repair_workdir}" \
+                'Report repair work directory' &&
+            require_outside_git_repository "${report_repair_runtime_home}" \
+                'Report repair runtime home'
+        } 2>> "${error_path}"; then
+        printf '%s\n' 'Report repair runtime path isolation could not be verified.' \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+    if ((repair_ready)) &&
+        { directory_contains_physical "${RUN_WORKSPACE}" "${report_repair_workdir}" ||
+          directory_contains_physical "${RUN_RESULTS}" "${report_repair_workdir}" ||
+          directory_contains_physical "${RUN_WORKSPACE}" "${report_repair_runtime_home}" ||
+          directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"; }; then
+        printf '%s\n' \
+            'Report repair runtime directories overlap a review workspace or artifact root.' \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+    trap 'cleanup_report_repair_runtime >/dev/null 2>&1 || true' EXIT
+    repair_session_id="$(new_session_id)"
+    local repair_suffix="-${RUN_ID}"
+    local repair_slug_limit=$((96 - 7 - ${#repair_suffix}))
+    repair_session_name="repair-${slug:0:repair_slug_limit}${repair_suffix}"
+    repair_authentication_names="$(
+        IFS=,
+        printf '%s' "${authentication_variables[*]}"
+    )"
+    if ((repair_ready)) &&
+        ! rhyolite_harness_invoke harness_prepare_worker_home \
+        "${report_repair_runtime_home}" \
+        "${REASONING_EFFORT}" "${CONTEXT_TIER}" 'report-repair' \
+        >/dev/null 2>> "${report_repair_errors_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_prepare_worker_home" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Report repair home preparation failed.}" \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+    if ((repair_ready)) &&
+        ! rhyolite_harness_invoke harness_report_repair_argv \
+            repair_arguments "${report_repair_workdir}" \
+            "${repair_session_name}" "${repair_session_id}" \
+            "${MODEL}" "${REASONING_EFFORT}" "${CONTEXT_TIER}" \
+            "${repair_authentication_names}" "${REPORT_REPAIR_TRANSCRIPT_PATH}" \
+            >/dev/null 2>> "${report_repair_errors_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_report_repair_argv" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Report repair arguments could not be constructed.}" \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+    if ((repair_ready)) &&
+        ! rhyolite_harness_invoke harness_report_repair_env \
+            repair_environment "${report_repair_runtime_home}" \
+            >/dev/null 2>> "${report_repair_errors_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_report_repair_env" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Report repair environment could not be constructed.}" \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+
+    if ((repair_ready)); then
+        env "${repair_environment[@]}" \
+            timeout --signal=TERM --kill-after=30s \
+            "${REPORT_REPAIR_TIMEOUT_SECONDS}s" \
+            "${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \
+            < "${REPORT_REPAIR_REQUEST_PATH}" \
+            > "${report_repair_raw_output}" \
+            2>> "${report_repair_errors_path}" &
+        local repair_process_id=$!
+        RHYOLITE_ACTIVE_CHILD_PID="${repair_process_id}"
+        local repair_started_epoch
+        local repair_heartbeat_epoch
+        local repair_now_epoch
+        repair_started_epoch="$(date +%s)"
+        repair_heartbeat_epoch="${repair_started_epoch}"
+        while kill -0 "${repair_process_id}" 2>/dev/null; do
+            sleep 1
+            if kill -0 "${repair_process_id}" 2>/dev/null; then
+                repair_now_epoch="$(date +%s)"
+                if ((repair_now_epoch - repair_heartbeat_epoch >= 30)); then
+                    review_progress "${slug}" 'report repair' \
+                        "attempt 1/1 still running; elapsed $((repair_now_epoch - repair_started_epoch))s"
+                    repair_heartbeat_epoch="${repair_now_epoch}"
+                fi
+            fi
+        done
+        repair_exit_code=0
+        wait "${repair_process_id}" || repair_exit_code=$?
+        RHYOLITE_ACTIVE_CHILD_PID=""
+    fi
+    if ! sanitize_report_repair_output; then
+        printf '%s\n' 'Report repair output sanitization failed.' \
+            >> "${error_path}"
+        repair_ready=0
+    fi
+
+    if ((repair_ready == 0)); then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair harness preparation failed.'
+    elif ((repair_exit_code == 124 || repair_exit_code == 137)); then
+        REPORT_REPAIR_STATUS='TimedOut'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair exceeded ${REPORT_REPAIR_TIMEOUT_SECONDS} seconds."
+    elif ((repair_exit_code != 0)); then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair worker exited with status ${repair_exit_code}."
+    elif ! rhyolite_harness_invoke harness_verify_isolation \
+        "${REPORT_REPAIR_TIMELINE_PATH}" \
+        >/dev/null 2>> "${report_repair_errors_path}"; then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair harness isolation verification failed.'
+    elif ! rhyolite_harness_invoke harness_extract_report_repair \
+        "${REPORT_REPAIR_TIMELINE_PATH}" \
+        "${report_repair_transcript_plain}" \
+        "${REPORT_REPAIR_EDIT_PATH}" \
+        >/dev/null 2>> "${report_repair_errors_path}"; then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair did not return an extractable confidence edit.'
+    elif ! apply_review_report_repair \
+        "${REPORT_REPAIR_INITIAL_PATH}" "${SCOPE}" \
+        "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" \
+        "${REPORT_REPAIR_EDIT_PATH}" "${REPORT_REPAIR_CANDIDATE_PATH}" \
+        2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"; then
+        REPORT_REPAIR_PRESERVATION='Failed'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        )"
+    else
+        REPORT_REPAIR_PRESERVATION='Passed'
+        if REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            validate_final_review_report "${REPORT_REPAIR_CANDIDATE_PATH}" \
+                "${SCOPE}" 2>&1
+        )"; then
+            REPORT_REPAIR_VALIDATION='Passed'
+            repair_candidate_valid=1
+        else
+            REPORT_REPAIR_VALIDATION='Failed'
+        fi
+    fi
+    if ! cleanup_report_repair_runtime; then
+        repair_candidate_valid=0
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair cleanup failed; canonical promotion was blocked.'
+    fi
+    trap - EXIT
+    local repair_artifact
+    for repair_artifact in \
+        "${REPORT_REPAIR_INITIAL_PATH}" \
+        "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" \
+        "${REPORT_REPAIR_REQUEST_PATH}" \
+        "${REPORT_REPAIR_EDIT_PATH}" \
+        "${REPORT_REPAIR_CANDIDATE_PATH}" \
+        "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}" \
+        "${REPORT_REPAIR_TIMELINE_PATH}" \
+        "${REPORT_REPAIR_TRANSCRIPT_PATH}" \
+        "${report_repair_errors_path}"; do
+        if [[ -f "${repair_artifact}" ]] &&
+            ! chmod 600 -- "${repair_artifact}" 2>> "${error_path}"; then
+            repair_candidate_valid=0
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair artifact permission finalization failed.'
+        fi
+    done
+    if ((repair_candidate_valid)) &&
+        ! {
+            cp -- "${REPORT_REPAIR_CANDIDATE_PATH}" "${report_path}.tmp" &&
+            chmod 600 -- "${report_path}.tmp" "${REPORT_REPAIR_CANDIDATE_PATH}" &&
+            mv -- "${report_path}.tmp" "${report_path}"
+        } 2>> "${error_path}"; then
+        repair_candidate_valid=0
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair canonical promotion failed.'
+    fi
+    if ((repair_candidate_valid)); then
+        REPORT_REPAIR_STATUS='Succeeded'
+        REPORT_REPAIR_PROMOTED=1
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Strict validation and exact content preservation passed.'
+    elif [[ "${REPORT_REPAIR_STATUS}" != 'TimedOut' ]]; then
+        REPORT_REPAIR_STATUS='Failed'
+    fi
+    printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+        > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+    chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+    write_report_repair_state || return 1
+    if ((repair_candidate_valid)); then
+        review_progress "${slug}" 'report repair' \
+            'strict revalidation passed; unchanged findings promoted to canonical report'
+        return 0
+    fi
+    printf 'Report repair exhausted: %s\n' \
+        "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+    if [[ -s "${report_repair_errors_path}" ]]; then
+        cat -- "${report_repair_errors_path}" >> "${error_path}"
+    fi
+    review_progress "${slug}" 'report repair' \
+        "${REPORT_REPAIR_STATUS}; one attempt exhausted; noncanonical evidence preserved"
+    return 1
+}
+
 write_result() {
     local path="$1"
     local slug="$2"
@@ -3219,6 +3774,7 @@ write_result() {
   },
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
+  "ReportRepair": $(report_repair_saved_json "${output_directory}"),
   "Research": {
     "Status": "$(json_escape "${RESEARCH_STATUS:-Disabled}")",
     "Directory": "$(json_escape "${RESEARCH_DIRECTORY:-}")",
@@ -3342,7 +3898,9 @@ EOF
         "${REASONING_EFFORT}" "${CONTEXT_TIER}" \
         "${HARNESS_PROVIDER_ID}" "${HARNESS_PROVIDER_HOST}" \
         "$(provider_forwarded_env_var_names_text)" \
-        "${HARNESS_RESUME_POLICY}"
+        "${HARNESS_RESUME_POLICY}" \
+        "$(report_repair_summary "${output_directory}")
+Artifacts: ${REPORT_REPAIR_DIRECTORY:-}"
     write_result \
         "${state_path}" "${slug}" "${repository}" "${session}" "${commit}" \
         "${status}" "${exit_code}" "${checkout}" "${output_directory}" \
@@ -3351,11 +3909,12 @@ EOF
         "${completed_at}" "${active_session_id}" \
         "${active_verification_clone}" "${active_requested_commit}" \
         "${active_source_kind}" "${active_source_path}"
-    printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
+    printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
         "${repository}" "${active_source_kind}" "${active_source_path}" \
         "${active_requested_commit}" "${commit}" "${status}" \
         "${state_path}" "${handoff}" "${html}" \
         "${RESEARCH_STATUS:-Disabled}" "${RESEARCH_DIRECTORY:-}" \
+        "$(report_repair_summary "${output_directory}")" \
         > "${output_directory}/.result-summary"
     FINALIZED_REPOSITORY_STATUS="${status}"
     FINALIZED_REPOSITORY_EXIT_CODE="${exit_code}"
@@ -4204,6 +4763,7 @@ process_repository() {
     local review_path=""
     local result_path="${RUN_RESULTS}/${slug}"
     local report_path="${result_path}/review.txt"
+    local candidate_report_path="${result_path}/report-candidate.txt"
     local markdown_path="${result_path}/review.md"
     local html_path="${result_path}/review.html"
     local timeline_path="${result_path}/analysis-timeline.txt"
@@ -4225,6 +4785,23 @@ process_repository() {
     local post_process_failure=0
     local report_contract_error=""
     local runtime_harness_home=""
+    local REPORT_REPAIR_STATUS='NotReached'
+    local REPORT_REPAIR_ATTEMPT_COUNT=0
+    local REPORT_REPAIR_INITIAL_DIAGNOSTIC=""
+    local REPORT_REPAIR_FINAL_DIAGNOSTIC=""
+    local REPORT_REPAIR_PRESERVATION='NotRun'
+    local REPORT_REPAIR_VALIDATION='NotRun'
+    local REPORT_REPAIR_CLEANUP='NotRun'
+    local REPORT_REPAIR_PROMOTED=0
+    local REPORT_REPAIR_DIRECTORY=""
+    local REPORT_REPAIR_INITIAL_PATH=""
+    local REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH=""
+    local REPORT_REPAIR_REQUEST_PATH=""
+    local REPORT_REPAIR_EDIT_PATH=""
+    local REPORT_REPAIR_CANDIDATE_PATH=""
+    local REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH=""
+    local REPORT_REPAIR_TIMELINE_PATH=""
+    local REPORT_REPAIR_TRANSCRIPT_PATH=""
     local RESEARCH_STATUS
     if ((ENABLE_PUBLIC_RESEARCH)); then
         RESEARCH_STATUS='NotStarted'
@@ -5191,11 +5768,11 @@ EOF
     if ((exit_code == 0)); then
         review_progress "${slug}" 'analysis' 'agent response received'
         local report_extracted=0
-        if extract_report "${timeline_path}" "${report_path}"; then
+        if extract_report "${timeline_path}" "${candidate_report_path}"; then
             report_extracted=1
         fi
         if ((report_extracted == 0)) ||
-            ! report_has_closing_delimiter "${report_path}"; then
+            ! report_has_closing_delimiter "${candidate_report_path}"; then
             if [[ -s "${transcript_plain_path}" ]]; then
                 local transcript_extraction_status=0
                 if rhyolite_harness_invoke harness_extract_final_report \
@@ -5206,14 +5783,14 @@ EOF
                     >/dev/null 2>> "${error_path}"; then
                     if report_has_closing_delimiter \
                         "${transcript_report_path}"; then
-                        mv -- "${transcript_report_path}" "${report_path}"
+                        mv -- "${transcript_report_path}" "${candidate_report_path}"
                         report_extracted=1
                         review_progress \
                             "${slug}" \
                             'analysis' \
                             'complete report recovered from sanitized session transcript'
                     elif ((report_extracted == 0)); then
-                        mv -- "${transcript_report_path}" "${report_path}"
+                        mv -- "${transcript_report_path}" "${candidate_report_path}"
                         report_extracted=1
                     fi
                 else
@@ -5229,27 +5806,11 @@ EOF
             rm -f -- "${transcript_report_path}"
         fi
         if ((report_extracted == 0)); then
-            printf '%s\n' \
-                'Final report extraction failed. See analysis-timeline.txt.' \
-                > "${report_path}"
+            write_failed_review_report "${report_path}" \
+                'Final report extraction failed. See analysis-timeline.txt.'
             printf '%s\n' \
                 'Final report header or end marker was not found.' \
                 >> "${error_path}"
-            exit_code=1
-        elif ! report_has_closing_delimiter "${report_path}"; then
-            printf '%s\n' \
-                'Incomplete report: final closing delimiter was missing; recovered text was saved through end of agent output.' \
-                >> "${error_path}"
-            exit_code=1
-        elif grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${report_path}"; then
-            printf '%s\n' \
-                'Final report contains a Markdown table.' >> "${error_path}"
-            exit_code=1
-        elif ! report_contract_error="$(
-            validate_review_report_contract "${report_path}" "${SCOPE}" 2>&1
-        )"; then
-            printf 'Final report contract validation failed: %s\n' \
-                "${report_contract_error}" >> "${error_path}"
             exit_code=1
         fi
     elif ((exit_code == 124)); then
@@ -5262,6 +5823,58 @@ EOF
         printf '%s\n' \
             'Repository review failed. See errors.txt and analysis-timeline.txt.' \
             > "${report_path}"
+    fi
+    if [[ -f "${transcript_path}" ]]; then
+        write_safe_markdown_document \
+            "${HARNESS_DISPLAY_NAME} Session Transcript" \
+            "${transcript_plain_path}" \
+            "${transcript_path}.tmp"
+        mv -- "${transcript_path}.tmp" "${transcript_path}"
+        rm -f -- "${transcript_plain_path}"
+    fi
+
+    if ((exit_code == 0)); then
+        if report_contract_error="$(
+            validate_final_review_report "${candidate_report_path}" \
+                "${SCOPE}" 2>&1
+        )"; then
+            REPORT_REPAIR_STATUS='NotNeeded'
+            REPORT_REPAIR_VALIDATION='Passed'
+            if ((post_process_failure == 0)); then
+                mv -- "${candidate_report_path}" "${report_path}"
+                REPORT_REPAIR_PROMOTED=1
+            else
+                write_failed_review_report "${report_path}" \
+                    'Harness finalization failed before canonical promotion.'
+            fi
+        else
+            printf 'Final report contract validation failed: %s\n' \
+                "${report_contract_error}" >> "${error_path}"
+            review_progress "${slug}" 'report validation' \
+                'strict contract rejected a noncanonical candidate; checking bounded repair eligibility'
+            if ((post_process_failure == 0)) &&
+                run_report_repair "${candidate_report_path}" \
+                    "${report_contract_error}"; then
+                exit_code=0
+            else
+                if [[ "${REPORT_REPAIR_STATUS}" == 'Running' ||
+                    "${REPORT_REPAIR_STATUS}" == 'Succeeded' ]]; then
+                    REPORT_REPAIR_STATUS='Failed'
+                    REPORT_REPAIR_PROMOTED=0
+                    REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair finalization failed before durable canonical publication.'
+                    printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+                        >> "${error_path}"
+                    if ! write_report_repair_state; then
+                        printf '%s\n' \
+                            'Report repair state could not be finalized.' \
+                            >> "${error_path}"
+                    fi
+                fi
+                write_failed_review_report "${report_path}" \
+                    'Final report validation failed and bounded recovery did not complete.'
+                exit_code=1
+            fi
+        fi
     fi
     if ((post_process_failure)); then
         exit_code=1
@@ -5295,15 +5908,6 @@ EOF
         printf '%s\n' \
             'Policy violation: reviewed checkout is not clean.' >> "${error_path}"
         exit_code=1
-    fi
-
-    if [[ -f "${transcript_path}" ]]; then
-        write_safe_markdown_document \
-            "${HARNESS_DISPLAY_NAME} Session Transcript" \
-            "${transcript_plain_path}" \
-            "${transcript_path}.tmp"
-        mv -- "${transcript_path}.tmp" "${transcript_path}"
-        rm -f -- "${transcript_plain_path}"
     fi
 
     if ((exit_code == 0)); then
@@ -5532,6 +6136,7 @@ read_result_summary() {
     IFS= read -r -d '' html <&9
     IFS= read -r -d '' research_status <&9
     IFS= read -r -d '' research_directory <&9
+    IFS= read -r -d '' repair_summary <&9
     exec 9<&-
 }
 MANIFEST_PATH="${RUN_RESULTS}/manifest.json"
@@ -5594,6 +6199,7 @@ INDEX_PATH="${RUN_RESULTS}/index.html"
   },
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
+  "ReportRepairPolicy": $(report_repair_policy_json),
   "Paths": {
     "ReadOnlyWorkspace": "$(json_escape "${RUN_WORKSPACE}")",
     "WritableOutput": "$(json_escape "${RUN_RESULTS}")"
@@ -5624,6 +6230,9 @@ EOF
       "ProvenanceWindow": $(provenance_window_json '      '),
       "ResearchStatus": "$(json_escape "${research_status}")",
       "ResearchDirectory": "$(json_escape "${research_directory}")",
+      "ReportRepair": $(python3 -c \
+          'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["ReportRepair"]))' \
+          "${result_files[index]}"),
       "State": "$(json_escape "${state}")",
       "Handoff": "$(json_escape "${handoff}")",
       "Html": "$(json_escape "${html}")"
@@ -5640,6 +6249,8 @@ EOF
 {
     provenance_window="$(provenance_window_text)"
     printf '# Repository review run handoff\n\n'
+    printf 'Report repair policy:\n\n    %s\n\n' \
+        "${REPORT_REPAIR_ATTEMPT_LIMIT} isolated confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s; no research rerun"
     printf 'Run ID:\n\n    %s\n\n' "${RUN_ID}"
     printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
     printf 'Harness:\n\n    %s (%s)\n\n' \
@@ -5679,6 +6290,7 @@ EOF
         printf 'Selected source path:\n\n    %s\n\n' "${source_path}"
         printf 'Status:\n\n    %s\n\n' "${status}"
         printf 'Research status:\n\n    %s\n\n' "${research_status}"
+        printf 'Report repair:\n\n    %s\n\n' "${repair_summary}"
         if [[ -n "${research_directory}" ]]; then
             printf 'Research directory:\n\n    %s\n\n' \
                 "${research_directory}"
@@ -5731,17 +6343,18 @@ EOF
             '<p>Private research evidence exists under each repository research/network/private directory. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
     fi
     printf '<p><a href="review-plan.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (text)</a> · <a href="review-plan.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (JSON)</a> · <a href="handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run handoff</a> · <a href="state.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run state</a> · <a href="manifest.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Manifest</a></p>\n'
-    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
+    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
     for result_file in "${result_files[@]}"; do
         summary_file="${result_file%/state.json}/.result-summary"
         read_result_summary "${summary_file}"
         slug="$(basename -- "$(dirname -- "${result_file}")")"
         encoded_slug="$(html_escape_value "${slug}")"
-        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
+        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
             "$(html_escape_value "${repository}")" \
             "$(html_escape_value "${source_kind}")" \
             "$(html_escape_value "${status}")" \
             "$(html_escape_value "${research_status}")" \
+            "$(html_escape_value "${repair_summary}")" \
             "$(html_escape_value "${commit}")"
         printf '<td><a href="%s/review.html" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">HTML</a> ' "${encoded_slug}"
         printf '<a href="%s/review.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Markdown</a> ' "${encoded_slug}"
@@ -5767,7 +6380,9 @@ review_progress 'run' 'completed' "${RUN_STATUS}; ${RUN_RESULTS}"
 
 if ((failure)); then
     for result_file in "${result_files[@]}"; do
-        if ! grep -q '"Status": "Completed"' "${result_file}"; then
+        if ! python3 -c \
+            'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8"))["Status"] == "Completed" else 1)' \
+            "${result_file}"; then
             print_repository_error "${result_file}"
         fi
     done

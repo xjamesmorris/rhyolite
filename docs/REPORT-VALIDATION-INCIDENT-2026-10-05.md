@@ -1,7 +1,7 @@
 # Rhyolite incident report: completed review rejected without bounded recovery
 
 **Date:** 2026-10-05 UTC
-**Status:** Confirmed product reliability defect; repair explicitly deferred
+**Status:** Confirmed product reliability defect; bounded confidence repair implemented
 **Severity:** High (review reliability and resource efficiency)
 **Security impact:** No security-boundary failure observed
 **Confidence:** High
@@ -280,3 +280,21 @@ canonical, but the runner incorrectly made that first recoverable formatting
 miss terminal. Future repair should preserve strict validation and introduce a
 small, isolated, approval-compatible repair phase rather than accepting the
 invalid syntax or rerunning the entire review.
+
+## Resolution: October 5, 2026
+
+The trusted runner now stages extracted reports as noncanonical candidates.
+An eligible invalid confidence value can invoke one fresh, tool-less repair
+worker under the approved harness, provider, model, reasoning, and context,
+with a 300-second limit. Its exact JSON edit descriptor is checked against
+the original section, occurrence, value hash, and lowest explicitly stated
+confidence level. The runner constructs the corrected field while retaining
+the original confidence detail verbatim and every other report byte unchanged.
+
+Research is not repeated or exposed to repair. The unchanged strict validator
+and finalization checks run again before canonical promotion. Unsupported
+errors, invalid descriptors, failed revalidation, timeout, interruption, and
+cleanup failure retain truthful failed state and noncanonical evidence.
+`ReportRepairPolicy` is approval-bound; repair progress and state roll up into
+the repository and run artifacts. The incident analysis above remains the
+historical record of the original failure.

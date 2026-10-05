@@ -180,8 +180,14 @@ GitHub Copilot is the only production harness. The no-op adapter belongs
 only under `tests/fixtures` and may be loaded only through test-owned fixed
 fixture wiring. It must never be added to the production registry, plugin
 assets, launcher choices, marketplace metadata, or public support claims.
-Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v3
+Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v4
 work and any future adapter.
+
+`bash tests/test-report-repair.sh` covers the report-only confidence edit
+protocol. The aggregate gate also runs it. Keep the strict report validator
+unchanged; repair replies are exact edit descriptors, not replacement reports.
+The runner owns the sole bounded attempt, canonical promotion, interruption,
+cleanup, and synchronized repair artifacts/state.
 
 Scope 1 must remain transport-free: no research worker, MCP config,
 broker process, cookie jar, or research/network artifact. Scope 2/3 must
