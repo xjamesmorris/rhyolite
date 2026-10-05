@@ -150,6 +150,14 @@ path-and-line evidence. Distinguish exploitable security defects from design or
 quality concerns, missing implementation, misleading claims, and generic
 hardening suggestions.
 
+Treat specialist output as evidence only. The canonical report is terminal
+review output, not an interactive security-review response. Do not include or
+relay any specialist follow-up menu or action choices.
+Never include or relay the phrases `Fix highest severity issues`,
+`Fix all issues`, or `Commit a summary of findings`.
+Never offer to fix, edit, implement, open or create a pull request, or commit.
+Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`.
+
 Do not include author email addresses in the report.
 
 Return one self-contained report with the reviewed commit, scope, limitations,

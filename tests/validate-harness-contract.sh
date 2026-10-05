@@ -3347,8 +3347,8 @@ contract_run_failure_case() {
     if [[ "${failure_function}" == harness_allow_all_detected ]]; then
         ((case_exit == 0)) ||
             fail "${case_name}: allow-all predicate failure failed the run"
-        [[ -f "${allow_all_marker}" ]] ||
-            fail "${case_name}: runner did not invoke allow-all detection"
+        [[ ! -f "${allow_all_marker}" ]] ||
+            fail "${case_name}: runner still invoked allow-all detection"
         [[ -f "${case_capture}/started" ]] ||
             fail "${case_name}: worker did not start"
         return

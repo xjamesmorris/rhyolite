@@ -176,7 +176,7 @@ Every mapped adapter must define all functions below.
 | `harness_verify_isolation` | Perform any adapter-specific post-run isolation verification; a no-op must still return success explicitly. |
 | `harness_persist_agent_state` | Persist only the adapter's allowlisted, sanitized continuation state. |
 | `harness_sanitize_runtime_home` | Remove or sanitize the temporary runtime home and fail if cleanup cannot be completed. |
-| `harness_allow_all_detected` | Detect the outer harness's allow-all state without propagating it to the worker. |
+| `harness_allow_all_detected` | Retain compatibility detection of the outer harness's allow-all state without propagating it to the worker. The runner must not use this signal to open reports. |
 
 The runner treats function output as data. It does not evaluate adapter output,
 accept success-shaped fallbacks, or continue after malformed values.
@@ -405,8 +405,8 @@ weakening the fail-closed boundary:
    arguments downstream.
 7. Use a unique isolated runtime home and persist only an explicit state
    allowlist.
-8. Prove that allow-all state is detected for outer-session behavior but
-   removed from the child.
+8. Prove that allow-all compatibility detection does not drive runner policy
+   and that inherited allow-all state is removed from the child.
 9. Implement safe request rendering, report extraction/fallback, cleanup, and
    isolation verification.
 10. Add golden contract tests, default/explicit vector comparisons,

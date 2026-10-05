@@ -1,6 +1,6 @@
 {
   "displayName": "Rhyolite",
-  "tagline": "Guided, read-only reviews of public HTTPS Git repositories.",
+  "tagline": "Open-source software analysis platform; repo-review is the initial and default module.",
   "homeUrl": "https://github.com/xjamesmorris/rhyolite",
   "docsUrl": "https://github.com/xjamesmorris/rhyolite#readme",
   "supportUrl": "https://github.com/xjamesmorris/rhyolite/blob/main/SUPPORT.md",

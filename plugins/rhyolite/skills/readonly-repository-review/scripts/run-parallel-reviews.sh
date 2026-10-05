@@ -129,8 +129,8 @@ Options:
                                    duckduckgo-html-v1 (default) or none
   --research-cookies MODE          off or ephemeral (default: off)
   --non-interactive                Use defaults without terminal prompts
-  --open-html                      Open the HTML run index after completion
-  --no-open-html                   Never open the HTML run index
+  --open-html                      Explicitly open the HTML run index after completion
+  --no-open-html                   Compatibility spelling for the default never-open policy
   --validate-only                  Validate arguments without cloning or review
   --plan-only                      Resolve and print the effective plan as JSON
   --list-models                    Print available model IDs and exit
@@ -807,10 +807,8 @@ research_web_search_status() {
 review_plan_open_html_policy() {
     if ((OPEN_HTML)); then
         printf 'always'
-    elif ((NO_OPEN_HTML)); then
-        printf 'never'
     else
-        printf 'default'
+        printf 'never'
     fi
 }
 
@@ -5795,26 +5793,9 @@ fi
 
 trap - INT TERM HUP
 
-should_open=0
-if ((RUN_INTERRUPTED)); then
-    should_open=0
-elif ((OPEN_HTML)); then
-    should_open=1
-elif ((!NO_OPEN_HTML)) &&
-    rhyolite_harness_invoke \
-        harness_allow_all_detected >/dev/null 2>&1; then
-    should_open=1
-elif ((!NO_OPEN_HTML)) && is_interactive_console; then
-    read -r -p 'Open the local HTML report index now? [y/N]: ' open_input
-    open_input="${open_input,,}"
-    if [[ "${open_input}" == "y" || "${open_input}" == "yes" ]]; then
-        should_open=1
-    fi
-fi
-
-if ((should_open)); then
+if ((!RUN_INTERRUPTED && OPEN_HTML)); then
     if command -v xdg-open >/dev/null 2>&1; then
-        nohup xdg-open -- "${INDEX_PATH}" >/dev/null 2>&1 &
+        nohup xdg-open "${INDEX_PATH}" >/dev/null 2>&1 &
     elif command -v open >/dev/null 2>&1; then
         nohup open -- "${INDEX_PATH}" >/dev/null 2>&1 &
     else

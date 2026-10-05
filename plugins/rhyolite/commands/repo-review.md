@@ -1,6 +1,6 @@
 ---
 name: repo-review
-description: Compatibility alias for the guided Rhyolite review session
+description: Compatibility alias for Rhyolite's repo-review module
 agent: rhyolite:repo-review.agent
 disable-model-invocation: true
 ---

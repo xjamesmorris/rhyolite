@@ -93,7 +93,7 @@ banner_display_width() {
 }
 
 version_line_text() {
-    local version_text="v${version}"
+    local version_text="v${version} Beta"
     local padding=$((banner_width - ${#version_text}))
 
     if ((padding < 0)); then
@@ -117,16 +117,16 @@ plaque_sentences() {
     if launcher_started_immediately; then
         printf '%s\n' \
             '' \
-            'Rhyolite is running in automatic guided mode.' \
-            'Startup is continuing automatically; wait for the first setup prompt before responding.' \
-            'Use /rhyolite:help for commands or /rhyolite:status for current progress.'
+            'Rhyolite is an open-source software analysis platform.' \
+            'repo-review is its initial and default module; automatic guided setup is starting.' \
+            'Wait for the first setup prompt; use /rhyolite:status for current progress.'
         return
     fi
 
     printf '%s\n' \
         '' \
-        'Rhyolite guides evidence-based, read-only reviews of public HTTPS Git repositories.' \
-        'Use /rhyolite:start to begin a review.' \
+        'Rhyolite is an open-source software analysis platform.' \
+        'repo-review is its initial and default module; use /rhyolite:start to begin.' \
         'Use /rhyolite:help for commands or /rhyolite:status for current progress.'
 }
 
@@ -281,7 +281,7 @@ if [[ "${mode}" == "progress" ]]; then
             "$(json_escape "$(review_plaque)")"
         exit 0
     fi
-    progress_message="${display_name} v${version} loaded — type ${start_command} to start."
+    progress_message="${display_name} v${version} Beta loaded — type ${start_command} to start."
     printf '{"type":"progress","message":"%s"}\n' \
         "$(json_escape "${progress_message}")"
     exit 0

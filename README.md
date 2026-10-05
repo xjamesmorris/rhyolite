@@ -1,9 +1,11 @@
-# Rhyolite Copilot Plugin
+# Rhyolite
 
-Rhyolite is an evidence-based, read-only GitHub Copilot plugin for
-reviewing untrusted public HTTPS Git repositories.
+Rhyolite is an open-source software analysis platform. `repo-review` is its
+initial and default module and is currently the only shipped module.
+This release is delivered as a GitHub Copilot plugin, and production runtime
+harness support remains Copilot-only.
 
-Rhyolite combines:
+The current plugin combines:
 
 - The `repo-review` command agent, write-disabled main review worker, and
   dedicated write-disabled research worker.
@@ -32,7 +34,8 @@ Rhyolite combines:
 
 ## Status
 
-Version `0.5.0` is a public preview release. GitHub Copilot plugins are
+Rhyolite currently uses a temporary user-facing `Beta` suffix: a machine
+version `X.Y.Z` is displayed as `vX.Y.Z Beta`. GitHub Copilot plugins are
 currently public-preview features.
 
 The plugin supports anonymously readable public HTTPS Git repositories on
@@ -95,8 +98,8 @@ wrapper on Fedora Linux 44:
 ./rhyolite --repo https://github.com/owner/repository
 ```
 
-The optional `--yolo` switch changes the outer Copilot session for that
-launch and also affects report handling:
+The optional `--yolo` switch changes the outer Copilot session permissions
+for that launch:
 
 ```bash
 ./rhyolite --repo https://github.com/owner/repository --yolo
@@ -105,11 +108,10 @@ launch and also affects report handling:
 `--yolo` is disabled by default. It explicitly opts the outer Copilot
 orchestrator into all permissions for that launch and is not persisted in
 launcher context, copied into trusted setup, or remembered as a preference.
-Because `--yolo` sets allow-all mode, a completed review opens the local
-HTML report index automatically instead of prompting unless the runner's
-`--no-open-html` option is selected. Restricted child review sessions
-retain runner-enforced tool isolation and remove inherited
-`COPILOT_ALLOW_ALL` state.
+It does not change report handling. Guided planning and execution both use
+the never-open policy, while restricted child review sessions retain
+runner-enforced tool isolation and remove inherited `COPILOT_ALLOW_ALL`
+state.
 
 The former launcher `--autopilot` option is retired. The packaged launcher
 rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
@@ -151,7 +153,7 @@ user to confirm or modify them. Native mode adds the process-level `--fleet` fla
 and every launch passes the selected `--model`, `--reasoning-effort`,
 and `--context`. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
-(`Rhyolite v... loaded — type /rhyolite:start to start.`) and show
+(`Rhyolite v... Beta loaded — type /rhyolite:start to start.`) and show
 automatic-guided-mode copy that tells the user to wait for the first
 setup prompt.
 
@@ -261,8 +263,8 @@ compatibility agent path is
 | Command | Purpose |
 | --- | --- |
 | `/rhyolite:start` | In-session compatibility start for the guided, read-only review session. |
-| `/rhyolite:repo-review` | Compatibility alias for `/rhyolite:start`. |
-| `/repo-review` | Experimental shorthand for the same review session. |
+| `/rhyolite:repo-review` | Compatibility alias for the initial/default `repo-review` module. |
+| `/repo-review` | Experimental shorthand for the same module. |
 | `/rhyolite:status` | Show command stage, elapsed time, selections, output, review run, tasks, and visible subagents. |
 | `/rhyolite:version` | Show the installed Rhyolite version. |
 | `/rhyolite:help` | Show Rhyolite command help. |
@@ -280,15 +282,17 @@ exact manual start command and emits the large plaque. It ignores
 internal resumes, marker-bearing continuations, launcher prompts, and
 unrelated user text; it does not modify the prompt or persist state. The
 visual treatment is limited to
-the large RHYOLITE wordmark, a smaller right-aligned `v<version>` line
+the large RHYOLITE wordmark, a smaller right-aligned `v<version> Beta` line
 immediately beneath it, full/half-block contours that approximate
 antialiasing in a terminal cell grid, and the wordmark's blue-family
 TrueColor gradient, with the version line using the final subordinate
 gradient stop. The accompanying copy remains three concise functional
-sentences. Manual starts describe Rhyolite and the start/help/status
-commands. Launcher starts instead identify automatic guided mode and
-tell the user to wait for the first setup prompt; neither mode contains
-themed labels or faux telemetry.
+sentences. Manual starts identify Rhyolite as an open-source software analysis
+platform, identify `repo-review` as its initial/default module, and use exact
+`/rhyolite:start`, `/rhyolite:help`, and `/rhyolite:status` guidance. Launcher
+starts preserve that positioning while identifying automatic guided setup and
+telling the user to wait for the first prompt; neither mode contains themed
+labels or faux telemetry.
 
 Color is explicitly disabled through `NO_COLOR`,
 `COPILOT_NO_COLOR=1`, `FORCE_COLOR=0`, or `TERM=dumb`; uncertain
@@ -488,9 +492,9 @@ Reports preserve `RESEARCH SOURCE LANDSCAPE`,
 `TOP USER RETRIEVAL PRIORITIES` sections, plus
 `RESEARCH TRANSPORT OBSERVATIONS`. Rhyolite does not bypass
 paywalls, authentication, robots restrictions, removals, or network
-policy. It brings inaccessible high-priority sources to the user's
-attention and offers a picker to display the ranked sources most useful
-to retrieve.
+policy. Inaccessible resources and ranked retrieval priorities stay in
+the report; completion does not ask the user to retrieve, copy, or re-fetch
+them.
 
 Every scope includes an exact
 `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`. It covers prompt
@@ -531,11 +535,16 @@ During execution, the runners emit `RHYOLITE PROGRESS` milestones for
 run start, anonymous access preflight, anonymous clone, exact commit,
 read-only snapshot, analysis, periodic elapsed-time heartbeat, artifact
 creation, finalization, and completion. `/rhyolite:status` reflects the
-latest known stage.
+latest known stage. For current progress, use exact `/rhyolite:status`; bare
+`status` remains only the in-agent setup intent/fallback.
 
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material
-limitations, before listing artifact paths.
+limitations, then lists artifact paths including the run-level HTML index and
+ends the command as complete. Completion is terminal and review-only: it asks
+no post-run questions, does not open a report, and does not offer to fix,
+edit, implement, create a pull request, or commit changes. Remediation remains
+inside the report or executive summary.
 
 These are rough planning ranges. Large repositories and broad research
 topics can take substantially longer.
@@ -549,8 +558,10 @@ The plan JSON also supplies an `ApprovalHash`, which the agent must
 retain and pass back unchanged to the actual runner with
 `--expected-plan-hash`. The actual review must reuse
 the same resolved inputs that were accepted in the `EFFECTIVE REVIEW
-PLAN`. Fleet mode, model, and whether settings will be remembered are
-part of the plan and approval hash. The `EFFECTIVE REVIEW PLAN` summary
+PLAN`. Fleet mode, model, whether settings will be remembered, and
+`OpenHtmlPolicy` are part of the plan and approval hash. Guided plan-only and
+execution calls both pass `--no-open-html`, so that policy remains `never`
+without changing between approval and execution. The `EFFECTIVE REVIEW PLAN` summary
 shows prior-art as disabled
 for scope `1`, or the authoritative scope-`2`/`3` prior-art start/end
 window from `PriorArtWindow`. It also labels `ReviewDate`,
@@ -675,10 +686,11 @@ arbitrary executables, TLS bypass, or cross-run state.
 Provenance output is evidence-only and must receive human review before it
 is shared.
 
-At the end of an interactive run, the runner asks whether to open the
-local HTML index. Use `--open-html` to open it automatically or
-`--no-open-html` to disable opening. Allow-all/YOLO sessions also open
-it automatically unless disabled.
+The runner writes artifact paths and exits without an opening prompt or
+browser launch, including in interactive and allow-all/YOLO sessions.
+Advanced direct-runner use may pass explicit `--open-html` to open the local
+HTML index after completion. `--no-open-html` remains accepted as a
+compatibility spelling for the default never-open policy.
 
 ## Output
 

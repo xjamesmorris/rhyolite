@@ -5,6 +5,11 @@ Release branches, commits, and stable tags originate here. Repository
 visibility is an independent administrative decision; changing visibility is
 not part of the release script or checklist.
 
+Public release copy describes Rhyolite as an open-source software analysis
+platform and `repo-review` as its initial/default and currently only shipped
+module. This release remains a GitHub Copilot plugin with Copilot-only
+production harness support.
+
 The clean export and preflight remain mandatory release gates. They validate
 the exact candidate tree but do not create a separate history or release
 repository.
@@ -29,7 +34,8 @@ repository.
 6. Run the Fedora Linux 44 Bash validator and smoke-test installation
    and manual update from the published repository.
 7. Smoke-test the onboarding flow from a new Copilot CLI session:
-   confirm the one-line version/start status, invoke `/rhyolite:start`
+   confirm the one-line `Rhyolite vX.Y.Z Beta` version/start status, invoke
+   `/rhyolite:start`
    to see the large plaque, verify exact
    `help`/`status`/`explain scopes` behavior, and confirm isolated child
    review homes still disable hooks.
@@ -60,7 +66,7 @@ repository.
 4. Fast-forward `main` to the approved candidate commit. Do not rewrite
    `main`, publish a different tree, or tag an unpushed commit.
 5. Push `main`, create the matching annotated stable tag on that exact commit,
-   and push the tag, for example `v0.5.0`.
+   and push the matching `vX.Y.Z` tag.
 6. Verify that local `main`, `origin/main`, and the stable tag resolve to the
    same commit and that every version surface matches the tag.
 7. Ask users to register the marketplace repository:
@@ -93,8 +99,11 @@ repository.
     the experimental shorthand, and the full welcome panel is
     followed by the first setup question in the same turn. Confirm the
     source, output, scope, provenance-lookback, final run/edit/explain,
-    and open-HTML decisions use Copilot CLI's numbered picker with its
-    automatic final `Other` custom-answer option.
+    and research-cookie decisions use Copilot CLI's numbered picker with its
+    automatic final `Other` custom-answer option. Confirm successful
+    completion prints `RHYOLITE EXECUTIVE SUMMARY`, lists artifact paths
+    including the HTML index, and ends without a retrieval/opening question
+    or browser launch.
 
 If public distribution is intended, separately verify repository visibility,
 GitHub private vulnerability reporting, support forms, anonymous marketplace
@@ -105,6 +114,10 @@ Copilot plugins are public-preview features.
 
 - Keep `VERSION`, `plugin.json`, and `marketplace.json` versions
   synchronized.
+- Keep the temporary user-facing `Beta` display suffix separate from machine
+  semver. `VERSION` and JSON version fields remain `X.Y.Z`, stable tags remain
+  `vX.Y.Z`, and plan, state, and other schemas keep their independent integer
+  versions. Do not encode `Beta` as prerelease semver.
 - Create release tags in this canonical repository only after the approved
   commit is pushed to `origin/main`.
 - Record security or behavior changes in release notes.
@@ -152,10 +165,10 @@ that onboarding notice.
 7. Fast-forward local `main` to the approved release commit and push
    `origin/main`.
 8. Create and push the matching annotated stable tag on that exact commit,
-   for example `v0.5.0`.
+   using `vX.Y.Z`.
 9. Verify a fresh remote install and a manual update from the prior public
-   release, including the one-line load status, the large plaque after
-   a review-start command, and the exact
+   release, including the `Rhyolite vX.Y.Z Beta` load status, the large
+   plaque after a review-start command, and the exact
    `help`/`status`/`explain scopes` setup behavior.
 10. Verify the remote branch and tag resolve to the same commit, then remove
    merged release branches.

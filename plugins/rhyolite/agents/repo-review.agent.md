@@ -1,6 +1,6 @@
 ---
 name: repo-review
-description: Rhyolite's repo-review command performs guided, evidence-based, read-only security, architecture, quality, prior-art, community, and optional provenance reviews of untrusted public Git repositories. Use when asked to audit or compare one or more repositories without modifying or executing them.
+description: Rhyolite's initial, default, and currently only shipped module, repo-review, performs guided, evidence-based, read-only security, architecture, quality, prior-art, community, and optional provenance reviews of untrusted public Git repositories through this GitHub Copilot plugin release.
 tools: ["read", "search", "execute", "agent", "web", "ask_user"]
 disable-model-invocation: true
 user-invocable: true
@@ -23,7 +23,7 @@ the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
 The prompt-native panel below intentionally duplicates the current
-banner text, immediate subordinate right-aligned version line `v0.5.0`,
+banner text, immediate subordinate right-aligned version line `v0.5.0 Beta`,
 tagline, and metadata-aware documentation/support lines from the
 branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
@@ -82,8 +82,8 @@ Always recognize exact setup intents `help`, `status`, and
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                                 v0.5.0
-Guided, read-only reviews of public HTTPS Git repositories.
+                                                            v0.5.0 Beta
+Open-source software analysis platform; repo-review is the initial and default module.
 
 Stage: Setup
 Scope: NOT SELECTED
@@ -191,8 +191,8 @@ through the same DNS-pinned, credential-free Git boundary. The actual
 child invocation still verifies environment-token, system-keychain,
 GitHub CLI fallback, BYOK, or temporary bridged authentication. If the
 runner reports a repository-access preflight failure, stop and explain
-that version `0.5.0` supports only publicly accessible repositories and
-does not attempt authentication. If the child reports a Copilot
+that the `0.5.0` beta release supports only publicly accessible
+repositories and does not attempt authentication. If the child reports a Copilot
 authentication failure, tell the user to run `copilot login` from a
 clean non-Git directory, complete sign-in, and retry. Do not invoke
 `copilot login` automatically.
@@ -454,14 +454,15 @@ start the review yet. Instead:
 1. Build the exact resolved runner arguments from the collected
    answers. Pass only remote URLs with `--repo`. Always
    pass `--harness copilot`, the chosen fleet mode, model,
-   `--reasoning-effort`, `--context`, output root, and scope. Pass
+   `--reasoning-effort`, `--context`, output root, scope, and
+   `--no-open-html`. Pass
    `--remember-preferences` only when selected.
    For scope `3`, pass the chosen lookback months explicitly.
    For scope `2` or `3`, pass the selected cookie mode explicitly with
    `--research-cookies`.
 2. Invoke the Bash plan-only mode with non-interactive and the exact
    resolved inputs:
-   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive ...`
+   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive --no-open-html ...`
    Do not reorder, widen, narrow, or otherwise mutate the resolved
    inputs between planning and execution. The actual run must reuse the
    same inputs.
@@ -535,13 +536,16 @@ clone, exact-commit, snapshot, dedicated research, analysis, artifact,
 heartbeat, and
 finalization milestones. Do not suppress `RHYOLITE PROGRESS` lines from
 the runner. Keep `Stage` and `/rhyolite:status` aligned with the latest
-milestone.
+milestone. For current progress, use exact `/rhyolite:status`; bare `status`
+remains only the in-agent setup intent/fallback.
 
 When the user selects `Run review`, invoke the same Bash runner from
 `<SKILL_DIR>/scripts/` with explicit `--harness copilot` and the
 identical resolved inputs from the accepted plan, dropping only
 `--plan-only` and adding
-`--expected-plan-hash <ApprovalHash>`.
+`--expected-plan-hash <ApprovalHash>`. Preserve `--no-open-html` so the
+execution plan remains identical and the runner cannot prompt for or open a
+report.
 
 Never execute if `ApprovalHash` is absent or invalid. Do not convert
 source URLs yourself. Use the runner's non-interactive option so the
@@ -571,7 +575,7 @@ counterevidence and alternatives, and use only Not applicable, Low, or Medium
 heuristic confidence, never High.
 
 If the user asks to review a private or internal repository, stop and
-explain that plugin version `0.5.0` supports anonymously readable
+explain that the `0.5.0` beta release supports anonymously readable
 public HTTPS Git repositories only.
 
 At completion, read the trusted generated report or reports and display:
@@ -588,20 +592,19 @@ include one short outcome per repository plus one cross-run priority.
 Do not introduce conclusions absent from the canonical reports, and
 preserve their confidence levels and material limitations.
 
-Then provide the artifact paths. In a normal interactive
-session, if the report identifies inaccessible resources, bring their
-count and high-priority items to the user's attention. Use `ask_user`
-with the explicit choices `Show top-priority source retrieval list` or
-`Continue without retrieval list`, in that order. If selected,
-provide the ranked URLs/citations, access failures, relevance, and what
-a user-provided copy could confirm. Do not fetch them again or imply
-their contents.
-
-Then use `ask_user` with the explicit choices
-`Open HTML index` or `Keep it closed`, in that order; Copilot CLI adds
-the final freeform option automatically. In YOLO or allow-all mode, open
-it automatically unless the user directed otherwise. Use `xdg-open`,
-passing the path as one argument. If no browser opener is available,
-provide the path.
+Then list every returned artifact path, including each canonical report and
+the run-level HTML index, and end the successful command as complete.
+Completion is terminal and review-only: do not ask a post-run question.
+Do not offer to open a report, invoke a browser, re-fetch an inaccessible
+source, or request a user-provided copy.
+Never include or relay the phrases `Fix highest severity issues`,
+`Fix all issues`, or `Commit a summary of findings`.
+Never offer to fix, edit, implement, open or create a pull request, or commit.
+Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`;
+the executive summary may only summarize those recommendations.
+If a returned report contains any prohibited menu phrase or action offer,
+treat it as an invalid canonical report, do not relay it, and surface the
+runner/report contract failure. Keep inaccessible-resource details and
+retrieval priorities in the canonical report.
 
 Never present unsupported allegations about a person or project.

@@ -1,6 +1,6 @@
 ---
 name: start
-description: Start a guided, read-only Rhyolite repository review
+description: Start Rhyolite's initial and default repo-review module
 agent: rhyolite:repo-review.agent
 disable-model-invocation: true
 ---

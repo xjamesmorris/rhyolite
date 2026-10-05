@@ -8,14 +8,14 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const MANUAL_PLAQUE_COPY_LINES = [
-    'Rhyolite guides evidence-based, read-only reviews of public HTTPS Git repositories.',
-    'Use /rhyolite:start to begin a review.',
+    'Rhyolite is an open-source software analysis platform.',
+    'repo-review is its initial and default module; use /rhyolite:start to begin.',
     'Use /rhyolite:help for commands or /rhyolite:status for current progress.',
 ];
 const LAUNCHER_PLAQUE_COPY_LINES = [
-    'Rhyolite is running in automatic guided mode.',
-    'Startup is continuing automatically; wait for the first setup prompt before responding.',
-    'Use /rhyolite:help for commands or /rhyolite:status for current progress.',
+    'Rhyolite is an open-source software analysis platform.',
+    'repo-review is its initial and default module; automatic guided setup is starting.',
+    'Wait for the first setup prompt; use /rhyolite:status for current progress.',
 ];
 const PLAQUE_GRADIENT = [
     '118;234;255',
@@ -215,8 +215,8 @@ function validateProgressPayload(progressPayload, pluginVersion, findings) {
     if (!progressPayload.message.includes(TRUSTED_START_COMMANDS[0])) {
         findings.push('Progress payload message must explicitly point to /rhyolite:start.');
     }
-    if (!progressPayload.message.includes(`v${pluginVersion}`)) {
-        findings.push('Progress payload message must carry the plugin.json version.');
+    if (!progressPayload.message.includes(`v${pluginVersion} Beta`)) {
+        findings.push('Progress payload message must carry the plugin.json version and Beta display label.');
     }
     if (/\bskill\s*\(\s*start\s*\)/iu.test(progressPayload.message)) {
         findings.push('Progress payload message must not mention skill(start).');
@@ -281,7 +281,7 @@ function getBannerDisplayWidth(bannerText) {
 }
 
 function buildExpectedVersionLine(bannerText, pluginVersion) {
-    const versionText = `v${pluginVersion}`;
+    const versionText = `v${pluginVersion} Beta`;
     const bannerWidth = getBannerDisplayWidth(bannerText);
     const padding = Math.max(0, bannerWidth - stringWidth(versionText));
     return `${' '.repeat(padding)}${versionText}`;
@@ -333,11 +333,11 @@ function validatePlaquePayload(
     if (actualLines[versionLineIndex] !== expectedVersionLine) {
         findings.push(`${label} must place the version line immediately below the wordmark.`);
     }
-    if (!/^v\S+$/.test(expectedVersionText)) {
-        findings.push(`${label} expected version line must contain only v<version> text.`);
+    if (!/^v\d+\.\d+\.\d+ Beta$/.test(expectedVersionText)) {
+        findings.push(`${label} expected version line must contain only v<version> Beta text.`);
     }
     if (actualLines[versionLineIndex]?.trimStart() !== expectedVersionText) {
-        findings.push(`${label} version line must contain only the plugin version text.`);
+        findings.push(`${label} version line must contain only the plugin version and Beta display label.`);
     }
     if (stringWidth(actualLines[versionLineIndex] ?? '') !== bannerWidth) {
         findings.push(`${label} version line must right-align to the banner display width.`);
@@ -526,6 +526,7 @@ function validateExtension(extensionText, findings) {
         'PUBLIC_PLACEHOLDER_PATTERN',
         'metadata.localSupportPath',
         'metadata.localContributingPath',
+        'Rhyolite v${RHYOLITE_VERSION} Beta loaded',
     ];
 
     for (const fragment of requiredFragments) {
@@ -751,7 +752,7 @@ function runSelfCheck() {
         );
         const progress = JSON.stringify({
             type: 'progress',
-            message: `Rhyolite v${version} loaded — type /rhyolite:start to start.`,
+            message: `Rhyolite v${version} Beta loaded — type /rhyolite:start to start.`,
         });
         const coloredPlaque = JSON.stringify({
             type: 'progress',
@@ -817,6 +818,7 @@ function runSelfCheck() {
             'metadata.pullsUrl;',
             'metadata.localSupportPath;',
             'metadata.localContributingPath;',
+            'const loadNotice = `Rhyolite v${RHYOLITE_VERSION} Beta loaded`;',
             'const errorHeader = "RHYOLITE ERROR";',
             'const errorStage = `Stage: extension RPC ${stage}`;',
             'await joinSession({ commands: [] });',

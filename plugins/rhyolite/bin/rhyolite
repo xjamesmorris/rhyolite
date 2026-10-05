@@ -600,7 +600,7 @@ print_help() {
     local version="$1"
 
     cat <<EOF
-Rhyolite launcher v${version}
+Rhyolite v${version} Beta
 
 Usage:
   rhyolite [--help]
@@ -753,7 +753,7 @@ main() {
                 '--version does not accept additional arguments.' \
                 'Run rhyolite --version without any other arguments.' \
                 2
-        printf 'Rhyolite v%s\n' "${version}"
+        printf 'Rhyolite v%s Beta\n' "${version}"
         exit 0
     fi
 

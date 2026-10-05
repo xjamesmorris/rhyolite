@@ -10,8 +10,8 @@ Reply with exactly this plain-text help:
 ```text
 Rhyolite commands
 
-/rhyolite:repo-review  Start the guided, read-only repository-review command.
-/rhyolite:start        Start the guided review session (recommended).
+/rhyolite:repo-review  Start the initial/default read-only repo-review module.
+/rhyolite:start        Start repo-review in a guided session (recommended).
 /repo-review           Shorthand when Rhyolite extension commands are available.
 /rhyolite:version      Show the installed Rhyolite version.
 /rhyolite:status       Show current command, task, subagent, timing, and output status.

@@ -111,7 +111,7 @@ session = await joinSession({
   commands: [
     {
       name: "repo-review",
-      description: "Start a guided, read-only Rhyolite repository review",
+      description: "Start Rhyolite's initial and default repo-review module",
       handler: async ({ args }) => {
         let rpcStage = "argument decoding";
         try {
@@ -178,7 +178,7 @@ try {
   const activeAgent = await session.rpc.agent.getCurrent();
   if (activeAgent.agent?.id !== REPO_REVIEW_AGENT_ID) {
     await session.log(
-      `Rhyolite v${RHYOLITE_VERSION} loaded — ` +
+      `Rhyolite v${RHYOLITE_VERSION} Beta loaded — ` +
         "type /rhyolite:start to start.",
     );
   }

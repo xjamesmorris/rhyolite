@@ -337,7 +337,7 @@ Worker environment must:
 | `harness_persist_agent_state` | Runtime-home path and destination agent-state directory. Status only. | Copy only an explicit sanitized continuation allowlist. |
 | `harness_sanitize_runtime_home` | Runtime-home path. Status only. | Remove or sanitize the entire temporary home; be safe when called by normal flow or the exit trap. |
 | `harness_verify_isolation` | Sanitized timeline path. Status only. | Perform adapter-specific post-run isolation checks. An explicit no-op is allowed only when the adapter has no additional invariant to verify. |
-| `harness_allow_all_detected` | No arguments. Boolean status: zero means detected, one means not detected. | Detect the outer harness state for user-facing behavior without forwarding it to the child. Do not print its value. |
+| `harness_allow_all_detected` | No arguments. Boolean status: zero means detected, one means not detected. | Retain the compatibility signal without forwarding it to the child. Do not print its value or use it to open reports. |
 
 Runtime-home requirements:
 

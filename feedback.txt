@@ -1,0 +1,10 @@
+- add Beta / beta after version for now
+- update docs/description for release: rhyolite is an OSS analysis platform, repo-review is the initial & default module
+- "use status", should that be /rhyolite:status ?
+- do not offer to fix repo, this is a review module only
+- don't offer to commit findings, stop random scope creep
+- with the inaccessible resources list, just document as part of the report, do not ask user about it; this
+should run to completion without further interaction with the user unless absolutely required, just perform
+the analysis, write the report, summarize and task complete.
+- don't offer to open the report, just write it and say where it was written in the end summary
+

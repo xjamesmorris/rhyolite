@@ -64,9 +64,8 @@
 20. A tampered or mismatched launcher preference silently changes fleet
     mode or model, leaks a selected source, or bypasses review approval.
 21. An explicit `--yolo` launch broadens the outer Copilot orchestrator
-    to all permissions for that launch. Its allow-all state also makes the
-    runner open the local HTML report index without confirmation unless
-    that behavior is disabled.
+    to all permissions for that launch, or allow-all state is incorrectly
+    coupled to report opening instead of requiring explicit `--open-html`.
 22. The retired launcher `--autopilot` spelling is mistaken for an initial
     request, or an in-session plan/autopilot transition replays the plaque,
     presents a misleading model-change notice, continues the guided review
@@ -158,9 +157,12 @@
 - `--yolo` is disabled by default and is an ephemeral per-launch
   outer-orchestrator switch. It opts the outer Copilot orchestrator into all
   permissions but is not persisted in launcher context, copied into the
-  trusted launcher setup block, or remembered as a preference. The runner
-  reads allow-all state only to decide whether to open the local HTML report
-  index automatically; `--no-open-html` disables that behavior.
+  trusted launcher setup block, or remembered as a preference. The runner's
+  default and guided open policy is `never`; it writes artifact paths and
+  exits without a prompt or browser launch. Only explicit advanced
+  direct-runner `--open-html` may open the index. `--no-open-html` remains a
+  compatibility spelling, and `harness_allow_all_detected` is retained only
+  as a harness contract compatibility signal, not an opening decision.
 - The launcher has an explicit retired-option parser branch for
   `--autopilot`; it renders `RHYOLITE ERROR` and exits `2` before Copilot
   starts. It passes `--mode interactive` explicitly. Rhyolite does not support

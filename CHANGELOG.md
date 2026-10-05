@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added a temporary visible `Beta` suffix to user-facing `vX.Y.Z` displays
+  while keeping `VERSION` and JSON version fields at machine semver `X.Y.Z`,
+  stable tags at `vX.Y.Z`, and approval data bound to independent plan/state
+  schema versions.
+- Repositioned Rhyolite as an open-source software analysis platform with
+  `repo-review` as its initial/default and currently only shipped module,
+  while preserving this release as a GitHub Copilot plugin with Copilot-only
+  production harness support.
+- Made successful completion terminal and review-only: Rhyolite now reads the
+  trusted report, prints `RHYOLITE EXECUTIVE SUMMARY`, lists artifacts
+  including the HTML index, and ends without retrieval/opening questions or
+  offers to modify the reviewed repository. The runner now defaults
+  `OpenHtmlPolicy` to `never`; only explicit direct-runner `--open-html` may
+  open the index, and allow-all state no longer affects opening.
 - Validate every selected review model against the live model catalog exposed
   by the installed Copilot CLI. The launcher and guided setup can list exact
   available IDs, including `gpt-6-sol` when present, and runtime agent

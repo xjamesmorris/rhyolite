@@ -8,8 +8,11 @@ pointers to this file, not independent policy sources.
 
 ## Build, validation, and tests
 
-Rhyolite is a source-loaded GitHub Copilot CLI plugin. There is no compile or
-package build step. From the repository root:
+Rhyolite is an open-source software analysis platform. `repo-review` is its
+initial and default module and is currently the only shipped module. This
+release is a source-loaded GitHub Copilot CLI plugin with Copilot-only
+production harness support. There is no compile or package build step. From
+the repository root:
 
 ```bash
 # Load the development checkout and verify plugin discovery.
@@ -118,13 +121,17 @@ supported and must not drive new work.
   production registry, packaged, exposed through the launcher, or documented
   as runtime support.
 - `plugins/rhyolite/agents/repo-review.agent.md` is the user-facing command
-  orchestrator. It reserves its embedded prompt-native panel for exact
+  orchestrator for the initial/default module. It reserves its embedded
+  prompt-native panel for exact
   `help`, follows that panel with a live `CURRENT SETUP STATUS` block,
   consumes trusted launcher source/fleet/model/reasoning/context selections
   or asks through
   guided setup, then asks for output and scope through numbered `ask_user`
   pickers. It surfaces exact `help`, `status`, and `explain scopes` setup
-  intents and delegates every review to the bundled runner.
+  intents and delegates every review to the bundled runner. Successful
+  completion reads the trusted report, prints `RHYOLITE EXECUTIVE SUMMARY`,
+  lists artifact paths including the HTML index, and ends without a post-run
+  question or repository-change offer.
 - Finite choice lists rely on Copilot CLI's automatic final custom-answer
   option. Do not add an explicit `Other` choice.
 - `repo-review-worker.agent.md` is the non-user-invocable, write-disabled main
@@ -151,11 +158,15 @@ supported and must not drive new work.
 - Startup notices use the concise ANSI-gradient plaque. Explicit no-color
   signals win; uncertain terminal capability defaults to color. The plaque
   contains only the large RHYOLITE logo, a smaller right-aligned
-  `v<version>` line immediately below it using the final gradient stop,
+  `v<version> Beta` line immediately below it using the final gradient stop,
   solid full/half-block contours, and three concise functional onboarding
   sentences. Do not add themed labels or faux telemetry.
 - Long reviews emit `RHYOLITE PROGRESS` milestones and heartbeats. Completion
-  includes a brief executive summary.
+  includes a brief executive summary, artifact paths, and a terminal
+  review-only end state. Do not add post-run retrieval/opening pickers or
+  offers to fix, edit, implement, create pull requests, or commit changes.
+  For current progress, use exact `/rhyolite:status`; bare `status` remains
+  only the in-agent setup intent/fallback.
 - `plugins/rhyolite/skills/readonly-repository-review/SKILL.md` defines the
   review and safety contract. `review-prompt.txt` is rendered by the Bash
   runner; `research-prompt.txt` defines the dedicated dossier contract. Their
@@ -185,6 +196,12 @@ supported and must not drive new work.
   `.git`-free snapshot, supplies bounded Git metadata, creates isolated
   harness homes, and invokes workers with write/shell/custom
   instructions/built-in MCPs disabled.
+- The runner's default and guided `OpenHtmlPolicy` is `never`. Normal
+  completion writes paths and exits without prompting or opening a browser,
+  including under allow-all. Only explicit advanced direct-runner
+  `--open-html` may open the HTML index; `--no-open-html` remains a
+  compatibility spelling. `harness_allow_all_detected` remains a contract
+  compatibility function and must not control report opening.
 - Scope 1 creates no research process, config, log, cookie jar, or research
   artifact. Scope 2/3 launches dedicated research through an ephemeral local
   MCP config, validates at least one successful public response, the dossier,
