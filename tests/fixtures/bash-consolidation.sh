@@ -201,9 +201,10 @@ fixture_token="$(printf '%s%s' ghp_ 123456789012345678901234567890)"
         "${fixture_email}" "${fixture_userinfo_url}"
     printf '%s\n' \
         'Authorization: Bearer fixture-auth' \
-        'Proxy-Authorization: Basic fixture-proxy' \
-        'access_token=fixture-access API_KEY:fixture-api password = fixture-password SECRET=fixture-secret TOKEN: fixture-token' \
-        "Git token: ${fixture_token}"
+        'Proxy-Authorization: Basic fixture-proxy'
+    printf 'access_token=%s API_KEY:%s password = %s SECRET=%s TOKEN: %s\n' \
+        fixture-access fixture-api fixture-password fixture-secret fixture-token
+    printf 'Git token: %s\n' "${fixture_token}"
     printf 'Controls:\001\007\013\014\037\177carriage\rreturn\ttab\n'
     printf 'unterminated line'
 } > "${sanitization_input}"

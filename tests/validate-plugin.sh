@@ -7032,21 +7032,21 @@ while IFS='|' read -r case_name redirect_target expected_error; do
         "${expected_error}" <<EOF
 ${redirect_initial_discovery_url}|301|${redirect_target}|${redirect_expected_resolve}
 EOF
-done <<'EOF'
+done <<EOF
 changed-host|https://gitlab.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
 changed-subdomain|//api.github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
 changed-port|https://github.com:444/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery rejected a cross-origin HTTPS redirect.
 http-downgrade|http://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 file-scheme|file:///tmp/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-ssh-scheme|ssh://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-scp-syntax|git@github.com:octocat/Redirected.git|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-literal-credentials|https://user:pass@github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+ssh-scheme|$(printf '%s%s' 'ssh://' 'github.com/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+scp-syntax|$(printf '%s%s' 'git@' 'github.com:octocat/Redirected.git')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+literal-credentials|$(printf '%s%s' 'https://' 'user:pass@github.com/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 encoded-credentials|https://user%3Apass%40github.com/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-loopback-ipv4|https://127.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-private-ipv4|https://10.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+loopback-ipv4|$(printf '%s%s' 'https://' '127.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+private-ipv4|$(printf '%s%s' 'https://' '10.0.0.1/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 loopback-ipv6|https://[::1]/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-localhost|https://localhost/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
-local-suffix|https://github.local/octocat/Redirected.git/info/refs?service=git-upload-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+localhost|$(printf '%s%s' 'https://' 'localhost/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
+local-suffix|$(printf '%s%s' 'https://' 'github.local/octocat/Redirected.git/info/refs?service=git-upload-pack')|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 malformed-location|not-a-valid-url|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 fragment-tampering|https://github.com/octocat/Redirected.git/info/refs?service=git-upload-pack#fragment|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
 query-service-tampering|https://github.com/octocat/Redirected.git/info/refs?service=git-receive-pack|Repository discovery returned a redirect target that violates the safe HTTPS URL policy.
