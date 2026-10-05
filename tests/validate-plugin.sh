@@ -2049,8 +2049,14 @@ bash -n "${COPILOT_HARNESS}"
 node --check "${RHYOLITE_EXTENSION}"
 node --check "${TUI_RUNTIME_VALIDATOR}"
 node "${TUI_RUNTIME_VALIDATOR}" --self-check >/dev/null
-python3 -m py_compile "${RESEARCH_BROKER}" "${RESEARCH_BROKER_TEST}"
-python3 "${RESEARCH_BROKER_TEST}" >/dev/null
+python3 -B - "${RESEARCH_BROKER}" "${RESEARCH_BROKER_TEST}" <<'PY'
+import pathlib
+import sys
+
+for source in sys.argv[1:]:
+    compile(pathlib.Path(source).read_bytes(), source, "exec")
+PY
+python3 -B "${RESEARCH_BROKER_TEST}" >/dev/null
 
 [[ -x "${ROOT_LAUNCHER}" ]] ||
     fail 'Repository-root Rhyolite launcher is not executable.'

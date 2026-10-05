@@ -133,7 +133,8 @@ function inventory(directory, prefix = "") {
         expect(!stat.isSymbolicLink(), `Unexpected packaged symlink: ${relative}`);
         expect(!/\.(?:ps1|psm1|psd1|cmd|bat)$/i.test(name),
             `Installed plugin contains an unsupported alternate-shell artifact: ${relative}`);
-        expect(![".git", ".github", "tests", "fixtures", "tools"].includes(name) &&
+        expect(![".git", ".github", "tests", "fixtures", "tools", "__pycache__"].includes(name) &&
+            !/\.py[co]$/i.test(name) &&
             !["rhyolite-ui-validator.agent.md", "rhyolite-tui-runtime-validator.agent.md",
                 "noop.sh", "noop-worker.sh"].includes(name),
             `Installed plugin contains a development-only artifact: ${relative}`);
@@ -366,6 +367,8 @@ grep -Fq 'Installed package content differs from the exported payload:' \
 
 for forbidden in \
     scripts/unsupported.ps1 \
+    scripts/install-coverage.pyc \
+    scripts/install-coverage.pyo \
     lib/harness/noop.sh \
     agents/rhyolite-ui-validator.agent.md \
     agents/rhyolite-tui-runtime-validator.agent.md; do
@@ -381,6 +384,17 @@ for forbidden in \
         fail 'Forbidden payload failed for a reason other than package exclusion.'
     rm -- "${fixture}/plugins/rhyolite/${forbidden}"
 done
+cache_fixture="${fixture}/plugins/rhyolite/scripts/__pycache__"
+mkdir -- "${cache_fixture}"
+if assert_payload "${fixture}/plugins/rhyolite" "${version}" \
+    "${fixture}/plugins/rhyolite" "${fixture}" \
+    > "${TEST_ROOT}/cache-payload.log" 2>&1; then
+    fail 'Package validation accepted a development bytecode-cache directory.'
+fi
+grep -Fq 'development-only artifact: scripts/__pycache__' \
+    "${TEST_ROOT}/cache-payload.log" ||
+    fail 'Cache payload failed for a reason other than package exclusion.'
+rmdir -- "${cache_fixture}"
 [[ ! -e "${TEST_ROOT}/launcher-copilot-called" ]] ||
     fail 'Offline launcher help, version, or failure checks unexpectedly invoked Copilot.'
 [[ "$(stat -c '%a' "${TEST_ROOT}")" == 700 &&
