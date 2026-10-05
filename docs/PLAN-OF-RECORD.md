@@ -77,7 +77,7 @@ preserved speculatively.
 - [x] Drop non-Fedora compatibility constraints and document the
   supported Linux/Bash/GNU toolchain.
 - [x] Add any remaining useful Linux-native installation coverage.
-- [ ] Re-run public-release export/preflight and update package contents
+- [x] Re-run public-release export/preflight and update package contents
   after the removal.
 
 ## Non-goals
