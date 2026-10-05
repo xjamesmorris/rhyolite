@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-05
+
+- Consolidated canonical Bash launcher-state resolution, report/dossier
+  extraction, and streaming output sanitization without changing safety
+  boundaries, artifact schemas, or supported runtime behavior. Added focused
+  regression coverage for extraction failures, control/redaction handling,
+  and state-path resolution.
+- Expanded Linux installation tests to verify the complete packaged payload,
+  Git-free marketplace installation, prior-version manual updates, installed
+  launcher/helper behavior through symlinked paths with spaces, and
+  fail-closed malformed, incomplete, corrupted, or unsupported packages.
+  Fixture configuration and state remain isolated from the user's Copilot
+  installation.
+- Preserved selected terminal `.git` endpoints as canonical source identity.
+  Anonymous pinned-TLS Git discovery may follow at most three explicit
+  same-origin HTTPS 301 hops without replacing the approved source or
+  weakening credential, redirect, or DNS isolation.
 - Added a temporary visible `Beta` suffix to user-facing `vX.Y.Z` displays
   while keeping `VERSION` and JSON version fields at machine semver `X.Y.Z`,
   stable tags at `vX.Y.Z`, and approval data bound to independent plan/state
@@ -16,7 +33,7 @@
   offers to modify the reviewed repository. The runner now defaults
   `OpenHtmlPolicy` to `never`; only explicit direct-runner `--open-html` may
   open the index, and allow-all state no longer affects opening.
-- Validate every selected review model against the live model catalog exposed
+- Validated every selected review model against the live model catalog exposed
   by the installed Copilot CLI. The launcher and guided setup can list exact
   available IDs, including `gpt-6-sol` when present, and runtime agent
   frontmatter no longer overrides the validated CLI model.

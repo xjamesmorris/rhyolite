@@ -72,11 +72,11 @@ preserved speculatively.
 - [x] Remove alternate-platform hook entries and metadata.
 - [x] Remove parity assertions from the Linux validator.
 - [x] Remove hosted CI workflows.
-- [ ] Consolidate duplicated orchestration and output logic around the
+- [x] Consolidate duplicated orchestration and output logic around the
   Bash implementation.
 - [x] Drop non-Fedora compatibility constraints and document the
   supported Linux/Bash/GNU toolchain.
-- [ ] Add any remaining useful Linux-native installation coverage.
+- [x] Add any remaining useful Linux-native installation coverage.
 - [ ] Re-run public-release export/preflight and update package contents
   after the removal.
 

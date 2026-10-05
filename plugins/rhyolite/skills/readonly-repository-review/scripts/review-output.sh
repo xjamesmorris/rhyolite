@@ -40,6 +40,13 @@ strip_terminal_controls() {
     '
 }
 
+sanitize_review_text() {
+    # Caller-specific prefilters and stricter error/transcript profiles stay separate.
+    strip_terminal_controls |
+        redact_credentials |
+        redact_emails
+}
+
 bound_repository_metadata() {
     awk '{
         print substr($0, 1, 512)
@@ -149,70 +156,29 @@ bound_repository_metadata() {
         '
 }
 
-extract_report() {
+extract_delimited_review_output() {
     local timeline="$1"
-    local report="$2"
+    local output="$2"
+    local kind="$3"
 
-    awk '
+    case "${kind}" in
+        report|research-dossier) ;;
+        *) return 2 ;;
+    esac
+
+    awk -v kind="${kind}" '
         function is_delimiter(value, trimmed) {
             trimmed = value
             sub(/^[[:space:]]+/, "", trimmed)
             sub(/[[:space:]]+$/, "", trimmed)
             return trimmed ~ /^=+$/ && length(trimmed) >= 80
         }
-        { lines[NR] = $0 }
-        END {
-            start = 0
-            last = NR
-            candidate_finish = 0
-            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) {
-                last--
+        function is_header(value, normalized) {
+            normalized = toupper(value)
+            if (kind == "report") {
+                return normalized ~ /REPOSITORY.*REVIEW.*REPORT/
             }
-            for (i = 1; i <= last; i++) {
-                if (is_delimiter(lines[i])) {
-                    window = lines[i]
-                    header = 0
-                    for (j = 1; j <= 3 && i + j <= last; j++) {
-                        window = window " " lines[i + j]
-                        if (toupper(lines[i + j]) ~ /REPOSITORY.*REVIEW.*REPORT/) {
-                            header = i + j
-                        }
-                    }
-                    if (header > 0 &&
-                        toupper(window) ~ /REPOSITORY.*REVIEW.*REPORT/) {
-                        start = i
-                        candidate_finish = 0
-                        for (j = header + 1; j <= last; j++) {
-                            if (is_delimiter(lines[j])) {
-                                candidate_finish = j
-                                break
-                            }
-                        }
-                    }
-                }
-            }
-            if (start == 0) {
-                exit 42
-            }
-            finish = candidate_finish > 0 ? candidate_finish : last
-            for (i = start; i <= finish; i++) {
-                sub(/^ /, "", lines[i])
-                print lines[i]
-            }
-        }
-    ' "${timeline}" > "${report}"
-}
-
-extract_research_dossier() {
-    local timeline="$1"
-    local dossier="$2"
-
-    awk '
-        function is_delimiter(value, trimmed) {
-            trimmed = value
-            sub(/^[[:space:]]+/, "", trimmed)
-            sub(/[[:space:]]+$/, "", trimmed)
-            return trimmed ~ /^=+$/ && length(trimmed) >= 80
+            return normalized == "REPOSITORY RESEARCH DOSSIER"
         }
         { lines[NR] = $0 }
         END {
@@ -226,7 +192,7 @@ extract_research_dossier() {
                 if (is_delimiter(lines[i])) {
                     header = 0
                     for (j = 1; j <= 3 && i + j <= last; j++) {
-                        if (toupper(lines[i + j]) == "REPOSITORY RESEARCH DOSSIER") {
+                        if (is_header(lines[i + j])) {
                             header = i + j
                         }
                     }
@@ -251,7 +217,15 @@ extract_research_dossier() {
                 print lines[i]
             }
         }
-    ' "${timeline}" > "${dossier}"
+    ' "${timeline}" > "${output}"
+}
+
+extract_report() {
+    extract_delimited_review_output "$1" "$2" report
+}
+
+extract_research_dossier() {
+    extract_delimited_review_output "$1" "$2" research-dossier
 }
 
 canonicalize_research_dossier_closing_delimiter() {

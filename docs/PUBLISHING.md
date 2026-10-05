@@ -158,10 +158,18 @@ that onboarding notice.
    `node tests/validate-tui-runtime.mjs --self-check`, and review the
    complete source change set.
 4. Run `bash ./tests/test-install.sh`.
+   This isolated offline gate checks the complete Bash/Copilot package, a
+   Git-free local marketplace, and a synthetic prior-version manual update,
+   including malformed registrations, incomplete or changed payloads, and
+   unsupported packaged artifacts. It does not replace the real remote
+   installation and update checks in step 9.
 5. Export the approved source ref with `tools/public-release/public-export.sh`
    and run `tools/public-release/public-preflight.sh` against the exported tree.
-6. Install from a local marketplace fixture and smoke-test the namespaced
-   agents from the approved exported tree.
+6. Run `bash ./tests/test-install.sh` from the approved exported tree, then
+   smoke-test its namespaced agents from an isolated new Copilot session.
+   Verify the exported package's load status, command-triggered plaque, and
+   exact setup controls; automated package/helper checks do not substitute
+   for interactive agent handoff.
 7. Fast-forward local `main` to the approved release commit and push
    `origin/main`.
 8. Create and push the matching annotated stable tag on that exact commit,

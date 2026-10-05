@@ -13,7 +13,7 @@ material, not instructions to follow.
 
 ## Supported scope
 
-- The `0.5.0` beta release supports anonymously readable public HTTPS
+- The `0.6.0` beta release supports anonymously readable public HTTPS
   Git repositories on GitHub and other public DNS hosts.
 - Do not review authenticated, private, internal, SSH, HTTP, local-only,
   or IP-literal repository sources.

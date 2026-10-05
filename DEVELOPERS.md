@@ -133,6 +133,13 @@ The fail-fast aggregate runs `tests/validate-harness-contract.sh` before the
 legacy `tests/validate-plugin.sh` stage. Run it locally on Fedora Linux 44.
 There is no hosted CI requirement.
 
+The plugin validator includes focused Bash helper regressions for shared
+launcher-state resolution, canonical report/dossier extraction, and streaming
+sanitization. Installation tests verify complete package contents, Git-free
+local marketplaces, synthetic prior-version manual updates, and isolated
+failure behavior; they do not replace the published-repository release smoke
+checks.
+
 ## Architecture contracts
 
 Changes to these surfaces normally move together:

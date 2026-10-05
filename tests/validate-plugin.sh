@@ -10,6 +10,7 @@ SOURCE_ASSESSMENT_SKILL="${PLUGIN_ROOT}/skills/research-source-assessment/SKILL.
 RUNNER="${SKILL_ROOT}/scripts/run-parallel-reviews.sh"
 DISCOVERY="${SKILL_ROOT}/scripts/discover-repositories.sh"
 OUTPUT_HELPER="${SKILL_ROOT}/scripts/review-output.sh"
+BASH_CONSOLIDATION_FIXTURE="${ROOT}/tests/fixtures/bash-consolidation.sh"
 HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 COPILOT_HARNESS="${PLUGIN_ROOT}/lib/harness/copilot.sh"
 PROMPT="${SKILL_ROOT}/review-prompt.txt"
@@ -145,6 +146,7 @@ public_marketplace_add_guidance='copilot plugin marketplace add https://github.c
 
 required_files=(
     "${ROOT_LAUNCHER}"
+    "${BASH_CONSOLIDATION_FIXTURE}"
     "${PLUGIN_MANIFEST}"
     "${HOOKS_CONFIG}"
     "${WELCOME_METADATA}"
@@ -2041,6 +2043,7 @@ bash -n "${LAUNCHER_PREFERENCES_BASH}"
 bash -n "${ROOT_LAUNCHER}"
 bash -n "${RHYOLITE_LAUNCHER}"
 bash -n "${OUTPUT_HELPER}"
+bash -n "${BASH_CONSOLIDATION_FIXTURE}"
 bash -n "${HARNESS_COMMON}"
 bash -n "${COPILOT_HARNESS}"
 node --check "${RHYOLITE_EXTENSION}"
@@ -2154,6 +2157,9 @@ grep -Fq \
 grep -Fq 'readFileSync' "${RHYOLITE_EXTENSION}" &&
     grep -Fq 'branding", "welcome-metadata.json"' "${RHYOLITE_EXTENSION}" ||
     fail 'Rhyolite extension does not read centralized repository metadata.'
+grep -Fq 'launcher_home="$(rhyolite_launcher_home)"' "${RHYOLITE_LAUNCHER}" &&
+    ! grep -Fq 'get_launcher_home()' "${RHYOLITE_LAUNCHER}" ||
+    fail 'Launcher duplicates the canonical state-home resolver.'
 grep -Fq 'directly into setup' "${AGENT}" ||
     fail 'Rhyolite agent does not continue after the command plaque.'
 grep -Fq 'first public repository URL in the same turn' \
@@ -2170,6 +2176,11 @@ fixture_root="$(cd -- "${ROOT}/.." && pwd)/repo-reviewer-test-output"
 fixture_dir="${fixture_root}/validate-plugin-sh.$$.$RANDOM.$RANDOM"
 mkdir -p -- "${fixture_root}" "${fixture_dir}"
 trap 'chmod -R u+w -- "${fixture_dir}" 2>/dev/null || true; rm -rf -- "${fixture_dir}"' EXIT
+
+bash "${BASH_CONSOLIDATION_FIXTURE}" \
+    "${OUTPUT_HELPER}" "${LAUNCHER_PREFERENCES_BASH}" \
+    "${fixture_dir}/bash-consolidation" ||
+    fail 'Canonical Bash helper regression fixtures failed.'
 
 offline_curl_guard_bin="${fixture_dir}/offline-curl-guard-bin"
 mkdir -p -- "${offline_curl_guard_bin}"

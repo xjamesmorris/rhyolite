@@ -167,27 +167,6 @@ read_plugin_version() {
     printf '%s\n' "${version}"
 }
 
-get_launcher_home() {
-    if [ -n "${XDG_STATE_HOME:-}" ]; then
-        case "${XDG_STATE_HOME}" in
-            /*)
-                printf '%s/rhyolite/launcher\n' "${XDG_STATE_HOME%/}"
-                return
-                ;;
-        esac
-    fi
-
-    case "$(uname -s 2>/dev/null || printf 'unknown')" in
-        Darwin)
-            printf '%s/Library/Application Support/Rhyolite/Launcher\n' \
-                "${HOME%/}"
-            ;;
-        *)
-            printf '%s/.local/state/rhyolite/launcher\n' "${HOME%/}"
-            ;;
-    esac
-}
-
 contains_git_marker() {
     [ -e "$1/.git" ]
 }
@@ -920,7 +899,7 @@ main() {
             2
     fi
 
-    launcher_home="$(get_launcher_home)"
+    launcher_home="$(rhyolite_launcher_home)"
     session_dir="$(create_session_dir "${launcher_home}")"
     log_dir="${session_dir}/copilot-logs"
     mkdir -p "${log_dir}"

@@ -517,12 +517,8 @@ print_runner_error() {
     safe_details="$(
         printf '%s\n' "${details}" |
             strip_runner_error_controls |
-            sed -E \
-                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
-                -e 's/((Authorization|authorization|Proxy-Authorization|proxy-authorization):[[:space:]]*)((Bearer|bearer|Basic|basic)[[:space:]]+)?[^[:space:]]+/\1[credential omitted]/g' \
-                -e 's/((access[_-]?token|ACCESS[_-]?TOKEN|api[_-]?key|API[_-]?KEY|password|PASSWORD|secret|SECRET|token|TOKEN)[[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1[credential omitted]/g' \
-                -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[credential omitted]/g' \
-                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' |
+            redact_credentials |
+            redact_emails |
             awk '
                 NF {
                     gsub(/^[[:space:]]+|[[:space:]]+$/, "")
@@ -3324,9 +3320,7 @@ EOF
     fi
     if [[ -s "${errors}" ]]; then
         tr -d '\r' < "${errors}" |
-            strip_terminal_controls |
-            redact_credentials |
-            redact_emails > "${errors}.tmp"
+            sanitize_review_text > "${errors}.tmp"
         mv -- "${errors}.tmp" "${errors}"
     fi
 
@@ -4466,9 +4460,7 @@ EOF
                 '--pretty=tformat:__RHYOLITE_COMMIT_RECORD_START__%nCommit object ID (attacker-controlled evidence): %H%nAuthor date (attacker-controlled evidence): %ad%nAuthor name (attacker-controlled evidence): %an%nCommitter name (attacker-controlled evidence): %cn%nSubject (attacker-controlled evidence): %s%nSelected trailer values (attacker-controlled evidence): %(trailers:key=Co-authored-by,key=Generated-with,key=Generated-by,key=Assisted-by,key=Aider,key=Aider-model,key=AI-Model,key=Model,only,unfold,separator=%x20|%x20)%n%n__RHYOLITE_COMMIT_RECORD_END__'
             printf '\n'
         } |
-            strip_terminal_controls |
-            redact_credentials |
-            redact_emails |
+            sanitize_review_text |
             bound_repository_metadata
     )"
 
@@ -4758,22 +4750,16 @@ EOF
         set -e
 
         tr -d '\r' < "${research_raw_output}" |
-            strip_terminal_controls |
-            redact_credentials |
-            redact_emails > "${research_timeline_path}"
+            sanitize_review_text > "${research_timeline_path}"
         rm -f -- "${research_raw_output}"
         if [[ -s "${research_error_path}" ]]; then
             tr -d '\r' < "${research_error_path}" |
-                strip_terminal_controls |
-                redact_credentials |
-                redact_emails > "${research_error_path}.tmp"
+                sanitize_review_text > "${research_error_path}.tmp"
             mv -- "${research_error_path}.tmp" "${research_error_path}"
         fi
         if [[ -f "${research_transcript_path}" ]]; then
             tr -d '\r' < "${research_transcript_path}" |
-                strip_terminal_controls |
-                redact_credentials |
-                redact_emails > "${research_transcript_plain}"
+                sanitize_review_text > "${research_transcript_plain}"
         fi
 
         if sanitize_and_remove_runtime_copilot_home \
@@ -5177,15 +5163,11 @@ EOF
     fi
 
     tr -d '\r' < "${raw_output}" |
-        strip_terminal_controls |
-        redact_credentials |
-        redact_emails > "${timeline_path}"
+        sanitize_review_text > "${timeline_path}"
     rm -f -- "${raw_output}"
     if [[ -s "${error_path}" ]]; then
         tr -d '\r' < "${error_path}" |
-            strip_terminal_controls |
-            redact_credentials |
-            redact_emails > "${error_path}.tmp"
+            sanitize_review_text > "${error_path}.tmp"
         mv -- "${error_path}.tmp" "${error_path}"
     fi
     if [[ -f "${transcript_path}" ]]; then
