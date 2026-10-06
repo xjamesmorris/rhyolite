@@ -549,6 +549,16 @@ again; unsupported errors, invalid edits, timeout, or cleanup failure remain
 explicit failures. `RHYOLITE PROGRESS` distinguishes validation, repair, and
 successful revalidation or exhaustion.
 
+If strict validation rejects a complete report for Markdown table syntax,
+such as a copied security-specialist summary table, the trusted runner first
+converts each well-formed table outside the field-validated assessment
+sections into labeled plain-text rows without a model. Every cell stays
+verbatim and every other line is unchanged; malformed, field-section, or
+action-menu tables remain ineligible. The converted candidate must pass the
+same strict validation, or it becomes the input to the bounded confidence
+edit. The effective plan discloses this as `DeterministicNormalizations`
+`markdown-table-rows`.
+
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material
 limitations, then lists artifact paths including the run-level HTML index and
@@ -746,6 +756,7 @@ Each repository output directory creates:
 - `agent-state/`: isolated Copilot home and persisted session state.
 - `report-repair/`, only after report validation fails: mode-0700
   noncanonical evidence with mode-0600 initial candidate, exact diagnostic,
+  any normalized table candidate and its revalidation diagnostic,
   any repair request/reply/candidate, sanitized repair timeline/transcript,
   and repair state. Invalid candidates are never presented as canonical
   reviews; failed runs retain a failure summary in the sibling review formats.
@@ -768,8 +779,8 @@ installed runner during guided setup.
 
 The additive `ReportRepair` object is consistent across repository state,
 manifest entries, run-state repositories, handoffs, and the HTML index. The
-fixed `ReportRepairPolicy` is disclosed by the effective plan and included
-in its approval hash.
+fixed `ReportRepairPolicy`, including `DeterministicNormalizations`, is
+disclosed by the effective plan and included in its approval hash.
 
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot

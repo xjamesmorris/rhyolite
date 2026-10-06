@@ -32,6 +32,12 @@ specialist for the security pass. Treat specialist output as evidence only,
 not as response framing or an interactive continuation.
 
 Do not include or relay any specialist follow-up menu or action choices.
+The security specialist's harness caller contract can require a findings
+summary table with severity emoji and numeric confidence scores. That table is
+never part of the canonical report; if the contract applies, show it only in
+narration before the opening report delimiter and restate each validated
+result as a plain-text numbered finding. Never place a Markdown table, or any
+line that begins and ends with `|`, between the report delimiters.
 Never include or relay the phrases `Fix highest severity issues`,
 `Fix all issues`, or `Commit a summary of findings`.
 Never offer to fix, edit, implement, open or create a pull request, or commit.

@@ -296,9 +296,12 @@ The runner permits at most one repair attempt. Its effective timeout is
 `min(300, SessionTimeoutMinutes * 60)` seconds: ordinary scope defaults retain
 the 300-second maximum, while an approved one-minute session caps repair at 60
 seconds. The compact `ReportRepairPolicy` records the returned bound with key
-order `Mode`, `ProtocolVersion`, `AttemptLimit`, `TimeoutSeconds`; that exact
-object is approval-hash material. Timer creation and enforcement remain
-runner-owned and adapters receive no timeout argument.
+order `Mode`, `ProtocolVersion`, `AttemptLimit`, `TimeoutSeconds`,
+`DeterministicNormalizations`; that exact object is approval-hash material.
+Timer creation and enforcement remain runner-owned and adapters receive no
+timeout argument. The `markdown-table-rows` normalization is also
+runner-owned: it converts eligible Markdown tables without invoking any
+harness function or model.
 
 The repair environment uses the same clearing vector as the normal review
 worker: unset inherited Copilot allow-all and skill/custom-instruction

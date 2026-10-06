@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Fixed completed reviews that failed at report finalization when the review
+  worker copied the Copilot CLI security-review summary table into
+  `FINDINGS`. The review prompt, worker agent, and skill now keep that
+  caller-contract table, with its severity emoji and numeric scores, out of
+  the canonical report and require plain-text numbered findings instead.
+- Added approval-bound, model-free Markdown-table normalization as
+  `ReportRepairPolicy.DeterministicNormalizations` value
+  `markdown-table-rows`. When strict validation rejects table syntax, the
+  trusted runner converts each well-formed table outside the field-validated
+  assessment sections into labeled plain-text rows, keeps every cell
+  verbatim, and changes no other line. Malformed, field-section, or
+  action-menu tables stay ineligible. The normalized candidate must pass the
+  unchanged strict validator, or it becomes the input to the one bounded
+  confidence edit. `ReportRepair` state adds `TableNormalization`,
+  `TablesConverted`, and normalized candidate/diagnostic artifacts; plan
+  schema 5 and state schema 6 are unchanged.
+- Corrected the report-repair eligibility diagnostic for non-contract
+  failures, which previously claimed that the rejected report already
+  satisfied strict validation.
+
 ## 0.6.1 - 2026-10-06
 
 - First tagged 0.6.x release. It includes the untagged 0.6.0 changes below.

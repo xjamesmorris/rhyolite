@@ -61,6 +61,7 @@ PROVENANCE_LOOKBACK_SPECIFIED=0
 STATE_SCHEMA_VERSION=6
 REPORT_REPAIR_ATTEMPT_LIMIT=1
 REPORT_REPAIR_TIMEOUT_SECONDS=300
+REPORT_MARKDOWN_TABLE_DIAGNOSTIC='Final report contains a Markdown table.'
 NON_INTERACTIVE=0
 OPEN_HTML=0
 NO_OPEN_HTML=0
@@ -299,7 +300,8 @@ if not isinstance(repair, dict):
 count = repair.get("AttemptCount")
 if type(count) is not int or count not in (0, 1):
     raise SystemExit("Invalid report-repair attempt count")
-raise SystemExit(0 if count == 1 else 1)
+normalization = repair.get("TableNormalization", "NotRun")
+raise SystemExit(0 if count == 1 or normalization == "Applied" else 1)
 ' "${state_path}"
 }
 
@@ -997,7 +999,7 @@ compute_approval_hash() {
 }
 
 report_repair_policy_json() {
-    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
         "${REPORT_REPAIR_ATTEMPT_LIMIT}" "${REPORT_REPAIR_TIMEOUT_SECONDS}"
 }
 
@@ -1265,7 +1267,7 @@ write_review_plan_text() {
     fi
     printf '%-20s %s minutes\n' 'Session timeout:' "${SESSION_TIMEOUT_MINUTES}"
     printf '%-20s %s\n' 'Report repair:' \
-        "${REPORT_REPAIR_ATTEMPT_LIMIT} isolated, tool-less confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s maximum; no research rerun"
+        "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated, tool-less confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s maximum; no research rerun"
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
@@ -3243,6 +3245,8 @@ report_repair_json() {
   "Status": "$(json_escape "${REPORT_REPAIR_STATUS:-NotReached}")",
   "AttemptLimit": ${REPORT_REPAIR_ATTEMPT_LIMIT},
   "AttemptCount": ${REPORT_REPAIR_ATTEMPT_COUNT:-0},
+  "TableNormalization": "$(json_escape "${REPORT_REPAIR_TABLE_NORMALIZATION:-NotRun}")",
+  "TablesConverted": ${REPORT_REPAIR_TABLES_CONVERTED:-0},
   "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC:-}")",
   "FinalDiagnostic": "$(json_escape "${REPORT_REPAIR_FINAL_DIAGNOSTIC:-}")",
   "PreservationCheck": "$(json_escape "${REPORT_REPAIR_PRESERVATION:-NotRun}")",
@@ -3253,6 +3257,8 @@ report_repair_json() {
     "Directory": "$(json_escape "${REPORT_REPAIR_DIRECTORY:-}")",
     "InitialCandidate": "$(json_escape "${REPORT_REPAIR_INITIAL_PATH:-}")",
     "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH:-}")",
+    "NormalizedCandidate": "$(json_escape "${REPORT_REPAIR_NORMALIZED_PATH:-}")",
+    "NormalizedDiagnostic": "$(json_escape "${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH:-}")",
     "Request": "$(json_escape "${REPORT_REPAIR_REQUEST_PATH:-}")",
     "Edit": "$(json_escape "${REPORT_REPAIR_EDIT_PATH:-}")",
     "Candidate": "$(json_escape "${REPORT_REPAIR_CANDIDATE_PATH:-}")",
@@ -3294,16 +3300,27 @@ data = json.load(sys.stdin)
 statuses = {"NotReached", "NotNeeded", "NotEligible", "Running",
             "Succeeded", "Failed", "TimedOut", "Interrupted"}
 checks = {"NotRun", "Passed", "Failed"}
+normalizations = {"NotRun", "Applied", "NotEligible", "Failed"}
+normalization = data.get("TableNormalization", "NotRun")
+tables = data.get("TablesConverted", 0)
 if (data["Status"] not in statuses or
     any(data[key] not in checks for key in
         ("PreservationCheck", "FinalValidation", "Cleanup")) or
     type(data["AttemptCount"]) is not int or
     type(data["AttemptLimit"]) is not int or
-    not 0 <= data["AttemptCount"] <= data["AttemptLimit"] == 1):
+    not 0 <= data["AttemptCount"] <= data["AttemptLimit"] == 1 or
+    normalization not in normalizations or
+    type(tables) is not int or
+    tables < 0 or
+    (tables > 0) != (normalization == "Applied")):
     raise SystemExit("Invalid trusted report-repair state")
-print("{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".format(
+summary = "{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".format(
     data["Status"], data["AttemptCount"], data["AttemptLimit"],
-    data["PreservationCheck"], data["FinalValidation"], data["Cleanup"]))
+    data["PreservationCheck"], data["FinalValidation"], data["Cleanup"])
+if normalization != "NotRun":
+    summary += "; table normalization {} ({} converted)".format(
+        normalization, tables)
+print(summary)
 '
 }
 
@@ -3316,7 +3333,7 @@ validate_final_review_report() {
         return 1
     fi
     if grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${candidate}"; then
-        printf '%s\n' 'Final report contains a Markdown table.'
+        printf '%s\n' "${REPORT_MARKDOWN_TABLE_DIAGNOSTIC}"
         return 1
     fi
     validate_review_report_contract "${candidate}" "${scope}" || return
@@ -3417,6 +3434,128 @@ cleanup_report_repair_runtime() {
     fi
 }
 
+run_report_table_normalization() {
+    local normalization_status=0
+    local normalized_count=""
+    local normalized_diagnostic=""
+    local normalized_candidate="${REPORT_REPAIR_DIRECTORY}/normalized-candidate.txt"
+    local normalized_diagnostic_path="${REPORT_REPAIR_DIRECTORY}/normalized-diagnostic.txt"
+
+    REPORT_REPAIR_STATUS='Running'
+    REPORT_REPAIR_REQUEST_PATH=""
+    if normalized_count="$(
+        normalize_review_report_markdown_tables \
+            "${REPORT_REPAIR_INITIAL_PATH}" "${normalized_candidate}" \
+            2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+    )"; then
+        normalization_status=0
+    else
+        normalization_status=$?
+    fi
+    if ((normalization_status == 0)) &&
+        ! {
+            [[ "${normalized_count}" =~ ^[1-9][0-9]{0,5}$ ]] &&
+            chmod 600 -- "${normalized_candidate}"
+        } 2>> "${error_path}"; then
+        printf '%s\n' \
+            'report repair helper error: the normalized candidate could not be verified' \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        normalization_status=1
+    fi
+    if ((normalization_status != 0)); then
+        rm -f -- "${normalized_candidate}"
+        if ((normalization_status == 42)); then
+            REPORT_REPAIR_TABLE_NORMALIZATION='NotEligible'
+            REPORT_REPAIR_STATUS='NotEligible'
+        else
+            REPORT_REPAIR_TABLE_NORMALIZATION='Failed'
+            REPORT_REPAIR_STATUS='Failed'
+        fi
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        )"
+        if [[ -z "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" ]]; then
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='report repair helper error: the table normalizer returned no diagnostic'
+            printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+                > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        fi
+        printf 'Report repair %s: %s\n' \
+            "${REPORT_REPAIR_STATUS}" "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            >> "${error_path}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report validation' \
+            'candidate rejected; no eligible content-preserving correction'
+        return 1
+    fi
+
+    REPORT_REPAIR_NORMALIZED_PATH="${normalized_candidate}"
+    REPORT_REPAIR_TABLE_NORMALIZATION='Applied'
+    REPORT_REPAIR_TABLES_CONVERTED="${normalized_count}"
+    REPORT_REPAIR_PRESERVATION='Passed'
+    write_report_repair_state || return 1
+    review_progress "${slug}" 'report repair' \
+        "converted ${normalized_count} Markdown table(s) to plain-text rows without a model; every cell preserved; strict revalidation follows"
+
+    if normalized_diagnostic="$(
+        validate_final_review_report "${REPORT_REPAIR_NORMALIZED_PATH}" \
+            "${SCOPE}" 2>&1
+    )"; then
+        REPORT_REPAIR_VALIDATION='Passed'
+        if {
+            cp -- "${REPORT_REPAIR_NORMALIZED_PATH}" "${report_path}.tmp" &&
+            chmod 600 -- "${report_path}.tmp" &&
+            mv -- "${report_path}.tmp" "${report_path}"
+        } 2>> "${error_path}"; then
+            REPORT_REPAIR_STATUS='Succeeded'
+            REPORT_REPAIR_PROMOTED=1
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Markdown table normalization preserved every cell and passed strict validation.'
+        else
+            REPORT_REPAIR_STATUS='Failed'
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair canonical promotion failed.'
+        fi
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        if ((REPORT_REPAIR_PROMOTED)); then
+            review_progress "${slug}" 'report repair' \
+                'strict revalidation passed; unchanged findings promoted to canonical report'
+            return 0
+        fi
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+
+    REPORT_REPAIR_VALIDATION='Failed'
+    printf 'Normalized report validation failed: %s\n' \
+        "${normalized_diagnostic}" >> "${error_path}"
+    if ! {
+        printf '%s\n' "${normalized_diagnostic}" \
+            > "${normalized_diagnostic_path}" &&
+        chmod 600 -- "${normalized_diagnostic_path}"
+    } 2>> "${error_path}"; then
+        rm -f -- "${normalized_diagnostic_path}"
+        REPORT_REPAIR_STATUS='Failed'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair could not preserve the normalized candidate diagnostic.'
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+    REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH="${normalized_diagnostic_path}"
+    write_report_repair_state || return 1
+    return 2
+}
+
 run_report_repair() {
     local initial_candidate="$1"
     local initial_diagnostic="$2"
@@ -3432,6 +3571,9 @@ run_report_repair() {
     local repair_session_id
     local repair_session_name
     local repair_authentication_names
+    local repair_source_path=""
+    local repair_source_diagnostic_path=""
+    local normalization_status=0
     local -a repair_arguments=()
     local -a repair_environment=()
 
@@ -3452,12 +3594,29 @@ run_report_repair() {
         return 1
     fi
     REPORT_REPAIR_INITIAL_DIAGNOSTIC="${initial_diagnostic}"
-    REPORT_REPAIR_REQUEST_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-request.txt"
     REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-diagnostic.txt"
+    repair_source_path="${REPORT_REPAIR_INITIAL_PATH}"
+    repair_source_diagnostic_path="${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}"
+    if [[ "${initial_diagnostic}" == "${REPORT_MARKDOWN_TABLE_DIAGNOSTIC}" ]]; then
+        run_report_table_normalization || normalization_status=$?
+        case "${normalization_status}" in
+            0)
+                return 0
+                ;;
+            2)
+                repair_source_path="${REPORT_REPAIR_NORMALIZED_PATH}"
+                repair_source_diagnostic_path="${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+    REPORT_REPAIR_REQUEST_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-request.txt"
 
     prepare_review_report_repair \
-        "${REPORT_REPAIR_INITIAL_PATH}" "${SCOPE}" \
-        "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" \
+        "${repair_source_path}" "${SCOPE}" \
+        "${repair_source_diagnostic_path}" \
         "${REPORT_REPAIR_REQUEST_PATH}" \
         2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}" || request_status=$?
     if ((request_status != 0)); then
@@ -3642,8 +3801,8 @@ run_report_repair() {
         >/dev/null 2>> "${report_repair_errors_path}"; then
         REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair did not return an extractable confidence edit.'
     elif ! apply_review_report_repair \
-        "${REPORT_REPAIR_INITIAL_PATH}" "${SCOPE}" \
-        "${REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH}" \
+        "${repair_source_path}" "${SCOPE}" \
+        "${repair_source_diagnostic_path}" \
         "${REPORT_REPAIR_EDIT_PATH}" "${REPORT_REPAIR_CANDIDATE_PATH}" \
         2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"; then
         REPORT_REPAIR_PRESERVATION='Failed'
@@ -4787,6 +4946,8 @@ process_repository() {
     local runtime_harness_home=""
     local REPORT_REPAIR_STATUS='NotReached'
     local REPORT_REPAIR_ATTEMPT_COUNT=0
+    local REPORT_REPAIR_TABLE_NORMALIZATION='NotRun'
+    local REPORT_REPAIR_TABLES_CONVERTED=0
     local REPORT_REPAIR_INITIAL_DIAGNOSTIC=""
     local REPORT_REPAIR_FINAL_DIAGNOSTIC=""
     local REPORT_REPAIR_PRESERVATION='NotRun'
@@ -4796,6 +4957,8 @@ process_repository() {
     local REPORT_REPAIR_DIRECTORY=""
     local REPORT_REPAIR_INITIAL_PATH=""
     local REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH=""
+    local REPORT_REPAIR_NORMALIZED_PATH=""
+    local REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH=""
     local REPORT_REPAIR_REQUEST_PATH=""
     local REPORT_REPAIR_EDIT_PATH=""
     local REPORT_REPAIR_CANDIDATE_PATH=""
@@ -6250,7 +6413,7 @@ EOF
     provenance_window="$(provenance_window_text)"
     printf '# Repository review run handoff\n\n'
     printf 'Report repair policy:\n\n    %s\n\n' \
-        "${REPORT_REPAIR_ATTEMPT_LIMIT} isolated confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s; no research rerun"
+        "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s; no research rerun"
     printf 'Run ID:\n\n    %s\n\n' "${RUN_ID}"
     printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
     printf 'Harness:\n\n    %s (%s)\n\n' \

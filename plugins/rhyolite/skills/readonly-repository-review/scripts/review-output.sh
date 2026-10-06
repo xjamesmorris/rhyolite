@@ -1364,7 +1364,7 @@ prepare_review_report_repair() {
         validate_review_report_contract "${report}" "${scope}" 2>&1
     )"; then
         printf '%s\n' \
-            'report repair unsupported: the initial report already satisfies strict validation' \
+            'report repair unsupported: the report-contract validator found no confidence-level error to repair' \
             >&2
         return 42
     else
@@ -1422,7 +1422,7 @@ apply_review_report_repair() {
         validate_review_report_contract "${report}" "${scope}" 2>&1
     )"; then
         printf '%s\n' \
-            'report repair unsupported: the initial report already satisfies strict validation' \
+            'report repair unsupported: the report-contract validator found no confidence-level error to repair' \
             >&2
         return 42
     else
@@ -1455,6 +1455,249 @@ apply_review_report_repair() {
         "${repair_reply}" \
         "${candidate}" \
         "${validator_diagnostic}"
+}
+
+normalize_review_report_markdown_tables() {
+    local report="$1"
+    local output="$2"
+
+    python3 - "${report}" "${output}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+import unicodedata
+
+report_name, output_name = sys.argv[1:]
+
+ordered_sections = (
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+)
+field_validated_sections = frozenset((
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+))
+prohibited_phrases = (
+    "fix highest severity issues",
+    "fix all issues",
+    "commit a summary of findings",
+)
+# Superset of the strict validator's pattern: every rejected line is handled.
+pipe_row = re.compile(r"^\s*\|.*\|\s*$")
+delimiter_cell = re.compile(r"^:?-+:?$")
+
+
+class Unsupported(Exception):
+    pass
+
+
+class HelperError(Exception):
+    pass
+
+
+def read_report(name):
+    try:
+        data = pathlib.Path(name).read_bytes()
+    except OSError:
+        raise HelperError(
+            "the table normalizer could not read the report"
+        ) from None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Unsupported(
+            f"the report is not valid UTF-8 at byte offset {error.start}"
+        ) from None
+    for character in text:
+        if character in ("\n", "\t"):
+            continue
+        if (
+            unicodedata.category(character) == "Cc"
+            or character in ("\u2028", "\u2029")
+        ):
+            raise Unsupported(
+                "the report contains unsupported control or line-separator "
+                "characters"
+            )
+    return text
+
+
+def leading_whitespace(row):
+    return row[:len(row) - len(row.lstrip())]
+
+
+def split_cells(row):
+    stripped = row.strip()
+    if "\\|" in stripped:
+        raise Unsupported("a Markdown table cell contains an escaped pipe")
+    return [cell.strip() for cell in stripped[1:-1].split("|")]
+
+
+def owning_section(lines, index):
+    for position in range(index - 1, -1, -1):
+        if lines[position] in ordered_sections:
+            return lines[position]
+    return None
+
+
+def convert_table(lines, start, end, table_number):
+    section = owning_section(lines, start)
+    if section is None:
+        raise Unsupported(
+            "a Markdown table appears outside the required report sections"
+        )
+    if section in field_validated_sections:
+        raise Unsupported(
+            f"a Markdown table appears in a field-validated section: {section}"
+        )
+    rows = lines[start:end]
+    if len(rows) < 3:
+        raise Unsupported(
+            "a pipe-delimited block is not a Markdown table with a header, "
+            "a delimiter row, and at least one body row"
+        )
+    if any(leading_whitespace(row).strip(" \t") for row in rows):
+        raise Unsupported(
+            "a Markdown table row uses unsupported leading whitespace"
+        )
+    indent = leading_whitespace(rows[0])
+    header = split_cells(rows[0])
+    delimiter = split_cells(rows[1])
+    body = [split_cells(row) for row in rows[2:]]
+    if not all(delimiter_cell.fullmatch(cell) for cell in delimiter):
+        raise Unsupported("a Markdown table lacks a valid delimiter row")
+    if any(len(cells) != len(header) for cells in (delimiter, *body)):
+        raise Unsupported(
+            "a Markdown table row has an inconsistent column count"
+        )
+    if not all(header):
+        raise Unsupported("a Markdown table has an empty header cell")
+    for cells in (header, *body):
+        for cell in cells:
+            folded = cell.casefold()
+            if any(phrase in folded for phrase in prohibited_phrases):
+                raise Unsupported(
+                    "a Markdown table contains a prohibited action-menu phrase"
+                )
+    converted = []
+    for row_number, cells in enumerate(body, start=1):
+        converted.append(f"{indent}Table {table_number}, row {row_number}:")
+        for name, value in zip(header, cells):
+            converted.append(
+                f"{indent}  {name}: {value}" if value else f"{indent}  {name}:"
+            )
+    return converted, len(body) * len(header)
+
+
+def atomic_write(path, data):
+    parent = path.parent
+    if not parent.is_dir():
+        raise HelperError("the normalized report directory does not exist")
+    temporary_name = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=str(parent),
+        )
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        temporary_name = None
+    except OSError:
+        raise HelperError("could not write the normalized report") from None
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+
+
+try:
+    output_path = pathlib.Path(output_name)
+    if (
+        output_path.resolve(strict=False)
+        == pathlib.Path(report_name).resolve(strict=False)
+    ):
+        raise HelperError("the normalized report must not replace its input")
+    text = read_report(report_name)
+    lines = text.split("\n")
+    blocks = []
+    index = 0
+    while index < len(lines):
+        if pipe_row.match(lines[index]):
+            start = index
+            while index < len(lines) and pipe_row.match(lines[index]):
+                index += 1
+            blocks.append((start, index))
+        else:
+            index += 1
+    if not blocks:
+        raise Unsupported("the report contains no Markdown table")
+
+    output_lines = []
+    converted_flags = []
+    expected_cells = 0
+    converted_cells = 0
+    cursor = 0
+    for table_number, (start, end) in enumerate(blocks, start=1):
+        converted, cell_count = convert_table(lines, start, end, table_number)
+        retained = lines[cursor:start]
+        output_lines.extend(retained)
+        converted_flags.extend([False] * len(retained))
+        output_lines.extend(converted)
+        converted_flags.extend([True] * len(converted))
+        expected_cells += cell_count
+        converted_cells += len(converted) - (end - start - 2)
+        cursor = end
+    output_lines.extend(lines[cursor:])
+    converted_flags.extend([False] * (len(lines) - cursor))
+
+    original_retained = [
+        line
+        for position, line in enumerate(lines)
+        if not any(start <= position < end for start, end in blocks)
+    ]
+    normalized_retained = [
+        line
+        for line, converted in zip(output_lines, converted_flags)
+        if not converted
+    ]
+    if (
+        normalized_retained != original_retained
+        or converted_cells != expected_cells
+        or any(pipe_row.match(line) for line in output_lines)
+        or any(
+            output_lines.count(section) != lines.count(section)
+            for section in ordered_sections
+        )
+    ):
+        raise HelperError("the normalized report failed content preservation")
+
+    atomic_write(output_path, "\n".join(output_lines).encode("utf-8"))
+    print(len(blocks))
+except Unsupported as error:
+    print(f"report repair unsupported: {error}", file=sys.stderr)
+    raise SystemExit(42)
+except HelperError as error:
+    print(f"report repair helper error: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
 }
 
 extract_safe_https_references() {

@@ -1154,6 +1154,28 @@ for report_contract_surface in \
 done
 [[ "$(grep -Fc 'Never include or relay the phrases' "${SKILL}")" -ge 2 ]] ||
     fail 'Skill does not enforce the action-menu ban in completion and report requirements.'
+for security_table_surface in "${PROMPT}" "${SKILL}" "${WORKER_AGENT}"; do
+    normalized_security_table_contract="$(
+        tr '\r\n\t' '   ' < "${security_table_surface}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    for security_table_phrase in \
+        'findings summary table with severity emoji and numeric confidence scores' \
+        'never part of the canonical report' \
+        'only in narration before the opening report delimiter' \
+        'Never place a Markdown table, or any line that begins and ends with `|`, between the report delimiters.'; do
+        grep -Fq "${security_table_phrase}" \
+            <<< "${normalized_security_table_contract}" ||
+            fail "Security summary-table boundary is missing from ${security_table_surface}: ${security_table_phrase}"
+    done
+done
+for normalization_disclosure_surface in "${AGENT}" "${SKILL}"; do
+    grep -Fq '`DeterministicNormalizations`' \
+        "${normalization_disclosure_surface}" &&
+        grep -Fq '`markdown-table-rows`' \
+            "${normalization_disclosure_surface}" ||
+        fail "Effective plan does not disclose deterministic table normalization: ${normalization_disclosure_surface}"
+done
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' \
     'report validation' 'report repair' 'artifacts' 'finalizing' \
@@ -1919,7 +1941,7 @@ for hash_fragment in \
         fail "Approval hash material is missing ${hash_fragment}."
 done
 grep -Fq \
-    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
     "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_ATTEMPT_LIMIT=1' "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_TIMEOUT_SECONDS=300' "${RUNNER}" &&
@@ -5024,6 +5046,8 @@ function assertCommonPlan(
       plan.ReportRepairPolicy?.AttemptLimit !== 1 ||
       plan.ReportRepairPolicy?.TimeoutSeconds !==
         Math.min(300, plan.SessionTimeoutMinutes * 60) ||
+      JSON.stringify(plan.ReportRepairPolicy?.DeterministicNormalizations) !==
+        JSON.stringify(["markdown-table-rows"]) ||
       !Array.isArray(plan.Sources) ||
       plan.Sources.length !== 1) {
     throw new Error(`${label} common plan contract is invalid`);
@@ -5050,6 +5074,7 @@ function assertCommonPlan(
   ], `${label} prior-art window`);
   assertKeys(plan.ReportRepairPolicy, [
     "AttemptLimit",
+    "DeterministicNormalizations",
     "Mode",
     "ProtocolVersion",
     "TimeoutSeconds",
@@ -6791,6 +6816,17 @@ fi
 cat > "${MOCK_LOG}.review-request"
 printf '# Mock Copilot session\n' > "${share_path}"
 
+emit_security_summary_table() {
+    printf '%s\n' \
+        '' \
+        'Security-pass summary:' \
+        '' \
+        '| # | Severity | File | Lines | Vulnerability | Confidence |' \
+        '|---|----------|------|-------|---------------|------------|' \
+        '| 1 | 🟡 MEDIUM | src/parser.c | 203-207 | 32-bit length overflow enables out-of-bounds value printing | 9/10 |' \
+        ''
+}
+
 emit_report_prefix() {
     cat <<'REPORT'
 ================================================================================
@@ -6816,6 +6852,9 @@ REPORT
             'I cannot verify the commit beyond the bounded fixture evidence.' \
             'Fix all issues reported by CodeQL remains descriptive evidence.'
     fi
+    if [[ "${MOCK_SECURITY_SUMMARY_TABLE-}" == "findings" ]]; then
+        emit_security_summary_table
+    fi
     cat <<'REPORT'
 Confidence: High
 Evidence basis: deterministic fixture behavior.
@@ -6837,6 +6876,9 @@ in checked-in fixture content; no resource URL was activated.
 Limitations of available evidence: Target code was not executed and normalized
 external pages can omit active-resource details.
 REPORT
+        if [[ "${MOCK_SECURITY_SUMMARY_TABLE-}" == "agent-targeting" ]]; then
+            emit_security_summary_table
+        fi
         if [[ "${MOCK_MALFORMED_CONFIDENCE-}" == "1" ]]; then
             printf '%s\n' \
                 'Confidence: High for the two observed constructs; Medium for absence outside normalized text.'
@@ -8440,6 +8482,8 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ReportRepairPolicy?.AttemptLimit !== 1 ||
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
+    JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
+      JSON.stringify(["markdown-table-rows"]) ||
     reviewPlan.ResearchTransport?.Enabled !== true ||
     reviewPlan.ResearchTransport?.Mode !==
       "dedicated-worker-local-stdio-mcp" ||
@@ -8512,7 +8556,7 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("ephemeral") ||
     !reviewPlanText.includes("Report repair:") ||
     !reviewPlanText.includes(
-      "1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
+      "model-free Markdown table conversion; 1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
     ) ||
     !reviewPlanText.includes("Raw Set-Cookie:") ||
     !reviewPlanText.includes("private per-repository ledger") ||
@@ -8538,7 +8582,7 @@ if (!stdout.includes("Generated at (UTC):") ||
     !stdout.includes("Research cookies:") ||
     !stdout.includes("Report repair:") ||
     !stdout.includes(
-      "1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
+      "model-free Markdown table conversion; 1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
     )) {
   throw new Error("run stdout is missing expected review-plan labels");
 }
@@ -8847,7 +8891,7 @@ for (const fragment of [
   "Provider:\n\n    ID: github-copilot",
   "    Host: managed-provider",
   "    Forwarded environment variable names: COPILOT_GITHUB_TOKEN",
-  "Report repair policy:\n\n    1 isolated confidence edit; 300s; no research rerun",
+  "Report repair policy:\n\n    model-free Markdown table conversion; 1 isolated confidence edit; 300s; no research rerun",
   "Report repair:\n\n    NotNeeded; attempts 0/1; preservation NotRun; validation Passed; cleanup NotRun",
   "Continue only through the trusted Rhyolite repo-review runner; do not invoke copilot --resume directly.",
 ]) {
@@ -9881,6 +9925,8 @@ function assertRepairObject(value, label) {
     Directory: repairDirectory,
     InitialCandidate: path.join(repairDirectory, "initial-candidate.txt"),
     InitialDiagnostic: path.join(repairDirectory, "initial-diagnostic.txt"),
+    NormalizedCandidate: "",
+    NormalizedDiagnostic: "",
     Request: path.join(repairDirectory, "attempt-1-request.txt"),
     Edit: path.join(repairDirectory, "attempt-1-edit.json"),
     Candidate: path.join(repairDirectory, "attempt-1-candidate.txt"),
@@ -9894,6 +9940,8 @@ function assertRepairObject(value, label) {
   if (value?.Status !== "Succeeded" ||
       value.AttemptLimit !== 1 ||
       value.AttemptCount !== 1 ||
+      value.TableNormalization !== "NotRun" ||
+      value.TablesConverted !== 0 ||
       !value.InitialDiagnostic.includes(originalValue) ||
       value.FinalDiagnostic !==
         "Strict validation and exact content preservation passed." ||
@@ -9922,6 +9970,8 @@ if (reviewPlan.ReportRepairPolicy?.Mode !==
     reviewPlan.ReportRepairPolicy?.AttemptLimit !== 1 ||
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
+    JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
+      JSON.stringify(["markdown-table-rows"]) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy)) {
   throw new Error("approval-bound report-repair policy is invalid");
@@ -10076,8 +10126,17 @@ if (!repositoryHandoff.includes(successSummary) ||
     !indexHtml.includes(successSummary)) {
   throw new Error("repair success summary did not roll up");
 }
-for (const artifactPath of Object.values(state.ReportRepair.Artifacts)) {
-  if (!fs.existsSync(artifactPath)) {
+const unusedNormalizationArtifacts = [
+  "NormalizedCandidate",
+  "NormalizedDiagnostic",
+];
+for (const [artifactName, artifactPath] of
+  Object.entries(state.ReportRepair.Artifacts)) {
+  if (unusedNormalizationArtifacts.includes(artifactName)) {
+    if (artifactPath !== "") {
+      throw new Error(`unexpected normalization artifact ${artifactPath}`);
+    }
+  } else if (!fs.existsSync(artifactPath)) {
     throw new Error(`missing repair artifact ${artifactPath}`);
   }
 }
@@ -10085,7 +10144,8 @@ if ((fs.statSync(repairDirectory).mode & 0o777) !== 0o700) {
   throw new Error("report-repair directory is not mode 700");
 }
 for (const artifactPath of Object.values(state.ReportRepair.Artifacts)
-  .filter((artifactPath) => artifactPath !== repairDirectory)) {
+  .filter((artifactPath) =>
+    artifactPath !== "" && artifactPath !== repairDirectory)) {
   if ((fs.statSync(artifactPath).mode & 0o777) !== 0o600) {
     throw new Error(`report-repair artifact is not mode 600: ${artifactPath}`);
   }
@@ -10238,6 +10298,321 @@ if (state.Status !== "ReviewFailed" ||
   }));
 }
 JS
+done
+
+for table_case in \
+    findings-scope-1 \
+    findings-scope-3 \
+    findings-with-confidence-repair \
+    agent-targeting-not-eligible \
+    action-menu-not-eligible; do
+    table_case_scope=1
+    table_case_expect_success=1
+    table_case_flags=(MOCK_SECURITY_SUMMARY_TABLE=findings)
+    case "${table_case}" in
+        findings-scope-3)
+            table_case_scope=3
+            ;;
+        findings-with-confidence-repair)
+            table_case_flags+=(MOCK_MALFORMED_CONFIDENCE=1)
+            ;;
+        agent-targeting-not-eligible)
+            table_case_flags=(MOCK_SECURITY_SUMMARY_TABLE=agent-targeting)
+            table_case_expect_success=0
+            ;;
+        action-menu-not-eligible)
+            table_case_flags=(MOCK_REVALIDATION_FAILURE=1)
+            table_case_expect_success=0
+            ;;
+    esac
+    table_case_root="${fixture_dir}/table-case-${table_case}"
+    table_case_output="${table_case_root}/output"
+    table_case_workspace="${table_case_root}/workspace"
+    table_case_stdout="${table_case_root}/stdout.txt"
+    table_case_stderr="${table_case_root}/stderr.txt"
+    table_case_log="${table_case_root}/copilot.log"
+    table_case_arguments=(
+        --repo https://github.com/octocat/Hello-World
+        --scope "${table_case_scope}"
+        --output-root "${table_case_output}"
+        --workspace-root "${table_case_workspace}"
+        --non-interactive
+        --no-open-html
+    )
+    if [[ "${table_case_scope}" != "1" ]]; then
+        table_case_arguments+=(--research-cookies off)
+    fi
+    mkdir -p -- "${table_case_root}"
+    : > "${table_case_log}"
+    : > "${mock_git_log}"
+    configure_mock_repair "${table_case_log}" valid
+    table_case_status=0
+    env \
+        "${table_case_flags[@]}" \
+        MOCK_LOG="${table_case_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            "${table_case_arguments[@]}" >"${table_case_stdout}" \
+            2>"${table_case_stderr}" || table_case_status=$?
+    if ((table_case_expect_success && table_case_status != 0)); then
+        cat "${table_case_stdout}" "${table_case_stderr}" >&2
+        fail "Markdown table case ${table_case} unexpectedly failed."
+    fi
+    if ((!table_case_expect_success && table_case_status == 0)); then
+        fail "Markdown table case ${table_case} unexpectedly completed."
+    fi
+    [[ ! -s "${table_case_stderr}" ]] ||
+        fail "Markdown table case ${table_case} wrote unexpected stderr."
+    table_case_run="$(
+        find "${table_case_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${table_case_run}" \
+        "${table_case_log}" \
+        "${table_case}" \
+        "${table_case_scope}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, tableCase, scopeText] = process.argv.slice(2);
+const scope = Number.parseInt(scopeText, 10);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const readText = (file) => fs.readFileSync(file, "utf8");
+const state = readJson(path.join(repository, "state.json"));
+const repairState = readJson(path.join(repairDirectory, "state.json"));
+const runState = readJson(path.join(run, "state.json"));
+const manifest = readJson(path.join(run, "manifest.json"));
+const reviewPlan = readJson(path.join(run, "review-plan.json"));
+const report = readText(path.join(repository, "review.txt"));
+const errors = readText(path.join(repository, "errors.txt"));
+const initial = readText(path.join(repairDirectory, "initial-candidate.txt"));
+const repositoryHandoff = readText(path.join(repository, "handoff.md"));
+const runHandoff = readText(path.join(run, "handoff.md"));
+const indexHtml = readText(path.join(run, "index.html"));
+const mockLines = readText(mockLogPath).split("\n");
+const repair = state.ReportRepair;
+const countLine = (expected) =>
+  mockLines.filter((line) => line === expected).length;
+const tableLines = [
+  "| # | Severity | File | Lines | Vulnerability | Confidence |",
+  "|---|----------|------|-------|---------------|------------|",
+  "| 1 | \u{1F7E1} MEDIUM | src/parser.c | 203-207 | 32-bit length overflow enables out-of-bounds value printing | 9/10 |",
+];
+const convertedLines = [
+  "Table 1, row 1:",
+  "  #: 1",
+  "  Severity: \u{1F7E1} MEDIUM",
+  "  File: src/parser.c",
+  "  Lines: 203-207",
+  "  Vulnerability: 32-bit length overflow enables out-of-bounds value printing",
+  "  Confidence: 9/10",
+];
+const repairPath = (name) => path.join(repairDirectory, name);
+const failWith = (message) => {
+  throw new Error(`${tableCase}: ${message}: ${JSON.stringify(repair)}`);
+};
+
+for (const [label, value] of [
+  ["repair artifact", repairState],
+  ["manifest", manifest[0]?.ReportRepair],
+  ["run repository", runState.Repositories?.[0]?.ReportRepair],
+]) {
+  if (JSON.stringify(value) !== JSON.stringify(repair)) {
+    failWith(`${label} report-repair state diverged`);
+  }
+}
+if (JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
+    JSON.stringify(["markdown-table-rows"]) ||
+    JSON.stringify(runState.ReportRepairPolicy) !==
+      JSON.stringify(reviewPlan.ReportRepairPolicy)) {
+  failWith("approval-bound normalization policy is missing");
+}
+if (countLine("AGENT=rhyolite:repo-review-worker") !== 1 ||
+    countLine("AGENT=rhyolite:repo-research-worker") !==
+      (scope === 1 ? 0 : 1)) {
+  failWith("analysis or research did not run exactly once");
+}
+if (/^[ \t]*\|.*\|[ \t]*$/m.test(report)) {
+  failWith("canonical or failed report retained Markdown table syntax");
+}
+
+let expectedSummary;
+if (tableCase === "findings-scope-1" || tableCase === "findings-scope-3") {
+  const normalized = readText(repairPath("normalized-candidate.txt"));
+  const expectedArtifacts = {
+    Directory: repairDirectory,
+    InitialCandidate: repairPath("initial-candidate.txt"),
+    InitialDiagnostic: repairPath("initial-diagnostic.txt"),
+    NormalizedCandidate: repairPath("normalized-candidate.txt"),
+    NormalizedDiagnostic: "",
+    Request: "",
+    Edit: "",
+    Candidate: "",
+    FinalDiagnostic: repairPath("attempt-1-diagnostic.txt"),
+    Timeline: "",
+    Transcript: "",
+  };
+  if (state.Status !== "Completed" ||
+      runState.Status !== "Completed" ||
+      repair.Status !== "Succeeded" ||
+      repair.AttemptLimit !== 1 ||
+      repair.AttemptCount !== 0 ||
+      repair.TableNormalization !== "Applied" ||
+      repair.TablesConverted !== 1 ||
+      repair.InitialDiagnostic !== "Final report contains a Markdown table." ||
+      repair.FinalDiagnostic !==
+        "Markdown table normalization preserved every cell and passed strict validation." ||
+      repair.PreservationCheck !== "Passed" ||
+      repair.FinalValidation !== "Passed" ||
+      repair.Cleanup !== "NotRun" ||
+      repair.CanonicalPromoted !== true ||
+      JSON.stringify(repair.Artifacts) !== JSON.stringify(expectedArtifacts) ||
+      countLine("PHASE=report-repair") !== 0 ||
+      (fs.statSync(repairDirectory).mode & 0o777) !== 0o700 ||
+      (fs.statSync(repairPath("normalized-candidate.txt")).mode & 0o777) !==
+        0o600) {
+    failWith("deterministic normalization state is invalid");
+  }
+  if (!initial.includes(tableLines.join("\n")) ||
+      initial.replace(tableLines.join("\n"), convertedLines.join("\n")) !==
+        report ||
+      normalized !== report) {
+    failWith("normalization changed report bytes outside the converted table");
+  }
+  expectedSummary =
+    "Succeeded; attempts 0/1; preservation Passed; validation Passed; " +
+    "cleanup NotRun; table normalization Applied (1 converted)";
+} else if (tableCase === "findings-with-confidence-repair") {
+  const normalized = readText(repairPath("normalized-candidate.txt"));
+  const normalizedDiagnostic =
+    readText(repairPath("normalized-diagnostic.txt")).trim();
+  const candidate = readText(repairPath("attempt-1-candidate.txt"));
+  const repairRequest = readText(`${mockLogPath}.report-repair-request`);
+  const originalConfidence =
+    "High for the two observed constructs; Medium for absence outside normalized text.";
+  if (state.Status !== "Completed" ||
+      repair.Status !== "Succeeded" ||
+      repair.AttemptCount !== 1 ||
+      repair.TableNormalization !== "Applied" ||
+      repair.TablesConverted !== 1 ||
+      repair.InitialDiagnostic !== "Final report contains a Markdown table." ||
+      repair.FinalDiagnostic !==
+        "Strict validation and exact content preservation passed." ||
+      repair.PreservationCheck !== "Passed" ||
+      repair.FinalValidation !== "Passed" ||
+      repair.Cleanup !== "Passed" ||
+      repair.CanonicalPromoted !== true ||
+      repair.Artifacts.NormalizedCandidate !==
+        repairPath("normalized-candidate.txt") ||
+      repair.Artifacts.NormalizedDiagnostic !==
+        repairPath("normalized-diagnostic.txt") ||
+      normalizedDiagnostic !==
+        "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: " +
+          originalConfidence ||
+      countLine("PHASE=report-repair") !== 1 ||
+      !repairRequest.includes("    Table 1, row 1:") ||
+      repairRequest.includes(tableLines[0]) ||
+      candidate !== report ||
+      normalized.replace(
+        `Confidence: ${originalConfidence}`,
+        `Confidence: Medium - Original confidence detail: ${originalConfidence}`,
+      ) !== report ||
+      initial.replace(tableLines.join("\n"), convertedLines.join("\n")) !==
+        normalized) {
+    failWith("normalization did not chain into the bounded confidence edit");
+  }
+  expectedSummary =
+    "Succeeded; attempts 1/1; preservation Passed; validation Passed; " +
+    "cleanup Passed; table normalization Applied (1 converted)";
+} else if (tableCase === "agent-targeting-not-eligible") {
+  const expectedDiagnostic =
+    "report repair unsupported: a Markdown table appears in a field-validated section: " +
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT";
+  if (state.Status !== "ReviewFailed" ||
+      runState.Status !== "Failed" ||
+      repair.Status !== "NotEligible" ||
+      repair.AttemptCount !== 0 ||
+      repair.TableNormalization !== "NotEligible" ||
+      repair.TablesConverted !== 0 ||
+      repair.InitialDiagnostic !== "Final report contains a Markdown table." ||
+      repair.FinalDiagnostic !== expectedDiagnostic ||
+      repair.PreservationCheck !== "NotRun" ||
+      repair.FinalValidation !== "NotRun" ||
+      repair.Cleanup !== "NotRun" ||
+      repair.CanonicalPromoted !== false ||
+      repair.Artifacts.NormalizedCandidate !== "" ||
+      repair.Artifacts.Request !== "" ||
+      fs.existsSync(repairPath("normalized-candidate.txt")) ||
+      !initial.includes(tableLines.join("\n")) ||
+      !report.includes("No canonical review was produced.") ||
+      !errors.includes(`Report repair NotEligible: ${expectedDiagnostic}`) ||
+      countLine("PHASE=report-repair") !== 0) {
+    failWith("field-validated table was not rejected truthfully");
+  }
+  expectedSummary =
+    "NotEligible; attempts 0/1; preservation NotRun; validation NotRun; " +
+    "cleanup NotRun; table normalization NotEligible (0 converted)";
+} else if (tableCase === "action-menu-not-eligible") {
+  if (state.Status !== "ReviewFailed" ||
+      repair.Status !== "NotEligible" ||
+      repair.TableNormalization !== "NotRun" ||
+      repair.InitialDiagnostic !==
+        "Final report contains a prohibited action menu or implementation offer." ||
+      repair.FinalDiagnostic !==
+        "report repair unsupported: the report-contract validator found no confidence-level error to repair" ||
+      repair.FinalDiagnostic.includes("already satisfies") ||
+      errors.includes("already satisfies") ||
+      countLine("PHASE=report-repair") !== 0) {
+    failWith("non-contract failure produced a misleading repair diagnostic");
+  }
+  expectedSummary =
+    "NotEligible; attempts 0/1; preservation NotRun; validation NotRun; " +
+    "cleanup NotRun";
+} else {
+  throw new Error(`unknown Markdown table case ${tableCase}`);
+}
+for (const [label, surface] of [
+  ["repository handoff", repositoryHandoff],
+  ["run handoff", runHandoff],
+  ["HTML index", indexHtml],
+]) {
+  if (!surface.includes(expectedSummary)) {
+    failWith(`${label} lost the report-repair summary`);
+  }
+}
+if (tableCase === "action-menu-not-eligible" &&
+    indexHtml.includes("table normalization")) {
+  failWith("summary reported a table normalization that never ran");
+}
+JS
+    case "${table_case}" in
+        findings-scope-1|findings-scope-3|findings-with-confidence-repair)
+            grep -Fq \
+                'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | converted 1 Markdown table(s) to plain-text rows without a model; every cell preserved; strict revalidation follows' \
+                "${table_case_stdout}" &&
+                grep -Fq \
+                    'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | strict revalidation passed; unchanged findings promoted to canonical report' \
+                    "${table_case_stdout}" ||
+                fail "Markdown table case ${table_case} progress milestones are incomplete."
+            ;;
+        agent-targeting-not-eligible)
+            grep -Fq 'Stage: report validation' "${table_case_stdout}" &&
+                grep -Fq \
+                    'a Markdown table appears in a field-validated section' \
+                    "${table_case_stdout}" ||
+                fail 'Ineligible Markdown table failure is not explanatory.'
+            ;;
+    esac
 done
 
 for repair_failure_mode in \
@@ -10640,7 +11015,7 @@ grep -Fq \
     'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | TimedOut; one attempt exhausted; noncanonical evidence preserved' \
     "${repair_timeout_stdout}" &&
     grep -Fq \
-        '1 isolated, tool-less confidence edit; 60s maximum; no research rerun' \
+        'model-free Markdown table conversion; 1 isolated, tool-less confidence edit; 60s maximum; no research rerun' \
         "${repair_timeout_stdout}" ||
     fail 'Report-repair timeout did not surface bounded exhaustion.'
 

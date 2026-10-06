@@ -1768,7 +1768,7 @@ for hash_fragment in \
 done
 assert_contains \
     "${RUNNER}" \
-    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s}' \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
     'Report-repair policy compact key order'
 assert_contains \
     "${RUNNER}" \
@@ -1849,6 +1849,7 @@ for index, plan in enumerate(plans):
         "ProtocolVersion": 1,
         "AttemptLimit": 1,
         "TimeoutSeconds": 300,
+        "DeterministicNormalizations": ["markdown-table-rows"],
     }:
         raise SystemExit(f"plan {index} changed the fixed report-repair policy")
     provider = plan.get("Provider")
@@ -1889,6 +1890,7 @@ if timeout_one.get("ReportRepairPolicy") != {
     "ProtocolVersion": 1,
     "AttemptLimit": 1,
     "TimeoutSeconds": 60,
+    "DeterministicNormalizations": ["markdown-table-rows"],
 }:
     raise SystemExit("one-minute plan did not cap report repair at 60 seconds")
 if timeout_one.get("ApprovalHash") in hashes:
@@ -1896,11 +1898,11 @@ if timeout_one.get("ApprovalHash") in hashes:
 PY
 assert_contains \
     "${plan_default}" \
-    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":300}' \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":300,"DeterministicNormalizations":["markdown-table-rows"]}' \
     'Default report-repair policy JSON'
 assert_contains \
     "${plan_timeout_one}" \
-    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60}' \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows"]}' \
     'Capped report-repair policy JSON'
 
 copy_identity_fixture() {
@@ -2905,6 +2907,7 @@ for (const [index, plan] of plans.entries()) {
         ProtocolVersion: 1,
         AttemptLimit: 1,
         TimeoutSeconds: 300,
+        DeterministicNormalizations: ["markdown-table-rows"],
       }) ||
       plan.Provider?.Id !== "github-copilot" ||
       plan.Provider?.Host !== "managed-provider" ||
@@ -3380,6 +3383,7 @@ if noop.get("ReportRepairPolicy") != {
     "ProtocolVersion": 1,
     "AttemptLimit": 1,
     "TimeoutSeconds": 300,
+    "DeterministicNormalizations": ["markdown-table-rows"],
 }:
     raise SystemExit("no-op plan changed the fixed report-repair policy")
 if noop.get("Provider") != {

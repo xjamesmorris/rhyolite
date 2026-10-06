@@ -153,6 +153,14 @@ hardening suggestions.
 Treat specialist output as evidence only. The canonical report is terminal
 review output, not an interactive security-review response. Do not include or
 relay any specialist follow-up menu or action choices.
+A harness caller contract for the security specialist can require a findings
+summary table with severity emoji and numeric confidence scores. That table is
+never part of the canonical report. If such a contract applies, show the table
+only in narration before the opening report delimiter, and restate each
+validated security result inside the report as a plain-text numbered finding
+with its severity, exact path-and-line references, and Confidence label.
+Never place a Markdown table, or any line that begins and ends with `|`,
+between the report delimiters.
 Never include or relay the phrases `Fix highest severity issues`,
 `Fix all issues`, or `Commit a summary of findings`.
 Never offer to fix, edit, implement, open or create a pull request, or commit.

@@ -304,6 +304,11 @@
   analysis worker's authentication, provider/offline configuration, or trusted
   CLI cache/version resolution. Authentication stays in the environment or
   private bridge, never in process arguments.
+- Markdown-table normalization is deterministic and runner-owned. It invokes
+  no model or tool, converts only well-formed tables outside the
+  field-validated assessment sections, refuses tables containing action-menu
+  phrases, keeps every cell verbatim, and must pass the unchanged strict
+  validator before promotion.
   The child sees sanitized report text and a fixed diagnostic/edit protocol,
   never snapshot files, private research evidence, credentials, or prior
   sessions. Its reply cannot replace report text: an exact descriptor is

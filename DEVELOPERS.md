@@ -184,7 +184,8 @@ Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v4
 work and any future adapter.
 
 `bash tests/test-report-repair.sh` covers the report-only confidence edit
-protocol. The aggregate gate also runs it. Keep the strict report validator
+protocol and deterministic Markdown-table normalization. The aggregate gate
+also runs it. Keep the strict report validator
 unchanged; repair replies are exact edit descriptors, not replacement reports.
 The runner owns the sole bounded attempt, canonical promotion, interruption,
 cleanup, and synchronized repair artifacts/state.

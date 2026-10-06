@@ -226,6 +226,35 @@ pathlib.Path(expected).write_bytes(data.replace(needle, replacement, 1))
 PY
 }
 
+insert_after_exact_line() {
+    local source="$1"
+    local destination="$2"
+    local anchor="$3"
+    local insertion="$4"
+
+    python3 - "${source}" "${destination}" "${anchor}" "${insertion}" <<'PY'
+import pathlib
+import sys
+
+source, destination, anchor, insertion = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+if lines.count(anchor) != 1:
+    raise SystemExit(f"synthetic anchor must occur exactly once: {anchor}")
+position = lines.index(anchor) + 1
+lines[position:position] = insertion.split("\n")
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+}
+
+assert_no_markdown_table() {
+    local file="$1"
+    local description="$2"
+
+    if grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${file}"; then
+        fail "${description}: Markdown table syntax remains"
+    fi
+}
+
 source "${OUTPUT_HELPER}"
 
 observed_value='High for the two observed constructs; Medium for absence outside normalized text.'
@@ -1194,6 +1223,279 @@ expect_status \
     "$(< "${FIXTURE_ROOT}/scope-3-diagnostic.txt")" \
     "${changed_known_section}" \
     "${FIXTURE_ROOT}/changed-known-section-candidate.txt"
+
+security_table_row=$'| 1 | \U0001F7E1 MEDIUM | src/asn1.c; src/main.c | 203-207; 40-45,79-82 | 32-bit TLV length overflow enables out-of-bounds value printing | 9/10 |'
+security_table=$'Security-pass summary:\n\n| # | Severity | File | Lines | Vulnerability | Confidence |\n|---|----------|------|-------|---------------|------------|\n'"${security_table_row}"
+converted_security_table=$'Security-pass summary:\n\nTable 1, row 1:\n  #: 1\n  Severity: \U0001F7E1 MEDIUM\n  File: src/asn1.c; src/main.c\n  Lines: 203-207; 40-45,79-82\n  Vulnerability: 32-bit TLV length overflow enables out-of-bounds value printing\n  Confidence: 9/10'
+valid_table=$'| Area | Result |\n|---|---|\n| Build | not executed |'
+
+table_base="${FIXTURE_ROOT}/table-base.txt"
+table_report="${FIXTURE_ROOT}/table-report.txt"
+table_normalized="${FIXTURE_ROOT}/table-normalized.txt"
+table_expected="${FIXTURE_ROOT}/table-expected.txt"
+write_report \
+    "${table_base}" \
+    3 \
+    manipulation \
+    'High - synthetic table fixture evidence.' \
+    ''
+validate_review_report_contract "${table_base}" 3 ||
+    fail 'strict validator rejected the table control report'
+insert_after_exact_line \
+    "${table_base}" "${table_report}" \
+    'No qualifying findings.' "${security_table}"
+if ! grep -Eq '^[[:space:]]*\|.*\|[[:space:]]*$' "${table_report}"; then
+    fail 'security summary fixture lacks rejected table syntax'
+fi
+table_count="$(
+    normalize_review_report_markdown_tables \
+        "${table_report}" "${table_normalized}"
+)" || fail 'eligible security summary table was not normalized'
+[[ "${table_count}" == '1' ]] ||
+    fail "security summary normalization reported ${table_count} tables"
+[[ "$(stat -c '%a' -- "${table_normalized}")" == '600' ]] ||
+    fail 'normalized candidate is not mode 600'
+assert_no_markdown_table "${table_normalized}" 'security summary normalization'
+validate_review_report_contract "${table_normalized}" 3 ||
+    fail 'normalized security summary failed strict validation'
+insert_after_exact_line \
+    "${table_base}" "${table_expected}" \
+    'No qualifying findings.' "${converted_security_table}"
+cmp -s -- "${table_expected}" "${table_normalized}" ||
+    fail 'table normalization changed bytes outside the table or lost cell text'
+
+multi_table_base="${FIXTURE_ROOT}/multi-table-base.txt"
+multi_table_step="${FIXTURE_ROOT}/multi-table-step.txt"
+multi_table_report="${FIXTURE_ROOT}/multi-table-report.txt"
+multi_table_normalized="${FIXTURE_ROOT}/multi-table-normalized.txt"
+multi_table_step_expected="${FIXTURE_ROOT}/multi-table-step-expected.txt"
+multi_table_expected="${FIXTURE_ROOT}/multi-table-expected.txt"
+write_report \
+    "${multi_table_base}" \
+    2 \
+    manipulation \
+    'Medium - synthetic multi-table evidence.' \
+    ''
+insert_after_exact_line \
+    "${multi_table_base}" "${multi_table_step}" \
+    'No qualifying findings.' \
+    $'  | Area | Result |\n  |:-----|-------:|\n  | Build | not executed |\n  | Tests |  |'
+insert_after_exact_line \
+    "${multi_table_step}" "${multi_table_report}" \
+    'No external sources are needed for this trusted fixture.' \
+    $'| Source | Checked |\n| --- | --- |\n| https://example.org/a | 2026-10-06 |'
+multi_table_count="$(
+    normalize_review_report_markdown_tables \
+        "${multi_table_report}" "${multi_table_normalized}"
+)" || fail 'eligible multi-table report was not normalized'
+[[ "${multi_table_count}" == '2' ]] ||
+    fail "multi-table normalization reported ${multi_table_count} tables"
+assert_no_markdown_table "${multi_table_normalized}" 'multi-table normalization'
+validate_review_report_contract "${multi_table_normalized}" 2 ||
+    fail 'normalized multi-table report failed strict validation'
+insert_after_exact_line \
+    "${multi_table_base}" "${multi_table_step_expected}" \
+    'No qualifying findings.' \
+    $'  Table 1, row 1:\n    Area: Build\n    Result: not executed\n  Table 1, row 2:\n    Area: Tests\n    Result:'
+insert_after_exact_line \
+    "${multi_table_step_expected}" "${multi_table_expected}" \
+    'No external sources are needed for this trusted fixture.' \
+    $'Table 2, row 1:\n  Source: https://example.org/a\n  Checked: 2026-10-06'
+cmp -s -- "${multi_table_expected}" "${multi_table_normalized}" ||
+    fail 'multi-table normalization lost indentation, order, or empty cells'
+
+chain_base="${FIXTURE_ROOT}/chain-base.txt"
+chain_report="${FIXTURE_ROOT}/chain-report.txt"
+chain_normalized="${FIXTURE_ROOT}/chain-normalized.txt"
+chain_diagnostic="${FIXTURE_ROOT}/chain-diagnostic.txt"
+chain_request="${FIXTURE_ROOT}/chain-request.txt"
+chain_reply="${FIXTURE_ROOT}/chain-reply.txt"
+chain_candidate="${FIXTURE_ROOT}/chain-candidate.txt"
+write_report \
+    "${chain_base}" 1 manipulation "${observed_value}" ''
+insert_after_exact_line \
+    "${chain_base}" "${chain_report}" \
+    'No qualifying findings.' "${security_table}"
+normalize_review_report_markdown_tables \
+    "${chain_report}" "${chain_normalized}" > /dev/null ||
+    fail 'table plus malformed confidence was not normalized'
+capture_diagnostic "${chain_normalized}" 1 "${chain_diagnostic}"
+assert_contains \
+    "${chain_diagnostic}" \
+    "has an invalid confidence level: ${observed_value}" \
+    'normalized candidate confidence diagnostic'
+prepare_review_report_repair \
+    "${chain_normalized}" 1 "${chain_diagnostic}" "${chain_request}" ||
+    fail 'normalized candidate was not eligible for the confidence edit'
+extract_descriptor "${chain_request}" > "${chain_reply}"
+apply_review_report_repair \
+    "${chain_normalized}" \
+    1 \
+    "$(< "${chain_diagnostic}")" \
+    "${chain_reply}" \
+    "${chain_candidate}" ||
+    fail 'confidence edit could not be applied after table normalization'
+validate_review_report_contract "${chain_candidate}" 1 ||
+    fail 'chained repair candidate failed strict validation'
+assert_no_markdown_table "${chain_candidate}" 'chained repair candidate'
+assert_contains \
+    "${chain_candidate}" \
+    "Confidence: Medium - Original confidence detail: ${observed_value}" \
+    'chained confidence correction'
+assert_contains \
+    "${chain_candidate}" \
+    '  Vulnerability: 32-bit TLV length overflow enables out-of-bounds value printing' \
+    'chained table conversion'
+
+table_diagnostic="${FIXTURE_ROOT}/table-diagnostic.txt"
+printf '%s\n' 'Final report contains a Markdown table.' \
+    > "${table_diagnostic}"
+expect_status \
+    42 \
+    'table diagnostic outside the confidence-edit class' \
+    "${FIXTURE_ROOT}/table-request.txt" \
+    prepare_review_report_repair \
+    "${table_report}" \
+    3 \
+    "${table_diagnostic}" \
+    "${FIXTURE_ROOT}/table-request.txt"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'report repair unsupported: the report-contract validator found no confidence-level error to repair' \
+    'non-contract repair diagnostic'
+assert_not_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'already satisfies strict validation' \
+    'non-contract repair diagnostic'
+
+exercise_ineligible_table() {
+    local name="$1"
+    local scope="$2"
+    local anchor="$3"
+    local insertion="$4"
+    local expected_detail="$5"
+    local base="${FIXTURE_ROOT}/${name}-base.txt"
+    local report="${FIXTURE_ROOT}/${name}-report.txt"
+    local output="${FIXTURE_ROOT}/${name}-normalized.txt"
+
+    write_report \
+        "${base}" \
+        "${scope}" \
+        manipulation \
+        'High - synthetic ineligible-table evidence.' \
+        ''
+    insert_after_exact_line "${base}" "${report}" "${anchor}" "${insertion}"
+    expect_status \
+        42 \
+        "${name}" \
+        "${output}" \
+        normalize_review_report_markdown_tables "${report}" "${output}"
+    assert_contains \
+        "${FIXTURE_ROOT}/expect-status.stderr" \
+        "report repair unsupported: ${expected_detail}" \
+        "${name} diagnostic"
+}
+
+exercise_ineligible_table \
+    table-in-agent-targeting 1 \
+    'Limitations of available evidence: Trusted synthetic fixture only.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT'
+exercise_ineligible_table \
+    table-in-provenance 3 \
+    'Alternative explanations: No directly bound generation evidence.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: GENERATED-CODE PROVENANCE ASSESSMENT'
+exercise_ineligible_table \
+    table-outside-sections 1 \
+    'REPOSITORY REVIEW REPORT' \
+    "${valid_table}" \
+    'a Markdown table appears outside the required report sections'
+exercise_ineligible_table \
+    table-with-action-menu 1 \
+    'No qualifying findings.' \
+    $'| Option | Action |\n|---|---|\n| 2 | Then FIX ALL ISSUES now |' \
+    'a Markdown table contains a prohibited action-menu phrase'
+exercise_ineligible_table \
+    table-with-escaped-pipe 1 \
+    'No qualifying findings.' \
+    $'| Expression |\n|---|\n| a \\| b |' \
+    'a Markdown table cell contains an escaped pipe'
+exercise_ineligible_table \
+    table-without-delimiter 1 \
+    'No qualifying findings.' \
+    $'| A | B |\n| 1 | 2 |\n| 3 | 4 |' \
+    'a Markdown table lacks a valid delimiter row'
+exercise_ineligible_table \
+    table-with-ragged-row 1 \
+    'No qualifying findings.' \
+    $'| A | B |\n|---|---|\n| 1 |' \
+    'a Markdown table row has an inconsistent column count'
+exercise_ineligible_table \
+    table-with-empty-header 1 \
+    'No qualifying findings.' \
+    $'| A |  |\n|---|---|\n| 1 | 2 |' \
+    'a Markdown table has an empty header cell'
+exercise_ineligible_table \
+    lone-pipe-line 1 \
+    'No qualifying findings.' \
+    '| not a table |' \
+    'a pipe-delimited block is not a Markdown table with a header, a delimiter row, and at least one body row'
+exercise_ineligible_table \
+    header-only-table 1 \
+    'No qualifying findings.' \
+    $'| A | B |\n|---|---|' \
+    'a pipe-delimited block is not a Markdown table with a header, a delimiter row, and at least one body row'
+exercise_ineligible_table \
+    table-with-unicode-indent 1 \
+    'No qualifying findings.' \
+    $'\u00a0| A |\n|---|\n| 1 |' \
+    'a Markdown table row uses unsupported leading whitespace'
+
+no_table_output="${FIXTURE_ROOT}/no-table-normalized.txt"
+expect_status \
+    42 \
+    'report without a Markdown table' \
+    "${no_table_output}" \
+    normalize_review_report_markdown_tables "${table_base}" "${no_table_output}"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'report repair unsupported: the report contains no Markdown table' \
+    'no-table diagnostic'
+
+invalid_utf8_table="${FIXTURE_ROOT}/invalid-utf8-table.txt"
+invalid_utf8_table_output="${FIXTURE_ROOT}/invalid-utf8-table-normalized.txt"
+cp -- "${table_report}" "${invalid_utf8_table}"
+printf '\377\n' >> "${invalid_utf8_table}"
+expect_status \
+    42 \
+    'invalid UTF-8 table report' \
+    "${invalid_utf8_table_output}" \
+    normalize_review_report_markdown_tables \
+    "${invalid_utf8_table}" "${invalid_utf8_table_output}"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'report repair unsupported: the report is not valid UTF-8' \
+    'invalid UTF-8 table diagnostic'
+
+in_place_table="${FIXTURE_ROOT}/in-place-table.txt"
+in_place_stderr="${FIXTURE_ROOT}/in-place-table.stderr"
+cp -- "${table_report}" "${in_place_table}"
+if normalize_review_report_markdown_tables \
+    "${in_place_table}" "${in_place_table}" \
+    > /dev/null 2> "${in_place_stderr}"; then
+    fail 'table normalization replaced its input in place'
+else
+    in_place_status=$?
+fi
+[[ "${in_place_status}" -eq 1 ]] ||
+    fail "in-place table normalization returned ${in_place_status}"
+cmp -s -- "${table_report}" "${in_place_table}" ||
+    fail 'refused in-place table normalization modified its input'
+assert_contains \
+    "${in_place_stderr}" \
+    'report repair helper error: the normalized report must not replace its input' \
+    'in-place table normalization diagnostic'
 
 handoff_with_summary="${FIXTURE_ROOT}/handoff-with-summary.md"
 handoff_without_summary="${FIXTURE_ROOT}/handoff-without-summary.md"

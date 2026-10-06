@@ -500,8 +500,11 @@ approved `--timeout-minutes 1` plan uses 60 seconds. The compact policy object
 keeps exact key order:
 
 ```json
-{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60}
+{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows"]}
 ```
+
+`DeterministicNormalizations` lists runner-owned, model-free corrections that
+run before any repair invocation. Adapters never implement or receive them.
 
 `TimeoutSeconds` is the effective returned bound, not a constant. The complete
 policy object is approval-hash material and appears consistently in plan/run

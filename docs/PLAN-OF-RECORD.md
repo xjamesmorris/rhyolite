@@ -62,7 +62,8 @@ preserved speculatively.
   within at most 300 seconds, capped by the session timeout, under the approved
   model settings. Research is never
   repeated, and strict validation plus deterministic preservation remain
-  authoritative.
+  authoritative. The same policy discloses runner-owned, model-free
+  `markdown-table-rows` normalization for eligible Markdown tables.
 - The no-op harness is development-only under `tests/fixtures`. It is
   never registered by production code, packaged, exposed through launcher or
   runner choices, or described as supported runtime behavior.

@@ -481,7 +481,12 @@ start the review yet. Instead:
    repair policy permits one fresh, tool-less confidence edit within its
    returned `TimeoutSeconds` (at most 300 seconds, capped by the session
    timeout) under the approved model settings, with no research rerun
-   and no weakening of strict validation. Label `ReviewDate`, `PriorArtWindow`, and
+   and no weakening of strict validation. Also explain that its
+   `DeterministicNormalizations` value `markdown-table-rows` lets the
+   trusted runner convert well-formed Markdown tables outside the
+   field-validated assessment sections into labeled plain-text rows
+   without a model, keeping every cell verbatim before the same strict
+   revalidation. Label `ReviewDate`, `PriorArtWindow`, and
    `ProvenanceWindow` as local-session calendar dates. Label
    `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
    disabled. For scope `2` or `3`, show the authoritative prior-art

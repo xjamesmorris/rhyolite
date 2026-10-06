@@ -252,6 +252,14 @@ supported and must not drive new work.
   errors and exhausted repair fail explicitly. Candidates, diagnostics,
   progress, and `ReportRepair` state remain observable without rerunning
   research or exposing direct child resume.
+  When strict validation rejects Markdown table syntax, the approval-bound
+  `DeterministicNormalizations` entry `markdown-table-rows` lets the trusted
+  runner convert each well-formed table outside the field-validated
+  assessment sections into labeled plain-text rows without a model, keeping
+  every cell verbatim and every other line unchanged. Malformed,
+  field-section, and action-menu tables stay ineligible. The normalized
+  candidate must pass the same strict validation; otherwise it becomes the
+  only input to the bounded confidence edit.
 - Release validation is local only on Fedora Linux 44. Do not add or require
   hosted CI workflows for the current release.
 
@@ -373,7 +381,8 @@ supported and must not drive new work.
   defines `Provider` as an object with `Id`, `Host`, and
   `ForwardedEnvVarNames`. Follow `docs/ADDING-A-HARNESS.md`; do not claim v2
   is implemented until runtime and tests land together.
-- `ReportRepairPolicy` is part of plan approval. The additive `ReportRepair`
+- `ReportRepairPolicy`, including `DeterministicNormalizations`, is part of
+  plan approval. The additive `ReportRepair`
   object is synchronized across repository state, manifest entries, run-state
   repositories, handoffs, and the HTML index. Repair itself never widens an
   approved harness, provider, model, effort, context, source, or research scope.

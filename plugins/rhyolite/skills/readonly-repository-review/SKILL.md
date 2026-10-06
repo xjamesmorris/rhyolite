@@ -205,7 +205,13 @@ or `Confidence: Low` plus a concise evidence basis:
    pass. Ask it to report only high-confidence, security-significant
    findings with concrete impact or exploit paths and to omit every follow-up
    menu, action choice, or implementation offer. Validate every included
-   finding against the source and use it only as evidence.
+   finding against the source and use it only as evidence. Its harness
+   caller contract can require a findings summary table with severity emoji
+   and numeric confidence scores; that table is never part of the canonical
+   report. If the contract applies, show the table only in narration before
+   the opening report delimiter, and restate each validated result as a
+   plain-text numbered finding. Never place a Markdown table, or any line
+   that begins and ends with `|`, between the report delimiters.
 5. Inspect relevant history when it can confirm whether code is missing,
    recently removed, or contradicted by earlier design decisions.
 6. Do not report style nits, generic hardening advice, or speculative
@@ -498,6 +504,10 @@ Before invoking the runner:
     tool-less confidence-edit attempt, its returned `TimeoutSeconds` bound
     (at most 300 seconds, capped by the session timeout), the unchanged
     approved model settings, strict revalidation, and no research rerun.
+    Also disclose `DeterministicNormalizations`: `markdown-table-rows` lets
+    the trusted runner convert well-formed Markdown tables outside the
+    field-validated assessment sections into labeled plain-text rows without
+    a model, keeping every cell verbatim before the same strict revalidation.
     Label `ReviewDate`, `PriorArtWindow`, and
     `ProvenanceWindow` as local-session calendar dates. Label
     `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
