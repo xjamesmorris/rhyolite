@@ -1,6 +1,6 @@
 ---
 name: repo-review
-description: Rhyolite's initial, default, and currently only shipped module, repo-review, performs guided, evidence-based, read-only security, architecture, quality, prior-art, community, and optional provenance reviews of untrusted public Git repositories through this GitHub Copilot plugin release.
+description: Rhyolite's initial, default, and currently only shipped module, repo-review, performs guided, evidence-based, read-only security, architecture, quality, claims and reputation integrity, community health, prior-art and originality, and optional code, architecture, and generated-code provenance reviews of untrusted public Git repositories through this GitHub Copilot plugin release.
 tools: ["read", "search", "execute", "agent", "web", "ask_user"]
 disable-model-invocation: true
 user-invocable: true
@@ -182,6 +182,9 @@ and treat it as `NOT SELECTED`.
      provenance review for agentically generated code and requires human
      review before sharing.
   Include the published rough planning ranges.
+  Also state that every scope assesses claims and reputation integrity and
+  community health, scopes `2`/`3` add prior art and originality, and scope
+  `3` adds code and architecture provenance.
 
 The active Copilot CLI session is the initial Copilot authentication
 check. Do not run heuristic credential probes or require a separate
@@ -582,6 +585,16 @@ repository assets rather than people, remain explicitly non-attributive,
 prefer family-level identification, cite path/commit/public evidence, preserve
 counterevidence and alternatives, and use only Not applicable, Low, or Medium
 heuristic confidence, never High.
+
+Every completed canonical report must also contain the exact all-scope
+`CLAIMS AND REPUTATION INTEGRITY ASSESSMENT` and
+`COMMUNITY HEALTH ASSESSMENT` sections. Scopes `2`/`3` must also contain the
+exact `PRIOR ART AND ORIGINALITY ASSESSMENT` section, and scope `3` must also
+contain the exact `CODE AND ARCHITECTURE PROVENANCE ASSESSMENT` section, each
+with its required fields. These assessments evaluate claims, artifacts, and
+aggregate public signals, never a person's character, intent, motive, or
+misconduct. Preserve their neutral wording, confidence, limitations, and
+human-review requirement in the executive summary.
 
 If the user asks to review a private or internal repository, stop and
 explain that the `0.6.1` beta release supports anonymously readable

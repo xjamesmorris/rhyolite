@@ -21,6 +21,51 @@
 - Corrected the report-repair eligibility diagnostic for non-contract
   failures, which previously claimed that the rejected report already
   satisfied strict validation.
+- Fixed an interruption race in which the run-level `state.json` could be
+  finalized while a repository process was still writing its own
+  `Interrupted` state, which could produce invalid JSON or a stale
+  `ReportRepair` status. After an interrupt, the runner now waits for each
+  tracked repository process to exit before writing run-level artifacts; a
+  second interrupt still escalates to a forced stop.
+- Restored first-class prior-art, originality, and community coverage from
+  the original review contract. Every report now requires exact
+  `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT` and
+  `COMMUNITY HEALTH ASSESSMENT` sections; scope 1 derives them only from the
+  snapshot and wrapper Git metadata and states that external corroboration
+  was not requested. Scopes 2/3 add `PRIOR ART AND ORIGINALITY ASSESSMENT`,
+  and scope 3 adds `CODE AND ARCHITECTURE PROVENANCE ASSESSMENT` for code and
+  architecture lineage, license and attribution consistency, and chronology.
+  Each section has exact labeled fields plus confidence and evidence basis.
+  Strict validation rejects missing, duplicated, out-of-order, or
+  out-of-scope sections and missing, duplicated, or empty fields.
+- Added claims and reputation coverage that supports reviewer triage, such
+  as conference program-committee review of proposals and projects. It
+  compares capability, maturity, security, and roadmap claims with the
+  implementation and covers conference, CFP, proposal, and paper-submission
+  indicators with local commit chronology; media, endorsement, award, and
+  affiliation claims; adoption and engagement authenticity;
+  reputation-building pattern indicators; and supply-chain precursor
+  indicators, which are risk indicators, never findings of intent. When such
+  concerns exist, the executive summary begins with one advisory triage
+  sentence. The scope-3 generation assessment now explicitly covers every
+  tracked asset, including documentation and proposal, pitch, CFP, and paper
+  material, with unchanged heading, fields, and verdicts. The README
+  documents conference and CFP review triage by scope.
+- Added required `COMMUNITY HEALTH EVIDENCE`, `CLAIM VERIFICATION EVIDENCE`,
+  and `PRIOR ART AND LINEAGE EVIDENCE` research-dossier sections for scopes
+  2/3. Community-health evidence may use anonymous public GitHub REST
+  metadata through the existing broker `fetch_public_url` tool within
+  existing budgets; the broker, providers, and research policy are
+  unchanged.
+- Extended the bounded confidence edit to the new assessment sections, gated
+  by the approved scope. Missing, duplicated, or empty labels and tables in
+  assessment sections still fail explicitly.
+- Added safeguards: these assessments evaluate claims, artifacts, and
+  aggregate public signals, never a person's character or intent; use
+  neutral terms; never research or characterize named individuals quoted in
+  endorsements; report engagement and contributor data only as counts and
+  date distributions; and require human review before external sharing.
+  Plan schema 5 and state schema 6 are unchanged.
 
 ## 0.6.1 - 2026-10-06
 

@@ -157,6 +157,16 @@ The supported runner path:
   `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT` contract. Scope 3 also
   requires the exact `GENERATED-CODE PROVENANCE ASSESSMENT`, its required
   fields, and a bounded generation verdict.
+- Also fails closed unless every report contains the exact all-scope
+  `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT` and
+  `COMMUNITY HEALTH ASSESSMENT` sections with their required labeled fields,
+  confidence, and evidence basis. Scopes 2/3 also require the exact
+  `PRIOR ART AND ORIGINALITY ASSESSMENT`, and scope 3 also requires the exact
+  `CODE AND ARCHITECTURE PROVENANCE ASSESSMENT`. Headings outside the
+  approved scope are rejected. These sections assess claims, artifacts, and
+  aggregate public signals, never people: named individuals quoted in
+  endorsements are not researched or characterized, and engagement data
+  appear only as counts and date distributions.
 - Restricts direct model, effort, and harness provenance attribution to
   directly bound commit-specific attestations, transcripts, provenance
   records, or explicit disclosures. Heuristic model candidates are separate,

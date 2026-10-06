@@ -86,6 +86,8 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   matrix.
 - Scope `3` is evidence-based provenance review for agentically generated
   code. It is separately opt-in and requires human review before sharing.
+  It also covers code and architecture lineage, and its generation
+  assessment includes documentation and proposal material.
 - **Strongly recommended:** select `1 - Core repository review` for the
   first run; broader scopes can be resource-intensive and long-running.
 
@@ -487,6 +489,14 @@ public response before the main worker starts. The main worker receives
 only a read-only sanitized dossier and network summary and has no direct
 network tool.
 
+The dossier also requires `COMMUNITY HEALTH EVIDENCE`, which reports
+contributor and engagement data only as counts and date distributions;
+`CLAIM VERIFICATION EVIDENCE` for each material external claim; and
+`PRIOR ART AND LINEAGE EVIDENCE`, which adds code and architecture lineage
+and chronology for scope `3`. Community-health evidence may include
+anonymous public GitHub REST metadata fetched through `fetch_public_url`
+within the existing request budgets.
+
 Reports preserve `RESEARCH SOURCE LANDSCAPE`,
 `INACCESSIBLE RESOURCE REGISTER`, and
 `TOP USER RETRIEVAL PRIORITIES` sections, plus
@@ -506,6 +516,23 @@ the available evidence. Checked-in source and documentation are inspected as
 inert text. Resource URLs are not activated merely to test tracking behavior,
 and normalized external pages can limit sensor detection.
 
+Every scope also includes exact `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT`
+and `COMMUNITY HEALTH ASSESSMENT` sections. The claims assessment compares
+capability, maturity, security, and roadmap claims with the implementation
+and covers conference, CFP, proposal, and paper-submission indicators;
+media coverage, endorsement, award, and affiliation claims; adoption and
+engagement authenticity; reputation-building pattern indicators; and
+supply-chain precursor indicators, which are risk indicators, never findings
+of intent. Scope `1` uses only the snapshot and wrapper Git metadata and
+states that external corroboration and public community research were not
+requested. Scopes `2`/`3` add the dossier evidence and an exact
+`PRIOR ART AND ORIGINALITY ASSESSMENT`. Scope `3` adds an exact
+`CODE AND ARCHITECTURE PROVENANCE ASSESSMENT` for code and architecture
+lineage, license and attribution consistency, and chronology. These sections
+assess claims, artifacts, and aggregate public signals, never a person's
+character or intent. They do not research or characterize named individuals
+quoted in endorsements and never list individual engagement accounts.
+
 Scope `3` also requires an exact
 `GENERATED-CODE PROVENANCE ASSESSMENT` with generation, direct model,
 non-attributive heuristic model candidates, heuristic confidence, direct
@@ -515,7 +542,9 @@ and evidence-basis fields. Generation verdicts are limited to `Confirmed`,
 `No supporting evidence found`. An absence of evidence never establishes
 human generation. Direct model, effort, or harness attribution requires
 commit-bound evidence such as an attestation, transcript, provenance record,
-or explicit disclosure.
+or explicit disclosure. The whole-repository generation assessment covers
+every tracked asset, including documentation and proposal, pitch, CFP, and
+paper material.
 
 Heuristic model candidates concern repository assets, never people, and are
 not attribution. They prefer family-level identification, cite exact paths,
@@ -547,7 +576,10 @@ uses its lowest explicitly stated level, and changes no other report bytes.
 Research is not rerun. The unchanged strict validator checks the candidate
 again; unsupported errors, invalid edits, timeout, or cleanup failure remain
 explicit failures. `RHYOLITE PROGRESS` distinguishes validation, repair, and
-successful revalidation or exhaustion.
+successful revalidation or exhaustion. The confidence edit is scope-gated: it
+can target only an assessment section that the approved scope requires.
+Missing, duplicated, or empty labels and tables in assessment sections still
+fail explicitly.
 
 If strict validation rejects a complete report for Markdown table syntax,
 such as a copied security-specialist summary table, the trusted runner first
@@ -637,6 +669,21 @@ For programmatic invocation, installed plugin agents are namespaced:
 ```text
 copilot --agent rhyolite:repo-review --prompt "..."
 ```
+
+## Conference and CFP review triage
+
+Program committees and other reviewers can use Rhyolite to triage projects
+that accompany talk proposals, CFP submissions, or papers, including
+proposals that may be LLM-generated. Scope `1` assesses local claims,
+reputation, and community signals from the snapshot and its bounded Git
+metadata. Scope `2` adds prior art and originality, external claim
+verification, and public community-health evidence. Scope `3` adds code and
+architecture provenance and generated-content provenance, including
+documentation and proposal material. When such concerns exist, the executive
+summary begins with one triage sentence that names the strongest
+evidence-backed concern and its confidence. Triage output is advisory and
+never a verdict about a person; human review is required before sharing or
+acting on it.
 
 ## Use the batch runner directly
 
@@ -857,6 +904,10 @@ Important defaults:
   section. Scope 3 additionally fails closed if the generated-code provenance
   section or any required field is missing, or if heuristic model confidence
   is `High` or inconsistent with the controlled no-candidate values.
+- Every scope also validates the claims and reputation integrity and
+  community health sections. Scopes 2/3 add the prior-art and originality
+  section, and scope 3 adds the code and architecture provenance section.
+  Headings outside the approved scope fail validation.
 - Reports omit author email addresses and avoid unsupported attribution.
 - Isolated child review homes still set `disableAllHooks`, so nested
   review sessions do not inherit the onboarding hook.

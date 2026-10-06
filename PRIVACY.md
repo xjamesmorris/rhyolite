@@ -65,6 +65,23 @@ separately disabled by default. When enabled, it must:
 - Present alternative explanations and missing evidence.
 - Receive human review before distribution.
 
+## Claims, reputation, and community assessments
+
+Every scope assesses claims and reputation integrity and community health.
+These assessments evaluate claims, artifacts, and aggregate public signals,
+never a person's character, intent, motive, or misconduct. Named individuals
+quoted in endorsements or testimonials are not researched or characterized;
+reports cite only the path, line, and attributed role and say "no public
+record located" when no independent record is found. Engagement and
+contributor data appear only as counts and date distributions; individual
+stargazer, fork, watcher, follower, and commenter accounts are never listed.
+Scope 1 uses only the snapshot and wrapper Git metadata. Scope 2/3 research
+may fetch anonymous public GitHub REST metadata, such as repository,
+contributor, release, issue, pull request, and community-profile records,
+through the existing broker `fetch_public_url` tool within the existing
+request budgets. Human review is required before any such conclusion is
+shared externally.
+
 ## Local onboarding hook
 
 Installing the plugin registers a local, display-only `sessionStart`

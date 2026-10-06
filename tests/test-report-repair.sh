@@ -95,15 +95,35 @@ write_report() {
     local target_prefix="$5"
     local duplicate_target="${6:-no}"
     local manipulation_value="Medium."
+    local claims_value="Medium."
+    local community_value="Medium."
+    local prior_art_value="Medium."
+    local code_architecture_value="Medium."
     local provenance_value="Low."
 
-    if [[ "${target_section}" == "manipulation" ]]; then
-        manipulation_value="${target_value}"
-    elif [[ "${target_section}" == "provenance" ]]; then
-        provenance_value="${target_value}"
-    else
-        fail "unknown synthetic target section: ${target_section}"
-    fi
+    case "${target_section}" in
+        manipulation)
+            manipulation_value="${target_value}"
+            ;;
+        claims)
+            claims_value="${target_value}"
+            ;;
+        community)
+            community_value="${target_value}"
+            ;;
+        prior-art)
+            prior_art_value="${target_value}"
+            ;;
+        code-architecture)
+            code_architecture_value="${target_value}"
+            ;;
+        provenance)
+            provenance_value="${target_value}"
+            ;;
+        *)
+            fail "unknown synthetic target section: ${target_section}"
+            ;;
+    esac
 
     {
         cat <<'EOF'
@@ -138,6 +158,40 @@ EOF
             printf '%s\n' 'Evidence basis: Deliberate ambiguous duplicate.'
         fi
 
+        cat <<'EOF'
+
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT
+Capability, maturity, and security claims versus implementation: No material
+claim beyond the synthetic fixture.
+Roadmap and delivery commitments: No roadmap commitment.
+Conference, CFP, proposal, and paper submission indicators: None identified;
+the synthetic local chronology has no venue or deadline reference.
+Media coverage, endorsement, award, and affiliation claims: None identified.
+Adoption, popularity, and engagement authenticity: No adoption claim.
+Reputation-building pattern indicators: No supporting evidence.
+Supply-chain precursor indicators: No supporting evidence.
+Limitations of available evidence: Synthetic claims fixture only.
+EOF
+        printf '%sConfidence: %s\n' \
+            "${target_prefix}" "${claims_value}"
+        printf '%sEvidence basis: Synthetic claims evidence.\n' \
+            "${target_prefix}"
+
+        cat <<'EOF'
+
+COMMUNITY HEALTH ASSESSMENT
+Contributor and maintainer base: One synthetic author.
+Activity and maintenance cadence: One synthetic commit.
+Issue, pull request, and review practices: Not observable in the fixture.
+Governance, security policy, and release practices: None identified.
+Independent adoption and engagement: No supporting evidence.
+Limitations of available evidence: Synthetic community fixture only.
+EOF
+        printf '%sConfidence: %s\n' \
+            "${target_prefix}" "${community_value}"
+        printf '%sEvidence basis: Synthetic community evidence.\n' \
+            "${target_prefix}"
+
         if [[ "${scope}" -ge 2 ]]; then
             cat <<'EOF'
 
@@ -152,10 +206,35 @@ None.
 
 RESEARCH TRANSPORT OBSERVATIONS
 No network activity occurred.
+
+PRIOR ART AND ORIGINALITY ASSESSMENT
+Closest prior art and ecosystem: Synthetic established ecosystem.
+Novelty and differentiation: No novelty claim.
+Repackaging indicators: No supporting evidence.
+Citation and attribution integrity: No citation present.
+Limitations of available evidence: Synthetic prior-art fixture only.
 EOF
+            printf '%sConfidence: %s\n' \
+                "${target_prefix}" "${prior_art_value}"
+            printf '%sEvidence basis: Synthetic prior-art evidence.\n' \
+                "${target_prefix}"
         fi
 
         if [[ "${scope}" -eq 3 ]]; then
+            cat <<'EOF'
+
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT
+Code lineage and reuse: No upstream or near-duplicate source identified.
+Architecture lineage: Conventional synthetic layout.
+License and attribution consistency: No inconsistency identified.
+Chronology and submission timeline: One synthetic commit; no submission event.
+Coverage/window: Synthetic code and architecture window only.
+Alternative explanations: Synthetic code and architecture fixture only.
+EOF
+            printf '%sConfidence: %s\n' \
+                "${target_prefix}" "${code_architecture_value}"
+            printf '%sEvidence basis: Synthetic lineage evidence.\n' \
+                "${target_prefix}"
             cat <<'EOF'
 
 GENERATED-CODE PROVENANCE ASSESSMENT
@@ -409,6 +488,7 @@ exercise_generic_level_case() {
     local target_value="$4"
     local conservative_level="$5"
     local target_prefix="$6"
+    local expected_section="${7-}"
     local initial="${FIXTURE_ROOT}/${name}-initial.txt"
     local diagnostic="${FIXTURE_ROOT}/${name}-diagnostic.txt"
     local request="${FIXTURE_ROOT}/${name}-request.txt"
@@ -423,6 +503,11 @@ exercise_generic_level_case() {
         "${target_value}" \
         "${target_prefix}"
     capture_diagnostic "${initial}" "${scope}" "${diagnostic}"
+    if [[ -n "${expected_section}" ]]; then
+        [[ "$(< "${diagnostic}")" == \
+            "${expected_section} has an invalid confidence level: ${target_value}" ]] ||
+            fail "${name} strict diagnostic did not name ${expected_section}"
+    fi
     prepare_review_report_repair \
         "${initial}" "${scope}" "${diagnostic}" "${request}" ||
         fail "${name} request preparation failed"
@@ -431,6 +516,12 @@ exercise_generic_level_case() {
         "${request}" \
         "\"ConservativeLevel\":\"${conservative_level}\"" \
         "${name} conservative level"
+    if [[ -n "${expected_section}" ]]; then
+        assert_contains \
+            "${request}" \
+            "\"Section\":\"${expected_section}\"" \
+            "${name} descriptor section"
+    fi
     apply_review_report_repair \
         "${initial}" \
         "${scope}" \
@@ -499,6 +590,178 @@ exercise_generic_level_case \
     'High for direct evidence; Very Low for unverified absence.' \
     Low \
     '  7) '
+exercise_generic_level_case \
+    'claims-scope-1-compound' \
+    1 \
+    claims \
+    'High for snapshot claims; Low for uncorroborated venue acceptance.' \
+    Low \
+    '  3. ' \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT'
+exercise_generic_level_case \
+    'community-scope-1-single-level' \
+    1 \
+    community \
+    'Medium confidence from bounded wrapper metadata.' \
+    Medium \
+    '  - ' \
+    'COMMUNITY HEALTH ASSESSMENT'
+exercise_generic_level_case \
+    'prior-art-scope-2-compound' \
+    2 \
+    prior-art \
+    'High for established ecosystem projects; Medium for novelty claims.' \
+    Medium \
+    '  4) ' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT'
+exercise_generic_level_case \
+    'code-architecture-scope-3-compound' \
+    3 \
+    code-architecture \
+    'Medium for vendored lineage; Low for architecture similarity.' \
+    Low \
+    '  9. ' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
+
+scope_gate_root="${FIXTURE_ROOT}/scope-gate"
+mkdir -p -- "${scope_gate_root}"
+prior_art_gate_value='High for named ecosystem projects; Low for novelty claims.'
+prior_art_gate_report="${scope_gate_root}/prior-art-scope-2.txt"
+prior_art_gate_diagnostic="${scope_gate_root}/prior-art-scope-2-diagnostic.txt"
+write_report \
+    "${prior_art_gate_report}" \
+    2 \
+    prior-art \
+    "${prior_art_gate_value}" \
+    '  4) '
+capture_diagnostic \
+    "${prior_art_gate_report}" 2 "${prior_art_gate_diagnostic}"
+prior_art_gate_text="$(< "${prior_art_gate_diagnostic}")"
+[[ "${prior_art_gate_text}" == \
+    "PRIOR ART AND ORIGINALITY ASSESSMENT has an invalid confidence level: ${prior_art_gate_value}" ]] ||
+    fail 'scope 2 prior-art gate fixture produced an unexpected diagnostic'
+expect_status \
+    42 \
+    'scope 1 repair request for a PRIOR ART confidence diagnostic' \
+    "${scope_gate_root}/prior-art-scope-1-request.txt" \
+    prepare_review_report_repair \
+    "${prior_art_gate_report}" \
+    1 \
+    "${prior_art_gate_diagnostic}" \
+    "${scope_gate_root}/prior-art-scope-1-request.txt"
+expect_status \
+    42 \
+    'scope 1 PRIOR ART confidence diagnostic class' \
+    "${scope_gate_root}/prior-art-scope-1-candidate.txt" \
+    _review_report_repair_helper \
+    preflight \
+    "${prior_art_gate_report}" \
+    1 \
+    text \
+    "${prior_art_gate_text}" \
+    '' \
+    "${scope_gate_root}/prior-art-scope-1-candidate.txt" \
+    "${prior_art_gate_text}"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'report repair unsupported: the validator diagnostic is not the supported confidence-level class' \
+    'scope 1 PRIOR ART repair gate'
+_review_report_repair_helper \
+    preflight \
+    "${prior_art_gate_report}" \
+    2 \
+    text \
+    "${prior_art_gate_text}" \
+    '' \
+    "${scope_gate_root}/prior-art-scope-2-candidate.txt" \
+    "${prior_art_gate_text}" ||
+    fail 'scope 2 PRIOR ART confidence diagnostic was not eligible'
+validate_review_report_contract \
+    "${scope_gate_root}/prior-art-scope-2-candidate.txt" 2 ||
+    fail 'scope 2 PRIOR ART gate candidate failed strict validation'
+
+prior_art_scope_one_report="${scope_gate_root}/prior-art-in-scope-1.txt"
+prior_art_scope_one_diagnostic="${scope_gate_root}/prior-art-in-scope-1-diagnostic.txt"
+awk '
+    $0 == "RESEARCH SOURCE LANDSCAPE" {
+        skipping = 1
+    }
+    $0 == "PRIOR ART AND ORIGINALITY ASSESSMENT" {
+        skipping = 0
+    }
+    !skipping { print }
+' "${prior_art_gate_report}" > "${prior_art_scope_one_report}"
+capture_diagnostic \
+    "${prior_art_scope_one_report}" 1 "${prior_art_scope_one_diagnostic}"
+[[ "$(< "${prior_art_scope_one_diagnostic}")" == \
+    'scope 1 report contains an unexpected section: PRIOR ART AND ORIGINALITY ASSESSMENT' ]] ||
+    fail 'scope 1 report with PRIOR ART was not rejected as an unexpected section'
+expect_status \
+    42 \
+    'scope 1 unexpected PRIOR ART section' \
+    "${scope_gate_root}/prior-art-in-scope-1-request.txt" \
+    prepare_review_report_repair \
+    "${prior_art_scope_one_report}" \
+    1 \
+    "${prior_art_scope_one_diagnostic}" \
+    "${scope_gate_root}/prior-art-in-scope-1-request.txt"
+printf '%s\n' "${prior_art_gate_text}" \
+    > "${scope_gate_root}/forged-prior-art-diagnostic.txt"
+expect_status \
+    42 \
+    'forged scope 1 PRIOR ART confidence diagnostic' \
+    "${scope_gate_root}/forged-prior-art-request.txt" \
+    prepare_review_report_repair \
+    "${prior_art_scope_one_report}" \
+    1 \
+    "${scope_gate_root}/forged-prior-art-diagnostic.txt" \
+    "${scope_gate_root}/forged-prior-art-request.txt"
+
+code_architecture_gate_value='Medium for vendored lineage; Low for timeline gaps.'
+code_architecture_gate_report="${scope_gate_root}/code-architecture-scope-3.txt"
+code_architecture_gate_diagnostic="${scope_gate_root}/code-architecture-scope-3-diagnostic.txt"
+write_report \
+    "${code_architecture_gate_report}" \
+    3 \
+    code-architecture \
+    "${code_architecture_gate_value}" \
+    '  9. '
+capture_diagnostic \
+    "${code_architecture_gate_report}" 3 "${code_architecture_gate_diagnostic}"
+code_architecture_gate_text="$(< "${code_architecture_gate_diagnostic}")"
+[[ "${code_architecture_gate_text}" == \
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT has an invalid confidence level: ${code_architecture_gate_value}" ]] ||
+    fail 'scope 3 code-architecture gate fixture produced an unexpected diagnostic'
+expect_status \
+    42 \
+    'scope 2 CODE AND ARCHITECTURE confidence diagnostic class' \
+    "${scope_gate_root}/code-architecture-scope-2-candidate.txt" \
+    _review_report_repair_helper \
+    preflight \
+    "${code_architecture_gate_report}" \
+    2 \
+    text \
+    "${code_architecture_gate_text}" \
+    '' \
+    "${scope_gate_root}/code-architecture-scope-2-candidate.txt" \
+    "${code_architecture_gate_text}"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'report repair unsupported: the validator diagnostic is not the supported confidence-level class' \
+    'scope 2 CODE AND ARCHITECTURE repair gate'
+_review_report_repair_helper \
+    preflight \
+    "${code_architecture_gate_report}" \
+    3 \
+    text \
+    "${code_architecture_gate_text}" \
+    '' \
+    "${scope_gate_root}/code-architecture-scope-3-candidate.txt" \
+    "${code_architecture_gate_text}" ||
+    fail 'scope 3 CODE AND ARCHITECTURE confidence diagnostic was not eligible'
+validate_review_report_contract \
+    "${scope_gate_root}/code-architecture-scope-3-candidate.txt" 3 ||
+    fail 'scope 3 CODE AND ARCHITECTURE gate candidate failed strict validation'
 
 repeated_valid_initial="${FIXTURE_ROOT}/repeated-valid-initial.txt"
 repeated_valid_diagnostic="${FIXTURE_ROOT}/repeated-valid-diagnostic.txt"
@@ -1406,6 +1669,26 @@ exercise_ineligible_table \
     'Alternative explanations: No directly bound generation evidence.' \
     "${valid_table}" \
     'a Markdown table appears in a field-validated section: GENERATED-CODE PROVENANCE ASSESSMENT'
+exercise_ineligible_table \
+    table-in-claims 1 \
+    'Limitations of available evidence: Synthetic claims fixture only.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: CLAIMS AND REPUTATION INTEGRITY ASSESSMENT'
+exercise_ineligible_table \
+    table-in-community 1 \
+    'Limitations of available evidence: Synthetic community fixture only.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: COMMUNITY HEALTH ASSESSMENT'
+exercise_ineligible_table \
+    table-in-prior-art 2 \
+    'Limitations of available evidence: Synthetic prior-art fixture only.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: PRIOR ART AND ORIGINALITY ASSESSMENT'
+exercise_ineligible_table \
+    table-in-code-architecture 3 \
+    'Alternative explanations: Synthetic code and architecture fixture only.' \
+    "${valid_table}" \
+    'a Markdown table appears in a field-validated section: CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
 exercise_ineligible_table \
     table-outside-sections 1 \
     'REPOSITORY REVIEW REPORT' \

@@ -241,6 +241,9 @@ lines = text.splitlines()
 required_sections = [
     "RESEARCH CAPABILITY RECORD",
     "RESEARCH SOURCE LANDSCAPE",
+    "COMMUNITY HEALTH EVIDENCE",
+    "CLAIM VERIFICATION EVIDENCE",
+    "PRIOR ART AND LINEAGE EVIDENCE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH LIMITATIONS",
@@ -278,10 +281,14 @@ REVIEW CONTEXT	review-context
 EXECUTIVE SUMMARY	executive-summary
 FINDINGS	findings
 AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT	agent-targeting-and-review-manipulation-assessment
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT	claims-and-reputation-integrity-assessment
+COMMUNITY HEALTH ASSESSMENT	community-health-assessment
 RESEARCH SOURCE LANDSCAPE	research-source-landscape
 INACCESSIBLE RESOURCE REGISTER	inaccessible-resource-register
 TOP USER RETRIEVAL PRIORITIES	top-user-retrieval-priorities
 RESEARCH TRANSPORT OBSERVATIONS	research-transport-observations
+PRIOR ART AND ORIGINALITY ASSESSMENT	prior-art-and-originality-assessment
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT	code-and-architecture-provenance-assessment
 GENERATED-CODE PROVENANCE ASSESSMENT	generated-code-provenance-assessment
 AREAS REVIEWED WITHOUT QUALIFYING FINDINGS	areas-reviewed-without-qualifying-findings
 PRIORITIZED REMEDIATION	prioritized-remediation
@@ -345,10 +352,14 @@ ordered_sections = [
     "EXECUTIVE SUMMARY",
     "FINDINGS",
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
     "RESEARCH SOURCE LANDSCAPE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
     "GENERATED-CODE PROVENANCE ASSESSMENT",
     "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
     "PRIORITIZED REMEDIATION",
@@ -359,6 +370,8 @@ base_sections = [
     "EXECUTIVE SUMMARY",
     "FINDINGS",
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
     "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
     "PRIORITIZED REMEDIATION",
     "OVERALL ASSESSMENT",
@@ -369,6 +382,10 @@ research_sections = [
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH TRANSPORT OBSERVATIONS",
 ]
+claims_section = "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT"
+community_section = "COMMUNITY HEALTH ASSESSMENT"
+prior_art_section = "PRIOR ART AND ORIGINALITY ASSESSMENT"
+code_provenance_section = "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT"
 provenance_section = "GENERATED-CODE PROVENANCE ASSESSMENT"
 
 if (
@@ -384,7 +401,9 @@ if (
 required = list(base_sections)
 if scope >= 2:
     required.extend(research_sections)
+    required.append(prior_art_section)
 if scope == 3:
+    required.append(code_provenance_section)
     required.append(provenance_section)
 
 for section in ordered_sections:
@@ -550,7 +569,56 @@ require_assessment_fields(
     ],
 )
 
+require_assessment_fields(
+    claims_section,
+    [
+        "Capability, maturity, and security claims versus implementation:",
+        "Roadmap and delivery commitments:",
+        "Conference, CFP, proposal, and paper submission indicators:",
+        "Media coverage, endorsement, award, and affiliation claims:",
+        "Adoption, popularity, and engagement authenticity:",
+        "Reputation-building pattern indicators:",
+        "Supply-chain precursor indicators:",
+        "Limitations of available evidence:",
+    ],
+)
+
+require_assessment_fields(
+    community_section,
+    [
+        "Contributor and maintainer base:",
+        "Activity and maintenance cadence:",
+        "Issue, pull request, and review practices:",
+        "Governance, security policy, and release practices:",
+        "Independent adoption and engagement:",
+        "Limitations of available evidence:",
+    ],
+)
+
+if scope >= 2:
+    require_assessment_fields(
+        prior_art_section,
+        [
+            "Closest prior art and ecosystem:",
+            "Novelty and differentiation:",
+            "Repackaging indicators:",
+            "Citation and attribution integrity:",
+            "Limitations of available evidence:",
+        ],
+    )
+
 if scope == 3:
+    require_assessment_fields(
+        code_provenance_section,
+        [
+            "Code lineage and reuse:",
+            "Architecture lineage:",
+            "License and attribution consistency:",
+            "Chronology and submission timeline:",
+            "Coverage/window:",
+            "Alternative explanations:",
+        ],
+    )
     provenance = require_assessment_fields(
         provenance_section,
         [
@@ -669,10 +737,14 @@ ordered_sections = [
     "EXECUTIVE SUMMARY",
     "FINDINGS",
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
     "RESEARCH SOURCE LANDSCAPE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
     "GENERATED-CODE PROVENANCE ASSESSMENT",
     "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
     "PRIORITIZED REMEDIATION",
@@ -686,6 +758,39 @@ assessment_fields = {
         "Recursive/resource-exhaustion tarpits:",
         "Tracking pixels/callback beacons/trackers/sensors:",
         "Limitations of available evidence:",
+    ],
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT": [
+        "Capability, maturity, and security claims versus implementation:",
+        "Roadmap and delivery commitments:",
+        "Conference, CFP, proposal, and paper submission indicators:",
+        "Media coverage, endorsement, award, and affiliation claims:",
+        "Adoption, popularity, and engagement authenticity:",
+        "Reputation-building pattern indicators:",
+        "Supply-chain precursor indicators:",
+        "Limitations of available evidence:",
+    ],
+    "COMMUNITY HEALTH ASSESSMENT": [
+        "Contributor and maintainer base:",
+        "Activity and maintenance cadence:",
+        "Issue, pull request, and review practices:",
+        "Governance, security policy, and release practices:",
+        "Independent adoption and engagement:",
+        "Limitations of available evidence:",
+    ],
+    "PRIOR ART AND ORIGINALITY ASSESSMENT": [
+        "Closest prior art and ecosystem:",
+        "Novelty and differentiation:",
+        "Repackaging indicators:",
+        "Citation and attribution integrity:",
+        "Limitations of available evidence:",
+    ],
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT": [
+        "Code lineage and reuse:",
+        "Architecture lineage:",
+        "License and attribution consistency:",
+        "Chronology and submission timeline:",
+        "Coverage/window:",
+        "Alternative explanations:",
     ],
     "GENERATED-CODE PROVENANCE ASSESSMENT": [
         "Generation assessment:",
@@ -882,10 +987,19 @@ def logical_field_value(normalized, position, field, stop_fields):
 def parse_diagnostic(diagnostic, scope):
     allowed_sections = [
         "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+        "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+        "COMMUNITY HEALTH ASSESSMENT",
     ]
-    if scope == 3:
+    if scope >= 2:
         allowed_sections.append(
-            "GENERATED-CODE PROVENANCE ASSESSMENT"
+            "PRIOR ART AND ORIGINALITY ASSESSMENT"
+        )
+    if scope == 3:
+        allowed_sections.extend(
+            (
+                "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+                "GENERATED-CODE PROVENANCE ASSESSMENT",
+            )
         )
     matches = []
     for section in allowed_sections:
@@ -1476,10 +1590,14 @@ ordered_sections = (
     "EXECUTIVE SUMMARY",
     "FINDINGS",
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
     "RESEARCH SOURCE LANDSCAPE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
     "GENERATED-CODE PROVENANCE ASSESSMENT",
     "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
     "PRIORITIZED REMEDIATION",
@@ -1487,6 +1605,10 @@ ordered_sections = (
 )
 field_validated_sections = frozenset((
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
     "GENERATED-CODE PROVENANCE ASSESSMENT",
 ))
 prohibited_phrases = (
@@ -1742,10 +1864,14 @@ ordered_sections = {
     "EXECUTIVE SUMMARY",
     "FINDINGS",
     "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
     "RESEARCH SOURCE LANDSCAPE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
     "GENERATED-CODE PROVENANCE ASSESSMENT",
     "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
     "PRIORITIZED REMEDIATION",

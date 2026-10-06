@@ -2326,10 +2326,14 @@ required_report_contract=(
     'EXECUTIVE SUMMARY'
     'FINDINGS'
     'AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT'
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT'
+    'COMMUNITY HEALTH ASSESSMENT'
     'RESEARCH SOURCE LANDSCAPE'
     'INACCESSIBLE RESOURCE REGISTER'
     'TOP USER RETRIEVAL PRIORITIES'
     'RESEARCH TRANSPORT OBSERVATIONS'
+    'PRIOR ART AND ORIGINALITY ASSESSMENT'
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
     'GENERATED-CODE PROVENANCE ASSESSMENT'
     'AREAS REVIEWED WITHOUT QUALIFYING FINDINGS'
     'PRIORITIZED REMEDIATION'
@@ -2340,6 +2344,26 @@ required_report_contract=(
     'Recursive/resource-exhaustion tarpits:'
     'Tracking pixels/callback beacons/trackers/sensors:'
     'Limitations of available evidence:'
+    'Capability, maturity, and security claims versus implementation:'
+    'Roadmap and delivery commitments:'
+    'Conference, CFP, proposal, and paper submission indicators:'
+    'Media coverage, endorsement, award, and affiliation claims:'
+    'Adoption, popularity, and engagement authenticity:'
+    'Reputation-building pattern indicators:'
+    'Supply-chain precursor indicators:'
+    'Contributor and maintainer base:'
+    'Activity and maintenance cadence:'
+    'Issue, pull request, and review practices:'
+    'Governance, security policy, and release practices:'
+    'Independent adoption and engagement:'
+    'Closest prior art and ecosystem:'
+    'Novelty and differentiation:'
+    'Repackaging indicators:'
+    'Citation and attribution integrity:'
+    'Code lineage and reuse:'
+    'Architecture lineage:'
+    'License and attribution consistency:'
+    'Chronology and submission timeline:'
     'Generation assessment:'
     'Direct model attribution:'
     'Heuristic model candidates (not attribution):'
@@ -2744,17 +2768,17 @@ done
 initialize_harness_data_contract
 
 if ((ENABLE_PUBLIC_RESEARCH)); then
-    PUBLIC_RESEARCH_INSTRUCTIONS=$'ENABLED. Dedicated research completed before this review. Consume only the\nvalidated sanitized dossier and network summary supplied by the trusted\nwrapper. Do not invoke a research specialist or use any direct network tool.'
+    PUBLIC_RESEARCH_INSTRUCTIONS=$'ENABLED. Dedicated research completed before this review. Consume only the\nvalidated sanitized dossier and network summary supplied by the trusted\nwrapper. Do not invoke a research specialist or use any direct network tool.\nUse the dossier\'s COMMUNITY HEALTH EVIDENCE, CLAIM VERIFICATION EVIDENCE, and\nPRIOR ART AND LINEAGE EVIDENCE sections for the claims, community, and\nprior-art assessments.'
 else
-    PUBLIC_RESEARCH_INSTRUCTIONS=$'DISABLED. No research broker, research worker, dossier, network log, or cookie\njar exists for this scope. Do not perform public research or invoke a research\nspecialist. State that prior-art and community research were not requested.'
+    PUBLIC_RESEARCH_INSTRUCTIONS=$'DISABLED. No research broker, research worker, dossier, network log, or cookie\njar exists for this scope. Do not perform public research or invoke a research\nspecialist. State that prior-art and community research were not requested.\nStill complete the CLAIMS AND REPUTATION INTEGRITY ASSESSMENT and\nCOMMUNITY HEALTH ASSESSMENT from the snapshot and wrapper Git metadata only,\nand state that external corroboration and public community research were not\nrequested.'
 fi
 
 if ((ENABLE_PROVENANCE_RESEARCH)); then
-    PROVENANCE_INSTRUCTIONS=$'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section for\nthe whole repository at the exact commit and stated window. Use only Confirmed,\nEvidence supports assisted generation, Indeterminate, or No supporting evidence\nfound. Never infer human generation from absent evidence. Keep direct model,\neffort, and harness attribution direct-evidence-only; use No direct attribution\nwhen no commit-bound attestation, transcript, provenance record, or explicit\ndisclosure exists. Separately identify only non-attributive heuristic model\ncandidates for repository assets, never people; prefer family-level candidates,\ncite path/commit/public evidence, preserve counterevidence and alternatives,\nand never present a candidate as verified attribution. Heuristic confidence is\nexactly Not applicable, Low, or Medium, never High. Use No candidate identified\nor Not appropriate with Not applicable when needed. Tool configuration shows\nconfiguration, not generation; style, quality, verbosity, test density, bulk\ncommits, generic fingerprints, and similarity alone are not proof. Require\nchronology, source lineage, alternatives, confidence, evidence basis, and human\nreview.'
-    RESEARCH_PROVENANCE_INSTRUCTIONS=$'ENABLED. Gather whole-repository exact-commit public provenance evidence for\nthe stated window within the existing research dossier headings only. Preserve\ncommit-specific attestations, transcripts, provenance records, explicit\ndisclosures, chronology, source lineage, alternatives, confidence, evidence\nbasis, counterevidence, and coverage gaps. Direct model, effort, or harness\nattribution requires evidence directly bound to the reviewed code or commit.\nSeparately gather evidence for explicitly non-attributive, preferably\nfamily-level heuristic model candidates concerning repository assets, never\npeople, and never give such heuristics High confidence. Never infer human\ngeneration from absent evidence, and do not add a main-report-only provenance\nsection to the research dossier.'
+    PROVENANCE_INSTRUCTIONS=$'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT section for\nthe whole repository at the exact commit and stated window. Use only Confirmed,\nEvidence supports assisted generation, Indeterminate, or No supporting evidence\nfound. Never infer human generation from absent evidence. Keep direct model,\neffort, and harness attribution direct-evidence-only; use No direct attribution\nwhen no commit-bound attestation, transcript, provenance record, or explicit\ndisclosure exists. Separately identify only non-attributive heuristic model\ncandidates for repository assets, never people; prefer family-level candidates,\ncite path/commit/public evidence, preserve counterevidence and alternatives,\nand never present a candidate as verified attribution. Heuristic confidence is\nexactly Not applicable, Low, or Medium, never High. Use No candidate identified\nor Not appropriate with Not applicable when needed. Tool configuration shows\nconfiguration, not generation; style, quality, verbosity, test density, bulk\ncommits, generic fingerprints, and similarity alone are not proof. Require\nchronology, source lineage, alternatives, confidence, evidence basis, and human\nreview.\nAlso produce the exact CODE AND ARCHITECTURE PROVENANCE ASSESSMENT section for\ncode and architecture lineage, license and attribution consistency, and\nchronology. The generation assessment covers every tracked asset, including\ndocumentation and proposal, pitch, CFP, and paper material.'
+    RESEARCH_PROVENANCE_INSTRUCTIONS=$'ENABLED. Gather whole-repository exact-commit public provenance evidence for\nthe stated window within the existing research dossier headings only. Preserve\ncommit-specific attestations, transcripts, provenance records, explicit\ndisclosures, chronology, source lineage, alternatives, confidence, evidence\nbasis, counterevidence, and coverage gaps. Direct model, effort, or harness\nattribution requires evidence directly bound to the reviewed code or commit.\nSeparately gather evidence for explicitly non-attributive, preferably\nfamily-level heuristic model candidates concerning repository assets, never\npeople, and never give such heuristics High confidence. Never infer human\ngeneration from absent evidence, and do not add a main-report-only provenance\nsection to the research dossier.\nRecord code and architecture lineage, license and attribution, and chronology\nevidence in PRIOR ART AND LINEAGE EVIDENCE.'
 else
-    PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not analyze whether the repository contains agentically\ngenerated code or make unsupported claims about copying, plagiarism,\nintent, or misconduct.'
-    RESEARCH_PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not gather or assess generated-code provenance evidence, and do\nnot add any provenance-specific dossier section.'
+    PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not analyze whether the repository contains agentically\ngenerated code or make unsupported claims about copying, plagiarism,\nintent, or misconduct.\nDo not emit the CODE AND ARCHITECTURE PROVENANCE ASSESSMENT or\nGENERATED-CODE PROVENANCE ASSESSMENT sections.'
+    RESEARCH_PROVENANCE_INSTRUCTIONS=$'DISABLED. Do not gather or assess generated-code provenance evidence, and do\nnot add any provenance-specific dossier section.\nIn PRIOR ART AND LINEAGE EVIDENCE, record prior art only and state that code\nand architecture lineage were not requested.'
 fi
 
 if ((PLAN_ONLY || !VALIDATE_ONLY)); then
@@ -4659,6 +4683,9 @@ expected_web_available = sys.argv[9] == "true"
 required_sections = [
     "RESEARCH CAPABILITY RECORD",
     "RESEARCH SOURCE LANDSCAPE",
+    "COMMUNITY HEALTH EVIDENCE",
+    "CLAIM VERIFICATION EVIDENCE",
+    "PRIOR ART AND LINEAGE EVIDENCE",
     "INACCESSIBLE RESOURCE REGISTER",
     "TOP USER RETRIEVAL PRIORITIES",
     "RESEARCH LIMITATIONS",
@@ -6133,6 +6160,22 @@ interrupt_run() {
     done
 }
 
+# A trapped signal makes wait return before the child exits; wait again so
+# each repository finishes its own Interrupted finalization before the run
+# reads its state.
+wait_for_interrupted_review_processes() {
+    local process_id
+    local wait_status
+
+    for process_id in "${pids[@]}"; do
+        while kill -0 "${process_id}" 2>/dev/null; do
+            wait_status=0
+            wait "${process_id}" 2>/dev/null || wait_status=$?
+            ((wait_status != 127)) || break
+        done
+    done
+}
+
 write_missing_interrupted_results() {
     local index
     local state_path
@@ -6274,6 +6317,7 @@ else
         fi
     done
     if ((RUN_INTERRUPTED)); then
+        wait_for_interrupted_review_processes
         write_missing_interrupted_results
     fi
 fi

@@ -7,7 +7,8 @@
 - Source code outside the target checkout.
 - Accuracy and integrity of generated reports.
 - People and projects discussed in provenance findings about agentically
-  generated code.
+  generated code and in claims, reputation, community-health, prior-art, and
+  code and architecture provenance conclusions.
 
 ## Untrusted inputs
 
@@ -95,6 +96,9 @@
 31. Trusted Markdown/HTML navigation accidentally promotes arbitrary report
     text or unsafe URLs into active markup, leaks credentials/referrers, or
     causes rendering-time network access.
+32. Claims, reputation, community, prior-art, or provenance assessments cause
+    reputational harm through false positives, accusatory wording, research
+    on people named in endorsements, or lists of individual accounts.
 
 ## Controls
 
@@ -331,6 +335,29 @@
   no-candidate values. Direct model/effort/harness attribution requires
   commit-bound evidence; heuristics concern repository assets, never people,
   and remain explicitly non-attributive.
+- Every scope also requires exact `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT`
+  and `COMMUNITY HEALTH ASSESSMENT` sections; scope 1 derives them only from
+  the snapshot and wrapper Git metadata. Scopes 2/3 add
+  `PRIOR ART AND ORIGINALITY ASSESSMENT` and use the validated dossier's
+  `COMMUNITY HEALTH EVIDENCE`, `CLAIM VERIFICATION EVIDENCE`, and
+  `PRIOR ART AND LINEAGE EVIDENCE`. Scope 3 adds
+  `CODE AND ARCHITECTURE PROVENANCE ASSESSMENT`, and the scope-3 generation
+  assessment covers every tracked asset, including documentation and
+  proposal material. Each section requires exact labeled fields, confidence,
+  and evidence basis; out-of-scope headings are rejected. The confidence edit
+  can target only a section that the approved scope requires, and missing,
+  duplicated, or empty labels and tables still fail explicitly.
+- Reputational-harm and false-positive mitigations: these assessments
+  evaluate claims, artifacts, and aggregate public signals, never a person's
+  character, intent, motive, or misconduct. They use neutral terms such as
+  unsupported, not corroborated, indicator, and requires human review, never
+  labeling a person or account fake or malicious; never research or
+  characterize named individuals quoted in endorsements or testimonials;
+  report engagement and contributor data only as counts and date
+  distributions, never per-account lists; and treat supply-chain precursor
+  indicators as risk indicators, never findings of intent. Every conclusion
+  carries confidence and an evidence basis, strict validation enforces the
+  required fields, and human review is required before external sharing.
 - Text artifacts strip terminal control sequences and redact email
   addresses.
 - Markdown and HTML promote only exact allowlisted report headings into
@@ -361,6 +388,9 @@
 - Copilot and public search services process prompts and public source
   content.
 - Read-only analysis can still be inaccurate or incomplete.
+- Claims, reputation, community, prior-art, and provenance indicators can be
+  false positives or miss context. They are advisory, never verdicts about
+  people, and require human review before they are shared or acted on.
 - Public web sources can contain prompt injection and false claims.
 - The wrapper command itself can write to the user-selected artifact
   workspace.

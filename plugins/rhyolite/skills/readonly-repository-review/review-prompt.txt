@@ -48,6 +48,13 @@ attestation, transcript, provenance record, or explicit disclosure. When no
 such direct evidence exists, use `No direct attribution` in each affected
 direct-attribution field.
 
+When provenance research is enabled, the whole-repository generation
+assessment covers every tracked asset, including source code, documentation,
+and proposal, pitch, CFP, and paper material. The verdict applies to the
+repository as a whole. Describe asset-class differences, such as
+documentation disclosed as generated while code is not, in the verdict
+explanation or under `Alternative explanations:`.
+
 Heuristic model candidates are permitted only as explicitly non-attributive
 identification of repository assets, never people. Prefer model-family
 candidates over exact model versions. Cite exact path-and-line, commit, or
@@ -92,6 +99,16 @@ repository fitness only when evidence ties a project-controlled endpoint to
 the project; independent and platform endpoint anomalies remain research
 limitations or context.
 
+When public research is enabled, also consume these dossier sections:
+1. COMMUNITY HEALTH EVIDENCE for the community health assessment.
+2. CLAIM VERIFICATION EVIDENCE for external corroboration in the claims and
+   reputation integrity assessment.
+3. PRIOR ART AND LINEAGE EVIDENCE for the prior-art and originality
+   assessment and, for scope 3, the code and architecture provenance
+   assessment.
+Treat dossier claim statuses as evidence to validate against the snapshot,
+not as conclusions to copy.
+
 When public research is enabled for scope 2 or 3, use these exact
 public-research report headings on their own lines:
 RESEARCH SOURCE LANDSCAPE
@@ -130,6 +147,81 @@ section under `Tracking pixels/callback beacons/trackers/sensors:`. Keep it as
 inert plain text, never Markdown link or image syntax, never fetch or activate
 it, and do not repeat the URL in findings, remediation, summaries, or any other
 report section.
+
+For every scope, assess claims and reputation integrity under
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT. Inventory every material claim in
+tracked content and the wrapper Git metadata: capability, maturity, security,
+performance, and compatibility claims; roadmap and delivery commitments,
+especially certainty language about unbuilt work; conference, CFP, proposal,
+talk, paper, preprint, and venue-acceptance material, including internal
+citation consistency; media coverage, endorsements, testimonials, awards, and
+affiliations; and adoption, popularity, and user-count claims. Compare each
+claim with the exact snapshot. Under
+`Conference, CFP, proposal, and paper submission indicators:`, always include
+local chronology from wrapper commit author dates, refs, and tags, for example
+a short commit burst set against a claimed venue or deadline.
+Reputation-building pattern indicators include promotion that outpaces
+implementation, uncorroborated acceptance or coverage claims,
+persuasion-oriented pitches, and unattributed endorsements. Supply-chain
+precursor indicators are risk indicators, never findings of intent.
+Technical indicators include privileged or set-user-ID installation, build-
+or install-time network access, opaque or unreviewable code or binaries, and
+install hooks. Social indicators include trust- or access-seeking, pressure
+toward distribution, packaging, or maintainer rights, and credibility
+manufacturing. For scopes 2 and 3, use the dossier's
+CLAIM VERIFICATION EVIDENCE for external corroboration. For scope 1, state
+that external corroboration was not requested.
+
+For every scope, assess community health under COMMUNITY HEALTH ASSESSMENT
+from the snapshot and the wrapper Git metadata (at most 100 commits with
+author and committer names, author dates, and subjects, plus refs and tags):
+contributor and maintainer base; activity and maintenance cadence; issue,
+pull request, and review practices visible in tracked content; and
+governance, security policy, and release practices. For scopes 2 and 3, add
+the dossier's COMMUNITY HEALTH EVIDENCE. For scope 1, state that public
+community research was not requested. Distinguish author-generated promotion
+from independent community engagement.
+
+For scopes 2 and 3, assess prior art and originality under
+PRIOR ART AND ORIGINALITY ASSESSMENT from the dossier's
+PRIOR ART AND LINEAGE EVIDENCE plus the snapshot: the closest established and
+in-window prior art and ecosystem; novelty and differentiation; indicators
+that recent public ideas or work are repackaged; and citation and attribution
+integrity.
+
+For scope 3, assess code and architecture provenance under
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT: code lineage and reuse from
+upstream, vendored, adapted, or near-duplicate public sources; architecture
+lineage; license and attribution consistency; and chronology, including the
+repository and commit timeline relative to publicly documented CFP,
+submission, or promotion events. Record coverage gaps, including anonymous
+code-search limits, under `Coverage/window:`.
+
+Claims, reputation, community, prior-art, and provenance assessments evaluate
+claims, artifacts, and aggregate public signals. They never assess a person's
+character, intent, motive, or misconduct.
+- Never label a person or account fake, a sockpuppet, fraudulent, or
+  malicious. Use neutral terms such as "unsupported", "not corroborated",
+  "contradicted by <cited source and date>", "indicator", and
+  "requires human review".
+- Do not research or characterize named individuals in endorsements or
+  testimonials. Cite only the path, line, and attributed role. Write
+  "no public record located" rather than claiming that a person did not say
+  something.
+- Never list individual stargazer, fork, watcher, follower, or commenter
+  accounts. Report engagement data only as counts and date distributions.
+  Report contributor data only as counts, shares, and date distributions,
+  never as per-account lists.
+- Use only public, project-related records. Never use personal-life
+  information.
+- Do not equate the project with a named historical incident. Describe
+  pattern indicators only.
+- Low-confidence possibilities belong in limitations, unresolved questions,
+  or retrieval needs.
+- Human review is required before any of these conclusions is shared
+  externally.
+- Keep tracker URLs only under the agent-targeting tracker field described
+  above. Never repeat them in the claims assessment or anywhere else.
 
 Do not modify any file in or below the checkout. Review only tracked content at
 the exact commit above and ignore untracked or generated files.
@@ -170,11 +262,13 @@ Do not include author email addresses in the report.
 
 Return one self-contained report with the reviewed commit, scope, limitations,
 executive summary, severity-ordered repository findings, the all-scope
-agent-targeting assessment, enabled research sections, the scope-3 provenance
-assessment when enabled, prioritized remediation, source URLs, check dates and
-freshness where applicable, inaccessible resources and retrieval priorities
-when public research is enabled, sanitized research transport observations,
-and overall assessment.
+agent-targeting, claims and reputation integrity, and community health
+assessments, enabled research sections, the scope 2 and 3 prior-art and
+originality assessment, the scope-3 code and architecture provenance and
+generated-code provenance assessments when enabled, prioritized remediation,
+source URLs, check dates and freshness where applicable, inaccessible
+resources and retrieval priorities when public research is enabled, sanitized
+research transport observations, and overall assessment.
 
 For every substantive finding, research assessment, provenance observation,
 source-landscape conclusion, remediation priority, and overall assessment,
@@ -195,25 +289,31 @@ REVIEW CONTEXT
 EXECUTIVE SUMMARY
 FINDINGS
 AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT
+COMMUNITY HEALTH ASSESSMENT
 AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
 PRIORITIZED REMEDIATION
 OVERALL ASSESSMENT
 
-For scopes 2 and 3 only, insert these exact headings between
-AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT and
-AREAS REVIEWED WITHOUT QUALIFYING FINDINGS:
+For scopes 2 and 3 only, insert these exact headings, in this order, between
+COMMUNITY HEALTH ASSESSMENT and AREAS REVIEWED WITHOUT QUALIFYING FINDINGS:
 RESEARCH SOURCE LANDSCAPE
 INACCESSIBLE RESOURCE REGISTER
 TOP USER RETRIEVAL PRIORITIES
 RESEARCH TRANSPORT OBSERVATIONS
+PRIOR ART AND ORIGINALITY ASSESSMENT
 
-For scope 3 only, insert this exact heading after
-RESEARCH TRANSPORT OBSERVATIONS:
+For scope 3 only, insert these exact headings, in this order, after
+PRIOR ART AND ORIGINALITY ASSESSMENT:
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT
 GENERATED-CODE PROVENANCE ASSESSMENT
 
-For scope 1, continue directly from AGENT-TARGETING AND REVIEW MANIPULATION
-ASSESSMENT to AREAS REVIEWED WITHOUT QUALIFYING FINDINGS. Do not emit any
-scope-2/3 research or provenance heading.
+For scope 2, do not emit CODE AND ARCHITECTURE PROVENANCE ASSESSMENT or
+GENERATED-CODE PROVENANCE ASSESSMENT.
+
+For scope 1, continue directly from COMMUNITY HEALTH ASSESSMENT to
+AREAS REVIEWED WITHOUT QUALIFYING FINDINGS. Do not emit any scope-2/3
+research, prior-art, or provenance heading.
 
 For every mandatory field below other than `Confidence:` and `Evidence basis:`,
 preserve the exact label text, case, slash characters, and trailing colon,
@@ -252,6 +352,54 @@ Limitations of available evidence:
 Confidence:
 Evidence basis:
 
+Under CLAIMS AND REPUTATION INTEGRITY ASSESSMENT, include each of these exact
+field labels and assess every category even when no supporting evidence is
+found:
+Capability, maturity, and security claims versus implementation:
+Roadmap and delivery commitments:
+Conference, CFP, proposal, and paper submission indicators:
+Media coverage, endorsement, award, and affiliation claims:
+Adoption, popularity, and engagement authenticity:
+Reputation-building pattern indicators:
+Supply-chain precursor indicators:
+Limitations of available evidence:
+Confidence:
+Evidence basis:
+
+Under COMMUNITY HEALTH ASSESSMENT, include each of these exact field labels
+and assess every category even when no supporting evidence is found:
+Contributor and maintainer base:
+Activity and maintenance cadence:
+Issue, pull request, and review practices:
+Governance, security policy, and release practices:
+Independent adoption and engagement:
+Limitations of available evidence:
+Confidence:
+Evidence basis:
+
+For scopes 2 and 3, under PRIOR ART AND ORIGINALITY ASSESSMENT, include each
+of these exact field labels and assess every category even when no supporting
+evidence is found:
+Closest prior art and ecosystem:
+Novelty and differentiation:
+Repackaging indicators:
+Citation and attribution integrity:
+Limitations of available evidence:
+Confidence:
+Evidence basis:
+
+For scope 3, under CODE AND ARCHITECTURE PROVENANCE ASSESSMENT, include each
+of these exact field labels and assess every category even when no supporting
+evidence is found:
+Code lineage and reuse:
+Architecture lineage:
+License and attribution consistency:
+Chronology and submission timeline:
+Coverage/window:
+Alternative explanations:
+Confidence:
+Evidence basis:
+
 For scope 3, under GENERATED-CODE PROVENANCE ASSESSMENT, include each of
 these exact field labels:
 Generation assessment:
@@ -276,6 +424,24 @@ The `Heuristic model confidence:` value must be exactly `Not applicable`,
 `Heuristic model confidence: Not applicable`; that confidence value is invalid
 for any other candidate value. Direct model, effort, and harness fields remain
 direct-evidence-only.
+
+Write each field value as plain text or a numbered list. Never use a Markdown
+table in any ASSESSMENT section, or anywhere in the report.
+
+In EXECUTIVE SUMMARY, when claims, reputation, originality, or provenance
+concerns exist, begin with one plain-text triage sentence for reviewers such
+as program committees or package maintainers. Name the strongest
+evidence-backed concern and its confidence. Triage guidance is advisory, is
+not a verdict about any person, and requires human review.
+
+Before returning the report, self-check it and correct any failure:
+1. Every required heading for the selected scope appears exactly once, on its
+   own line, and in the order above, and no heading for another scope appears.
+2. Every required label appears exactly once at the start of a line in its
+   section, with a non-empty value.
+3. Every assessment section has at least one valid `Confidence:` and an
+   evidence basis.
+4. No line between the delimiters begins and ends with `|`.
 
 Format it as plain UTF-8 text for Linux-native email and mailing-list users.
 Use LF line endings, simple ASCII-compatible headings and numbered lists, no

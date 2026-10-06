@@ -1695,18 +1695,50 @@ for report_heading in \
     'EXECUTIVE SUMMARY' \
     'FINDINGS' \
     'AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT' \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'COMMUNITY HEALTH ASSESSMENT' \
     'RESEARCH SOURCE LANDSCAPE' \
     'INACCESSIBLE RESOURCE REGISTER' \
     'TOP USER RETRIEVAL PRIORITIES' \
     'RESEARCH TRANSPORT OBSERVATIONS' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
     'GENERATED-CODE PROVENANCE ASSESSMENT' \
     'AREAS REVIEWED WITHOUT QUALIFYING FINDINGS' \
     'PRIORITIZED REMEDIATION' \
     'OVERALL ASSESSMENT'; do
     grep -Fq "${report_heading}" "${PROMPT}" &&
         grep -Fq "${report_heading}" "${SKILL}" &&
-        grep -Fq "${report_heading}" "${OUTPUT_HELPER}" ||
+        grep -Fq "${report_heading}" "${OUTPUT_HELPER}" &&
+        grep -Fq "${report_heading}" "${RUNNER}" ||
         fail "Canonical report heading contract is missing: ${report_heading}"
+done
+for coverage_field in \
+    'Capability, maturity, and security claims versus implementation:' \
+    'Roadmap and delivery commitments:' \
+    'Conference, CFP, proposal, and paper submission indicators:' \
+    'Media coverage, endorsement, award, and affiliation claims:' \
+    'Adoption, popularity, and engagement authenticity:' \
+    'Reputation-building pattern indicators:' \
+    'Supply-chain precursor indicators:' \
+    'Contributor and maintainer base:' \
+    'Activity and maintenance cadence:' \
+    'Issue, pull request, and review practices:' \
+    'Governance, security policy, and release practices:' \
+    'Independent adoption and engagement:' \
+    'Closest prior art and ecosystem:' \
+    'Novelty and differentiation:' \
+    'Repackaging indicators:' \
+    'Citation and attribution integrity:' \
+    'Code lineage and reuse:' \
+    'Architecture lineage:' \
+    'License and attribution consistency:' \
+    'Chronology and submission timeline:'; do
+    grep -Fq "${coverage_field}" "${PROMPT}" &&
+        grep -Fq "${coverage_field}" "${SKILL}" &&
+        grep -Fq "${coverage_field}" "${OUTPUT_HELPER}" &&
+        grep -Fq "${coverage_field}" "${RUNNER}" ||
+        fail "Claims, community, prior-art, or lineage report field is missing: ${coverage_field}"
 done
 for agent_targeting_field in \
     'Prompt injection and reviewer-directed instructions:' \
@@ -1783,6 +1815,14 @@ grep -Fq '{{RESEARCH_PROVENANCE_INSTRUCTIONS}}' "${RESEARCH_PROMPT}" &&
         "${RESEARCH_PROMPT}" &&
     grep -Fq 'existing dossier headings' "${RESEARCH_WORKER_AGENT}" ||
     fail 'Research provenance instructions still conflict with dossier headings.'
+for main_report_only_heading in \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'COMMUNITY HEALTH ASSESSMENT' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'; do
+    ! grep -Fq "${main_report_only_heading}" "${RESEARCH_PROMPT}" ||
+        fail "Research prompt names a main-report-only heading: ${main_report_only_heading}"
+done
 grep -Fiq 'normalized pages may hide active-resource details' \
     "${RESEARCH_WORKER_AGENT}" &&
     grep -Fq 'Do not activate or fetch a resource merely to' \
@@ -1793,6 +1833,9 @@ grep -Fiq 'normalized pages may hide active-resource details' \
 for heading in \
     'RESEARCH CAPABILITY RECORD' \
     'RESEARCH SOURCE LANDSCAPE' \
+    'COMMUNITY HEALTH EVIDENCE' \
+    'CLAIM VERIFICATION EVIDENCE' \
+    'PRIOR ART AND LINEAGE EVIDENCE' \
     'INACCESSIBLE RESOURCE REGISTER' \
     'TOP USER RETRIEVAL PRIORITIES' \
     'RESEARCH LIMITATIONS' \
@@ -1801,6 +1844,136 @@ for heading in \
         grep -Fq "${heading}" "${SOURCE_ASSESSMENT_SKILL}" ||
         fail "Research dossier heading is missing: ${heading}"
 done
+# Every hard-coded report or dossier section list must match the canonical
+# order exactly; drift between validators, repair, normalization, URL
+# extraction, navigation, and the runner preflight fails closed.
+python3 - "${OUTPUT_HELPER}" "${RUNNER}" <<'PY'
+import pathlib
+import re
+import sys
+
+helper_text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+runner_text = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+canonical_report_sections = [
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+]
+canonical_dossier_sections = [
+    "RESEARCH CAPABILITY RECORD",
+    "RESEARCH SOURCE LANDSCAPE",
+    "COMMUNITY HEALTH EVIDENCE",
+    "CLAIM VERIFICATION EVIDENCE",
+    "PRIOR ART AND LINEAGE EVIDENCE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH LIMITATIONS",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+]
+drift = []
+
+
+def quoted_entries(block, quote):
+    return re.findall(
+        rf"^[ \t]*{quote}([^{quote}\n]+){quote},?[ \t]*$",
+        block,
+        re.MULTILINE,
+    )
+
+
+def compare(label, actual, expected):
+    if actual != expected:
+        drift.append(f"{label}: {actual!r}")
+
+
+navigation = re.search(
+    r"^review_section_navigation_map\(\) \{\n[ \t]*cat <<'EOF'\n(.*?)\nEOF$",
+    helper_text,
+    re.MULTILINE | re.DOTALL,
+)
+if navigation is None:
+    drift.append("review_section_navigation_map was not found")
+    navigation_sections = []
+else:
+    navigation_sections = [
+        line.split("\t", 1)[0]
+        for line in navigation.group(1).splitlines()
+    ]
+compare(
+    "review_section_navigation_map",
+    navigation_sections,
+    canonical_report_sections,
+)
+ordered_blocks = re.findall(
+    r"^ordered_sections = [\[({]\n(.*?)^[\])}]",
+    helper_text,
+    re.MULTILINE | re.DOTALL,
+)
+if len(ordered_blocks) < 4:
+    drift.append(
+        f"review-output.sh has {len(ordered_blocks)} ordered_sections lists"
+    )
+for index, block in enumerate(ordered_blocks, start=1):
+    compare(
+        f"review-output.sh ordered_sections list {index}",
+        quoted_entries(block, '"'),
+        navigation_sections,
+    )
+runner_contract = re.search(
+    r"^required_report_contract=\(\n(.*?)^\)",
+    runner_text,
+    re.MULTILINE | re.DOTALL,
+)
+if runner_contract is None:
+    drift.append("run-parallel-reviews.sh required_report_contract was not found")
+else:
+    compare(
+        "run-parallel-reviews.sh required_report_contract headings",
+        [
+            entry
+            for entry in quoted_entries(runner_contract.group(1), "'")
+            if re.fullmatch(r"[A-Z][A-Z -]*[A-Z]", entry)
+        ],
+        navigation_sections,
+    )
+for label, text in (
+    ("review-output.sh", helper_text),
+    ("run-parallel-reviews.sh", runner_text),
+):
+    dossier_blocks = re.findall(
+        r"^required_sections = \[\n(.*?)^\]",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(dossier_blocks) != 1:
+        drift.append(
+            f"{label} has {len(dossier_blocks)} research dossier section lists"
+        )
+    for block in dossier_blocks:
+        compare(
+            f"{label} research dossier required_sections",
+            quoted_entries(block, '"'),
+            canonical_dossier_sections,
+        )
+if drift:
+    raise SystemExit(
+        "ERROR: Hard-coded report or dossier section lists drifted from "
+        "the canonical order:\n" + "\n".join(drift)
+    )
+PY
 grep -Fq 'Core repository review' "${AGENT}" ||
     fail 'Agent does not recommend the first-run core scope.'
 grep -Fq 'rhyolite-output/repo-review' "${AGENT}" ||
@@ -3580,6 +3753,32 @@ Limitations of available evidence: Renderer-only fixture.
 Confidence: High
 Evidence basis: deterministic fixture text.
 
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT
+Capability, maturity, and security claims versus implementation: No material
+capability or security claim in the renderer fixture.
+Roadmap and delivery commitments: No roadmap commitment.
+Conference, CFP, proposal, and paper submission indicators: None identified;
+local chronology has no venue or deadline reference.
+Media coverage, endorsement, award, and affiliation claims: Claimed coverage at
+https://docs.example.org/claimed-coverage is not corroborated.
+Adoption, popularity, and engagement authenticity: No adoption claim.
+Reputation-building pattern indicators: No supporting evidence.
+Supply-chain precursor indicators: No supporting evidence.
+Limitations of available evidence: External corroboration was not requested.
+Confidence: High
+Evidence basis: deterministic fixture text.
+
+COMMUNITY HEALTH ASSESSMENT
+Contributor and maintainer base: One fixture author.
+Activity and maintenance cadence: One fixture commit.
+Issue, pull request, and review practices: Not observable in the snapshot.
+Governance, security policy, and release practices: None identified.
+Independent adoption and engagement: Public community research was not
+requested.
+Limitations of available evidence: Snapshot and wrapper metadata only.
+Confidence: High
+Evidence basis: deterministic fixture text.
+
 AREAS REVIEWED WITHOUT QUALIFYING FINDINGS
 Renderer escaping and navigation.
 Confidence: High
@@ -3625,6 +3824,8 @@ for unexpected_scope_one_heading in \
     'INACCESSIBLE RESOURCE REGISTER' \
     'TOP USER RETRIEVAL PRIORITIES' \
     'RESEARCH TRANSPORT OBSERVATIONS' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
     'GENERATED-CODE PROVENANCE ASSESSMENT'; do
     ! grep -Fxq "${unexpected_scope_one_heading}" "${fixture_report}" ||
         fail "Bash scope 1 fixture emitted ${unexpected_scope_one_heading}."
@@ -3908,6 +4109,24 @@ grep -Fq -- '- [REVIEW CONTEXT](#review-context)' "${fixture_markdown}" &&
     grep -Fq '<a id="review-context"></a>' "${fixture_markdown}" &&
     grep -Fq '## REVIEW CONTEXT' "${fixture_markdown}" ||
     fail 'Bash Markdown output is missing trusted allowlisted navigation.'
+grep -Fq -- \
+    '- [CLAIMS AND REPUTATION INTEGRITY ASSESSMENT](#claims-and-reputation-integrity-assessment)' \
+    "${fixture_markdown}" &&
+    grep -Fq -- \
+        '- [COMMUNITY HEALTH ASSESSMENT](#community-health-assessment)' \
+        "${fixture_markdown}" &&
+    grep -Fq '<a id="community-health-assessment"></a>' \
+        "${fixture_markdown}" &&
+    grep -Fq \
+        '<section id="claims-and-reputation-integrity-assessment"><h2>CLAIMS AND REPUTATION INTEGRITY ASSESSMENT</h2><pre>' \
+        "${fixture_html}" ||
+    fail 'Bash report navigation omitted the claims or community assessment.'
+[[ "$(grep -Fc \
+    '[https://docs.example.org/claimed-coverage](https://docs.example.org/claimed-coverage)' \
+    "${fixture_markdown}")" -eq 1 ]] &&
+    grep -Fq 'href="https://docs.example.org/claimed-coverage"' \
+        "${fixture_html}" ||
+    fail 'Bash external references omitted a claims-assessment citation.'
 assert_markdown_body_inert "${fixture_markdown}" 'Canonical report'
 [[ "$(grep -Fc \
     '[https://docs.example.org/reference?topic=review](https://docs.example.org/reference?topic=review)' \
@@ -4104,6 +4323,31 @@ AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT
 8. Evidence basis:
    Deterministic fixture text.
 
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT
+1. Capability, maturity, and security claims versus implementation:
+   No material claim beyond the fixture.
+- Roadmap and delivery commitments: No roadmap commitment.
+2) Conference, CFP, proposal, and paper submission indicators:
+   None identified; local chronology has no venue or deadline reference.
+* Media coverage, endorsement, award, and affiliation claims: None identified.
++ Adoption, popularity, and engagement authenticity: No adoption claim.
+6. Reputation-building pattern indicators: No supporting evidence.
+7) Supply-chain precursor indicators: No supporting evidence.
+8. Limitations of available evidence: Static validation fixture.
+9) Confidence: Medium - synthetic claim verification evidence.
+10. Evidence basis:
+   Deterministic fixture text.
+
+COMMUNITY HEALTH ASSESSMENT
+Contributor and maintainer base: One fixture author.
+Activity and maintenance cadence: One fixture commit.
+Issue, pull request, and review practices: Not observable in the snapshot.
+Governance, security policy, and release practices: None identified.
+Independent adoption and engagement: No supporting evidence.
+Limitations of available evidence: Static validation fixture.
+Confidence: Medium.
+Evidence basis: Deterministic fixture text.
+
 RESEARCH SOURCE LANDSCAPE
 No material external source.
 
@@ -4115,6 +4359,26 @@ None.
 
 RESEARCH TRANSPORT OBSERVATIONS
 No material anomaly.
+
+PRIOR ART AND ORIGINALITY ASSESSMENT
+1. Closest prior art and ecosystem:
+   Established fixture ecosystem projects.
+2. Novelty and differentiation: No novelty claim.
+3. Repackaging indicators: No supporting evidence.
+4. Citation and attribution integrity: No citation present.
+5. Limitations of available evidence: Static validation fixture.
+6. Confidence: Low. Evidence basis: synthetic dossier prior-art evidence.
+
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT
+- Code lineage and reuse: No upstream, vendored, adapted, or near-duplicate
+  public source identified.
+- Architecture lineage: Conventional layout without a traced upstream design.
+- License and attribution consistency: No inconsistency identified.
+- Chronology and submission timeline: Single fixture commit; no submission event.
+- Coverage/window: Exact commit and approved lineage window.
+- Alternative explanations: Independent conventional design.
+- Confidence: Low
+- Evidence basis: Deterministic fixture text.
 
 GENERATED-CODE PROVENANCE ASSESSMENT
 1. Generation assessment:
@@ -4275,7 +4539,7 @@ awk '
         skipping = 1
         next
     }
-    $0 == "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS" {
+    $0 == "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT" {
         skipping = 0
     }
     !skipping { print }
@@ -4363,6 +4627,248 @@ if validate_review_report_contract "${hyphenated_provenance_verdict}" 3 \
     >/dev/null 2>&1; then
     fail 'Bash scope 3 validation accepted an unclear verdict delimiter.'
 fi
+
+rewrite_contract_fixture() {
+    local source="$1"
+    local destination="$2"
+    shift 2
+
+    python3 - "${source}" "${destination}" "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+source, destination, operation, *arguments = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+headings = {
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+}
+list_marker = re.compile(r"^(?:(?:[-*+])|(?:\d+[.)]))[ \t]+")
+
+
+def bounds(name):
+    if lines.count(name) != 1:
+        raise SystemExit(f"fixture section is not unique: {name}")
+    start = lines.index(name)
+    end = start + 1
+    while end < len(lines) and lines[end] not in headings and not (
+        len(lines[end].strip()) >= 80 and set(lines[end].strip()) == {"="}
+    ):
+        end += 1
+    return start, end
+
+
+def field_position(section, label):
+    start, end = bounds(section)
+    positions = [
+        position
+        for position in range(start + 1, end)
+        if list_marker.sub("", lines[position].strip(), count=1).startswith(label)
+    ]
+    if len(positions) != 1:
+        raise SystemExit(f"fixture field is not unique: {section}: {label}")
+    return positions[0]
+
+
+if operation == "drop-sections":
+    for name in arguments:
+        start, end = bounds(name)
+        del lines[start:end]
+elif operation == "swap-sections":
+    (first_start, first_end), (second_start, second_end) = sorted(
+        bounds(name) for name in arguments
+    )
+    lines = (
+        lines[:first_start]
+        + lines[second_start:second_end]
+        + lines[first_end:second_start]
+        + lines[first_start:first_end]
+        + lines[second_end:]
+    )
+elif operation == "drop-field":
+    section, label = arguments
+    del lines[field_position(section, label)]
+elif operation == "empty-field":
+    section, label = arguments
+    position = field_position(section, label)
+    line = lines[position]
+    lines[position] = line[:line.index(label) + len(label)]
+elif operation == "set-confidence":
+    section, value = arguments
+    position = field_position(section, "Confidence:")
+    line = lines[position]
+    lines[position] = (
+        line[:line.index("Confidence:") + len("Confidence:")] + " " + value
+    )
+else:
+    raise SystemExit(f"unknown fixture rewrite: {operation}")
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+}
+
+coverage_contract_root="${fixture_dir}/coverage-contract"
+mkdir -p -- "${coverage_contract_root}"
+
+expect_coverage_contract_failure() {
+    local name="$1"
+    local source="$2"
+    local scope="$3"
+    local expected="$4"
+    shift 4
+    local mutated="${coverage_contract_root}/${name}.txt"
+    local diagnostic
+
+    rewrite_contract_fixture "${source}" "${mutated}" "$@"
+    if diagnostic="$(
+        validate_review_report_contract "${mutated}" "${scope}" 2>&1
+    )"; then
+        fail "Bash scope ${scope} validation accepted ${name}."
+    fi
+    [[ "${diagnostic}" == "${expected}" ]] ||
+        fail "Bash scope ${scope} validation reported '${diagnostic}' for ${name}; expected '${expected}'."
+}
+
+scope_two_report="${coverage_contract_root}/scope-two-report.txt"
+rewrite_contract_fixture "${scope_three_report}" "${scope_two_report}" \
+    drop-sections \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT'
+validate_review_report_contract "${scope_two_report}" 2 ||
+    fail 'Bash scope 2 report contract rejected a complete prior-art report.'
+expect_coverage_contract_failure \
+    missing-claims "${fixture_report}" 1 \
+    'required report section is missing or duplicated: CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    drop-sections 'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT'
+expect_coverage_contract_failure \
+    missing-community "${fixture_report}" 1 \
+    'required report section is missing or duplicated: COMMUNITY HEALTH ASSESSMENT' \
+    drop-sections 'COMMUNITY HEALTH ASSESSMENT'
+expect_coverage_contract_failure \
+    missing-claims-field "${fixture_report}" 1 \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT is missing or duplicates required field: Supply-chain precursor indicators:' \
+    drop-field \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'Supply-chain precursor indicators:'
+expect_coverage_contract_failure \
+    empty-community-field "${fixture_report}" 1 \
+    'COMMUNITY HEALTH ASSESSMENT has an empty required field: Governance, security policy, and release practices:' \
+    empty-field \
+    'COMMUNITY HEALTH ASSESSMENT' \
+    'Governance, security policy, and release practices:'
+expect_coverage_contract_failure \
+    missing-community-confidence "${fixture_report}" 1 \
+    'COMMUNITY HEALTH ASSESSMENT is missing required assessment field: Confidence:' \
+    drop-field 'COMMUNITY HEALTH ASSESSMENT' 'Confidence:'
+expect_coverage_contract_failure \
+    invalid-claims-confidence "${fixture_report}" 1 \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level: High for snapshot claims; Low for venue claims.' \
+    set-confidence \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'High for snapshot claims; Low for venue claims.'
+expect_coverage_contract_failure \
+    claims-community-out-of-order "${fixture_report}" 1 \
+    'report sections are out of order' \
+    swap-sections \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'COMMUNITY HEALTH ASSESSMENT'
+expect_coverage_contract_failure \
+    scope-one-prior-art "${scope_three_report}" 1 \
+    'scope 1 report contains an unexpected section: PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    drop-sections \
+    'RESEARCH SOURCE LANDSCAPE' \
+    'INACCESSIBLE RESOURCE REGISTER' \
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH TRANSPORT OBSERVATIONS' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT'
+expect_coverage_contract_failure \
+    scope-one-code-architecture "${scope_three_report}" 1 \
+    'scope 1 report contains an unexpected section: CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    drop-sections \
+    'RESEARCH SOURCE LANDSCAPE' \
+    'INACCESSIBLE RESOURCE REGISTER' \
+    'TOP USER RETRIEVAL PRIORITIES' \
+    'RESEARCH TRANSPORT OBSERVATIONS' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT'
+expect_coverage_contract_failure \
+    scope-two-code-architecture "${scope_three_report}" 2 \
+    'scope 2 report contains an unexpected section: CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    drop-sections 'GENERATED-CODE PROVENANCE ASSESSMENT'
+expect_coverage_contract_failure \
+    missing-prior-art "${scope_two_report}" 2 \
+    'required report section is missing or duplicated: PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    drop-sections 'PRIOR ART AND ORIGINALITY ASSESSMENT'
+expect_coverage_contract_failure \
+    missing-prior-art-field "${scope_two_report}" 2 \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT is missing or duplicates required field: Repackaging indicators:' \
+    drop-field \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'Repackaging indicators:'
+expect_coverage_contract_failure \
+    empty-prior-art-field "${scope_two_report}" 2 \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT has an empty required field: Novelty and differentiation:' \
+    empty-field \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'Novelty and differentiation:'
+expect_coverage_contract_failure \
+    prior-art-out-of-order "${scope_two_report}" 2 \
+    'report sections are out of order' \
+    swap-sections \
+    'RESEARCH TRANSPORT OBSERVATIONS' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT'
+expect_coverage_contract_failure \
+    community-after-research "${scope_two_report}" 2 \
+    'report sections are out of order' \
+    swap-sections \
+    'COMMUNITY HEALTH ASSESSMENT' \
+    'RESEARCH SOURCE LANDSCAPE'
+expect_coverage_contract_failure \
+    missing-code-architecture "${scope_three_report}" 3 \
+    'required report section is missing or duplicated: CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    drop-sections 'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
+expect_coverage_contract_failure \
+    missing-code-architecture-field "${scope_three_report}" 3 \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT is missing or duplicates required field: Chronology and submission timeline:' \
+    drop-field \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    'Chronology and submission timeline:'
+expect_coverage_contract_failure \
+    empty-code-architecture-field "${scope_three_report}" 3 \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT has an empty required field: Architecture lineage:' \
+    empty-field \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    'Architecture lineage:'
+expect_coverage_contract_failure \
+    code-architecture-out-of-order "${scope_three_report}" 3 \
+    'report sections are out of order' \
+    swap-sections \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT' \
+    'GENERATED-CODE PROVENANCE ASSESSMENT'
+scope_three_markdown="${coverage_contract_root}/scope-three-report.md"
+write_markdown_report "${scope_three_report}" "${scope_three_markdown}" 3
+grep -Fq -- \
+    '- [PRIOR ART AND ORIGINALITY ASSESSMENT](#prior-art-and-originality-assessment)' \
+    "${scope_three_markdown}" &&
+    grep -Fq -- \
+        '- [CODE AND ARCHITECTURE PROVENANCE ASSESSMENT](#code-and-architecture-provenance-assessment)' \
+        "${scope_three_markdown}" ||
+    fail 'Bash scope 3 navigation omitted the prior-art or lineage assessment.'
 
 "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World \
@@ -6729,6 +7235,71 @@ EOF
         printf '%s\n' 'mock research capability failure' >&2
         exit 31
     fi
+    emit_research_evidence_sections() {
+        cat <<'DOSSIER'
+
+COMMUNITY HEALTH EVIDENCE
+1. Anonymous public repository metadata checked 2026-10-01: contributor,
+   release, issue, and pull request activity recorded as aggregate counts and
+   date distributions only; no individual account is listed.
+   Confidence: Medium. Evidence basis: deterministic broker fixture.
+
+CLAIM VERIFICATION EVIDENCE
+1. Claim: No material external claim was found in the snapshot.
+   Sources checked: https://github.com/octocat/Hello-World
+   Check date: 2026-10-01
+   Ownership: project-controlled
+   Status: Not checkable - the snapshot makes no external claim.
+   Confidence: High. Evidence basis: deterministic broker fixture.
+
+PRIOR ART AND LINEAGE EVIDENCE
+1. No closer established or in-window prior art was identified for the
+   deterministic fixture.
+   Confidence: Medium. Evidence basis: deterministic broker fixture.
+DOSSIER
+    }
+    apply_research_dossier_defect() {
+        case "${MOCK_RESEARCH_DOSSIER_DEFECT-}" in
+            '')
+                cat
+                ;;
+            missing-claim-verification)
+                awk '
+                    $0 == "CLAIM VERIFICATION EVIDENCE" {
+                        skipping = 1
+                        next
+                    }
+                    $0 == "PRIOR ART AND LINEAGE EVIDENCE" {
+                        skipping = 0
+                    }
+                    !skipping { print }
+                '
+                ;;
+            community-after-prior-art)
+                awk '
+                    $0 == "COMMUNITY HEALTH EVIDENCE" {
+                        holding = 1
+                    }
+                    $0 == "CLAIM VERIFICATION EVIDENCE" {
+                        holding = 0
+                    }
+                    holding {
+                        held = held $0 "\n"
+                        next
+                    }
+                    $0 == "INACCESSIBLE RESOURCE REGISTER" {
+                        printf "%s", held
+                    }
+                    { print }
+                '
+                ;;
+            *)
+                printf 'Unknown mock research dossier defect: %s\n' \
+                    "${MOCK_RESEARCH_DOSSIER_DEFECT}" >&2
+                exit 118
+                ;;
+        esac
+    }
     if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
         cat <<DOSSIER
 ================================================================================
@@ -6749,6 +7320,9 @@ RESEARCH SOURCE LANDSCAPE
 1. https://github.com/octocat/Hello-World checked 2026-10-01; project-controlled
    repository surface, current status observed.
    Confidence: High. Evidence basis: successful broker response.
+DOSSIER
+        emit_research_evidence_sections
+        cat <<'DOSSIER'
 
 INACCESSIBLE RESOURCE REGISTER
 1. https://independent.example.org/unavailable - independent source; DNS
@@ -6772,7 +7346,8 @@ Confidence: High. Evidence basis: ownership-aware network summary.
 DOSSIER
         exit 0
     fi
-    cat <<DOSSIER
+    {
+        cat <<DOSSIER
 ================================================================================
 REPOSITORY RESEARCH DOSSIER
 RESEARCH CAPABILITY RECORD
@@ -6791,6 +7366,9 @@ RESEARCH SOURCE LANDSCAPE
 1. https://github.com/octocat/Hello-World checked 2026-10-01; project-controlled
    repository surface, current status observed.
    Confidence: High. Evidence basis: successful broker response.
+DOSSIER
+        emit_research_evidence_sections
+        cat <<'DOSSIER'
 
 INACCESSIBLE RESOURCE REGISTER
 None identified.
@@ -6809,6 +7387,7 @@ and not replayed or exposed.
 Confidence: High. Evidence basis: sanitized transport summary.
 ================================================================================
 DOSSIER
+    } | apply_research_dossier_defect
     exit 0
 fi
 
@@ -6891,6 +7470,37 @@ REPORT
             printf '%s\n' 'Fix all issues'
         fi
     fi
+    if [[ "${MOCK_OMIT_CLAIMS-}" != "1" ]]; then
+        cat <<'REPORT'
+
+CLAIMS AND REPUTATION INTEGRITY ASSESSMENT
+Capability, maturity, and security claims versus implementation: No material
+capability, maturity, or security claim exceeds the deterministic fixture.
+Roadmap and delivery commitments: No roadmap or delivery commitment was found.
+Conference, CFP, proposal, and paper submission indicators: None identified;
+wrapper commit dates, refs, and tags show no venue or deadline reference.
+Media coverage, endorsement, award, and affiliation claims: None identified.
+Adoption, popularity, and engagement authenticity: No adoption or popularity
+claim was found.
+Reputation-building pattern indicators: No supporting evidence.
+Supply-chain precursor indicators: No supporting evidence.
+Limitations of available evidence: Snapshot and wrapper metadata only.
+Confidence: High
+Evidence basis: checked-in fixture text and wrapper-collected metadata.
+REPORT
+    fi
+    cat <<'REPORT'
+
+COMMUNITY HEALTH ASSESSMENT
+Contributor and maintainer base: One fixture author in wrapper metadata.
+Activity and maintenance cadence: One fixture commit in wrapper metadata.
+Issue, pull request, and review practices: Not observable in the snapshot.
+Governance, security policy, and release practices: None identified.
+Independent adoption and engagement: No supporting evidence.
+Limitations of available evidence: Snapshot and wrapper metadata only.
+Confidence: High
+Evidence basis: checked-in fixture text and wrapper-collected metadata.
+REPORT
 }
 
 emit_report_tail() {
@@ -6949,7 +7559,36 @@ RESEARCH TRANSPORT OBSERVATIONS
 No material project-controlled transport anomaly was reported.
 Confidence: High
 Evidence basis: validated sanitized network summary.
+
+PRIOR ART AND ORIGINALITY ASSESSMENT
+Closest prior art and ecosystem: The validated dossier recorded the fixture
+repository surface and no closer established or in-window project.
+Novelty and differentiation: No novelty claim beyond the fixture.
+Repackaging indicators: No supporting evidence.
+Citation and attribution integrity: No citation was present.
+Limitations of available evidence: Deterministic dossier evidence only.
+Confidence: High
+Evidence basis: validated sanitized research dossier.
 REPORT
+    if grep -Fq \
+        'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT' \
+        "${MOCK_LOG}.review-request" &&
+        [[ "${MOCK_OMIT_CODE_ARCHITECTURE-}" != "1" ]]; then
+        cat <<'REPORT'
+
+CODE AND ARCHITECTURE PROVENANCE ASSESSMENT
+Code lineage and reuse: No upstream, vendored, adapted, or near-duplicate
+public source was identified.
+Architecture lineage: Conventional layout without a traced upstream design.
+License and attribution consistency: No inconsistency identified.
+Chronology and submission timeline: One fixture commit; no public submission
+or promotion event was identified.
+Coverage/window: Exact reviewed commit and approved lineage window.
+Alternative explanations: Independent conventional design.
+Confidence: Low
+Evidence basis: validated sanitized research dossier and wrapper metadata.
+REPORT
+    fi
     if grep -Fq \
         'ENABLED. Produce the exact GENERATED-CODE PROVENANCE ASSESSMENT' \
         "${MOCK_LOG}.review-request" &&
@@ -8195,6 +8834,26 @@ grep -Fq \
     ! grep -Fxq 'GENERATED-CODE PROVENANCE ASSESSMENT' \
         "${mock_log}.research-request" ||
     fail 'Research request received the main report provenance section contract.'
+grep -Fq \
+    'Also produce the exact CODE AND ARCHITECTURE PROVENANCE ASSESSMENT section for' \
+    "${mock_log}.review-request" &&
+    grep -Fq \
+        "Use the dossier's COMMUNITY HEALTH EVIDENCE, CLAIM VERIFICATION EVIDENCE, and" \
+        "${mock_log}.review-request" ||
+    fail 'Main review request lost the scope 3 lineage or dossier evidence contract.'
+grep -Fq \
+    'Record code and architecture lineage, license and attribution, and chronology' \
+    "${mock_log}.research-request" ||
+    fail 'Research request lost the scope 3 lineage evidence contract.'
+for main_report_only_heading in \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT' \
+    'COMMUNITY HEALTH ASSESSMENT' \
+    'PRIOR ART AND ORIGINALITY ASSESSMENT' \
+    'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'; do
+    ! grep -Fq "${main_report_only_heading}" \
+        "${mock_log}.research-request" ||
+        fail "Research request names a main-report-only heading: ${main_report_only_heading}"
+done
 if find "${mock_workspace}" \
     \( -name 'research-mcp-config.json' -o -name 'research-runtime' \) \
     -print -quit | grep -q .; then
@@ -9033,7 +9692,13 @@ if (publicArtifacts.includes(Buffer.from(privateCookie))) {
 }
 JS
 
-for research_failure_case in capability zero-success; do
+for research_failure_case in \
+    capability \
+    zero-success \
+    dossier-missing-section \
+    dossier-out-of-order; do
+    research_failure_value=1
+    expected_research_error=''
     case "${research_failure_case}" in
         capability)
             research_failure_env='MOCK_RESEARCH_CAPABILITY_FAIL'
@@ -9044,6 +9709,20 @@ for research_failure_case in capability zero-success; do
             research_failure_env='MOCK_RESEARCH_ZERO_SUCCESS'
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
+            ;;
+        dossier-missing-section)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='missing-claim-verification'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research dossier section is missing or duplicated: CLAIM VERIFICATION EVIDENCE'
+            ;;
+        dossier-out-of-order)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='community-after-prior-art'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research dossier sections are out of order'
             ;;
     esac
     research_failure_output="${fixture_dir}/${research_failure_case}-research-output"
@@ -9068,7 +9747,7 @@ for research_failure_case in capability zero-success; do
     research_failure_stdout="${fixture_dir}/${research_failure_case}-research.stdout"
     research_failure_stderr="${fixture_dir}/${research_failure_case}-research.stderr"
     if env \
-        "${research_failure_env}=1" \
+        "${research_failure_env}=${research_failure_value}" \
         MOCK_LOG="${mock_log}" \
         MOCK_GIT_LOG="${mock_git_log}" \
         MOCK_RUNTIME_LOG="${runtime_log}" \
@@ -9102,11 +9781,14 @@ for research_failure_case in capability zero-success; do
     )"
     node - \
         "${research_failure_run}" \
-        "${expected_research_status}" <<'JS'
+        "${expected_research_status}" \
+        "${research_failure_case}" \
+        "${expected_research_error}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
-const [run, expectedStatus] = process.argv.slice(2);
+const [run, expectedStatus, failureCase, expectedError] =
+  process.argv.slice(2);
 const repository = path.join(run, "github--octocat--hello-world");
 const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
 const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json")));
@@ -9137,10 +9819,23 @@ if (expectedStatus === "ResearchCapabilityFailed" &&
      summary.Requests?.SuccessfulPublicResponses !== 0)) {
   throw new Error("capability failure summary is misleading");
 }
-if (expectedStatus === "ResearchFailed" &&
+if (failureCase === "zero-success" &&
     (summary.ToolCalls?.Capabilities !== 1 ||
      summary.Requests?.SuccessfulPublicResponses !== 0)) {
   throw new Error("zero-success research failure summary is misleading");
+}
+if (expectedError !== "") {
+  const researchErrors = fs.readFileSync(
+    path.join(research, "research-errors.txt"),
+    "utf8",
+  );
+  if (summary.Requests?.SuccessfulPublicResponses !== 1 ||
+      !researchErrors.split("\n").includes(expectedError) ||
+      !researchErrors.includes(
+        "Research dossier or transport artifact validation failed.",
+      )) {
+    throw new Error(`${failureCase} dossier failure was not explicit`);
+  }
 }
 JS
 done
@@ -9696,6 +10391,13 @@ if (state.Status !== "Completed" ||
   throw new Error("legitimate menu-like report text was not preserved safely");
 }
 JS
+grep -Fq \
+    'Still complete the CLAIMS AND REPUTATION INTEGRITY ASSESSMENT and' \
+    "${mock_log}.review-request" &&
+    grep -Fq \
+        'Do not emit the CODE AND ARCHITECTURE PROVENANCE ASSESSMENT or' \
+        "${mock_log}.review-request" ||
+    fail 'Scope 1 review request lost the local claims/community or no-lineage contract.'
 
 observed_repair_confidence='High for the two observed constructs; Medium for absence outside normalized text.'
 for repair_scope in 1 2 3; do
@@ -10178,6 +10880,8 @@ done
 
 for report_contract_case in \
     missing-agent-targeting \
+    missing-claims \
+    missing-code-architecture \
     missing-provenance \
     missing-provenance-field; do
     case "${report_contract_case}" in
@@ -10185,6 +10889,16 @@ for report_contract_case in \
             report_contract_scope=1
             report_contract_flag='MOCK_OMIT_AGENT_TARGETING=1'
             report_contract_detail='AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT'
+            ;;
+        missing-claims)
+            report_contract_scope=1
+            report_contract_flag='MOCK_OMIT_CLAIMS=1'
+            report_contract_detail='CLAIMS AND REPUTATION INTEGRITY ASSESSMENT'
+            ;;
+        missing-code-architecture)
+            report_contract_scope=3
+            report_contract_flag='MOCK_OMIT_CODE_ARCHITECTURE=1'
+            report_contract_detail='CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
             ;;
         missing-provenance)
             report_contract_scope=3

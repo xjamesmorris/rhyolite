@@ -173,6 +173,23 @@ supported and must not drive new work.
   runner; `research-prompt.txt` defines the dedicated dossier contract. Their
   placeholders are strict interfaces shared by templates, the runner,
   workers, and Linux validation.
+- Every report requires exact `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT`
+  and `COMMUNITY HEALTH ASSESSMENT` sections; scope 1 derives them only from
+  the snapshot and wrapper Git metadata. Scopes 2/3 add
+  `PRIOR ART AND ORIGINALITY ASSESSMENT`, and scope 3 adds
+  `CODE AND ARCHITECTURE PROVENANCE ASSESSMENT` before
+  `GENERATED-CODE PROVENANCE ASSESSMENT`; out-of-scope headings fail
+  validation. Claims coverage spans capability, maturity, security, and
+  roadmap overclaims; conference, CFP, proposal, and paper-submission
+  indicators; media, endorsement, award, and affiliation claims; adoption
+  and engagement authenticity; reputation-building patterns; and
+  supply-chain precursor indicators, which are risk indicators, never
+  findings of intent. The scope 2/3 dossier adds required
+  `COMMUNITY HEALTH EVIDENCE`, `CLAIM VERIFICATION EVIDENCE`, and
+  `PRIOR ART AND LINEAGE EVIDENCE` sections after
+  `RESEARCH SOURCE LANDSCAPE`. Keep every hard-coded report and dossier
+  section list in the prompts, runner, `review-output.sh`, and tests in the
+  same order.
 - `plugins/rhyolite/skills/research-source-assessment/SKILL.md` is private to
   the model. For scopes 2/3 it maps fresh subject-specific community,
   research, and commercial sources, deepens provenance coverage for scope 3,
@@ -259,7 +276,10 @@ supported and must not drive new work.
   every cell verbatim and every other line unchanged. Malformed,
   field-section, and action-menu tables stay ineligible. The normalized
   candidate must pass the same strict validation; otherwise it becomes the
-  only input to the bounded confidence edit.
+  only input to the bounded confidence edit. The confidence edit is
+  scope-gated: it may target only an assessment section that the approved
+  scope requires. Missing, duplicated, or empty labels and tables in
+  assessment sections still fail explicitly.
 - Release validation is local only on Fedora Linux 44. Do not add or require
   hosted CI workflows for the current release.
 
@@ -307,6 +327,22 @@ supported and must not drive new work.
 - Public research and provenance research are separate opt-ins. Scope 3 must
   be described as evidence-based provenance review for agentically generated
   code, and it requires public research plus human review before distribution.
+  Scope 3 also covers code and architecture lineage, license and attribution
+  consistency, and chronology, and its generation assessment covers every
+  tracked asset, including documentation and proposal, pitch, CFP, and paper
+  material.
+- Claims, reputation, community, prior-art, and provenance assessments
+  evaluate claims, artifacts, and aggregate public signals, never a person's
+  character, intent, motive, or misconduct. Use neutral terms such as
+  unsupported, not corroborated, contradicted by a cited source, indicator,
+  or requires human review; never label a person or account fake, a
+  sockpuppet, fraudulent, or malicious. Do not research or characterize
+  named individuals quoted in endorsements or testimonials, never list
+  individual stargazer, fork, watcher, follower, or commenter accounts,
+  report engagement and contributor data only as counts and date
+  distributions, and do not equate a project with a named historical
+  incident. Triage guidance is advisory and requires human review before
+  external sharing.
 - Guided scope 2/3 setup asks whether research cookie replay is `off`
   (recommended) or `ephemeral`. Either mode privately retains raw Set-Cookie
   values for transport analysis. Raw values and unsupported bodies never
