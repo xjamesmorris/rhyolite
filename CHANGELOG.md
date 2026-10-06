@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-10-06
+
+- First tagged 0.6.x release. It includes the untagged 0.6.0 changes below.
+- Fixed completed reviews that failed at report finalization because of an
+  eligible malformed `Confidence:` value. The trusted runner now stages
+  extracted reports as noncanonical candidates and may make one fresh,
+  tool-less report-repair attempt, bounded to at most 300 seconds and capped
+  by the session timeout, under the already-approved harness, provider,
+  model, reasoning effort, and context tier. Research is never rerun or
+  exposed to repair.
+- The repair child returns only an exact JSON edit descriptor. The runner
+  checks it against the original section, occurrence, value hash, and lowest
+  explicitly stated confidence level, keeps the original confidence detail
+  verbatim, and changes no other report bytes. The unchanged strict validator
+  must accept the candidate before canonical promotion. Unsupported errors,
+  invalid descriptors, failed revalidation, timeout, interruption, and
+  cleanup failure remain explicit failures with truthful state.
+- Added the fixed `ReportRepairPolicy` to the effective review plan and its
+  approval hash, plus an additive `ReportRepair` object across repository
+  state, manifest entries, run-state repositories, handoffs, and the HTML
+  index. Candidates, diagnostics, and repair transcripts stay under a
+  private noncanonical `report-repair/` directory, and `RHYOLITE PROGRESS`
+  distinguishes validation, repair, and revalidation or exhaustion.
+- Advanced the harness contract to version 4 with required report-repair
+  argv, environment, and reply-extraction functions. Plan schema 5 and state
+  schema 6 are unchanged. The repair child uses a fresh, isolated Copilot
+  home with hooks, memory, custom instructions, skills, MCP, and
+  model-visible tools disabled.
+- Clarified the single-level `Confidence:` grammar in the review prompt and
+  added report-repair regression coverage to the aggregate validation gate.
+
 ## 0.6.0 - 2026-10-05
 
 - Consolidated canonical Bash launcher-state resolution, report/dossier
