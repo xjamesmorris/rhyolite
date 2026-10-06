@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-10-07
+
 - Fixed completed reviews that failed at report finalization when the review
   worker copied the Copilot CLI security-review summary table into
   `FINDINGS`. The review prompt, worker agent, and skill now keep that
