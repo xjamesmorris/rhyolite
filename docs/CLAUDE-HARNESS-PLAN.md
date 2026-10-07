@@ -601,13 +601,13 @@ Operator decisions (2026-10-07, after real run R1 in the evidence file):
 Next:
 
 1. Done: P1/P2 probe and a real direct-runner scope-1 review (R2 in the
-   evidence file). Remaining: one real review through
-   `rhyolite --harness claude` (interactive; operator).
+   evidence file). Done: a real review through `rhyolite --harness claude`
+   (guided scope-2 run R6).
 2. Done: guided alternate is now `claude-opus-5`.
 3. Done: staged real scope-2 run R5 completed (after R4 hit the output
    token limit), and the operator approved the flip. `web_research` and
    `builtin_research_specialist` are now `yes` for Claude Code. The guided
    orchestrator offers scopes 2 and 3 with the provenance-lookback and
-   research-cookie questions. Remaining: one real guided scope-2/3 review
-   (interactive; operator).
+   research-cookie questions. Real guided scope-2 run R6 (fedithread)
+   completed.
 4. Phase 4 docs/validators/release (Contract v5 docs, support claims).
