@@ -28,6 +28,16 @@ body:
     validations:
       required: true
   - type: dropdown
+    id: harness
+    attributes:
+      label: Review harness
+      description: Which CLI ran the review? The `Harness:` line in `status` shows it.
+      options:
+        - GitHub Copilot CLI (copilot)
+        - Claude Code (claude)
+    validations:
+      required: true
+  - type: dropdown
     id: install-path
     attributes:
       label: Installation method

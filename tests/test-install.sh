@@ -19,6 +19,8 @@ cleanup() {
 
 COPILOT_BIN="$(command -v copilot)" ||
     fail 'The GitHub Copilot CLI is required.'
+CLAUDE_BIN="$(command -v claude)" ||
+    fail 'Claude Code is required for the Claude Code installation check.'
 command -v node >/dev/null 2>&1 ||
     fail 'Node.js is required for installation payload assertions.'
 
@@ -44,6 +46,18 @@ isolated_env() {
 
 copilot() {
     isolated_env "${COPILOT_BIN}" "$@"
+}
+
+# Claude Code plugin commands run from the scratch directory against an
+# isolated configuration root, with update checks and nonessential traffic off.
+claude_cli() {
+    (
+        cd -- "${TEST_ROOT}/scratch" &&
+            isolated_env CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_HOME:?}" \
+                DISABLE_AUTOUPDATER=1 \
+                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+                "${CLAUDE_BIN}" "$@"
+    )
 }
 
 cat > "${TEST_ROOT}/launcher-probe-bin/copilot" <<'SH'
@@ -99,7 +113,7 @@ const required = [
     "lib/harness/common.sh", "lib/harness/copilot.sh", "lib/harness/claude.sh",
     "scripts/launcher-preferences.sh", ".claude-plugin/plugin.json",
     "claude/agents/repo-review.md", "claude/agents/repo-review-worker.md",
-    "claude/commands/start.md", "claude/commands/repo-review.md",
+    "claude/agents/repo-research-worker.md", "claude/commands/start.md", "claude/commands/repo-review.md",
     "claude/commands/help.md", "claude/commands/status.md",
     "claude/commands/version.md", "claude/hooks.json",
     "skills/readonly-repository-review/SKILL.md",
@@ -412,9 +426,66 @@ grep -Fq 'development-only artifact: scripts/__pycache__' \
 rmdir -- "${cache_fixture}"
 [[ ! -e "${TEST_ROOT}/launcher-copilot-called" ]] ||
     fail 'Offline launcher help, version, or failure checks unexpectedly invoked Copilot.'
+
+# Claude Code: validate both manifests, install from the local Claude Code
+# marketplace into an isolated configuration, and compare the installed
+# payload with the checkout package.
+CLAUDE_CONFIG_HOME="${TEST_HOME}/claude-config"
+mkdir -- "${CLAUDE_CONFIG_HOME}"
+for claude_manifest_root in "${ROOT}/plugins/rhyolite" "${ROOT}"; do
+    claude_validate_output="$(
+        claude_cli plugin validate "${claude_manifest_root}" 2>&1
+    )" || {
+        printf '%s\n' "${claude_validate_output}" >&2
+        fail "Claude Code rejected a Rhyolite manifest: ${claude_manifest_root}"
+    }
+done
+claude_marketplace_output="$(claude_cli plugin marketplace add "${ROOT}" 2>&1)" || {
+    printf '%s\n' "${claude_marketplace_output}" >&2
+    fail 'Could not register the local Rhyolite Claude Code marketplace.'
+}
+claude_install_output="$(
+    claude_cli plugin install 'rhyolite@rhyolite-tools' 2>&1
+)" || {
+    printf '%s\n' "${claude_install_output}" >&2
+    fail 'Could not install Rhyolite from the local Claude Code marketplace.'
+}
+claude_list_output="$(claude_cli plugin list 2>&1)" || {
+    printf '%s\n' "${claude_list_output}" >&2
+    fail 'Could not list installed Claude Code plugins.'
+}
+grep -Fq 'rhyolite@rhyolite-tools' <<< "${claude_list_output}" &&
+    grep -Fq "Version: ${version}" <<< "${claude_list_output}" ||
+    fail 'Installed Claude Code plugin list does not contain the selected Rhyolite version.'
+claude_installed_root="$(
+    node - "${CLAUDE_CONFIG_HOME}/plugins/installed_plugins.json" "${version}" <<'JS'
+const fs = require("fs");
+const [registry, version] = process.argv.slice(2);
+const entries = JSON.parse(fs.readFileSync(registry, "utf8")).plugins?.["rhyolite@rhyolite-tools"];
+if (!Array.isArray(entries) || entries.length !== 1 || entries[0].version !== version) {
+    throw new Error("Claude Code did not record exactly one Rhyolite installation");
+}
+process.stdout.write(entries[0].installPath);
+JS
+)" || fail 'Could not resolve the installed Claude Code plugin root.'
+[[ "${claude_installed_root}" == "${CLAUDE_CONFIG_HOME}/plugins/"* &&
+    -d "${claude_installed_root}" ]] ||
+    fail 'Claude Code installed Rhyolite outside its isolated configuration.'
+assert_payload "${claude_installed_root}" "${version}" \
+    "${ROOT}/plugins/rhyolite" "${ROOT}" ||
+    fail 'Installed Claude Code package integrity validation failed.'
+claude_launcher_version="$(
+    offline_launcher "${claude_installed_root}/bin/rhyolite" --version
+)" || fail 'Installed Claude Code package launcher failed.'
+[[ "${claude_launcher_version}" == "Rhyolite v${version} Beta" ]] ||
+    fail 'Installed Claude Code package launcher version is stale.'
+[[ "$(stat -c '%a' "${CLAUDE_CONFIG_HOME}")" == 700 ]] ||
+    fail 'Claude Code installation fixture is not restricted to the current user.'
+printf 'Verified Claude Code installation: Rhyolite v%s Beta from the local marketplace.\n' \
+    "${version}"
 [[ "$(stat -c '%a' "${TEST_ROOT}")" == 700 &&
     "$(stat -c '%a' "${TEST_HOME}")" == 700 &&
     "$(stat -c '%a' "${COPILOT_HOME}")" == 700 ]] ||
     fail 'Installation fixtures are not restricted to the current user.'
 
-printf 'Installation test passed (checkout, Git-free package, prior-version manual update, failure isolation).\n'
+printf 'Installation test passed (checkout, Git-free package, prior-version manual update, failure isolation, Claude Code marketplace install).\n'

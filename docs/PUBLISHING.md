@@ -7,8 +7,8 @@ not part of the release script or checklist.
 
 Public release copy describes Rhyolite as an open-source software analysis
 platform and `repo-review` as its initial/default and currently only shipped
-module. This release remains a GitHub Copilot plugin with Copilot-only
-production harness support.
+module. This release is a GitHub Copilot plugin and a Claude Code plugin,
+with production harness support for GitHub Copilot CLI and Claude Code.
 
 The clean export and preflight remain mandatory release gates. They validate
 the exact candidate tree but do not create a separate history or release
@@ -91,6 +91,13 @@ repository.
    copilot plugin list
    ```
 
+   Claude Code users register and install from the same repository:
+
+   ```text
+   claude plugin marketplace add https://github.com/xjamesmorris/rhyolite
+   claude plugin install rhyolite@rhyolite-tools
+   ```
+
 10. Enable extension commands with `/experimental on`, then start a new
     session. Confirm the one-line version/start status appears, then the
     large plaque appears only after a review-start command;
@@ -105,6 +112,12 @@ repository.
     output folder path, and ends without a retrieval/opening question
     or browser launch.
 
+11. In a new Claude Code session, confirm the `SessionStart` load line, run
+    `/rhyolite:start`, check exact `help`/`status`/`explain scopes`, and
+    confirm `status` shows `Harness: claude`. Through
+    `rhyolite --harness claude`, confirm the aligned plaque, the guided
+    pickers, and a completed review.
+
 If public distribution is intended, separately verify repository visibility,
 GitHub private vulnerability reporting, support forms, anonymous marketplace
 installation, and update behavior before announcing the release. GitHub
@@ -112,8 +125,11 @@ Copilot plugins are public-preview features.
 
 ## Versioning
 
-- Keep `VERSION`, `plugin.json`, and `marketplace.json` versions
-  synchronized.
+- Keep `VERSION`, both `plugin.json` manifests
+  (`plugins/rhyolite/plugin.json` and
+  `plugins/rhyolite/.claude-plugin/plugin.json`), and both marketplace
+  registries (`.github/plugin/marketplace.json` and
+  `.claude-plugin/marketplace.json`) synchronized.
 - Keep the temporary user-facing `Beta` display suffix separate from machine
   semver. `VERSION` and JSON version fields remain `X.Y.Z`, stable tags remain
   `vX.Y.Z`, and plan, state, and other schemas keep their independent integer
@@ -132,6 +148,12 @@ Users update both the marketplace checkout and the installed plugin:
 copilot plugin marketplace update rhyolite-tools && copilot plugin update rhyolite@rhyolite-tools
 ```
 
+Claude Code users run:
+
+```text
+claude plugin marketplace update rhyolite-tools && claude plugin update rhyolite@rhyolite-tools
+```
+
 They can verify the installed version with:
 
 ```text
@@ -147,7 +169,9 @@ that onboarding notice.
 ## Maintainer release checklist
 
 1. Update `VERSION`, `plugins/rhyolite/plugin.json`,
-   `.github/plugin/marketplace.json`, and `CHANGELOG.md`.
+   `plugins/rhyolite/.claude-plugin/plugin.json`,
+   `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
+   `CHANGELOG.md`.
 2. On Fedora Linux 44, run the release validator:
 
    ```bash
@@ -161,7 +185,9 @@ that onboarding notice.
    This isolated offline gate checks the complete Bash/Copilot package, a
    Git-free local marketplace, and a synthetic prior-version manual update,
    including malformed registrations, incomplete or changed payloads, and
-   unsupported packaged artifacts. It does not replace the real remote
+   unsupported packaged artifacts. It also validates both Claude Code
+   manifests and installs the plugin from the local Claude Code marketplace
+   into an isolated configuration. It does not replace the real remote
    installation and update checks in step 9.
 5. Export the approved source ref with `tools/public-release/public-export.sh`
    and run `tools/public-release/public-preflight.sh` against the exported tree.

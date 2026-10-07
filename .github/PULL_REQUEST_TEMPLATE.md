@@ -24,8 +24,9 @@ work must also follow `docs/ADDING-A-HARNESS.md`.
 - [ ] Fedora Linux 44 remains the sole supported validation platform.
 - [ ] Maximum reasoning effort remains the cross-session default; only
       mechanical or fully scoped work may downgrade, and only to high.
-- [ ] Production runtime harness support remains Copilot-only unless this PR
-      is the separately approved, fully validated adapter release.
+- [ ] Production runtime harness support remains limited to GitHub Copilot
+      CLI and Claude Code unless this PR is the separately approved, fully
+      validated adapter release.
 - [ ] Development-only harness fixtures remain under `tests/fixtures` and are
       not registered, packaged, launcher-exposed, or advertised to users.
 

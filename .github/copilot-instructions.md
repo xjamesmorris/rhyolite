@@ -15,4 +15,4 @@ execute target code, inspect a selected local working tree, weaken anonymous
 clone or path isolation, grant child write/shell access, inherit allow-all
 state, or expose credentials. Rhyolite is Linux-only and Bash-first, with only
 the documented constrained Python research-broker exception. Production
-runtime harness support remains GitHub Copilot only.
+runtime harness support covers GitHub Copilot CLI and Claude Code only.

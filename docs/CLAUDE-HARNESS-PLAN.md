@@ -588,7 +588,7 @@ Deviations from the plan above, each backed by probe evidence:
   `claude/agents/repo-research-worker.md`. It kept `web_research=no`
   until real run R5.
   Deviation: no `harness_research_tool_names`; runtime tool names stay
-  adapter-internal and the runner passes the broker tool list.
+  adapter-owned and the runner passes the broker tool list.
 
 Operator decisions (2026-10-07, after real run R1 in the evidence file):
 
@@ -610,4 +610,16 @@ Next:
    orchestrator offers scopes 2 and 3 with the provenance-lookback and
    research-cookie questions. Real guided scope-2 run R6 (fedithread)
    completed.
-4. Phase 4 docs/validators/release (Contract v5 docs, support claims).
+4. Done: Phase 4 docs and validators. Support claims now cover GitHub
+   Copilot CLI and Claude Code in `AGENTS.md`, `CLAUDE.md`,
+   `.github/copilot-instructions.md`, the PR template and bug form, README,
+   DEVELOPERS, SECURITY, PRIVACY, SUPPORT, PUBLISHING, PLAN-OF-RECORD, and the
+   threat model. `HARNESS-ARCHITECTURE.md` and `ADDING-A-HARNESS.md` document
+   Contract v5 and the Claude Code baseline. CHANGELOG `Unreleased` lists the
+   Claude Code harness. `tests/validate-plugin.sh` pins the new wording and
+   rejects stale Copilot-only claims. `tests/test-install.sh` validates both
+   Claude Code manifests and installs the plugin from the local Claude Code
+   marketplace into an isolated configuration. Remaining: the release itself
+   (`VERSION`, both manifests and registries, CHANGELOG heading, public
+   export and preflight, tag). Under the `AGENTS.md` release contract, that
+   is a separate, explicitly requested step.

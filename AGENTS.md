@@ -10,13 +10,14 @@ pointers to this file, not independent policy sources.
 
 Rhyolite is an open-source software analysis platform. `repo-review` is its
 initial and default module and is currently the only shipped module. This
-release is a source-loaded GitHub Copilot CLI plugin with Copilot-only
-production harness support. There is no compile or package build step. From
+release is a source-loaded plugin with production harness support for GitHub
+Copilot CLI and Claude Code. There is no compile or package build step. From
 the repository root:
 
 ```bash
 # Load the development checkout and verify plugin discovery.
 copilot --plugin-dir ./plugins/rhyolite plugin list
+claude plugin validate ./plugins/rhyolite
 
 # Full Fedora Linux 44 validation.
 bash ./tests/validate-all.sh
@@ -81,10 +82,18 @@ supported and must not drive new work.
   `plugins/rhyolite/`. `plugins/rhyolite/plugin.json` registers agents, prompt
   commands, a skill, the `/repo-review` shorthand extension, and root-level
   `hooks.json`.
+- `.claude-plugin/marketplace.json` is the Claude Code marketplace registry
+  for the same `plugins/rhyolite/` root.
+  `plugins/rhyolite/.claude-plugin/plugin.json` registers the Claude Code
+  agents under `claude/agents/`, commands under `claude/commands/`, and
+  display-only hooks in `claude/hooks.json`. Skills, scripts, libraries, the
+  launcher, and branding are shared by both harnesses.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual
-  review-start commands only.
+  review-start commands only. Claude Code's `SessionStart` and
+  `UserPromptSubmit` hooks follow the same rules and emit only a display
+  `systemMessage`.
 - `plugins/rhyolite/branding/banner.txt` and
   `plugins/rhyolite/branding/welcome-metadata.json` centralize replaceable
   onboarding branding and public home/docs/support/issues/pulls URLs.
@@ -98,6 +107,10 @@ supported and must not drive new work.
   terminal `.git` endpoint, collects native fleet/model/reasoning/context
   settings, preselects `rhyolite:repo-review`, passes `--mode interactive`,
   and submits a trusted `-i` setup block without enabling allow-all mode.
+  With `--harness claude` it starts Claude Code with `--plugin-dir`,
+  `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
+  that allows only the bundled runner, and the trusted setup block appended
+  to the system prompt. Claude Code has no native fleet mode.
 - The launcher exports narrow trusted immediate-start and harness markers so
   the display-only `sessionStart` helper replaces the ordinary load line with
   the launcher plaque and the prompt hook suppresses launcher/internal
@@ -113,9 +126,10 @@ supported and must not drive new work.
 - `plugins/rhyolite/lib/harness/common.sh` owns safe harness selection,
   launcher-context validation, the fixed adapter registry, complete required
   function checks, guarded calls, and sanitized failures.
-  `plugins/rhyolite/lib/harness/copilot.sh` is the only production adapter.
-  Production runtime support remains Copilot-only.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v4 seam.
+  `plugins/rhyolite/lib/harness/copilot.sh` and
+  `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
+  Production runtime support covers GitHub Copilot CLI and Claude Code.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v5 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -133,21 +147,30 @@ supported and must not drive new work.
   completion reads the trusted report, prints `RHYOLITE EXECUTIVE SUMMARY`,
   shows only the run output folder path, and ends without a post-run
   question or repository-change offer.
+- `plugins/rhyolite/claude/agents/repo-review.md` is the Claude Code
+  orchestrator with the same setup, plan, approval, and completion contract.
+  It asks through `AskUserQuestion`, with at most four choices per question,
+  and runs the runner as one background Bash task that exact `stop` or
+  `cancel` ends with `TaskStop`.
 - Finite choice lists rely on Copilot CLI's automatic final custom-answer
-  option. Do not add an explicit `Other` choice.
+  option and Claude Code's automatic free-text answer. Do not add an explicit
+  `Other` choice.
 - `repo-review-worker.agent.md` is the non-user-invocable, write-disabled main
   child. It analyzes one isolated snapshot and consumes only a validated,
   sanitized research dossier/summary when research is enabled.
 - `repo-research-worker.agent.md` is the separate non-user-invocable,
   write/shell/agent-disabled child. It runs first for scope 2/3 and receives
   only snapshot reads/searches plus the exact local broker tools.
+  `claude/agents/repo-review-worker.md` and
+  `claude/agents/repo-research-worker.md` are the Claude Code equivalents.
 - `.github/agents/rhyolite-ui-validator.agent.md` is repository-only
   development tooling for finite picker drafts.
   `.github/agents/rhyolite-tui-runtime-validator.agent.md` covers
   terminal/runtime rendering, no-color behavior, handoff, and screenshot
   regressions through `tests/validate-tui-runtime.mjs`. Neither development
   agent is packaged or invoked by installed Rhyolite sessions.
-- `plugins/rhyolite/commands/` provides `/rhyolite:start`,
+- `plugins/rhyolite/commands/` (Copilot CLI) and
+  `plugins/rhyolite/claude/commands/` (Claude Code) provide `/rhyolite:start`,
   `/rhyolite:repo-review`, `/rhyolite:status`, `/rhyolite:version`, and
   `/rhyolite:help`.
 - `plugins/rhyolite/extensions/repo-review/extension.mjs` registers the
@@ -392,10 +415,11 @@ supported and must not drive new work.
   `README.md`, `SUPPORT.md`, and `CONTRIBUTING.md` guidance.
 - Keep deterministic orchestration in scripts and keep agent/skill files
   focused on workflow and policy.
-- In agent/skill instructions, resolve runner scripts from the absolute
-  directory of the loaded `SKILL.md`. Do not guess a checkout path, search
-  unrelated directories, or invent a fake `COPILOT_PLUGIN_ROOT`; only hook
-  runtime may rely on that variable.
+- In Copilot agent/skill instructions, resolve runner scripts from the
+  absolute directory of the loaded `SKILL.md`. Claude Code agents use the
+  `${CLAUDE_PLUGIN_ROOT}` path that Claude Code substitutes into agent text.
+  Do not guess a checkout path, search unrelated directories, or invent a fake
+  `COPILOT_PLUGIN_ROOT`; only hook runtime may rely on that variable.
 - The effective-plan confirmation flow uses the exact choices `Run review`,
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
@@ -420,12 +444,17 @@ supported and must not drive new work.
   cookie replay, private raw Set-Cookie retention, private unsupported-body
   retention, and network-log policy. Scope 1 fixes the object to disabled and
   clears stale cookie consent.
-- Harness Contract v4 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v5 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
-  `ForwardedEnvVarNames`. Follow `docs/ADDING-A-HARNESS.md`; do not claim v2
-  is implemented until runtime and tests land together.
+  `ForwardedEnvVarNames`. Contract v5 adds the adapter-owned research
+  functions `harness_write_research_mcp_config`,
+  `harness_research_worker_argv`, `harness_research_worker_env`, and
+  `harness_finalize_research_session` plus the `research` runtime-home phase,
+  and gates scope 2/3 on the adapter's `web_research` capability. Follow
+  `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
+  until runtime and tests land together.
 - `ReportRepairPolicy`, including `DeterministicNormalizations`, is part of
   plan approval. The additive `ReportRepair`
   object is synchronized across repository state, manifest entries, run-state
@@ -458,9 +487,14 @@ supported and must not drive new work.
 - Unknown IDs, unsafe IDs, missing files, incomplete adapters, invalid
   capability values, malformed provider summaries, and adapter-function
   failures stop the operation with sanitized nonzero errors.
-- Production remains Copilot-only until a separately approved adapter
-  satisfies every Contract-v4 requirement, negative test, end-to-end test,
-  documentation update, packaging review, and release requirement.
+- Production support covers exactly the registered `copilot` and `claude`
+  adapters. Another production adapter requires a separately approved
+  decision and must satisfy every Contract-v5 requirement, negative test,
+  end-to-end test, documentation update, packaging review, and release
+  requirement.
+- A review fails when the session record shows that the harness answered with
+  a model or effort other than the approved one, for example after a Claude
+  Code safeguard fallback. Adapters never accept substituted output.
 - A test no-op adapter belongs only under `tests/fixtures`. It is never a
   production registry entry, launcher option, plugin asset, marketplace
   feature, or user-facing supported harness.
@@ -493,7 +527,9 @@ supported and must not drive new work.
 ## Release contract
 
 - For a release, synchronize `VERSION`, `plugins/rhyolite/plugin.json`,
-  `.github/plugin/marketplace.json`, and `CHANGELOG.md`.
+  `plugins/rhyolite/.claude-plugin/plugin.json`,
+  `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
+  `CHANGELOG.md`.
 - Run `git diff --check`, the narrow checks relevant to the change, and the
   mandatory full gate `bash ./tests/validate-all.sh`.
 - Run public-release and installation validation when release/package

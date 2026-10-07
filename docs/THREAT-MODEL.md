@@ -3,7 +3,8 @@
 ## Assets
 
 - The reviewer's workstation and files.
-- The reviewer's GitHub and Copilot identity.
+- The reviewer's GitHub and Copilot identity, and their Claude Code sign-in
+  or API credentials.
 - Source code outside the target checkout.
 - Accuracy and integrity of generated reports.
 - People and projects discussed in provenance findings about agentically
@@ -13,7 +14,9 @@
 ## Untrusted inputs
 
 - Repository files and Git objects.
-- Repository instruction, agent, prompt, and skill files.
+- Repository instruction, agent, prompt, and skill files, including
+  `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` rules, skills,
+  settings, and hooks.
 - Source comments, strings, generated files, and documentation.
 - Issues, pull requests, release notes, and commit messages.
 - Public web pages, mailing-list posts, social media, and search
@@ -99,6 +102,12 @@
 32. Claims, reputation, community, prior-art, or provenance assessments cause
     reputational harm through false positives, accusatory wording, research
     on people named in endorsements, or lists of individual accounts.
+33. A harness's own safety mechanism silently answers with a model other than
+    the approved one (for example, a Claude Code safeguard fallback), or a
+    nested repository `CLAUDE.md`, rule, skill, setting, or hook loads into a
+    Claude Code worker.
+34. A Claude Code worker reply that reached the output token limit and was
+    resumed is promoted as a partial or spliced report.
 
 ## Controls
 
@@ -384,10 +393,34 @@
   limited to user-requested anonymous clones and optional public
   research.
 
+- Claude Code workers run `--restricted` with only `Read`, `Glob`, and
+  `Grep` (plus the five broker tools for research), with hooks, memory,
+  slash commands, MCP discovery, and repository instruction files disabled
+  by flags, settings, and environment. Rhyolite never passes
+  `--fallback-model` and fails the review when the session record shows
+  another model or effort, a safeguard handover, an advisor model, a
+  subagent turn, or an unreadable record.
+- Claude Code workers raise the per-response output limit to the model's
+  maximum. When Claude Code still resumes a cut reply, the transcript
+  renderer joins the segments only after an explicit `Output token limit
+  hit.` resume prompt, discloses every inserted separator, and the joined
+  report must still pass strict validation.
+- The Claude Code credential bridge copies only `.credentials.json` into a
+  mode-0700 runtime home when no supported authentication variable is set,
+  and deletes it with that home.
+
 ## Residual risks
 
-- Copilot and public search services process prompts and public source
-  content.
+- Copilot, Claude Code's model provider, and public search services process
+  prompts and public source content.
+- Claude Code's session record format is internal and version-dependent.
+  Rhyolite parses it defensively and fails closed on unreadable records, but
+  a format change can stop reviews until the adapter is updated.
+- If Claude Code rotates the refresh token inside the copied credentials
+  file during a long review, the rotated token is discarded with the runtime
+  home. Whether that can invalidate the user's original login is unproven.
+  Exporting `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` avoids the
+  copy.
 - Read-only analysis can still be inaccurate or incomplete.
 - Claims, reputation, community, prior-art, and provenance indicators can be
   false positives or miss context. They are advisory, never verdicts about

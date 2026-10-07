@@ -1,7 +1,6 @@
 # Adding a review harness
 
-This is the implementation playbook for the target Rhyolite Harness Contract
-version 4. It is written for contributors and coding agents that must change
+This is the implementation playbook for Rhyolite Harness Contract version 5. It is written for contributors and coding agents that must change
 the harness seam without weakening Rhyolite's read-only repository-review
 boundary.
 
@@ -10,10 +9,13 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v4.
+- The implemented production seam is Contract v5.
 - The current review plan is schema 5 and repository/run state is schema 6.
-- Production remains GitHub Copilot-only. A contract refactor does not itself
-  add another supported harness.
+- Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
+  and Claude Code (`claude`). A contract refactor does not itself add another
+  supported harness. The Claude Code adapter is the worked example of this
+  playbook; [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) records
+  its evidence.
 - The no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures. They are never registered by production
   `common.sh`, copied into the plugin, selectable through the launcher or
@@ -52,7 +54,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v4 function and every negative and
+12. The adapter can satisfy every Contract-v5 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -75,10 +77,11 @@ Harness work crosses a strict set of surfaces:
 - User and contributor documentation, packaging, release metadata, and
   publication checks when production support changes.
 
-Contract v4 must land as one coordinated behavior change. It retains plan
-schema 5, state schema 6, provider identity, preferences, and the Copilot-only
-registry while adding the complete bounded-repair lifecycle. Do not register
-an adapter before validation understands its complete lifecycle.
+Each contract version lands as one coordinated behavior change. Contract v5
+retains plan schema 5, state schema 6, provider identity, preferences, and the
+Contract-v4 bounded-repair lifecycle, and moves the dedicated scope 2/3
+research worker behind four adapter functions. Do not register an adapter
+before validation understands its complete lifecycle.
 
 ## Fixed registry procedure
 
@@ -116,12 +119,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v4 boundary
+## Contract-v5 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=4
+RHYOLITE_HARNESS_CONTRACT_VERSION=5
 ```
 
 The shared loader must require all functions in this document before calling
@@ -171,7 +174,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v4 capability keys remain:
+Contract-v5 capability keys remain:
 
 ```text
 fleet
@@ -196,9 +199,9 @@ it must not be silently translated into another mode.
 | Function | Signature and output | Required validation |
 | --- | --- | --- |
 | `harness_default_model` | No arguments. Print one model ID. | Must pass the same adapter validator used for explicit models. |
-| `harness_list_models` | No arguments. Print the model IDs in the offline catalog, one per line. | Use only a local non-interactive help/config surface; reject empty, unsafe, or duplicated IDs. A static help catalog can omit models that an account can use. |
+| `harness_list_models` | No arguments. Print the model IDs in the offline catalog, one per line. | Use only a local non-interactive help/config surface; reject empty, unsafe, or duplicated IDs. A static help catalog can omit models that an account can use. A CLI with no local catalog surface may use an adapter-owned constant list instead, with recorded evidence that each ID exists and runs without substitution; Claude Code does this. |
 | `harness_validate_model_id` | One model ID. Status only: `0`, `RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS` (`3`), or another nonzero rejection. | Return `0` only for exact membership in the offline catalog. Never substitute, normalize, alias, or silently downgrade it. Reject selectors that let the CLI choose a model, such as Copilot `auto`, before testing membership. Return `3` only for a safe ID that is absent from a successfully discovered catalog and that the harness's non-interactive workers reject without substitution when unavailable; the runner accepts it only with explicit `--allow-unlisted-model`. |
-| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default and one choice may list the offline catalog. Do not print an explicit `Other`; Copilot CLI owns the final custom-answer option. |
+| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default and one choice may list the offline catalog. Do not print an explicit `Other`; the outer CLI owns the final custom answer (Copilot CLI's `Other`, Claude Code's free-text answer). |
 | `harness_max_reasoning_effort` | One already validated model ID. Print one effort token. | The value must be safe, supported by that model, and the strongest available setting. It is the default approval-bound effort. |
 | `harness_reasoning_effort_choices` | No arguments. Print ordered guided effort labels. | Include only supported values at or above the project hard minimum. |
 | `harness_validate_reasoning_effort` | One effort token. Status only. | Accept only exact supported values. |
@@ -279,7 +282,11 @@ release artifacts.
 | `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
 | `harness_worker_env` | Destination array name. Status only. | Populate the exact ordered `env` argument array, including unsets and the isolated home binding. |
 | `harness_report_repair_argv` | Destination array name, empty trusted workdir, fresh session name, fresh session ID, approved model, approved reasoning effort, approved context tier, comma-separated protected variable names, and fresh transcript path. Status only. | Populate the exact ordered tool-less repair argument array. |
-| `harness_report_repair_env` | Destination array name and fresh runtime-home path. Status only. | Populate the repair `env` data array using normal worker clearing semantics and a fresh `COPILOT_HOME`, without serializing authentication values. |
+| `harness_report_repair_env` | Destination array name and fresh runtime-home path. Status only. | Populate the repair `env` data array using normal worker clearing semantics and a fresh harness home (`COPILOT_HOME` for Copilot, `CLAUDE_CONFIG_DIR` for Claude Code), without serializing authentication values. |
+| `harness_write_research_mcp_config` | Config path, broker launcher path, broker-argument array name, and the broker tool list as a JSON array. Status only. | Write one mode-0600 MCP configuration, in the adapter's own schema, whose only server starts the runner-supplied launcher with exactly the runner-supplied arguments. |
+| `harness_research_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, protected variable names, MCP config path, comma-separated broker tool names, and transcript path. Status only. | Populate the research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the named broker tools from that MCP configuration. |
+| `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
+| `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -332,6 +339,11 @@ Worker environment must:
   anonymous Git or research boundaries;
 - contain no test-only override in production.
 
+The worker and repair rules below name Copilot CLI flags. Each adapter maps
+them to its own CLI and pins the result as a golden vector;
+[HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) lists the Claude Code
+equivalents.
+
 Report-repair argv is a separate golden vector. It must:
 
 - use a fresh session name and ID and a runner-created empty trusted workdir;
@@ -369,11 +381,31 @@ Report-repair environment must:
 - keep source snapshots, research files, target metadata, and analysis runtime
   homes out of both the data vector and repair workdir.
 
+### Research worker
+
+The runner owns scope 2/3 research: policy resolution, the broker launcher
+and its arguments, timeouts, dossier extraction and validation, the network
+summary, cleanup, and artifacts. It calls the four research functions only
+when the adapter reports `web_research=yes`; otherwise scope 2/3 fails at
+stage `harness <id> harness_capability` before any broker or worker activity.
+The adapter must:
+
+- write an MCP configuration with exactly one local stdio server, the bundled
+  broker launcher, and no other server, credential, header, or endpoint;
+- grant exactly the runner-supplied broker tools and nothing broader, such as
+  a server-wide wildcard, `web_fetch`, or general URL access;
+- keep the review worker's write, shell, agent, hook, and instruction-file
+  restrictions;
+- prepare the runtime home with phase `research`;
+- when the harness records per-turn model and effort, verify the research
+  session record with the same model, effort, and subagent rules as the
+  review worker before the runtime home is removed.
+
 ### Runtime home, persistence, cleanup, and isolation
 
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
-| `harness_prepare_worker_home` | Runner-created runtime-home path, reasoning effort, context tier, and optional phase. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data. Omitted phase preserves normal behavior; `report-repair` writes repair-only settings. |
+| `harness_prepare_worker_home` | Runner-created runtime-home path, reasoning effort, context tier, and optional phase. Status only. | Restrict the directory and write only minimal approved configuration/auth bridge data. Omitted phase preserves normal behavior; `research` prepares the research worker; `report-repair` writes repair-only settings. |
 | `harness_persist_agent_state` | Runtime-home path and destination agent-state directory. Status only. | Copy only an explicit sanitized continuation allowlist. |
 | `harness_sanitize_runtime_home` | Runtime-home path. Status only. | Remove or sanitize the entire temporary home; be safe when called by normal flow or the exit trap. |
 | `harness_verify_isolation` | Sanitized timeline path. Status only. | Perform adapter-specific post-run isolation checks. An explicit no-op is allowed only when the adapter has no additional invariant to verify. |
@@ -544,7 +576,7 @@ deterministically implied by the approved harness and contract version.
 
 ## Plan schema 5 and approval hash
 
-Contract v4 retains the Contract-v3 approved runtime selection and plan
+Contract v5 retains the Contract-v3 approved runtime selection and plan
 schema 5. It includes these exact top-level fields:
 
 ```json
@@ -785,8 +817,8 @@ At minimum, add deterministic coverage for:
 
 - plugin discovery still reports only supported production assets;
 - public-release export excludes `tests/fixtures` and the no-op adapter;
-- production help, README usage, launcher choices, and metadata remain
-  Copilot-only until a real adapter is approved;
+- production help, README usage, launcher choices, and metadata list only
+  `copilot` and `claude` until another adapter is approved;
 - no hosted CI or alternate-platform path is introduced.
 
 ## Required end-to-end tests
@@ -813,7 +845,11 @@ generic seam:
 10. Exercise one fresh, tool-less bounded repair, exact descriptor extraction,
     deterministic application, full report revalidation, and cleanup without
     resuming or persisting the repair session.
-11. Run the full Fedora gate:
+11. For an adapter with research capabilities, prove the research worker
+    receives exactly the runner's MCP configuration and broker grant, that a
+    research failure stops the run before the review worker starts, and that
+    the research home and MCP configuration are removed.
+12. Run the full Fedora gate:
 
 ```bash
 bash ./tests/validate-all.sh
@@ -821,19 +857,20 @@ bash ./tests/validate-all.sh
 
 ## User documentation and release surfaces
 
-While production remains Copilot-only:
+Production support covers `copilot` and `claude`:
 
-- README and usage examples continue to identify GitHub Copilot as the only
-  supported runtime harness.
-- `docs/HARNESS-ARCHITECTURE.md` may describe the generic seam and target
-  contract, but must label the no-op adapter development-only.
+- README and usage examples identify GitHub Copilot CLI and Claude Code as
+  the supported runtime harnesses and document the Claude Code differences.
+- `docs/HARNESS-ARCHITECTURE.md` describes the seam and both adapter
+  baselines, and labels the no-op adapter development-only.
 - `DEVELOPERS.md`, `AGENTS.md`, and this playbook expose contributor workflow.
-- `CLAUDE.md` remains a contributor pointer and explicitly does not advertise
-  Claude Code runtime support.
-- Plugin, marketplace, command, launcher, help, support, publishing, version,
-  and changelog surfaces do not list a second harness.
+- `CLAUDE.md` and `.github/copilot-instructions.md` remain contributor
+  bootstrap pointers to `AGENTS.md`.
+- Each harness has its own plugin manifest and marketplace registry; the
+  launcher, help, support, and publishing surfaces list only these two
+  harnesses.
 
-When a real production adapter is separately approved, review and update all
+When another production adapter is separately approved, review and update all
 affected surfaces:
 
 - launcher options, trusted context marker, agent setup, status/help, and
@@ -842,8 +879,8 @@ affected surfaces:
   statements, support guidance, and publishing instructions;
 - plugin packaging and public-release allowlists;
 - install and discovery tests;
-- `VERSION`, `plugins/rhyolite/plugin.json`,
-  `.github/plugin/marketplace.json`, and `CHANGELOG.md` for the release;
+- `VERSION`, each harness's plugin manifest and marketplace registry, and
+  `CHANGELOG.md` for the release;
 - the matching stable tag after local Fedora validation and public preflight.
 
 Do not change version or release metadata merely to add internal test
@@ -853,7 +890,10 @@ fixtures.
 
 - Dynamic adapter discovery, path interpolation, or environment-selected
   adapter files.
-- Automatic fallback to Copilot.
+- Automatic fallback to Copilot or to any other harness.
+- Accepting a review that the session record shows came from a model or
+  effort other than the approved one, including a harness safeguard
+  fallback.
 - Registering an adapter with missing functions or `unverified` safety
   controls.
 - Treating a CLI flag name as proof of a capability.
@@ -888,7 +928,9 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v4 function inventory for the adapter;
+- the complete Contract-v5 function inventory for the adapter;
+- an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
+  real runs, and their consequences;
 - a capability decision table with evidence;
 - model, effort, authentication, and provider-summary examples;
 - exact argv and environment captures;

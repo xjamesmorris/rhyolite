@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "rhyolite",
-      "description": "Rhyolite is an open-source software analysis platform. Its initial, default, and currently only shipped module is repo-review, delivered here as a Claude Code plugin for read-only analysis of public HTTPS Git repositories.",
+      "description": "Rhyolite is an open-source software analysis platform. Its initial, default, and currently only shipped module is repo-review, delivered here as a Claude Code plugin for read-only analysis of public HTTPS Git repositories and optional provenance review for agentically generated code.",
       "version": "0.7.0",
       "source": "./plugins/rhyolite",
       "author": {

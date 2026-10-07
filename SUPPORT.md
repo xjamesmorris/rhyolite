@@ -22,10 +22,11 @@
 ## Response expectations
 
 Support is best-effort and may vary by maintainer availability. Include
-the plugin version, operating system, installation path, whether the
-load status and review-start plaque appeared, and sanitized logs
-when possible. For setup questions, include the `CURRENT SETUP STATUS`
-block or `status` output if it helps show the current
+the plugin version, the review harness (`copilot` or `claude`, shown on the
+`Harness:` line of `status`) and its CLI version, operating system,
+installation path, whether the load status and review-start plaque appeared,
+and sanitized logs when possible. For setup questions, include the
+`CURRENT SETUP STATUS` block or `status` output if it helps show the current
 source/output/scope/provenance selections. If the runner reports a
 plan-hash mismatch, include the mismatch message and the regenerated
 `EFFECTIVE REVIEW PLAN` summary if available.

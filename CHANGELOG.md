@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- Added Claude Code as a second production review harness. Use
+  `rhyolite --harness claude`, or `--harness claude` with the direct runner,
+  to run the guided setup, plan approval, scopes 1-3 with dedicated research,
+  report repair, and the usual artifacts through Claude Code (validated with
+  2.1.292). The default model is `claude-opus-5-5` and the guided alternate is
+  `claude-opus-5`; Rhyolite keeps its own offline Claude Code model list
+  because Claude Code has no local catalog. The plugin now ships a Claude Code
+  manifest and marketplace registry: run
+  `claude plugin marketplace add https://github.com/xjamesmorris/rhyolite`
+  and `claude plugin install rhyolite@rhyolite-tools`.
+- Claude Code workers run `claude -p --restricted` with only `Read`, `Glob`,
+  and `Grep`, plus the five local broker tools for research. Repository
+  `CLAUDE.md`, `AGENTS.md`, and `.claude/` files, hooks, memory, slash
+  commands, and subagents are disabled. A review fails closed when the
+  session record shows a model or effort other than the approved one,
+  including a Claude Code safeguard handover to another model, or a subagent
+  turn. Workers raise the per-response output limit to the model's maximum,
+  and a reply that Claude Code still resumes after the limit is joined with
+  disclosed separators before strict validation.
+- When no supported Claude Code authentication variable is set, each Claude
+  Code worker receives a private copy of `.credentials.json` in its temporary
+  runtime home. The copy is deleted with that home and never persisted.
+  Exporting `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` avoids the copy.
+- Harness Contract v5 moves the dedicated scope 2/3 research worker behind
+  four adapter functions and gates scope 2/3 on each adapter's `web_research`
+  capability. The Copilot research worker command is unchanged.
+- Added approval-bound, model-free `confidence-level-delimiters`
+  normalization to `ReportRepairPolicy.DeterministicNormalizations`. When an
+  assessment `Confidence:` value has one level directly followed by
+  explanatory words, the runner inserts the accepted ` - ` delimiter, keeps
+  every word, and revalidates before any model edit. The policy object is
+  approval-hash material, so plans generated before this change must be
+  regenerated.
+- The runner now retries a blob-filtered clone checkout twice when the host
+  transiently refuses the anonymous lazy fetch, and explains an
+  authentication challenge plainly instead of Git's password prompt error.
+- Help and `status` output now include a `Harness:` line for both harnesses.
+- The bug report form asks which review harness ran the review.
+
 - Added an explicit `--allow-unlisted-model` option to the launcher and the
   direct runner. Rhyolite validates models against the list printed by
   `copilot help config`, which is built into the CLI and can omit models

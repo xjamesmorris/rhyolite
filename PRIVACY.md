@@ -117,7 +117,7 @@ Reports, rendered requests, transcripts, timelines, state, and handoff
 files are written to a user-selected local artifact workspace outside the
 reviewed repository. They may contain public usernames, public
 statements, source excerpts, vulnerability analysis, local filesystem
-paths, and Copilot session names and IDs.
+paths, and Copilot or Claude Code session names and IDs.
 
 Scope 2/3 additionally creates a `research/` bundle. The sanitized
 dossier remains canonical plain text; Rhyolite does not create Markdown or
@@ -156,6 +156,15 @@ and the remaining user-only path is reported. Persisted settings disable
 hooks and the persisted managed configuration is empty. Supported
 authentication environment variables are marked secret for child tools.
 
+With `--harness claude`, `agent-state/claude-home/` contains the worker's
+`settings.json` and a filtered, redacted session record. Attachments such as
+the account email and organization ID are dropped, and `session.md` is a
+rendered transcript of that record. When no supported Claude Code
+authentication variable is set, the runner copies Claude Code's
+`.credentials.json` into the user-only temporary runtime home for the worker
+and deletes it with that home; the copy is never written to `agent-state/`.
+Exporting `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` avoids the copy.
+
 The plugin omits author email addresses by default. Users are
 responsible for storing, sharing, and deleting reports according to
 their own applicable data handling and retention requirements.
@@ -178,6 +187,15 @@ and does not itself upload the report. Following a generated external
 reference is an explicit user navigation and can contact that public site;
 Rhyolite does not prefetch it. Transcripts and handoffs continue to render
 untrusted text as inert code rather than active links or images.
+
+## Model providers
+
+Review content, including source excerpts, Git metadata, research dossiers,
+and prompts, is processed by the selected harness's model provider: GitHub
+Copilot for `--harness copilot`, and Anthropic or the provider configured for
+Claude Code for `--harness claude`. Claude Code workers run with nonessential
+traffic and auto-update disabled; the outer Claude Code session uses the
+user's own Claude Code settings.
 
 No telemetry, report upload, background network requests, or reusable
 cross-run research cookie store is implemented by this plugin.

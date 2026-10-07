@@ -4,6 +4,8 @@
 
 **Constrained broker exception approved:** October 1, 2026
 
+**Claude Code production harness approved:** October 7, 2026
+
 ## Decision
 
 Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
@@ -22,8 +24,10 @@ Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
   the current release gate.
 - Additional operating systems, shells, and Linux distributions are not
   supported or validated.
-- GitHub Copilot is the only supported production review harness. The fixed
-  harness seam does not advertise or imply support for other CLIs.
+- GitHub Copilot CLI and Claude Code are the supported production review
+  harnesses. Claude Code was approved after the evidence recorded in
+  [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md). The fixed harness
+  seam does not advertise or imply support for other CLIs.
 
 Broader platform support may be reconsidered after the Fedora/Bash
 implementation is stable and easier to maintain. Reconsideration
@@ -50,14 +54,18 @@ preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v4 seam.
+  Contract-v5 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v4 and any future production adapter.
-- Contract v4 retains approval-bound harness execution identity and validated runtime
+  playbook for Contract v5 and any future production adapter.
+- The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
   object with `Id`, `Host`, and `ForwardedEnvVarNames`.
-- Contract v4 adds an isolated, fresh, zero-tool report-repair invocation.
+- Contract v5 moves the dedicated scope 2/3 research worker behind four
+  adapter functions and gates scope 2/3 on the adapter's `web_research`
+  capability. The runner keeps broker lifecycle, validation, cleanup, and
+  artifacts.
+- Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved
   model settings. Research is never
@@ -69,10 +77,11 @@ preserved speculatively.
 - The no-op harness is development-only under `tests/fixtures`. It is
   never registered by production code, packaged, exposed through launcher or
   runner choices, or described as supported runtime behavior.
-- A second production harness requires a separate explicit support decision,
-  complete safety and capability evidence, Fedora validation, packaging and
-  user-documentation updates, and a release. Contract generalization alone is
-  not that decision.
+- Any further production harness requires a separate explicit support
+  decision, complete safety and capability evidence, Fedora validation,
+  packaging and user-documentation updates, and a release. Contract
+  generalization alone is not that decision. The Claude Code decision followed
+  that process.
 
 ## Refactor sequence
 

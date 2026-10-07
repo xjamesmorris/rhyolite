@@ -143,6 +143,7 @@ fixture_public_repository_url_bad_escape="$(
     build_url 'https' "${reserved_doc_host}" 'owner%zz/repository'
 )"
 public_marketplace_add_guidance='copilot plugin marketplace add https://github.com/xjamesmorris/rhyolite'
+public_claude_marketplace_add_guidance='claude plugin marketplace add https://github.com/xjamesmorris/rhyolite'
 
 required_files=(
     "${ROOT_LAUNCHER}"
@@ -235,11 +236,36 @@ grep -Fq '[AGENTS.md](../AGENTS.md)' "${COPILOT_INSTRUCTIONS}" &&
     grep -Fq 'bootstrap pointer' "${COPILOT_INSTRUCTIONS}" ||
     fail 'Copilot bootstrap does not point to canonical AGENTS.md guidance.'
 grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
-    grep -Fq 'does not define, advertise, or' "${CLAUDE_GUIDANCE}" &&
-    grep -Fq 'supported Claude Code runtime harness' "${CLAUDE_GUIDANCE}" ||
-    fail 'Claude contributor pointer does not preserve the Copilot-only runtime claim.'
+    grep -Fq 'bootstrap pointer only' "${CLAUDE_GUIDANCE}" &&
+    grep -Fq 'production runtime harnesses are GitHub Copilot CLI and Claude' \
+        "${CLAUDE_GUIDANCE}" ||
+    fail 'Claude contributor pointer does not point to AGENTS.md and state the supported runtime harnesses.'
+tr '\r\n\t' '   ' < "${COPILOT_INSTRUCTIONS}" |
+    sed -E 's/[[:space:]]+/ /g' |
+    grep -Fq 'Production runtime harness support covers GitHub Copilot CLI and Claude Code only.' ||
+    fail 'Copilot bootstrap does not state the supported runtime harnesses.'
+for support_claim_document in \
+    "${README}" \
+    "${AGENTS_GUIDANCE}" \
+    "${CLAUDE_GUIDANCE}" \
+    "${COPILOT_INSTRUCTIONS}" \
+    "${DEVELOPERS}" \
+    "${PUBLISHING_DOC}" \
+    "${PLATFORM_POR}" \
+    "${PR_TEMPLATE}" \
+    "${HARNESS_ARCHITECTURE}" \
+    "${HARNESS_PLAYBOOK}"; do
+    normalized_support_claim="$(
+        tr '\r\n\t' '   ' < "${support_claim_document}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    ! grep -Eqi \
+        'remains (GitHub )?Copilot[- ]only|Copilot-only production|only production (harness|adapter)|(GitHub )?Copilot is the only (supported )?production' \
+        <<< "${normalized_support_claim}" ||
+        fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
+done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v4' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v5' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -1439,6 +1465,20 @@ grep -Fq \
     'copilot plugin marketplace update rhyolite-tools && copilot plugin update rhyolite@rhyolite-tools' \
     "${README}" "${PUBLISHING_DOC}" ||
     fail 'Public marketplace update guidance is missing.'
+for claude_guidance_document in "${README}" "${PUBLISHING_DOC}"; do
+    grep -Fq "${public_claude_marketplace_add_guidance}" \
+        "${claude_guidance_document}" &&
+        grep -Fq 'claude plugin install rhyolite@rhyolite-tools' \
+            "${claude_guidance_document}" &&
+        grep -Fq \
+            'claude plugin marketplace update rhyolite-tools && claude plugin update rhyolite@rhyolite-tools' \
+            "${claude_guidance_document}" ||
+        fail "Claude Code marketplace guidance is missing: ${claude_guidance_document}"
+done
+grep -Fq './rhyolite --harness claude' "${README}" &&
+    grep -Fq 'claude auth login' "${README}" &&
+    grep -Fq 'claude plugin validate ./plugins/rhyolite' "${README}" ||
+    fail 'README does not document the Claude Code launcher, sign-in, and manifest check.'
 grep -Fq '/repo-review' "${README}" "${PUBLISHING_DOC}" ||
     fail 'Public docs do not describe the short Rhyolite command.'
 grep -Fq '/experimental on' "${README}" "${PUBLISHING_DOC}" ||
@@ -1451,9 +1491,9 @@ grep -Fq 'Rhyolite is an open-source software analysis platform.' \
     <<< "${normalized_readme}" &&
     grep -Fq 'initial and default module and is currently the only shipped module' \
         <<< "${normalized_readme}" &&
-    grep -Fq 'This release is delivered as a GitHub Copilot plugin' \
+    grep -Fq 'This release is delivered as a GitHub Copilot plugin and a Claude Code plugin' \
         <<< "${normalized_readme}" &&
-    grep -Fq 'production runtime harness support remains Copilot-only' \
+    grep -Fq 'production runtime harness support covers GitHub Copilot CLI and Claude Code' \
         <<< "${normalized_readme}" ||
     fail 'README does not preserve the canonical platform/module/runtime positioning.'
 normalized_publishing="$(
@@ -1574,7 +1614,7 @@ grep -Fq 'Rhyolite is an open-source software analysis platform.' \
     <<< "${normalized_agent_guidance}" &&
     grep -Fq '`repo-review` is its initial and default module and is currently the only shipped module.' \
         <<< "${normalized_agent_guidance}" &&
-    grep -Fq 'Copilot-only production harness support' \
+    grep -Fq 'production harness support for GitHub Copilot CLI and Claude Code' \
         <<< "${normalized_agent_guidance}" ||
     fail 'Canonical agent guidance does not preserve platform/module/runtime positioning.'
 grep -Fq 'bin/rhyolite' <<< "${normalized_agent_guidance}" &&

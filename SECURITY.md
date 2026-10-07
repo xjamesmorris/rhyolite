@@ -125,8 +125,8 @@ The supported runner path:
   GitHub CLI, BYOK, or bridged authentication. The plugin never launches
   login automatically.
 - Does not build, test, compile, install, load, or execute target code.
-- Uses the invoking user's Git and Copilot identity; there is no service
-  token.
+- Uses the invoking user's Git identity and GitHub Copilot or Claude Code
+  sign-in; there is no service token.
 - Resolves links and traversal in clone/output roots, checks that they
   are physically disjoint, creates the roots, and verifies them again
   before use.
@@ -215,6 +215,53 @@ direct HTTPS adapter, anonymous GitHub adapter, fixed anonymous
 to an effective digest and cannot enable plaintext, private destinations,
 authentication, arbitrary executables or remote MCPs, TLS bypass, imported
 cookies, proxies, configurable endpoints, or cross-run state.
+
+## Claude Code harness boundary
+
+The child-session controls above that name Copilot apply to
+`--harness copilot`. With `--harness claude`, the runner applies the same
+repository, clone, snapshot, research, validation, and artifact controls, and
+the Claude Code adapter enforces these worker controls:
+
+- Each worker runs in a unique mode-0700 `CLAUDE_CONFIG_DIR` runtime home
+  that contains only `settings.json` (mode 0600) and, when no supported
+  authentication variable is set, a mode-0600 copy of the user's Claude Code
+  `.credentials.json`. The runner deletes the runtime home after the worker
+  exits, times out, or fails.
+- Workers run `claude -p --restricted` with `--tools Read,Glob,Grep`, an
+  explicit `--disallowedTools` list for shell, write, web, agent, skill,
+  question, todo, and tool-search tools, `--permission-mode dontAsk`,
+  `--permission-prompts none`, `--strict-mcp-config`,
+  `--disable-slash-commands`, and the bundled write-disabled worker agent.
+- Inline worker settings disable hooks and auto memory, exclude
+  `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` files, and deny
+  the same tools. The environment also sets
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, disables auto-update, nonessential
+  traffic, and terminal titles, and unsets inherited variables that can
+  change the model, effort, thinking budget, extra instruction directories,
+  interrupted-turn resume, or simple mode.
+- The research worker additionally receives only the five local broker tools
+  through `--allowedTools` and an ephemeral mode-0600 stdio MCP
+  configuration.
+- The report-repair child runs with no tools, every tool denied, and no
+  session persistence in an empty working directory. Its JSON result is
+  accepted only when `modelUsage` lists only the approved model.
+- Rhyolite never passes `--fallback-model`. After each worker, it reads the
+  session record and fails the review if any main-thread turn came from
+  another model (including a safeguard `model_refusal_fallback` or an
+  advisor model) or another effort, if a subagent turn appears, if the record
+  is unreadable, or if a report arrives without its record.
+- Persisted agent state is the worker settings plus a filtered, redacted
+  session record that keeps only user, assistant, system, title, and
+  agent-name records. Attachments such as the account email and organization
+  ID are dropped.
+- The launcher starts the outer Claude Code session from a clean non-Git
+  directory with `--strict-mcp-config` and the orchestrator agent, whose tools
+  are `Read`, `Bash`, `AskUserQuestion`, and `TaskStop`. A permission rule
+  pre-approves only `bash <runner> ...`; any other command goes through Claude
+  Code's normal permission prompt unless the user launches with `--yolo`.
+- Claude Code `SessionStart` and `UserPromptSubmit` hooks are display-only and
+  emit only a `systemMessage`.
 
 ## Reporting a vulnerability
 

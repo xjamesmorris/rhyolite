@@ -1,10 +1,10 @@
 # Harness architecture
 
-**Contract version:** 4
+**Contract version:** 5
 
 **Initial implementation:** I1a
 
-**Supported harnesses:** `copilot` only
+**Supported harnesses:** `copilot` (default) and `claude`
 
 ## Purpose
 
@@ -16,14 +16,17 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v4 is a fail-closed data-contract and lifecycle seam. It preserves
-the Copilot-only runtime and Contract-v3 plan/state identity while adding one
-bounded, isolated report-repair invocation that can return only a compact
-confidence-edit descriptor. It does not make additional harnesses available,
-resume the review worker, or permit a model to rewrite the report.
+Contract v5 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
+report-repair invocation, which can return only a compact confidence-edit
+descriptor. Contract v5 moves the dedicated scope 2/3 research worker behind
+four adapter functions, so each production adapter builds its own research
+worker while the runner keeps broker lifecycle, validation, cleanup, and
+artifacts. The contract never resumes the review worker, permits a model to
+rewrite the report, or falls back to another harness.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v4 and any future production adapter.
+playbook for Contract v5 and any future production adapter.
 
 ## I1a invariants
 
@@ -43,8 +46,9 @@ playbook for Contract v4 and any future production adapter.
   entry. Safe syntax alone does not make an adapter supported.
 - Unknown IDs, unsafe IDs, missing adapter files, incomplete adapters, and
   adapter-function failures stop the operation. There is no fallback.
-- `bogus`, `codex`, and `claude` do not select Copilot and do not load another
-  adapter in I1a.
+- `bogus` and `codex` do not select Copilot and do not load another adapter.
+  In I1a, `claude` was likewise unregistered; it now selects the registered
+  Claude Code adapter.
 - The Copilot adapter preserves the existing worker and outer-launcher
   argument vectors byte for byte after Rhyolite consumes `--harness`.
 - Capability values are exactly `yes`, `no`, or `unverified`.
@@ -96,8 +100,9 @@ in both contexts.
 ## Fixed adapter loading
 
 The shared resolver and loader live in
-`plugins/rhyolite/lib/harness/common.sh`. The I1a Copilot adapter lives in
-`plugins/rhyolite/lib/harness/copilot.sh`. The loader performs these steps in
+`plugins/rhyolite/lib/harness/common.sh`. The Copilot adapter lives in
+`plugins/rhyolite/lib/harness/copilot.sh` and the Claude Code adapter in
+`plugins/rhyolite/lib/harness/claude.sh`. The loader performs these steps in
 order:
 
 1. Resolve the selected harness.
@@ -105,7 +110,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v4 function exists.
+6. Assert every required Contract-v5 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -142,7 +147,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v4 functions
+## Contract-v5 functions
 
 Every mapped adapter must define all functions below.
 
@@ -173,6 +178,10 @@ Every mapped adapter must define all functions below.
 | `harness_worker_env` | Build the ordered worker environment/unset vector. |
 | `harness_report_repair_argv` | Build the ordered argv for one fresh, tool-less report-repair session in an empty trusted working directory. |
 | `harness_report_repair_env` | Build normal worker environment clears plus a fresh harness-specific runtime home, without serializing authentication values. |
+| `harness_write_research_mcp_config` | Write the ephemeral mode-0600 MCP configuration that starts the runner-supplied local broker launcher with the runner-supplied arguments and tool list, in the adapter's own MCP schema. |
+| `harness_research_worker_argv` | Build the ordered research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the runner-supplied broker tools from the written MCP configuration. |
+| `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
+| `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
@@ -185,7 +194,11 @@ The runner treats function output as data. It does not evaluate adapter output,
 accept success-shaped fallbacks, or continue after malformed values.
 `harness_prepare_worker_home` receives the new runtime-home path plus the
 approved reasoning effort and context tier. Its optional fourth phase is
-`report-repair`; an omitted phase preserves normal review-worker behavior.
+`research` or `report-repair`; an omitted phase preserves normal review-worker
+behavior. The runner calls the four research functions only for scope 2/3,
+and only when the adapter reports `web_research=yes`; otherwise scope 2/3
+fails at stage `harness <id> harness_capability` before any broker or worker
+activity.
 Array-producing functions receive the destination array name first.
 
 ## Capabilities
@@ -201,25 +214,28 @@ No other spelling, empty output, multiple values, or successful exit with an
 invalid value is accepted. A future adapter must not report `yes` merely
 because its CLI has a similarly named option.
 
-Contract v4 retains these capability keys:
+Contract v5 retains these capability keys:
 
-| Capability | Copilot I1a |
-| --- | --- |
-| `fleet` | `yes` |
-| `structured_questions` | `yes` |
-| `subagents` | `yes` |
-| `builtin_security_specialist` | `yes` |
-| `builtin_research_specialist` | `yes` |
-| `web_research` | `yes` |
-| `shell_denial` | `yes` |
-| `final_message_file` | `no` |
+| Capability | Copilot | Claude Code |
+| --- | --- | --- |
+| `fleet` | `yes` | `no` |
+| `structured_questions` | `yes` | `yes` |
+| `subagents` | `yes` | `no` |
+| `builtin_security_specialist` | `yes` | `no` |
+| `builtin_research_specialist` | `yes` | `yes` |
+| `web_research` | `yes` | `yes` |
+| `shell_denial` | `yes` | `yes` |
+| `final_message_file` | `no` | `no` |
+
+[CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) records the probe and
+real-run evidence behind each Claude Code value.
 
 An unknown capability returns `unverified`; it is never silently promoted to
 `yes`.
 
 ## Copilot adapter baseline
 
-Copilot is the only mapped I1a adapter.
+Copilot was the only mapped I1a adapter and remains the default harness.
 
 - Canonical ID: `copilot`
 - Display name: `Copilot`
@@ -367,6 +383,119 @@ These boundaries apply only to descriptor repair extraction. Main
 through end of transcript, so internal assistant-report headings such as
 `### Alert 1` are preserved.
 
+## Claude Code adapter baseline
+
+- Canonical ID: `claude`
+- Display name: `Claude Code`
+- CLI: `claude` (validated with Claude Code 2.1.292)
+- Default model: `claude-opus-5-5`
+- Guided alternate model: `claude-opus-5`
+- Model catalog: Claude Code exposes no local catalog surface, so the adapter
+  owns an offline list: `claude-opus-5-5`, `claude-fable-5-1`,
+  `claude-sonnet-5-5`, `claude-fable-5`, `claude-opus-5`, and
+  `claude-sonnet-5`. It can omit models that an account can use.
+- Aliases such as `opus`, `sonnet`, `fable`, `default`, and `opusplan` are
+  rejected. A safe `claude-` ID outside the list returns status 3 and is
+  accepted only with explicit `--allow-unlisted-model`. An unavailable model
+  fails with Claude Code's `[claude-code:unrecognized_model]` marker on
+  stderr, and the runner reports a `model availability` stage.
+- Reasoning effort: `max` recommended; `xhigh` and `high` selectable; the
+  worker passes `--effort` and inline `effortLevel` settings.
+- Context tier: `long_context` is the only guided choice; `default` stays
+  valid. Every catalog model has a 1M-token context window.
+- Provider summary ID: `anthropic-claude-code`; host summary
+  `managed-provider`, because inherited Claude Code provider settings choose
+  the endpoint.
+- Protected authentication variables: `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_CUSTOM_HEADERS`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, and `ANTHROPIC_FOUNDRY_API_KEY`.
+- Resume policy: continue only through the trusted Rhyolite runner; do not
+  invoke `claude --resume` directly.
+- Login remediation: run `claude auth login` from a clean non-Git directory,
+  or export `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or
+  `ANTHROPIC_API_KEY`, then retry.
+- Authentication bridge: inherited environment or cloud-provider
+  authentication takes precedence. Otherwise `harness_prepare_run` locates
+  `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json` (a regular,
+  non-symlink file), and each runtime home receives a mode-0600 copy that
+  cleanup deletes first.
+
+Each worker runtime home is a mode-0700 `CLAUDE_CONFIG_DIR` that contains only
+`settings.json` and, when the bridge applies, `.credentials.json`. The review
+worker argv is:
+
+```text
+-p --model <model> --effort <effort> --session-id <uuid> --name <name>
+--output-format text --permission-mode dontAsk --permission-prompts none
+--restricted --settings <inline-json> --strict-mcp-config
+--tools Read,Glob,Grep
+--disallowedTools Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent,Skill,AskUserQuestion,TodoWrite,ToolSearch
+--disable-slash-commands --plugin-dir <plugin-root>
+--agent rhyolite:repo-review-worker
+--append-system-prompt-file <plugin-root>/skills/readonly-repository-review/SKILL.md
+```
+
+Settings are passed inline because the runner builds argv before it creates
+the runtime home and `--restricted` ignores the runtime home's own settings
+file. They set `disableAllHooks`, disable auto memory and co-author lines,
+exclude `**/CLAUDE.md`, `**/CLAUDE.local.md`, `**/AGENTS.md`, and
+`**/.claude/**`, set `effortLevel`, and deny the same tools. The environment
+vector starts with `-C <session-root>`, unsets
+`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, `ANTHROPIC_MODEL`,
+`CLAUDE_CODE_EFFORT_LEVEL`, `MAX_THINKING_TOKENS`,
+`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, and `CLAUDE_CODE_SIMPLE`, and sets
+`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`,
+`DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`, `NO_COLOR=1`, and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000`, which Claude Code caps at the model's
+own maximum. It does not use `env -i`.
+
+The research worker replaces the worker agent with
+`rhyolite:repo-research-worker`, appends the `research-source-assessment`
+skill, passes `--mcp-config <path> --strict-mcp-config`, and adds
+`--allowedTools` for exactly the five `mcp__rhyolite-research__*` broker
+tools. Its MCP configuration has `type: stdio` with only the broker command
+and arguments, and its environment adds `MCP_TOOL_TIMEOUT=120000`.
+
+The report-repair child runs in an empty trusted working directory with
+`--restricted --output-format json --tools '' --no-session-persistence`,
+denies `Read`,
+`Glob`, `Grep`, and every review-denied tool, and selects no plugin or agent.
+Its descriptor comes from the JSON envelope only when `modelUsage` lists only
+the approved model; otherwise the adapter falls back to the latest assistant
+reply in the rendered transcript.
+
+Claude Code writes its session record to
+`CLAUDE_CONFIG_DIR/projects/<cwd-slug>/<session-id>.jsonl`. The adapter
+renders it as `session.md` with `### User`, `### Claude`,
+`### Tool call: <name>`, `### Tool result`, and `### Claude Code notice`
+frames. It persists only `settings.json` and a filtered, redacted copy of the
+record that keeps user, assistant, system, title, and agent-name records and
+drops attachments such as the account email. `harness_verify_isolation` fails
+the review if any main-thread assistant turn used another model (including
+`model_refusal_fallback` safeguard handovers and advisor models) or another
+effort, if a subagent turn appears, if the record is unreadable, or if a
+report arrives without a record. Rhyolite never passes `--fallback-model`.
+
+Final-report extraction reads `-p` standard output first, then the last
+`### Claude` block of the rendered transcript. When Claude Code stops a reply
+at its output token limit and sends its `Output token limit hit.` resume
+prompt, the renderer joins the resumed text into the same block. It inserts
+no separator when either side already has whitespace, a line break when the
+resumed text opens a heading, delimiter, field, list item, or table row, and
+otherwise a space, and it adds a notice that names every inserted separator.
+Strict report validation still runs on the joined report.
+
+The outer launcher starts Claude Code from a clean non-Git directory with
+`--plugin-dir`, `--agent rhyolite:repo-review`, the approved `--model` and
+`--effort`, `--strict-mcp-config`, a permission rule that pre-approves only
+`bash <runner> ...`, `--permission-mode default`, and the trusted
+`RHYOLITE_LAUNCHER_SETUP_V1` block in `--append-system-prompt`. `--yolo` adds
+`--dangerously-skip-permissions`; native fleet mode is rejected because
+`fleet` is `no`.
+
 ## Lifecycle
 
 1. **Resolve** the harness from CLI, environment, or default.
@@ -479,14 +608,20 @@ that data contract:
 - preference and launcher-state paths reject wrong ownership, symlink
   components, and group/world-writable components.
 
-Contract v4 retains plan schema `5`, state schema `6`, provider identity,
-preference schema, and the Copilot-only fixed registry. It adds only the three
-required repair lifecycle functions, the optional `report-repair` home phase,
-and their fail-closed extraction/isolation contract. A backward-compatible
+Contract v4 retained plan schema `5`, state schema `6`, provider identity,
+preference schema, and the then Copilot-only fixed registry. It added only the
+three required repair lifecycle functions, the optional `report-repair` home
+phase, and their fail-closed extraction/isolation contract. A backward-compatible
 amendment adds the optional unlisted-model status for
 `harness_validate_model_id` and the additive approval-bound plan field
 `ModelCatalogMembership` (`listed` or `unlisted`); adapters that never
 return that status keep exact-catalog behavior.
+
+Contract v5 keeps plan schema `5`, state schema `6`, and preference schema
+`3`. It adds the four research functions, the optional `research` home phase,
+and capability-based scope 2/3 gating. The Copilot research argv is the pre-v5
+runner vector byte for byte. The fixed registry now maps `copilot` and
+`claude`.
 
 ## Adding a future adapter
 
@@ -495,8 +630,8 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v4 function; do not inherit missing behavior from
-   Copilot.
+3. Implement every Contract-v5 function; do not inherit missing behavior from
+   Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.
 5. Define model-catalog discovery, exact model validation, model/effort/context
@@ -520,7 +655,7 @@ partially initialized run.
 
 ## Validation
 
-The focused contract-v4 validator is:
+The focused contract-v5 validator is:
 
 ```bash
 bash ./tests/validate-harness-contract.sh
@@ -534,9 +669,17 @@ fixtures from `tests/fixtures/harnesses/` end to end. The no-op proof covers
 distinct approval hashes, cross-harness approval rejection in both directions,
 empty authentication, adapter-owned argv/environment/runtime-home/persistence/
 cleanup/extraction, diagnostic non-review output, state/manifest/handoff
-identity, Copilot-specific research rejection, and injected lifecycle failure
-stages. Production `common.sh`, manifests, help, and plugin assets remain
-Copilot-only.
+identity, capability-based research rejection, and injected lifecycle failure
+stages. Production `common.sh` registers only `copilot` and `claude`; the
+no-op fixture never enters production manifests, help, or plugin assets.
+
+The Claude Code section, `tests/harness-contract-claude.sh`, runs inside the
+same validator. It pins the Claude worker, research, and repair argv,
+environment, and settings vectors, and covers session rendering, persistence,
+isolation verification, and output-limit joins. It also drives the real
+runner through a mock `claude` for completed, recovered, substituted,
+unavailable, unsafe, repaired, and research runs, and checks the launcher
+and hooks.
 
 The Copilot runner-level checks compare captured worker argv and relevant
 environment exactly against the golden contract, compare default and explicit

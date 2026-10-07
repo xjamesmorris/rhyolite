@@ -2,8 +2,9 @@
 
 Rhyolite is an open-source software analysis platform. `repo-review` is its
 initial and default module and is currently the only shipped module.
-This release is delivered as a GitHub Copilot plugin, and production runtime
-harness support remains Copilot-only.
+This release is delivered as a GitHub Copilot plugin and a Claude Code
+plugin, and production runtime harness support covers GitHub Copilot CLI and
+Claude Code.
 
 The current plugin combines:
 
@@ -14,9 +15,11 @@ The current plugin combines:
   `/rhyolite:help`.
 - The short `/repo-review` guided-start command when extension commands
   are available.
-- A Linux Bash launcher that collects public sources, native fleet mode,
-  and the review model before selecting the restricted agent from a
-  clean non-Git orchestration directory.
+- Claude Code agents, commands, and display-only hooks registered by
+  `plugins/rhyolite/.claude-plugin/plugin.json`.
+- A Linux Bash launcher that collects public sources, native fleet mode
+  (Copilot CLI only), and the review model before selecting the restricted
+  agent from a clean non-Git orchestration directory.
 - Separate repository-only development validators for finite pickers and
   terminal/runtime UI.
 - The `readonly-repository-review` skill.
@@ -53,12 +56,15 @@ Other operating systems and Linux distributions are not currently
 validated or supported. See
 [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
 
-**Review harness support:** GitHub Copilot is the only production runtime
-harness. The harness abstraction is a fixed, fail-closed internal seam; it
-does not make other CLIs supported. Contributor and coding-agent guidance is
-canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
+**Review harness support:** GitHub Copilot CLI (`copilot`, the default) and
+Claude Code (`claude`, selected with `--harness claude`) are the production
+runtime harnesses. See [Use with Claude Code](#use-with-claude-code) for the
+Claude Code differences. The harness abstraction is a fixed, fail-closed
+internal seam; it does not make other CLIs supported. Contributor and
+coding-agent guidance is canonicalized in [AGENTS.md](AGENTS.md), with the
+architecture in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
-Contract-v4 implementation playbook in
+Contract-v5 implementation playbook in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
@@ -77,8 +83,8 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   forward. Downgrade only mechanical or fully scoped work, and only to
   high; keep analytical or open-ended work at maximum effort. Never use
   none, minimal, low, or medium effort.
-- Run `copilot login` and complete Copilot sign-in before starting a
-  review.
+- Sign in before starting a review: run `copilot login` for GitHub Copilot
+  CLI, or `claude auth login` for Claude Code.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
   for questions and feature requests.
 - Read [AGENTS.md](AGENTS.md) before contributing, then see
@@ -248,6 +254,80 @@ before installing Rhyolite so both onboarding hooks do not load:
 ```text
 copilot plugin uninstall repository-review
 copilot plugin marketplace remove repository-review-tools
+```
+
+## Use with Claude Code
+
+Claude Code (`claude`) is the second production harness. Rhyolite is
+validated with Claude Code 2.1.292 on Fedora Linux 44. Start a guided review
+from the checkout:
+
+```bash
+./rhyolite --harness claude --repo https://github.com/owner/repository
+```
+
+Like the Copilot path, the launcher starts the outer session from a clean
+non-Git directory. It passes `--plugin-dir`, selects the
+`rhyolite:repo-review` agent, uses `--strict-mcp-config`, and adds a
+permission rule that allows only the bundled runner. The outer session keeps
+Claude Code's normal permission prompts; `--yolo` maps to
+`--dangerously-skip-permissions` for that launch only. Claude Code has no
+native fleet mode, so `--fleet-mode native` is rejected.
+
+The guided setup, effective plan, approval, scopes 1-3, research questions,
+progress, and completion summary match the Copilot experience. The setup
+questions use Claude Code's picker, which adds its own free-text answer.
+`/rhyolite:start`, `/rhyolite:repo-review`, `/rhyolite:status`,
+`/rhyolite:version`, and `/rhyolite:help` are available; the `/repo-review`
+shorthand is a Copilot extension and does not exist in Claude Code. Exact
+`stop` or `cancel` ends the background runner.
+
+- **Models:** the default is `claude-opus-5-5` and the guided alternate is
+  `claude-opus-5`. Claude Code has no local model catalog, so Rhyolite keeps
+  its own list: `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5`,
+  `claude-fable-5`, `claude-opus-5`, and `claude-sonnet-5`. It can omit
+  models that your account can use; `--allow-unlisted-model` accepts another
+  safe `claude-` ID, and Claude Code checks availability when the review
+  starts. Aliases such as `opus` are rejected.
+- **Model substitution:** Claude Code safeguards can stop a response and
+  continue with another model, for example from Fable 5.1 to Opus 4.8, or
+  from Opus 5.5 to Opus 5 on security-heavy content. Rhyolite checks every
+  worker turn in the session record and fails the review rather than accept
+  output from a model or effort other than the approved one. Rerun with
+  another model, such as `claude-opus-5`.
+- **Authentication:** run `claude auth login` from a clean non-Git
+  directory, or export `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) or `ANTHROPIC_API_KEY`. When no supported
+  authentication variable is set, each worker gets a private copy of Claude
+  Code's `.credentials.json` in its temporary runtime home. The copy is
+  deleted when the worker exits and is never persisted.
+- **Workers:** review and research workers run `claude -p --restricted` with
+  only `Read`, `Glob`, and `Grep`; the research worker adds only the five
+  local broker tools. Project instructions (`CLAUDE.md`, `AGENTS.md`,
+  `.claude/`), hooks, memory, slash commands, and subagents are disabled.
+  The report-repair child has no tools at all.
+- **Artifacts:** `session.md` is a rendered transcript, and `agent-state/`
+  keeps only the worker's settings and a filtered session record without
+  private attachments such as the account email.
+
+Install from the published marketplace:
+
+```text
+claude plugin marketplace add https://github.com/xjamesmorris/rhyolite
+claude plugin install rhyolite@rhyolite-tools
+```
+
+Update both the marketplace and the plugin, then start a new Claude Code
+session:
+
+```text
+claude plugin marketplace update rhyolite-tools && claude plugin update rhyolite@rhyolite-tools
+```
+
+To validate the development checkout's manifests:
+
+```bash
+claude plugin validate ./plugins/rhyolite
 ```
 
 ## Use interactively
@@ -735,6 +815,11 @@ After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
 runtime home.
 
+Add `--harness claude` to run Claude Code workers instead. The runner then
+uses the Claude Code authentication described in
+[Use with Claude Code](#use-with-claude-code) and persists only the worker's
+settings and filtered session record.
+
 The report-repair child preserves that same authentication/provider/offline
 path and CLI cache resolution while using a separate fresh `COPILOT_HOME`.
 It does not copy or persist the analysis session, has no model-visible tools,
@@ -927,7 +1012,12 @@ Important defaults:
 - Reports omit author email addresses and avoid unsupported attribution.
 - Isolated child review homes still set `disableAllHooks`, so nested
   review sessions do not inherit the onboarding hook.
-- Users run under their own Git and Copilot identity.
+- Claude Code workers run with `--restricted` and only `Read`, `Glob`, and
+  `Grep` (plus the five broker tools for research). Project instructions,
+  hooks, memory, and slash commands are disabled, and a review fails if any
+  worker turn used a model or effort other than the approved one.
+- Users run under their own Git identity and their own GitHub Copilot or
+  Claude Code sign-in.
 - No telemetry or report upload is implemented by this plugin.
 
 ## Validate
@@ -947,8 +1037,9 @@ endings, and forbidden permission defaults. They do not execute code
 from a reviewed repository.
 
 `AGENTS.md` is the canonical development contract. Harness changes must also
-follow `docs/ADDING-A-HARNESS.md`; production support remains Copilot-only
-until a separately approved adapter satisfies that playbook in full.
+follow `docs/ADDING-A-HARNESS.md`; production support covers the `copilot`
+and `claude` adapters, and any other harness requires a separately approved
+adapter that satisfies that playbook in full.
 
 ## Name
 

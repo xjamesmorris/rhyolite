@@ -8,8 +8,8 @@ development contract for human contributors and coding agents.
 
 ## Development model
 
-Rhyolite is source-loaded by GitHub Copilot CLI. There is no compile or
-package build step. Bash is the canonical implementation language for
+Rhyolite is source-loaded by GitHub Copilot CLI and by Claude Code. There is
+no compile or package build step. Bash is the canonical implementation language for
 launchers, helpers, review orchestration, artifact rendering, and
 validation.
 
@@ -55,6 +55,12 @@ Or:
 npm install -g @github/copilot
 ```
 
+Install Claude Code (validated with 2.1.292) using an official method:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
 Verify the toolchain:
 
 ```bash
@@ -65,6 +71,7 @@ npm --version
 python3 --version
 curl --version
 copilot --version
+claude --version
 ```
 
 Git 2.41 or newer, Python 3, and curl are required for runner execution.
@@ -74,6 +81,7 @@ Authenticate from a clean directory outside every Git worktree:
 mkdir -p "$HOME/rhyolite-work"
 cd "$HOME/rhyolite-work"
 copilot login
+claude auth login
 ```
 
 ## Plugin discovery and launch
@@ -82,12 +90,14 @@ From the repository root:
 
 ```bash
 copilot --plugin-dir ./plugins/rhyolite plugin list
+claude plugin validate ./plugins/rhyolite
 ```
 
-Use the repository-root launcher:
+Use the repository-root launcher, adding `--harness claude` for Claude Code:
 
 ```bash
 ./rhyolite --repo https://github.com/owner/repository
+./rhyolite --harness claude --repo https://github.com/owner/repository
 ```
 
 The root wrapper remains delegation-only. The packaged implementation is
@@ -121,7 +131,7 @@ Run the narrowest relevant check first:
 | Public-release tooling | `bash ./tools/public-release/test-public-release.sh` |
 | Marketplace installation | `bash ./tests/test-install.sh` |
 | Text changes | `git diff --check` |
-| Plugin discovery | `copilot --plugin-dir ./plugins/rhyolite plugin list` |
+| Plugin discovery | `copilot --plugin-dir ./plugins/rhyolite plugin list` and `claude plugin validate ./plugins/rhyolite` |
 
 The authoritative release validation command is:
 
@@ -130,7 +140,8 @@ bash ./tests/validate-all.sh
 ```
 
 The fail-fast aggregate runs `tests/validate-harness-contract.sh` before the
-legacy `tests/validate-plugin.sh` stage. Run it locally on Fedora Linux 44.
+legacy `tests/validate-plugin.sh` stage. The harness contract validator also
+runs the Claude Code adapter section, `tests/harness-contract-claude.sh`. Run it locally on Fedora Linux 44.
 There is no hosted CI requirement.
 
 The plugin validator includes focused Bash helper regressions for shared
@@ -145,24 +156,28 @@ checks.
 Changes to these surfaces normally move together:
 
 - `VERSION`, `plugins/rhyolite/plugin.json`,
-  `.github/plugin/marketplace.json`, and `CHANGELOG.md` for releases.
+  `plugins/rhyolite/.claude-plugin/plugin.json`,
+  `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
+  `CHANGELOG.md` for releases.
 - `AGENTS.md`, tool-specific bootstrap pointers, `DEVELOPERS.md`, and
   contributor checklists when the canonical development contract changes.
 - `plugins/rhyolite/lib/harness/common.sh`, the selected adapter,
   `run-parallel-reviews.sh`, `tests/validate-harness-contract.sh`,
+  `tests/harness-contract-claude.sh` for the Claude Code adapter,
   `docs/HARNESS-ARCHITECTURE.md`, and
   `docs/ADDING-A-HARNESS.md` for harness contract changes.
 - `branding/banner.txt`, `scripts/show-welcome-panel.sh`, the embedded
-  prompt-native panel, `tests/validate-tui-runtime.mjs`, and
-  `tests/validate-plugin.sh` for onboarding changes.
+  prompt-native panels in both orchestrators, `claude/hooks.json`,
+  `tests/validate-tui-runtime.mjs`, and `tests/validate-plugin.sh` for
+  onboarding changes.
 - `bin/rhyolite`, `scripts/launcher-preferences.sh`, the guided setup
   instructions, and launcher smoke tests for startup preferences.
 - `skills/readonly-repository-review/review-prompt.txt`,
   `research-prompt.txt`, `research-policy.json`,
   `scripts/research-egress-broker.py`,
   `scripts/launch-research-egress-broker.sh`,
-  `scripts/run-parallel-reviews.sh`, both worker agents, and validation
-  for research/prompt/runner behavior.
+  `scripts/run-parallel-reviews.sh`, the Copilot and Claude Code worker
+  agents, and validation for research/prompt/runner behavior.
 - `scripts/review-output.sh` and validation for artifact rendering and
   sanitization.
 - `tests/test-research-egress-broker.py` for offline URL, DNS, TLS,
@@ -176,12 +191,14 @@ Changes to these surfaces normally move together:
 Repository-only validator agents must never be packaged under
 `plugins/rhyolite/agents/`.
 
-GitHub Copilot is the only production harness. The no-op adapter belongs
-only under `tests/fixtures` and may be loaded only through test-owned fixed
-fixture wiring. It must never be added to the production registry, plugin
-assets, launcher choices, marketplace metadata, or public support claims.
-Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md) for Contract-v4
-work and any future adapter.
+GitHub Copilot CLI and Claude Code are the production harnesses. The no-op
+adapter belongs only under `tests/fixtures` and may be loaded only through
+test-owned fixed fixture wiring. It must never be added to the production
+registry, plugin assets, launcher choices, marketplace metadata, or public
+support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
+for Contract-v5 work and any future adapter.
+[docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
+probes and real runs behind the Claude Code adapter's capability values.
 
 `bash tests/test-report-repair.sh` covers the report-only confidence edit
 protocol and deterministic Markdown-table normalization. The aggregate gate
@@ -201,14 +218,14 @@ documentation are intentionally versioned together.
 
 Before release:
 
-1. Synchronize `VERSION`, `plugin.json`, `marketplace.json`, and
-   `CHANGELOG.md`.
+1. Synchronize `VERSION`, both `plugin.json` manifests, both
+   `marketplace.json` registries, and `CHANGELOG.md`.
 2. Run `git diff --check`.
 3. Run `node tests/validate-tui-runtime.mjs --self-check`.
 4. Run `bash ./tests/validate-all.sh`.
 5. Run `bash ./tools/public-release/test-public-release.sh`.
 6. Run `bash ./tests/test-install.sh`.
-7. Verify plugin discovery.
+7. Verify plugin discovery with Copilot CLI and `claude plugin validate`.
 8. Export and preflight the approved source ref.
 9. Create the matching stable tag from the approved public commit.
 
