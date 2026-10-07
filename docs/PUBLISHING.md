@@ -101,8 +101,8 @@ repository.
     source, output, scope, provenance-lookback, final run/edit/explain,
     and research-cookie decisions use Copilot CLI's numbered picker with its
     automatic final `Other` custom-answer option. Confirm successful
-    completion prints `RHYOLITE EXECUTIVE SUMMARY`, lists artifact paths
-    including the HTML index, and ends without a retrieval/opening question
+    completion prints `RHYOLITE EXECUTIVE SUMMARY`, shows only the run
+    output folder path, and ends without a retrieval/opening question
     or browser launch.
 
 If public distribution is intended, separately verify repository visibility,

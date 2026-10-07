@@ -6640,14 +6640,7 @@ for result_file in "${result_files[@]}"; do
     rm -f -- "${result_file%/state.json}/.result-summary"
 done
 
-printf '\nRun workspace: %s\n' "${RUN_WORKSPACE}"
-printf 'Run output:    %s\n' "${RUN_RESULTS}"
-printf 'Review plan JSON: %s\n' "${REVIEW_PLAN_JSON_PATH}"
-printf 'Review plan text: %s\n' "${REVIEW_PLAN_TEXT_PATH}"
-printf 'Manifest:      %s\n' "${MANIFEST_PATH}"
-printf 'State:         %s\n' "${RUN_STATE_PATH}"
-printf 'Handoff:       %s\n' "${RUN_HANDOFF_PATH}"
-printf 'HTML index:    %s\n' "${INDEX_PATH}"
+printf '\nRun output:    %s\n' "${RUN_RESULTS}"
 review_progress 'run' 'completed' "${RUN_STATUS}; ${RUN_RESULTS}"
 
 if ((failure)); then

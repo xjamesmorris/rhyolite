@@ -162,11 +162,12 @@
   outer-orchestrator switch. It opts the outer Copilot orchestrator into all
   permissions but is not persisted in launcher context, copied into the
   trusted launcher setup block, or remembered as a preference. The runner's
-  default and guided open policy is `never`; it writes artifact paths and
-  exits without a prompt or browser launch. Only explicit advanced
-  direct-runner `--open-html` may open the index. `--no-open-html` remains a
-  compatibility spelling, and `harness_allow_all_detected` is retained only
-  as a harness contract compatibility signal, not an opening decision.
+  default and guided open policy is `never`; it prints only the run output
+  folder path and exits without a prompt or browser launch. Only explicit
+  advanced direct-runner `--open-html` may open the index. `--no-open-html`
+  remains a compatibility spelling, and `harness_allow_all_detected` is
+  retained only as a harness contract compatibility signal, not an opening
+  decision.
 - The launcher has an explicit retired-option parser branch for
   `--autopilot`; it renders `RHYOLITE ERROR` and exits `2` before Copilot
   starts. It passes `--mode interactive` explicitly. Rhyolite does not support

@@ -18,6 +18,13 @@
   model as unavailable.
 - Corrected documentation that described `copilot help config` as Copilot's
   live model catalog.
+- Simplified the end-of-run summary to one path: the run output folder,
+  which contains the HTML index, every report, and the other run artifacts.
+  The runner no longer prints the workspace, plan, manifest, state, handoff,
+  and HTML index paths at the end of a run, and the agent shows only that
+  folder after `RHYOLITE EXECUTIVE SUMMARY`. The agent finds each canonical
+  report through the folder's `manifest.json`. Failure blocks still name the
+  affected repository's state, errors, and timeline files.
 
 ## 0.7.0 - 2026-10-07
 

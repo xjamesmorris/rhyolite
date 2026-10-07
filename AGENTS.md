@@ -131,7 +131,7 @@ supported and must not drive new work.
   pickers. It surfaces exact `help`, `status`, and `explain scopes` setup
   intents and delegates every review to the bundled runner. Successful
   completion reads the trusted report, prints `RHYOLITE EXECUTIVE SUMMARY`,
-  lists artifact paths including the HTML index, and ends without a post-run
+  shows only the run output folder path, and ends without a post-run
   question or repository-change offer.
 - Finite choice lists rely on Copilot CLI's automatic final custom-answer
   option. Do not add an explicit `Other` choice.
@@ -163,9 +163,11 @@ supported and must not drive new work.
   solid full/half-block contours, and three concise functional onboarding
   sentences. Do not add themed labels or faux telemetry.
 - Long reviews emit `RHYOLITE PROGRESS` milestones and heartbeats. Completion
-  includes a brief executive summary, artifact paths, and a terminal
-  review-only end state. Do not add post-run retrieval/opening pickers or
-  offers to fix, edit, implement, create pull requests, or commit changes.
+  includes a brief executive summary, the single run output folder path, and
+  a terminal review-only end state. Failure blocks may still name the
+  affected repository's state, errors, and timeline files. Do not add
+  post-run retrieval/opening pickers or offers to fix, edit, implement,
+  create pull requests, or commit changes.
   For current progress, use exact `/rhyolite:status`; bare `status` remains
   only the in-agent setup intent/fallback.
 - `plugins/rhyolite/skills/readonly-repository-review/SKILL.md` defines the
@@ -215,11 +217,12 @@ supported and must not drive new work.
   harness homes, and invokes workers with write/shell/custom
   instructions/built-in MCPs disabled.
 - The runner's default and guided `OpenHtmlPolicy` is `never`. Normal
-  completion writes paths and exits without prompting or opening a browser,
-  including under allow-all. Only explicit advanced direct-runner
-  `--open-html` may open the HTML index; `--no-open-html` remains a
-  compatibility spelling. `harness_allow_all_detected` remains a contract
-  compatibility function and must not control report opening.
+  completion prints only the run output folder path and exits without
+  prompting or opening a browser, including under allow-all. Only explicit
+  advanced direct-runner `--open-html` may open the HTML index;
+  `--no-open-html` remains a compatibility spelling.
+  `harness_allow_all_detected` remains a contract compatibility function and
+  must not control report opening.
 - Scope 1 creates no research process, config, log, cookie jar, or research
   artifact. Scope 2/3 launches dedicated research through an ephemeral local
   MCP config, validates at least one successful public response, the dossier,

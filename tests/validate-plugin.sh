@@ -1123,11 +1123,21 @@ grep -Fq 'RHYOLITE EXECUTIVE SUMMARY' "${AGENT}" &&
 grep -Fq 'three to five concise bullets' "${AGENT}" &&
     grep -Fq 'three to five concise bullets' "${SKILL}" ||
     fail 'Executive summary length is not bounded.'
-grep -Fq 'run-level HTML index' "${AGENT}" &&
-    grep -Fq 'run-level HTML index' "${SKILL}" &&
+grep -Fq 'Then show exactly one path, the run output folder, as' "${AGENT}" &&
+    grep -Fq 'Then show exactly one path, the run output folder, as' \
+        "${SKILL}" &&
+    grep -Fq '`Run output: <absolute path>`.' "${AGENT}" &&
+    grep -Fq '`Run output: <absolute path>`.' "${SKILL}" &&
+    grep -Fq '`Artifacts.PlainText` path, which must be inside that folder.' \
+        "${AGENT}" &&
+    grep -Fq '`Artifacts.PlainText` path, which must be inside that folder.' \
+        "${SKILL}" &&
     grep -Fq 'end the successful command as complete' "${AGENT}" &&
     grep -Fq 'end the successful run as complete' "${SKILL}" ||
-    fail 'Successful completion is not terminal with complete artifact paths.'
+    fail 'Successful completion is not terminal with the single run output folder path.'
+! grep -Fq 'list every returned artifact path' "${AGENT}" &&
+    ! grep -Fq 'list every returned artifact path' "${SKILL}" ||
+    fail 'Successful completion still lists every artifact path.'
 for forbidden_completion_prompt in \
     'Show top-priority source retrieval list' \
     'Continue without retrieval list' \
@@ -1522,7 +1532,7 @@ grep -Fq 'numbered `ask_user` picker' "${README}" ||
 grep -Fq 'final `Other` custom-answer option' "${README}" ||
     fail 'README does not describe the automatic custom-answer option.'
 grep -Fq 'Completion is terminal and review-only' "${README}" &&
-    grep -Fq 'lists artifact paths including the run-level HTML index' \
+    grep -Fq 'then shows only the run output folder path and ends the command' \
         "${README}" &&
     grep -Fq 'does not offer to fix,' "${README}" ||
     fail 'README does not describe terminal review-only completion.'
@@ -9267,14 +9277,29 @@ if (!stdout.includes("Generated at (UTC):") ||
 }
 for (const line of [
   "EFFECTIVE REVIEW PLAN",
-  `Review plan JSON: ${reviewPlanJsonPath}`,
-  `Review plan text: ${reviewPlanTextPath}`,
-  `Handoff:       ${runHandoffPath}`,
-  `HTML index:    ${htmlIndexPath}`,
+  `Run output:    ${run}`,
 ]) {
   if (!stdout.includes(line)) {
     throw new Error(`run stdout is missing: ${line}`);
   }
+}
+for (const extraPathLabel of [
+  "Run workspace:",
+  "Review plan JSON:",
+  "Review plan text:",
+  "Manifest:",
+  "State:         ",
+  "Handoff:",
+  "HTML index:",
+]) {
+  if (stdout.includes(extraPathLabel)) {
+    throw new Error(
+      `run stdout lists more than the run output folder: ${extraPathLabel}`,
+    );
+  }
+}
+if ((stdout.match(/^Run output:/gmu) ?? []).length !== 1) {
+  throw new Error("run stdout does not print exactly one run output folder");
 }
 assertProvenanceWindow(
   state.ProvenanceWindow,

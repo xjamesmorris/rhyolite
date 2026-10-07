@@ -604,8 +604,9 @@ edit. The effective plan discloses this as `DeterministicNormalizations`
 
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material
-limitations, then lists artifact paths including the run-level HTML index and
-ends the command as complete. Completion is terminal and review-only: it asks
+limitations, then shows only the run output folder path and ends the command
+as complete. That folder contains the run-level HTML index, every report,
+and the other run artifacts. Completion is terminal and review-only: it asks
 no post-run questions, does not open a report, and does not offer to fix,
 edit, implement, create a pull request, or commit changes. Remediation remains
 inside the report or executive summary.
@@ -770,8 +771,9 @@ arbitrary executables, TLS bypass, or cross-run state.
 Provenance output is evidence-only and must receive human review before it
 is shared.
 
-The runner writes artifact paths and exits without an opening prompt or
-browser launch, including in interactive and allow-all/YOLO sessions.
+The runner prints only the run output folder path and exits without an
+opening prompt or browser launch, including in interactive and
+allow-all/YOLO sessions.
 Advanced direct-runner use may pass explicit `--open-html` to open the local
 HTML index after completion. `--no-open-html` remains accepted as a
 compatibility spelling for the default never-open policy.

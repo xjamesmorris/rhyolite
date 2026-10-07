@@ -711,7 +711,9 @@ runner command, or runner-reported worker result:
 - Preserve and parse all available safe stdout, stderr, exit-code, JSON,
   state, status, source, and artifact fields. A JSON parse failure does
   not justify discarding non-JSON detail.
-- Read only runner-returned state, errors, timeline, and handoff paths.
+- Read only state, errors, timeline, and handoff paths that the runner
+  returns or records inside the returned run output folder's trusted
+  `state.json` or `manifest.json`.
 - Strip terminal controls and redact emails, URL credentials,
   authorization values, tokens, passwords, secrets, and API keys before
   echoing details.
@@ -785,15 +787,19 @@ results, session metadata, and safe continuation guidance instead. Do
 not advertise a direct `copilot --resume` command because it may not
 restore the original restrictions.
 
-After a successful run, read the trusted generated canonical report or
-reports and display
+After a successful run, take the run output folder from the runner's final
+`Run output:` line, read that folder's trusted `manifest.json`, and for each
+completed repository read only the canonical report at its
+`Artifacts.PlainText` path, which must be inside that folder. Display
 `RHYOLITE EXECUTIVE SUMMARY` with three to five concise bullets grounded
 only in the canonical report or reports. Preserve confidence and
 limitations. For multiple repositories, include one outcome per
 repository and one cross-run priority.
 
-Then list every returned artifact path, including each canonical report and
-the run-level HTML index, and end the successful run as complete. Completion
+Then show exactly one path, the run output folder, as
+`Run output: <absolute path>`. That folder contains the HTML index, every
+report, and the other run artifacts, so do not list them separately, and
+end the successful run as complete. Completion
 is terminal and review-only: do not use `ask_user`, ask any post-run question,
 offer to open a report, invoke a browser, re-fetch an inaccessible source,
 or request a user-provided copy.

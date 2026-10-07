@@ -332,8 +332,10 @@ handle that specific command result rather than using a broad catch:
    stdout, stderr, and every returned structured field. Parse valid JSON
    objects and trusted generated `state.json` files, but retain safe
    non-JSON output rather than discarding it when parsing fails.
-2. Read only artifact paths returned by the bundled runner. For a failed
-   run, inspect the run state plus each failed repository state,
+2. Read only the run output folder and artifact paths returned by the
+   bundled runner, plus artifact paths recorded inside that folder's trusted
+   `state.json` or `manifest.json`. For a failed run, inspect the run state
+   plus each failed repository state,
    `errors.txt`, `analysis-timeline.txt`, and returned research
    state/errors/timeline/network-summary paths when present. Surface the
    returned status, exit code, artifact paths, and all relevant safe
@@ -622,7 +624,10 @@ If the user asks to review a private or internal repository, stop and
 explain that the `0.7.0` beta release supports anonymously readable
 public HTTPS Git repositories only.
 
-At completion, read the trusted generated report or reports and display:
+At completion, take the run output folder from the runner's final
+`Run output:` line. Read that folder's trusted `manifest.json`, and for each
+completed repository read only the canonical report at its
+`Artifacts.PlainText` path, which must be inside that folder. Then display:
 
 ```text
 RHYOLITE EXECUTIVE SUMMARY
@@ -636,8 +641,10 @@ include one short outcome per repository plus one cross-run priority.
 Do not introduce conclusions absent from the canonical reports, and
 preserve their confidence levels and material limitations.
 
-Then list every returned artifact path, including each canonical report and
-the run-level HTML index, and end the successful command as complete.
+Then show exactly one path, the run output folder, as
+`Run output: <absolute path>`. That folder contains the HTML index, every
+report, and the other run artifacts, so do not list them separately, and
+end the successful command as complete.
 Completion is terminal and review-only: do not ask a post-run question.
 Do not offer to open a report, invoke a browser, re-fetch an inaccessible
 source, or request a user-provided copy.
