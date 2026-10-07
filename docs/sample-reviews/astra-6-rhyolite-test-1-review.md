@@ -1,7 +1,5 @@
 # Repository Review Report
 
-[Plain text](review.txt) | [HTML](review.html) | [Run index](../index.html)
-
 ## Navigation
 
 - [REVIEW CONTEXT](#review-context)
