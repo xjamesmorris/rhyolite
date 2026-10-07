@@ -170,13 +170,19 @@ claude_populate_worker_environment() {
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
         NO_COLOR=1
+        # Claude Code caps this at the model's own output maximum, so a long
+        # final report is not cut into separate responses at the default.
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000
     )
 }
 
 # Render the private session JSONL as a readable transcript, write a filtered
 # continuation copy, and verify that only the approved model and effort
-# produced main-thread assistant turns. Prints one status token: verified,
-# substituted, effort-changed, subagent, or unreadable.
+# produced main-thread assistant turns. A reply that Claude Code stopped at
+# its output token limit and asked the model to resume is rendered as one
+# reply, preceded by a notice naming the separator inserted at each joint.
+# Prints one status token: verified, substituted, effort-changed, subagent,
+# or unreadable.
 claude_render_session_transcript() {
     local session_jsonl="$1"
     local transcript_output="$2"
@@ -191,10 +197,21 @@ claude_render_session_transcript() {
         "${approved_model}" \
         "${approved_effort}" <<'PY'
 import json
+import re
 import sys
 
 source, transcript_path, filtered_path, model, effort = sys.argv[1:6]
 TOOL_RESULT_LIMIT = 4000
+RESUME_PROMPT = "Output token limit hit."
+# A segment that opens with a section heading, delimiter, field label, list
+# item, or table row begins its own report line; any other segment resumes
+# the line where the previous response stopped.
+LINE_START = re.compile(
+    r"(?:={3,}|#{1,6}[ \t]|[-*+][ \t]|\d+[.)][ \t]|\||"
+    r"[A-Z][A-Z0-9 ,&/()'-]*[A-Z0-9)]$|"
+    r"[A-Z][A-Za-z0-9 /()'-]{0,60}:(?:[ \t]|$))"
+)
+JOINT_NAMES = {"": "none (whitespace already present)", "\n": "line break", " ": "space"}
 KEEP_TYPES = {"user", "assistant", "system", "custom-title", "agent-name"}
 status = "verified"
 blocks = []
@@ -230,8 +247,49 @@ def escalate(new_status):
         status = new_status
 
 
+def plain_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(item.get("text", "")) for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
+
+
+def joint(previous, continuation):
+    if (not previous or not continuation or previous[-1].isspace()
+            or continuation[0].isspace()):
+        return ""
+    if LINE_START.match(continuation.split("\n", 1)[0]):
+        return "\n"
+    return " "
+
+
+def stitch_notice(joints):
+    resumes = len(joints)
+    return indent(
+        "Claude Code stopped this reply at its per-response output token "
+        f"limit and asked the model to resume {resumes} "
+        f"time{'' if resumes == 1 else 's'}; Rhyolite joined the "
+        f"{resumes + 1} response segments in order. Separator inserted at "
+        "each joint: " + ", ".join(JOINT_NAMES[item] for item in joints) + "."
+    )
+
+
+def flush_resume():
+    global resume_notice
+    if resume_notice is not None:
+        blocks.append(("### Claude Code notice", indent(resume_notice)))
+        resume_notice = None
+
+
 kept_lines = []
 last_text_message = None
+cut_message = None
+resume_notice = None
+stitch = None
 with open(source, encoding="utf-8", errors="strict") as stream:
     raw_lines = stream.readlines()
 for index, raw_line in enumerate(raw_lines):
@@ -255,18 +313,26 @@ for index, raw_line in enumerate(raw_lines):
     if record.get("isSidechain") is True:
         escalate("subagent")
     if record_type == "system":
+        flush_resume()
         if record.get("subtype") == "model_refusal_fallback":
             escalate("substituted")
         content = record.get("content")
         if content:
             blocks.append(("### Claude Code notice", indent(content)))
         last_text_message = None
+        cut_message = None
         continue
     message = record.get("message")
     if not isinstance(message, dict):
         continue
     content = message.get("content")
     if record_type == "user":
+        if (record.get("isMeta") and cut_message is not None and
+                resume_notice is None and
+                plain_text(content).startswith(RESUME_PROMPT)):
+            resume_notice = plain_text(content)
+            continue
+        flush_resume()
         heading = "### Claude Code notice" if record.get("isMeta") else "### User"
         if isinstance(content, str):
             blocks.append((heading, indent(content)))
@@ -282,6 +348,7 @@ for index, raw_line in enumerate(raw_lines):
                 elif item.get("type") == "text":
                     blocks.append((heading, indent(item.get("text", ""))))
         last_text_message = None
+        cut_message = None
     elif record_type == "assistant":
         used_model = message.get("model")
         if used_model not in (model, "<synthetic>"):
@@ -301,7 +368,21 @@ for index, raw_line in enumerate(raw_lines):
             kind = item.get("type")
             if kind == "text":
                 text = str(item.get("text", ""))
-                if (last_text_message is not None and
+                if (resume_notice is not None and message_id != cut_message
+                        and blocks and blocks[-1][0] == "### Claude"):
+                    previous = blocks[-1][1]
+                    separator = joint(previous, text)
+                    blocks[-1] = ("### Claude", previous + separator + text)
+                    if stitch is not None and stitch["block"] == len(blocks) - 1:
+                        stitch["joints"].append(separator)
+                    else:
+                        blocks.insert(len(blocks) - 1, None)
+                        stitch = {"block": len(blocks) - 1, "joints": [separator]}
+                    blocks[stitch["block"] - 1] = (
+                        "### Claude Code notice", stitch_notice(stitch["joints"])
+                    )
+                    resume_notice = None
+                elif (last_text_message is not None and
                         last_text_message == message_id and blocks and
                         blocks[-1][0] == "### Claude"):
                     joined = blocks[-1][1]
@@ -309,9 +390,15 @@ for index, raw_line in enumerate(raw_lines):
                         joined += "\n"
                     blocks[-1] = ("### Claude", joined + text)
                 else:
+                    flush_resume()
                     blocks.append(("### Claude", text))
                 last_text_message = message_id
+                cut_message = (
+                    message_id if message.get("stop_reason") == "max_tokens"
+                    else None
+                )
             elif kind == "tool_use":
+                flush_resume()
                 tool_input = json.dumps(
                     item.get("input", {}), ensure_ascii=False, sort_keys=True
                 )
@@ -320,6 +407,8 @@ for index, raw_line in enumerate(raw_lines):
                     indent(tool_input),
                 ))
                 last_text_message = None
+                cut_message = None
+flush_resume()
 
 with open(transcript_path, "w", encoding="utf-8") as stream:
     for heading, body in blocks:

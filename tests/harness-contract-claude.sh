@@ -118,7 +118,8 @@ def add(record):
     records.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
 
 
-def assistant(content, used_model=None, used_effort=None, message_id="msg_fixture_final"):
+def assistant(content, used_model=None, used_effort=None,
+              message_id="msg_fixture_final", stop_reason="end_turn"):
     global counter
     counter += 1
     return {
@@ -134,9 +135,44 @@ def assistant(content, used_model=None, used_effort=None, message_id="msg_fixtur
             "role": "assistant",
             "model": used_model or model,
             "content": content,
-            "stop_reason": "end_turn",
+            "stop_reason": stop_reason,
         },
     }
+
+
+RESUME = ("Output token limit hit. Resume directly \u2014 no apology, no recap "
+          "of what you were doing. Pick up mid-thought if that is where the "
+          "cut happened. Break remaining work into smaller pieces.")
+
+
+def token_limit_segments():
+    # Cut once inside a prose line, once before a field line, and once just
+    # after a line break, as a resumed reply drops the boundary whitespace.
+    first = report.index("no-op harness") + len("no-op")
+    second = report.index("\nConfidence: High.", first)
+    third = report.index("\nOVERALL ASSESSMENT", second) + 1
+    return [report[:first], report[first + 1:second],
+            report[second + 1:third], report[third:]]
+
+
+def add_token_limit_reply(segments, finished=True):
+    for number, segment in enumerate(segments):
+        message_id = f"msg_fixture_part_{number}"
+        last = number == len(segments) - 1
+        stop_reason = "end_turn" if last and finished else "max_tokens"
+        add(assistant([{"type": "thinking", "thinking": "private reasoning",
+                        "signature": "sig"}],
+                      message_id=message_id, stop_reason=stop_reason))
+        add(assistant([{"type": "text", "text": segment}],
+                      message_id=message_id, stop_reason=stop_reason))
+        if last and finished:
+            continue
+        add({"type": "custom-title", "customTitle": "fixture",
+             "sessionId": session_id})
+        add({"type": "agent-name", "agentName": "fixture",
+             "sessionId": session_id})
+        add({**base, "type": "user", "uuid": f"u-resume-{number}",
+             "isMeta": True, "message": {"role": "user", "content": RESUME}})
 
 
 add({"type": "custom-title", "customTitle": "fixture", "sessionId": session_id})
@@ -174,6 +210,10 @@ elif mode == "subagent":
     add(assistant([{"type": "text", "text": report}]))
 elif mode == "unsafe":
     add(assistant([{"type": "text", "text": unsafe_text}]))
+elif mode == "max-tokens":
+    add_token_limit_reply(token_limit_segments())
+elif mode == "max-tokens-abandoned":
+    add_token_limit_reply(token_limit_segments()[:1], finished=False)
 elif mode == "split":
     split_at = report.index("FINDINGS")
     add(assistant([{"type": "text", "text": report[:split_at]}]))
@@ -592,6 +632,7 @@ PY
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
         NO_COLOR=1
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000
     )
     printf '%s\0' "${claude_expected_environment[@]}" \
         > "${fixture_root}/claude-env-expected.vector"
@@ -888,6 +929,34 @@ done
     cmp -s "${claude_canonical_report}" "${claude_extract_root}/split-report" ||
         fail 'Claude Code split-reply extraction changed the report.'
 
+    claude_persist_case max-tokens verified
+    claude_token_limit_result="${CLAUDE_CASE_RESULT}"
+    harness_extract_final_report /dev/null \
+        "${claude_token_limit_result}/session.md" \
+        "${claude_extract_root}/token-limit-final" \
+        "${claude_extract_root}/token-limit-report" ||
+        fail 'Claude Code did not join a reply resumed after the output token limit.'
+    cmp -s "${claude_canonical_report}" "${claude_extract_root}/token-limit-report" ||
+        fail 'Claude Code token-limit join changed the report.'
+    assert_contains "${claude_token_limit_result}/session.md" \
+        'asked the model to resume 3 times; Rhyolite joined the 4 response segments in order. Separator inserted at each joint: space, line break, none (whitespace already present).' \
+        'Claude Code token-limit join notice'
+    assert_not_contains "${claude_token_limit_result}/session.md" \
+        'Output token limit hit.' 'Claude Code joined resume prompts'
+    [[ "$(grep -c '^### Claude$' "${claude_token_limit_result}/session.md")" == 1 ]] ||
+        fail 'Claude Code token-limit join left more than one reply block.'
+
+    claude_persist_case max-tokens-abandoned verified
+    assert_contains "${CLAUDE_CASE_RESULT}/session.md" \
+        'Output token limit hit. Resume directly' \
+        'Claude Code unanswered resume prompt notice'
+    if harness_extract_final_report /dev/null "${CLAUDE_CASE_RESULT}/session.md" \
+        "${claude_extract_root}/abandoned-final" \
+        "${claude_extract_root}/abandoned-report" &&
+        report_has_closing_delimiter "${claude_extract_root}/abandoned-report"; then
+        fail 'Claude Code completed a report that stopped at the output token limit.'
+    fi
+
     claude_persist_case truncated verified
     harness_verify_isolation /dev/null ||
         fail 'Claude Code rejected a transcript with one partial final record.'
@@ -1111,6 +1180,7 @@ for variable_name in \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC \
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE \
     NO_COLOR \
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS \
     CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD \
     ANTHROPIC_MODEL \
     CLAUDE_CODE_EFFORT_LEVEL \
@@ -1207,6 +1277,9 @@ case "${mode}" in
     incomplete)
         sed -n '1,4p' "${RHYOLITE_MOCK_CLAUDE_REPORT}"
         ;;
+    max-tokens)
+        sed -n '/^OVERALL ASSESSMENT$/,$p' "${RHYOLITE_MOCK_CLAUDE_REPORT}"
+        ;;
     unsafe)
         printf '%s\n' "${RHYOLITE_MOCK_CLAUDE_UNSAFE}"
         printf '%s\n' "${RHYOLITE_MOCK_CLAUDE_UNSAFE}" >&2
@@ -1238,6 +1311,7 @@ claude_runner_environment=(
     ANTHROPIC_MODEL=hostile-substitute-model
     CLAUDE_CODE_EFFORT_LEVEL=low
     MAX_THINKING_TOKENS=1024
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS=1024
     CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1
     CLAUDE_CODE_SIMPLE=1
 )
@@ -1527,6 +1601,7 @@ assert_equal \
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 1 \
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE 1 \
         NO_COLOR 1 \
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS 128000 \
         CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD '<unset>' \
         ANTHROPIC_MODEL '<unset>' \
         CLAUDE_CODE_EFFORT_LEVEL '<unset>' \
@@ -1579,6 +1654,16 @@ cmp -s "${claude_canonical_report}" "${CLAUDE_RUN_REPOSITORY}/review.txt" ||
     fail 'Claude Code transcript fallback did not promote the complete report.'
 
 claude_run_case truncated 0 --env RHYOLITE_MOCK_CLAUDE_MODE=truncated
+
+claude_run_case max-tokens 0 --env RHYOLITE_MOCK_CLAUDE_MODE=max-tokens
+assert_contains "${CLAUDE_RUN_ROOT}/stdout" \
+    'complete report recovered from sanitized session transcript' \
+    'Claude Code token-limit transcript recovery progress'
+cmp -s "${claude_canonical_report}" "${CLAUDE_RUN_REPOSITORY}/review.txt" ||
+    fail 'Claude Code runner did not promote the joined token-limit report.'
+assert_contains "${CLAUDE_RUN_REPOSITORY}/session.md" \
+    'Separator inserted at each joint: space, line break, none (whitespace already present).' \
+    'Claude Code run token-limit join notice'
 
 claude_assert_failed_run() {
     local label="$1"
@@ -2507,6 +2592,7 @@ JS
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
         NO_COLOR=1
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000
         MCP_TOOL_TIMEOUT=120000
     )
     printf '%s\0' "${expected_research_environment[@]}" \

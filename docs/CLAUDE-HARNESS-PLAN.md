@@ -179,6 +179,7 @@ DISABLE_AUTOUPDATER=1
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
 NO_COLOR=1
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000
 ```
 Not `env -i`: HOME, XDG, PATH and the approved auth variables stay inherited
 (same semantics as Copilot). The `-C` entry needs `CLAUDE_SESSION_ROOT` from
@@ -569,6 +570,13 @@ Deviations from the plan above, each backed by probe evidence:
   tests. It now mocks DNS only for host/port arguments; the Copilot mock
   worker emits a complete canonical scope-1 report; a placeholder-report run
   must fail with `Final report contract validation failed`.
+- Staged scope-2 run R4 (`claude-opus-5`, `max`, evidence file): research
+  completed. The review's final reply reached Claude Code's 64000-token output
+  limit, and Claude Code had the model finish it in a second response that
+  `-p` printed alone. Workers now set `CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000`,
+  which Claude Code caps at the model maximum. The transcript renderer joins
+  a reply resumed after the limit into one block, before a notice that names
+  each separator it inserted.
 
 - Phase 3: Contract v5 (`RHYOLITE_HARNESS_CONTRACT_VERSION=5`) adds
   `harness_write_research_mcp_config`, `harness_research_worker_argv`,
@@ -595,6 +603,7 @@ Next:
    evidence file). Remaining: one real review through
    `rhyolite --harness claude` (interactive; operator).
 2. Done: guided alternate is now `claude-opus-5`.
-3. Operator: one staged real scope-2 run; then flip `web_research` and
+3. Operator: one staged real scope-2 run that completes (R4 hit the output
+   token limit; rerun after the fix); then flip `web_research` and
    `builtin_research_specialist` for Claude Code.
 4. Phase 4 docs/validators/release (Contract v5 docs, support claims).

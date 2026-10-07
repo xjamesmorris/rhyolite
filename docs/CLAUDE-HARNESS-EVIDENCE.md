@@ -29,6 +29,7 @@ fully scoped steps, and only to high.
 | P3a Fable safeguard fallback | `claude-fable-5-1` and `claude-fable-5` answered `Reply with exactly OK` (tools disabled) through `claude-opus-4-8`. The transcript records `system`/`model_refusal_fallback` ("Fable 5.1's safeguards flagged this message... Switched to Opus 4.8", category `[cyber]`) followed by an assistant turn whose `message.model` is `claude-opus-4-8`; the JSON envelope lists both models in `modelUsage` with `safety_stops: 2`. A tool-enabled Fable run on a toy snapshot completed without fallback. | The adapter treats any non-approved assistant model, `model_refusal_fallback`, or `advisorModel` as a substituted review and fails closed. It does not attempt to change the safeguard. Fable remains selectable but is a poor default for security reviews. |
 | R1 real scope-1 run (Opus 5.5) | Operator-approved run on 2026-10-07 against `https://github.com/xjamesmorris/rhyolite-test-1` at `a91e8de960a3`: preflight, clone, snapshot, and the isolated worker ran as designed (only `Read`/`Glob` calls; every turn `claude-opus-5-5` at `max`). After the worker read an intentionally insecure `src/snmp_legacy.c`, Opus 5.5 safeguards first stopped one response (`informational`: "continuing once with that noted") and later emitted `model_refusal_fallback` ("Opus 5 is answering instead", `[cyber]`); the remaining six turns, including the final report, came from `claude-opus-5`. The run ended `ReviewFailed` at `harness claude harness_verify_isolation` after 16.5 minutes. The runtime home and credential copy were removed; the output held no credential keys or email addresses; persisted state was exactly `settings.json` plus the filtered session record. | Substitution detection is necessary for Opus 5.5 too, not only Fable. Security-relevant targets can make an Opus 5.5 review fail closed; choosing a model is an operator decision (see Open items). |
 | R2 real scope-1 run (Opus 5) | Operator-approved rerun on 2026-10-07 with `--model claude-opus-5`, same repository and commit: `Completed` in about 17 minutes; strict validation passed with `ReportRepair` `NotNeeded`; 1665-line canonical report with every scope-1 section in order; 63 assistant turns, all `claude-opus-5` at `max`; tools used: `Read`, `Glob`, `Grep` only; no safeguard events. State schema 6 recorded `Harness: claude`, provider `anthropic-claude-code`, model, effort, context, and the Claude resume policy. Runtime home and credential copy removed; no credential keys or email addresses in the output; persisted state exactly `settings.json` plus the filtered session record. | Phase 1 exit criterion met. |
+| R4 staged scope-2 run (Opus 5) | Operator-approved run on 2026-10-07 from a staged copy with `web_research=yes`, `--model claude-opus-5`, effort `max`, same repository and commit. The research phase `Completed` in about 18 minutes through the local broker (49 broker calls: 37 `fetch_public_url`, 6 `search_public_github`, 4 `search_public_web`, plus `research_capabilities` and `research_network_summary`; 1890-line dossier; research transcript verified). The review worker's final reply reached Claude Code's per-response output limit (`stop_reason: max_tokens` at 64000 output tokens after 145071 characters of report). Claude Code then added a meta user message ("Output token limit hit. Resume directly ...") and the model finished the report in a second response with a new message ID. `-p` printed only that last 2217-character response, and the transcript fallback joined only replies that shared a message ID, so the run ended `ReviewFailed` with "Final report header or end marker was not found." | Workers now set `CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000`, which Claude Code 2.1.292 caps at the model's own maximum. The transcript renderer also joins a reply that was resumed after the limit into one `### Claude` block, before a notice that names the separator inserted at each joint. Re-rendering R4's persisted session gives a 145350-byte report that passes the scope-2 report contract. A fresh staged scope-2 run is still required. |
 | P4 tool denial | Worker vector on a toy snapshot: tools reported as exactly `Read`, `Glob`, `Grep`; write, shell, skill, and subagent attempts impossible; `permission_denials` empty because the tools were absent; no file written. | `shell_denial=yes`. |
 | P5 instruction injection | Canaries in `source/CLAUDE.md`, `source/sub/CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`, `AGENTS.md`, `.claude/skills/*`, and a `.claude/settings.json` hook. Plain `claude -p` loads the nested `CLAUDE.md` files. `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` alone blocks all of them. `claudeMdExcludes` without `**/AGENTS.md` falls back to loading `AGENTS.md`; with `**/AGENTS.md` it blocks all of them. `--restricted` alone also blocked nested loading. The hook did not run. | The worker keeps all three layers; `claudeMdExcludes` includes `**/AGENTS.md`. |
 | P6 transcript | `CLAUDE_CONFIG_DIR/projects/<slug>/<session-id>.jsonl`, where `<slug>` is the working directory with every non-alphanumeric character replaced by `-`. Assistant lines carry `message.model`, `effort`, `perTurnEffort`, `advisorModel`, `isSidechain`; one JSONL line per content block, several lines can share one `message.id`. Attachments include `session_context` (account email) and `credential_org`. | Rendered into `session.md`; private attachments are not persisted; model and effort are verified per turn. |
@@ -100,6 +101,28 @@ plus `.credentials.json` (0600) when the bridge applies; persisted state is
 exactly `agent-state/claude-home/settings.json` and the filtered
 `projects/<slug>/<session-id>.jsonl`.
 
+Every worker environment (review, research, and report repair) sets
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000`, overriding any value inherited from
+the caller. Claude Code reads the value through a bounded parser: values above
+the model's upper limit are capped, and invalid values fall back to the
+default.
+
+When a reply still reaches the limit, Claude Code asks the model to resume.
+The renderer joins the segments only when all of the following hold:
+
+- The cut text record has `stop_reason: max_tokens`.
+- A meta user message that starts with `Output token limit hit.` follows it.
+- The next main-thread text comes from a new message ID.
+
+At each joint, the renderer inserts nothing when either side already has
+whitespace. It inserts a line break when the resumed segment opens with a
+section heading, delimiter, field label, list item, or table row. Otherwise,
+it inserts a single space. These rules are needed because a resumed response
+cannot begin with the whitespace that the cut removed. The raw records stay
+in the persisted session JSONL. Strict report validation still runs on the
+joined report. A resume prompt that gets no answer is rendered as a Claude
+Code notice.
+
 ## Contract v5 research seam
 
 The dedicated research worker now runs through four adapter functions plus
@@ -130,4 +153,6 @@ summary, and research transcript.
 - P2 under a long run that crosses access-token expiry.
 - One real scope-1 review through `rhyolite --harness claude` (Phase 2 exit
   criterion).
-- One real staged scope-2 run before `web_research` can become `yes`.
+- One real staged scope-2 run that completes before `web_research` can
+  become `yes`. In R4 the research phase completed, but the review failed at
+  the output token limit (now addressed). The run must be repeated.
