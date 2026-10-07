@@ -2,7 +2,7 @@
 name: rhyolite-tui-runtime-validator
 description: Development-only validator for Rhyolite terminal/runtime UI artifacts, command handoff, color/accessibility behavior, and screenshot regressions before release.
 tools: ["read", "search", "execute"]
-model: gpt-5.6-sol
+model: gpt-6-astra
 disable-model-invocation: false
 user-invocable: true
 ---

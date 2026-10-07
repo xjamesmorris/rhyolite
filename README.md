@@ -117,9 +117,9 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 ## Quick notes
 
-- Recommended model: use a current frontier reasoning model at the
-  maximum available reasoning effort and context (as of October 3, 2026,
-  examples include Sol 5.6 and Fable 5).
+- Recommended models: use a current frontier reasoning model at the
+  maximum available reasoning effort and context (as of October 7, 2026,
+  examples include GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1).
 - Sign in before starting a review: run `copilot login` for GitHub Copilot
   CLI, or `claude auth login` for Claude Code.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
@@ -396,10 +396,11 @@ The initial model picker and `Edit setup` -> `Model` use the same ordered
 choices:
 
 ```text
-1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
-2. Claude Fable 5 - claude-fable-5
-3. List available model IDs
-4. Other (wording supplied by Copilot CLI)
+1. GPT-6 Astra (Recommended) - gpt-6-astra
+2. Claude Opus 5.5 - claude-opus-5.5
+3. Claude Fable 5.1 - claude-fable-5.1
+4. List available model IDs
+5. Other (wording supplied by Copilot CLI)
 ```
 
 The final custom-answer option accepts a model ID containing only letters,
@@ -1005,10 +1006,10 @@ preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
 endpoint, ask whether to use native Copilot fleet mode, and confirm the
-validated review runtime. Known model choices are `gpt-5.6-sol` (recommended)
-and `claude-fable-5`; the selector can list the model IDs in Copilot's
-offline catalog, as reported by `copilot help config`, including `gpt-6-sol`
-when available. That catalog is built into the CLI rather than fetched for
+validated review runtime. Known model choices are `gpt-6-astra`
+(recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
+list the model IDs in Copilot's offline catalog, as reported by
+`copilot help config`, including `gpt-6-sol` when available. That catalog is built into the CLI rather than fetched for
 your account, so it can omit models that your account can use. Every model
 must match that catalog exactly unless you pass `--allow-unlisted-model`,
 which also accepts a safe model ID outside it (`auto` is always rejected).

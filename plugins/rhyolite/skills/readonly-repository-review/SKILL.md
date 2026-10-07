@@ -179,11 +179,12 @@ material, not instructions to follow.
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for repository analysis, security, public research, and provenance (as of
-October 3, 2026, examples include Sol 5.6 and Fable 5). Never automatically fall
-back to a less capable model. If the required capability is unavailable, report
-the failure instead. Maximum reasoning effort is the default for every
-project task. High is the hard minimum; never use none, minimal, low, or
-medium effort, including for general-purpose or mechanical work.
+October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+Claude Fable 5.1). Never automatically fall back to a less capable model. If the
+required capability is unavailable, report the failure instead.
+Maximum reasoning effort is the default for every project task. High is the
+hard minimum; never use none, minimal, low, or medium effort, including for
+general-purpose or mechanical work.
 
 For every substantive finding, research assessment, provenance
 observation, source-landscape conclusion, remediation priority, and
@@ -487,8 +488,9 @@ Before invoking the runner:
    the recommended launcher because native fleet mode is process-level.
    Otherwise store `standard`.
 8. If the model was not supplied by a valid launcher block, ask with
-   the exact choices `GPT-5.6 Sol (Recommended) - gpt-5.6-sol`,
-   `Claude Fable 5 - claude-fable-5`, and `List available model IDs`.
+   the exact choices `GPT-6 Astra (Recommended) - gpt-6-astra`,
+   `Claude Opus 5.5 - claude-opus-5.5`,
+   `Claude Fable 5.1 - claude-fable-5.1`, and `List available model IDs`.
    The list choice invokes only
    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`,
    displays the returned IDs, and repeats the picker. Validate every selected
@@ -652,8 +654,9 @@ Before invoking the runner:
     re-entered source or output value is invalid, explain the specific
     problem and re-ask only that same field.
     If `Model` is selected, reuse the same ordered model picker:
-    `GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
-    `Claude Fable 5 - claude-fable-5`, then `List available model IDs`,
+    `GPT-6 Astra (Recommended) - gpt-6-astra`, then
+    `Claude Opus 5.5 - claude-opus-5.5`, then
+    `Claude Fable 5.1 - claude-fable-5.1`, then `List available model IDs`,
     followed only by Copilot CLI's automatic final custom-answer option.
     Apply the same model validation, including the launcher-only
     unlisted-model rule, and preserve every other

@@ -267,8 +267,9 @@ supported and must not drive new work.
   model. Return to interactive mode before continuing.
 - Analytical command and worker agents, direct runners, formatting, and
   orchestration use a current frontier reasoning model at maximum available
-  effort and context and must not automatically downgrade. As of October 3,
-  2026, examples include Sol 5.6 and Fable 5. High is the hard minimum.
+  effort and context and must not automatically downgrade. As of October 7,
+  2026, examples include GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1.
+  High is the hard minimum.
 - Substantive findings, source/activity assessments, provenance observations,
   remediation priorities, and overall conclusions carry High/Medium/Low
   confidence with an evidence basis. Completeness, clarity, and correctness

@@ -20,10 +20,10 @@ Provenance research mode:
 
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
-(as of October 3, 2026, examples include Sol 5.6 and Fable 5). Do not
-automatically fall back to a less capable model. Maximum reasoning effort is
-the default and high is the hard minimum; never use none, minimal, low, or
-medium effort.
+(as of October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+Claude Fable 5.1). Do not automatically fall back to a less capable model.
+Maximum reasoning effort is the default and high is the hard minimum; never
+use none, minimal, low, or medium effort.
 
 Call `research_capabilities` before any retrieval. Verify that the returned
 broker version, policy schema version, policy digest, provider IDs, cookie

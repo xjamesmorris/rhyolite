@@ -7,8 +7,9 @@ readonly RHYOLITE_AGENT='rhyolite:repo-review'
 readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'
 readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
 readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'
-readonly RHYOLITE_DEFAULT_MODEL='gpt-5.6-sol'
-readonly RHYOLITE_ALTERNATE_MODEL='claude-fable-5'
+readonly RHYOLITE_DEFAULT_MODEL='gpt-6-astra'
+readonly RHYOLITE_OPUS_MODEL='claude-opus-5.5'
+readonly RHYOLITE_FABLE_MODEL='claude-fable-5.1'
 readonly RHYOLITE_CLAUDE_DEFAULT_MODEL='claude-opus-5-5'
 readonly RHYOLITE_CLAUDE_ALTERNATE_MODEL='claude-opus-5'
 readonly RHYOLITE_DEFAULT_REASONING_EFFORT='max'
@@ -18,9 +19,18 @@ RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 LAUNCHER_HARNESS='copilot'
 LAUNCHER_HARNESS_DISPLAY='Copilot'
 LAUNCHER_DEFAULT_MODEL="${RHYOLITE_DEFAULT_MODEL}"
-LAUNCHER_ALTERNATE_MODEL="${RHYOLITE_ALTERNATE_MODEL}"
-LAUNCHER_DEFAULT_MODEL_FORMAT='GPT-5.6 Sol (Recommended) - %s'
-LAUNCHER_ALTERNATE_MODEL_FORMAT='Claude Fable 5 - %s'
+# Ordered guided model choices for the selected harness; the first is the
+# recommended default.
+LAUNCHER_MODEL_IDS=(
+    "${RHYOLITE_DEFAULT_MODEL}"
+    "${RHYOLITE_OPUS_MODEL}"
+    "${RHYOLITE_FABLE_MODEL}"
+)
+LAUNCHER_MODEL_LABELS=(
+    'GPT-6 Astra (Recommended)'
+    'Claude Opus 5.5'
+    'Claude Fable 5.1'
+)
 LAUNCHER_MODEL_IDS_HINT='copilot help config'
 
 fail() {
@@ -379,51 +389,41 @@ launcher_model_unlisted() {
 prompt_for_model() {
     local remembered_model="$1"
     local allow_unlisted_model="$2"
-    local answer candidate_model
+    local answer candidate_model index list_choice other_choice
+    local -a choice_models=()
 
     while true; do
         printf '\nReview model\n' >&2
+        choice_models=()
         if [[ -n "${remembered_model}" ]]; then
             printf '  1. Keep previously used (%s)\n' \
                 "${remembered_model}" >&2
-            printf "  2. ${LAUNCHER_DEFAULT_MODEL_FORMAT}\n" \
-                "${LAUNCHER_DEFAULT_MODEL}" >&2
-            printf "  3. ${LAUNCHER_ALTERNATE_MODEL_FORMAT}\n" \
-                "${LAUNCHER_ALTERNATE_MODEL}" >&2
-            printf '  4. List available model IDs\n' >&2
-            printf '  5. Enter another frontier model ID\n' >&2
-            printf 'Select model [1]: ' >&2
-            IFS= read -r answer
-            case "${answer:-1}" in
-                1) candidate_model="${remembered_model}" ;;
-                2) candidate_model="${LAUNCHER_DEFAULT_MODEL}" ;;
-                3) candidate_model="${LAUNCHER_ALTERNATE_MODEL}" ;;
-                4)
-                    print_available_models
-                    continue
-                    ;;
-                5) candidate_model='' ;;
-                *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
-            esac
+            choice_models+=("${remembered_model}")
+        fi
+        for index in "${!LAUNCHER_MODEL_IDS[@]}"; do
+            printf '  %d. %s - %s\n' "$((${#choice_models[@]} + 1))" \
+                "${LAUNCHER_MODEL_LABELS[index]}" \
+                "${LAUNCHER_MODEL_IDS[index]}" >&2
+            choice_models+=("${LAUNCHER_MODEL_IDS[index]}")
+        done
+        list_choice=$((${#choice_models[@]} + 1))
+        other_choice=$((list_choice + 1))
+        printf '  %d. List available model IDs\n' "${list_choice}" >&2
+        printf '  %d. Enter another frontier model ID\n' "${other_choice}" >&2
+        printf 'Select model [1]: ' >&2
+        IFS= read -r answer
+        answer="${answer:-1}"
+        if [[ "${answer}" =~ ^[1-9][0-9]*$ ]] &&
+            ((answer <= ${#choice_models[@]})); then
+            candidate_model="${choice_models[answer - 1]}"
+        elif [[ "${answer}" == "${list_choice}" ]]; then
+            print_available_models
+            continue
+        elif [[ "${answer}" == "${other_choice}" ]]; then
+            candidate_model=''
         else
-            printf "  1. ${LAUNCHER_DEFAULT_MODEL_FORMAT}\n" \
-                "${LAUNCHER_DEFAULT_MODEL}" >&2
-            printf "  2. ${LAUNCHER_ALTERNATE_MODEL_FORMAT}\n" \
-                "${LAUNCHER_ALTERNATE_MODEL}" >&2
-            printf '  3. List available model IDs\n' >&2
-            printf '  4. Enter another frontier model ID\n' >&2
-            printf 'Select model [1]: ' >&2
-            IFS= read -r answer
-            case "${answer:-1}" in
-                1) candidate_model="${LAUNCHER_DEFAULT_MODEL}" ;;
-                2) candidate_model="${LAUNCHER_ALTERNATE_MODEL}" ;;
-                3)
-                    print_available_models
-                    continue
-                    ;;
-                4) candidate_model='' ;;
-                *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
-            esac
+            printf 'Enter one of the displayed choice numbers.\n' >&2
+            continue
         fi
 
         if [[ -z "${candidate_model}" ]]; then
@@ -655,7 +655,8 @@ Usage:
 Options:
   --harness ID        Select a registered review harness.
   --model MODEL       Select an exact ID from Copilot's offline model catalog
-                      (default: gpt-5.6-sol; alternate: claude-fable-5).
+                      (default: gpt-6-astra; alternates: claude-opus-5.5,
+                      claude-fable-5.1).
                       With --harness claude, select from Rhyolite's Claude
                       Code catalog (default: claude-opus-5-5; alternate:
                       claude-opus-5).
@@ -998,9 +999,14 @@ main() {
                         2
             done
             LAUNCHER_DEFAULT_MODEL="${RHYOLITE_CLAUDE_DEFAULT_MODEL}"
-            LAUNCHER_ALTERNATE_MODEL="${RHYOLITE_CLAUDE_ALTERNATE_MODEL}"
-            LAUNCHER_DEFAULT_MODEL_FORMAT='Claude Opus 5.5 (Recommended) - %s'
-            LAUNCHER_ALTERNATE_MODEL_FORMAT='Claude Opus 5 - %s'
+            LAUNCHER_MODEL_IDS=(
+                "${RHYOLITE_CLAUDE_DEFAULT_MODEL}"
+                "${RHYOLITE_CLAUDE_ALTERNATE_MODEL}"
+            )
+            LAUNCHER_MODEL_LABELS=(
+                'Claude Opus 5.5 (Recommended)'
+                'Claude Opus 5'
+            )
             LAUNCHER_MODEL_IDS_HINT='rhyolite --harness claude model picker'
             copilot_path="$(command -v "${harness_cli}" || true)"
             [ -n "${copilot_path}" ] ||

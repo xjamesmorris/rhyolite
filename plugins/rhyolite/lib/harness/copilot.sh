@@ -287,7 +287,7 @@ harness_capability() {
 }
 
 harness_default_model() {
-    printf '%s\n' 'gpt-5.6-sol'
+    printf '%s\n' 'gpt-6-astra'
 }
 
 harness_list_models() {
@@ -387,8 +387,9 @@ harness_validate_model_id() {
 
 harness_model_choices() {
     printf '%s\n' \
-        'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' \
-        'Claude Fable 5 - claude-fable-5' \
+        'GPT-6 Astra (Recommended) - gpt-6-astra' \
+        'Claude Opus 5.5 - claude-opus-5.5' \
+        'Claude Fable 5.1 - claude-fable-5.1' \
         'List available model IDs'
 }
 

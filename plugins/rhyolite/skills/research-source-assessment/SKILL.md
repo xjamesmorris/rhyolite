@@ -38,10 +38,11 @@ request, reconstruct, or quote raw cookie values or private bodies.
 Prioritize completeness, clarity, and correctness. Use a current frontier
 reasoning model at the maximum available reasoning effort and context for
 source-landscape, research, commercial-activity, and provenance judgments (as
-of October 3, 2026, examples include Sol 5.6 and Fable 5). Do not automatically
-fall back to a less capable model. Maximum reasoning effort is the default and
-high is the hard minimum; never use none, minimal, low, or medium effort,
-including for mechanical normalization or formatting.
+of October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+Claude Fable 5.1). Do not automatically fall back to a less capable model.
+Maximum reasoning effort is the default and high is the hard minimum; never
+use none, minimal, low, or medium effort, including for mechanical
+normalization or formatting.
 
 ## Goal
 

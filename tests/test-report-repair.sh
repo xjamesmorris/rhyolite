@@ -1805,7 +1805,7 @@ write_review_handoff \
     '' \
     'copilot' \
     'Copilot' \
-    'gpt-5.6-sol' \
+    'gpt-6-astra' \
     'max' \
     'long_context' \
     'github' \
@@ -1852,7 +1852,7 @@ write_review_handoff \
     '' \
     'copilot' \
     'Copilot' \
-    'gpt-5.6-sol' \
+    'gpt-6-astra' \
     'max' \
     'long_context' \
     'github' \

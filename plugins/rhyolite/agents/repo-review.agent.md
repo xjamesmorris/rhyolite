@@ -15,8 +15,8 @@ dependencies, or access credentials.
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for orchestration and every analytical, security, research, or provenance task
-(as of October 3, 2026, examples include Sol 5.6 and Fable 5). Never automatically
-fall back to a less capable model.
+(as of October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+Claude Fable 5.1). Never automatically fall back to a less capable model.
 If the required capability is unavailable, stop and report that clearly.
 Maximum reasoning effort is the default for all project work. High is
 the hard minimum; never use none, minimal, low, or medium effort, including
@@ -260,8 +260,9 @@ cannot be applied reliably after this session starts. Otherwise store
 If the model was not supplied by a valid trusted launcher block, use
 `ask_user` with these exact choices:
 
-- `GPT-5.6 Sol (Recommended) - gpt-5.6-sol`
-- `Claude Fable 5 - claude-fable-5`
+- `GPT-6 Astra (Recommended) - gpt-6-astra`
+- `Claude Opus 5.5 - claude-opus-5.5`
+- `Claude Fable 5.1 - claude-fable-5.1`
 - `List available model IDs`
 
 If the user selects `List available model IDs`, invoke only
@@ -556,8 +557,9 @@ choice without losing any stored answers.
 If a re-entered source or output value is invalid, explain the specific problem and
 re-ask only that same field without losing the other stored answers.
 If `Model` is selected, reuse the same ordered picker:
-`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
-`Claude Fable 5 - claude-fable-5`, then `List available model IDs`,
+`GPT-6 Astra (Recommended) - gpt-6-astra`, then
+`Claude Opus 5.5 - claude-opus-5.5`, then
+`Claude Fable 5.1 - claude-fable-5.1`, then `List available model IDs`,
 followed only by Copilot CLI's automatic final custom-answer option. Apply the
 same model validation, including the launcher-only unlisted-model rule, to
 every answer and preserve every other setup value. If `Reasoning effort` or

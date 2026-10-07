@@ -654,16 +654,16 @@ for quality_file in \
     grep -Fqi 'maximum available reasoning effort and context' \
         <<< "${normalized_quality}" ||
         fail "Maximum effort/context recommendation is missing: ${quality_file}"
-    grep -Fq 'Sol 5.6' <<< "${normalized_quality}" &&
-        grep -Fq 'Fable 5' <<< "${normalized_quality}" ||
+    grep -Fq 'GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1' \
+        <<< "${normalized_quality}" ||
         fail "Dated model examples are missing: ${quality_file}"
 done
-grep -Fq 'as of October 3, 2026' "${README}" &&
-    grep -Fq 'Sol 5.6 and Fable 5' "${README}" ||
+grep -Fq 'as of October 7, 2026' "${README}" &&
+    grep -Fq 'GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1' "${README}" ||
     fail 'README does not provide the dated model examples.'
 grep -Fq 'rhyolite_harness_capture MODEL harness_default_model' "${RUNNER}" &&
-    grep -Fq "printf '%s\\n' 'gpt-5.6-sol'" "${COPILOT_HARNESS}" ||
-    fail 'Bash runner does not default to GPT-5.6 Sol.'
+    grep -Fq "printf '%s\\n' 'gpt-6-astra'" "${COPILOT_HARNESS}" ||
+    fail 'Bash runner does not default to GPT-6 Astra.'
 grep -Fq \
     'harness_validate_model_id "${MODEL}" >/dev/null 2>&1; then' \
     "${RUNNER}" &&
@@ -692,7 +692,7 @@ grep -Fq 'name: rhyolite-ui-validator' "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent has the wrong name.'
 grep -Fq 'tools: []' "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator agent must remain tool-free.'
-grep -Fq 'model: gpt-5.6-sol' "${UI_VALIDATOR_AGENT}" &&
+grep -Fq 'model: gpt-6-astra' "${UI_VALIDATOR_AGENT}" &&
     grep -Fq 'user-invocable: true' "${UI_VALIDATOR_AGENT}" ||
     fail 'Development UI validator agent metadata is invalid.'
 grep -Fq 'High is the hard minimum' "${UI_VALIDATOR_AGENT}" ||
@@ -717,7 +717,7 @@ grep -Fq 'name: rhyolite-tui-runtime-validator' \
 grep -Fq 'tools: ["read", "search", "execute"]' \
     "${TUI_RUNTIME_VALIDATOR_AGENT}" ||
     fail 'TUI runtime validator agent has the wrong bounded tool set.'
-grep -Fq 'model: gpt-5.6-sol' "${TUI_RUNTIME_VALIDATOR_AGENT}" &&
+grep -Fq 'model: gpt-6-astra' "${TUI_RUNTIME_VALIDATOR_AGENT}" &&
     grep -Fq 'High is the hard minimum' "${TUI_RUNTIME_VALIDATOR_AGENT}" ||
     fail 'TUI runtime validator does not enforce the frontier/high-effort policy.'
 grep -Fq 'TUI_RUNTIME_VALIDATION: PASS' \
@@ -882,8 +882,9 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Continue in standard mode`' "${AGENT}" &&
     grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
         "${AGENT}" &&
-    grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${AGENT}" &&
-    grep -Fq '`Claude Fable 5 - claude-fable-5`' "${AGENT}" &&
+    grep -Fq '`GPT-6 Astra (Recommended) - gpt-6-astra`' "${AGENT}" &&
+    grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${AGENT}" &&
+    grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${AGENT}" &&
     grep -Fq '`List available model IDs`' "${AGENT}" &&
     grep -Fq '`Maximum reasoning (Recommended) - max`' "${AGENT}" &&
     grep -Fq '`Long context (Recommended) - long_context`' "${AGENT}" &&
@@ -1050,11 +1051,12 @@ for output_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         fail "Home-directory output choice drifted: ${output_ui_file}"
 done
 for model_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
-    grep -Fq 'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' \
+    grep -Fq 'GPT-6 Astra (Recommended) - gpt-6-astra' \
         "${model_ui_file}" ||
         fail "Recommended model picker choice drifted: ${model_ui_file}"
-    grep -Fq 'Claude Fable 5 - claude-fable-5' "${model_ui_file}" ||
-        fail "Alternate model picker choice drifted: ${model_ui_file}"
+    grep -Fq 'Claude Opus 5.5 - claude-opus-5.5' "${model_ui_file}" &&
+        grep -Fq 'Claude Fable 5.1 - claude-fable-5.1' "${model_ui_file}" ||
+        fail "Alternate model picker choices drifted: ${model_ui_file}"
     grep -Fq 'List available model IDs' "${model_ui_file}" ||
         fail "Model-list picker choice drifted: ${model_ui_file}"
     grep -Fq 'Maximum reasoning (Recommended) - max' "${model_ui_file}" &&
@@ -1072,15 +1074,21 @@ done
 node - "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}" <<'JS'
 const fs = require("fs");
 
-const recommended = "GPT-5.6 Sol (Recommended) - gpt-5.6-sol";
-const alternate = "Claude Fable 5 - claude-fable-5";
+const choices = [
+  "GPT-6 Astra (Recommended) - gpt-6-astra",
+  "Claude Opus 5.5 - claude-opus-5.5",
+  "Claude Fable 5.1 - claude-fable-5.1",
+  "List available model IDs",
+];
 for (const file of process.argv.slice(2)) {
   const text = fs.readFileSync(file, "utf8");
-  const recommendedIndex = text.indexOf(recommended);
-  const alternateIndex = text.indexOf(alternate);
-  if (recommendedIndex < 0 || alternateIndex < 0 ||
-      recommendedIndex >= alternateIndex) {
-    throw new Error(`model picker order drifted: ${file}`);
+  let previousIndex = -1;
+  for (const choice of choices) {
+    const index = text.indexOf(choice);
+    if (index < 0 || index <= previousIndex) {
+      throw new Error(`model picker order drifted: ${file}`);
+    }
+    previousIndex = index;
   }
 }
 JS
@@ -1090,9 +1098,102 @@ grep -Fq 'If `Model` is selected, reuse the same ordered' "${AGENT}" &&
 grep -Fq 'initial setup model picker and `Edit setup` -> `Model`' \
     "${UI_VALIDATOR_AGENT}" ||
     fail 'UI validator does not enforce initial/edit model picker reuse.'
-grep -Fq 'GPT-5.6 Sol (Recommended) - %s' "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq 'Claude Fable 5 - %s' "${RHYOLITE_LAUNCHER}" ||
-    fail 'Launcher interactive model picker lost exact known choices.'
+# Render the launcher's real model picker for each harness with stubbed
+# validation and check the exact numbered choices and the selected model.
+render_launcher_model_menu() {
+    local harness="$1"
+    local remembered="$2"
+    local input="$3"
+
+    bash -c '
+set -euo pipefail
+launcher="$1"
+harness="$2"
+remembered="$3"
+eval "$(sed -n "/^readonly RHYOLITE_DEFAULT_MODEL=/,/^readonly RHYOLITE_CLAUDE_ALTERNATE_MODEL=/p" "${launcher}")"
+eval "$(sed -n "/^LAUNCHER_MODEL_IDS=(/,/^)/p; /^LAUNCHER_MODEL_LABELS=(/,/^)/p" "${launcher}")"
+if [[ "${harness}" == claude ]]; then
+    eval "$(sed -n "/^            LAUNCHER_MODEL_IDS=(/,/^            )/p; /^            LAUNCHER_MODEL_LABELS=(/,/^            )/p" "${launcher}")"
+fi
+eval "$(sed -n "/^prompt_for_model() {/,/^}/p" "${launcher}")"
+launcher_model_accepted() { return 0; }
+launcher_model_unlisted() { return 1; }
+print_available_models() { printf "%s\n" "LISTED MODELS" >&2; }
+LAUNCHER_HARNESS_DISPLAY=fixture
+exec 2>&1
+selected="$(prompt_for_model "${remembered}" 0)"
+printf "\nSELECTED=%s\n" "${selected}"
+' _ "${RHYOLITE_LAUNCHER}" "${harness}" "${remembered}" <<< "${input}"
+}
+assert_launcher_menu() {
+    local label="$1"
+    local harness="$2"
+    local remembered="$3"
+    local input="$4"
+    local expected_model="$5"
+    local expected_menu="$6"
+    local selected_model
+
+    launcher_menu_output="$(
+        render_launcher_model_menu "${harness}" "${remembered}" "${input}"
+    )" || fail "Launcher model picker failed: ${label}"
+    selected_model="$(sed -n 's/^SELECTED=//p' <<< "${launcher_menu_output}")"
+    [[ "${selected_model}" == "${expected_model}" ]] ||
+        fail "Launcher model picker selected ${selected_model} instead of ${expected_model}: ${label}"
+    [[ "$(sed -n '2,/^Select model/p' <<< "${launcher_menu_output}" |
+        sed '$d')" == "${expected_menu}" ]] ||
+        fail "Launcher interactive model picker lost exact known choices: ${label}"
+}
+copilot_launcher_menu='Review model
+  1. GPT-6 Astra (Recommended) - gpt-6-astra
+  2. Claude Opus 5.5 - claude-opus-5.5
+  3. Claude Fable 5.1 - claude-fable-5.1
+  4. List available model IDs
+  5. Enter another frontier model ID'
+assert_launcher_menu copilot-default copilot '' '' gpt-6-astra \
+    "${copilot_launcher_menu}"
+assert_launcher_menu copilot-opus copilot '' '2' claude-opus-5.5 \
+    "${copilot_launcher_menu}"
+assert_launcher_menu copilot-fable copilot '' '3' claude-fable-5.1 \
+    "${copilot_launcher_menu}"
+assert_launcher_menu copilot-list-then-default copilot '' $'4\n1' \
+    gpt-6-astra "${copilot_launcher_menu}"
+grep -Fq 'LISTED MODELS' <<< "${launcher_menu_output}" ||
+    fail 'Launcher model picker did not list available model IDs.'
+assert_launcher_menu copilot-other copilot '' $'5\nexample-frontier-model' \
+    example-frontier-model "${copilot_launcher_menu}"
+assert_launcher_menu copilot-invalid-then-default copilot '' $'9\n1' \
+    gpt-6-astra "${copilot_launcher_menu}"
+grep -Fq 'Enter one of the displayed choice numbers.' <<< "${launcher_menu_output}" ||
+    fail 'Launcher model picker accepted an out-of-range choice.'
+assert_launcher_menu copilot-remembered copilot gpt-6-sol '4' \
+    claude-fable-5.1 'Review model
+  1. Keep previously used (gpt-6-sol)
+  2. GPT-6 Astra (Recommended) - gpt-6-astra
+  3. Claude Opus 5.5 - claude-opus-5.5
+  4. Claude Fable 5.1 - claude-fable-5.1
+  5. List available model IDs
+  6. Enter another frontier model ID'
+assert_launcher_menu copilot-remembered-keep copilot gpt-6-sol '' gpt-6-sol \
+    'Review model
+  1. Keep previously used (gpt-6-sol)
+  2. GPT-6 Astra (Recommended) - gpt-6-astra
+  3. Claude Opus 5.5 - claude-opus-5.5
+  4. Claude Fable 5.1 - claude-fable-5.1
+  5. List available model IDs
+  6. Enter another frontier model ID'
+claude_launcher_menu='Review model
+  1. Claude Opus 5.5 (Recommended) - claude-opus-5-5
+  2. Claude Opus 5 - claude-opus-5
+  3. List available model IDs
+  4. Enter another frontier model ID'
+assert_launcher_menu claude-default claude '' '' claude-opus-5-5 \
+    "${claude_launcher_menu}"
+assert_launcher_menu claude-alternate claude '' '2' claude-opus-5 \
+    "${claude_launcher_menu}"
+assert_launcher_menu claude-other claude '' $'4\nclaude-sonnet-5' \
+    claude-sonnet-5 "${claude_launcher_menu}"
+
 grep -Fq 'agent: rhyolite:repo-review.agent' "${COMMAND_START}" ||
     fail '/rhyolite:start does not route to its command agent.'
 grep -Fq "Enter Rhyolite's guided" "${COMMAND_START}" ||
@@ -1416,8 +1517,9 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
     grep -Fq '`Continue in standard mode`' "${SKILL}" &&
     grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
         "${SKILL}" &&
-    grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${SKILL}" &&
-    grep -Fq '`Claude Fable 5 - claude-fable-5`' "${SKILL}" &&
+    grep -Fq '`GPT-6 Astra (Recommended) - gpt-6-astra`' "${SKILL}" &&
+    grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${SKILL}" &&
+    grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${SKILL}" &&
     grep -Fq '`List available model IDs`' "${SKILL}" &&
     grep -Fq '`Maximum reasoning (Recommended) - max`' "${SKILL}" &&
     grep -Fq '`Long context (Recommended) - long_context`' "${SKILL}" &&
@@ -2615,7 +2717,7 @@ rhyolite_write_preference \
     'https://github.com/octocat/Hello-World' \
     copilot \
     native \
-    gpt-5.6-sol \
+    gpt-6-astra \
     max \
     long_context \
     "${preference_helper_root}" ||
@@ -2659,7 +2761,7 @@ if (Object.keys(preference).sort().join(",") !== expectedKeys ||
     preference.schemaVersion !== 3 ||
     preference.harness !== "copilot" ||
     preference.fleetMode !== "native" ||
-    preference.model !== "gpt-5.6-sol" ||
+    preference.model !== "gpt-6-astra" ||
     preference.reasoningEffort !== "max" ||
     preference.contextTier !== "long_context") {
   throw new Error("launcher preference schema 3 is invalid");
@@ -2701,7 +2803,7 @@ cat > "${legacy_preference_path}" <<'EOF'
   "schemaVersion": 1,
   "canonicalRepository": "https://github.com/octocat/legacy-preference",
   "fleetMode": "standard",
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-astra",
   "updatedAt": "2026-09-30T12:00:00Z"
 }
 EOF
@@ -2727,7 +2829,7 @@ cat > "${preference_helper_path}" <<'EOF'
   "canonicalRepository": "https://github.com/octocat/Hello-World",
   "harness": "copilot",
   "fleetMode": "native",
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-astra",
   "updatedAt": "2026-09-30T12:00:00Z"
 }
 BROKEN
@@ -2750,7 +2852,7 @@ if rhyolite_write_preference \
     "${directory_preference_repository}" \
     copilot \
     standard \
-    gpt-5.6-sol \
+    gpt-6-astra \
     max \
     long_context \
     "${preference_helper_root}"; then
@@ -3225,8 +3327,9 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
     - "gpt-6-sol"
-    - "gpt-5.6-sol"
-    - "claude-fable-5"
+    - "gpt-6-astra"
+    - "claude-opus-5.5"
+    - "claude-fable-5.1"
   `reasoning_effort`: Reasoning effort.
 EOF
     exit 0
@@ -3259,8 +3362,9 @@ launcher_version="$("${launcher_link}" --version)"
 [[ "${launcher_help}" == "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}") Beta"$'\n'* &&
     "${launcher_help}" == *'initial review request'* &&
     "${launcher_help}" == *'--yolo'* &&
-    "${launcher_help}" == *'gpt-5.6-sol'* &&
-    "${launcher_help}" == *'claude-fable-5'* &&
+    "${launcher_help}" == *'gpt-6-astra'* &&
+    "${launcher_help}" == *'claude-opus-5.5'* &&
+    "${launcher_help}" == *'claude-fable-5.1'* &&
     "${launcher_help}" == *'Available harnesses:'* &&
     "${launcher_help}" == *'  - copilot'* &&
     "${launcher_help}" == *'--reasoning-effort'* &&
@@ -3269,8 +3373,9 @@ launcher_version="$("${launcher_link}" --version)"
     "${launcher_help}" != *'--autopilot'* ]] ||
     fail 'Unix launcher --help output is incomplete.'
 runner_help="$("${RUNNER}" --help)"
-[[ "${runner_help}" == *'gpt-5.6-sol (recommended)'* &&
-    "${runner_help}" == *'claude-fable-5'* &&
+[[ "${runner_help}" == *'gpt-6-astra (recommended)'* &&
+    "${runner_help}" == *'claude-opus-5.5'* &&
+    "${runner_help}" == *'claude-fable-5.1'* &&
     "${runner_help}" == *'another available model ID'* &&
     "${runner_help}" == *'--allow-unlisted-model'* &&
     "${runner_help}" == *'--list-models'* &&
@@ -3282,6 +3387,55 @@ runner_help="$("${RUNNER}" --help)"
     fail 'Unix launcher --version does not match VERSION.'
 [[ ! -e "${launcher_stub_log}" ]] ||
     fail 'Unix launcher help/version unexpectedly invoked Copilot.'
+
+launcher_picker_script="${fixture_dir}/launcher-model-picker.sh"
+# Load the trusted launcher helpers without starting the Copilot session.
+sed '/^main "\$@"$/d' "${RHYOLITE_LAUNCHER}" > "${launcher_picker_script}"
+cat >> "${launcher_picker_script}" <<'SH'
+source "${1}/lib/harness/common.sh"
+rhyolite_harness_load "$1" copilot
+prompt_for_model "$2" 0
+SH
+
+assert_launcher_model_selection() {
+    local name="$1"
+    local remembered_model="$2"
+    local answers="$3"
+    local expected_model="$4"
+    local selected_model
+
+    selected_model="$(
+        PATH="${launcher_mock_bin}:${PATH}" \
+            bash "${launcher_picker_script}" "${PLUGIN_ROOT}" \
+                "${remembered_model}" \
+                <<< "${answers}" 2>"${fixture_dir}/${name}.stderr"
+    )" || fail "${name}: launcher model picker failed."
+    [[ "${selected_model}" == "${expected_model}" ]] ||
+        fail "${name}: launcher model picker selected '${selected_model}', expected '${expected_model}'."
+}
+
+assert_launcher_model_selection launcher-default-model '' '' gpt-6-astra
+assert_launcher_model_selection launcher-keep-model gpt-6-sol '' gpt-6-sol
+for selection in \
+    '1:gpt-6-astra' \
+    '2:claude-opus-5.5' \
+    '3:claude-fable-5.1'; do
+    choice="${selection%%:*}"
+    selected_model="${selection#*:}"
+    assert_launcher_model_selection \
+        "launcher-model-${choice}" '' "${choice}" "${selected_model}"
+    assert_launcher_model_selection \
+        "launcher-remembered-model-${choice}" gpt-6-sol "$((choice + 1))" \
+        "${selected_model}"
+done
+assert_launcher_model_selection \
+    launcher-model-catalog '' $'4\n5\ngpt-6-sol' gpt-6-sol
+assert_launcher_model_selection \
+    launcher-remembered-model-catalog gpt-6-sol $'5\n6\ngpt-6-sol' gpt-6-sol
+for name in launcher-model-catalog launcher-remembered-model-catalog; do
+    grep -Fq 'Available Copilot model IDs' "${fixture_dir}/${name}.stderr" ||
+        fail "${name}: launcher did not display the catalog before custom entry."
+done
 
 launcher_autopilot_stdout="${fixture_dir}/launcher-autopilot.stdout"
 launcher_autopilot_stderr="${fixture_dir}/launcher-autopilot.stderr"
@@ -3326,7 +3480,7 @@ assert_unsafe_launcher_state_rejected() {
             "${launcher_link}" \
                 --repo https://example.com/owner/repository \
                 --fleet-mode standard \
-                --model gpt-5.6-sol
+                --model gpt-6-astra
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
     set -e
@@ -3370,7 +3524,7 @@ assert_unsafe_launcher_state_rejected \
         "${launcher_link}" \
             --repo https://example.com/owner/repository.git \
             --fleet-mode native \
-            --model claude-fable-5 \
+            --model claude-fable-5.1 \
             --yolo \
             --yolo \
             -- \
@@ -3420,7 +3574,7 @@ const expectedPrompt =
   "RHYOLITE_LAUNCHER_SETUP_V1\n" +
   "Source=https://example.com/owner/repository.git\n" +
   "FleetMode=native\n" +
-  "Model=claude-fable-5\n" +
+  "Model=claude-fable-5.1\n" +
   "ReasoningEffort=max\n" +
   "ContextTier=long_context\n" +
   "RememberPreferences=true\n" +
@@ -3437,7 +3591,7 @@ if (valueAfter("--agent") !== "rhyolite:repo-review") {
 }
 if (!args.includes("--fleet") ||
     valueAfter("--mode") !== "interactive" ||
-    valueAfter("--model") !== "claude-fable-5" ||
+    valueAfter("--model") !== "claude-fable-5.1" ||
     valueAfter("--reasoning-effort") !== "max" ||
     valueAfter("--context") !== "long_context") {
   throw new Error(
@@ -3461,7 +3615,7 @@ if (fs.realpathSync(values.get("CALLER")) !== fs.realpathSync(root) ||
     values.get("VERSION") !== expectedVersion ||
     values.get("IMMEDIATE") !== "RHYOLITE_LAUNCHER_IMMEDIATE_START_V1" ||
     values.get("FLEET") !== "native" ||
-    values.get("MODEL") !== "claude-fable-5") {
+    values.get("MODEL") !== "claude-fable-5.1") {
   throw new Error("launcher environment context is inconsistent");
 }
 let cursor = path.resolve(launchDirectory);
@@ -3488,7 +3642,7 @@ if (context.includes("InitialRequest=") ||
     context.includes(expectedRequest) ||
     context.includes("https://example.com/owner/repository") ||
     !context.includes("FleetMode=native") ||
-    !context.includes("Model=claude-fable-5") ||
+    !context.includes("Model=claude-fable-5.1") ||
     !context.includes("ReasoningEffort=max") ||
     !context.includes("ContextTier=long_context") ||
     /[\x00-\x08\x0B-\x1F\x7F]/u.test(context)) {
@@ -3569,7 +3723,7 @@ rhyolite_write_preference \
     'https://example.com/owner/repository' \
     copilot \
     native \
-    claude-fable-5 \
+    claude-fable-5.1 \
     max \
     long_context \
     "${launcher_preference_home}" ||
@@ -3594,8 +3748,8 @@ if (args.includes("--yolo") || args.includes("--autopilot")) {
   throw new Error("launcher enabled yolo/autopilot without explicit flags");
 }
 if (!args.includes("--fleet") ||
-    valueAfter("--model") !== "claude-fable-5" ||
-    !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5\n")) {
+    valueAfter("--model") !== "claude-fable-5.1" ||
+    !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5.1\n")) {
   throw new Error("launcher did not reuse the saved repository preference");
 }
 JS
@@ -3604,7 +3758,7 @@ rhyolite_write_preference \
     'https://example.com/owner/repository' \
     codex \
     native \
-    claude-fable-5 \
+    claude-fable-5.1 \
     max \
     long_context \
     "${launcher_preference_home}" ||
@@ -3629,8 +3783,8 @@ const argsIndex = fields.indexOf("ARGS");
 const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
-    valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    valueAfter("--model") !== "gpt-6-astra" ||
+    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-6-astra\n")) {
   throw new Error("launcher reused a preference for a different harness");
 }
 JS
@@ -3646,7 +3800,7 @@ cat > "${launcher_preference_path}" <<'EOF'
   "canonicalRepository": "https://example.com/owner/repository",
   "harness": "copilot",
   "fleetMode": "native",
-  "model": "claude-fable-5",
+  "model": "claude-fable-5.1",
   "updatedAt": "2026-09-30T12:00:00Z"
 }
 BROKEN
@@ -3673,8 +3827,8 @@ const argsIndex = fields.indexOf("ARGS");
 const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
-    valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    valueAfter("--model") !== "gpt-6-astra" ||
+    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-6-astra\n")) {
   throw new Error("launcher did not ignore the invalid repository preference");
 }
 JS
@@ -3692,7 +3846,7 @@ set +e
         "${launcher_link}" \
             --repo https://example.com/owner/repository \
             --fleet-mode standard \
-            --model gpt-5.6-sol
+            --model gpt-6-astra
 ) >"${launcher_failure_stdout}" 2>"${launcher_failure_stderr}"
 launcher_failure_exit=$?
 set -e
@@ -4962,7 +5116,7 @@ cat > "${validation_catalog_bin}/copilot" <<'EOF'
 if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'MODELS'
   `model`: AI model to use for Copilot CLI.
-    - "gpt-5.6-sol"
+    - "gpt-6-astra"
   `reasoning_effort`: Reasoning effort.
 MODELS
     exit 0
@@ -5622,7 +5776,7 @@ function assertCommonPlan(
         "COPILOT_HMAC_KEY",
         "GITHUB_COPILOT_API_TOKEN",
       ]) ||
-      plan.Model !== "gpt-5.6-sol" ||
+      plan.Model !== "gpt-6-astra" ||
       plan.ModelCatalogMembership !== "listed" ||
       plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
@@ -6695,8 +6849,9 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
     - "gpt-6-sol"
-    - "gpt-5.6-sol"
-    - "claude-fable-5"
+    - "gpt-6-astra"
+    - "claude-opus-5.5"
+    - "claude-fable-5.1"
   `reasoning_effort`: Reasoning effort.
 EOF
     exit 0
@@ -7816,7 +7971,7 @@ cat > "${copilot_guard_bin}/copilot" <<'MOCK_COPILOT_GUARD'
 if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
-    - "gpt-5.6-sol"
+    - "gpt-6-astra"
   `reasoning_effort`: Reasoning effort.
 EOF
     exit 0
@@ -7836,7 +7991,7 @@ cat > "${resolve_fail_bin}/copilot" <<'RESOLVE_FAIL_COPILOT'
 if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
-    - "gpt-5.6-sol"
+    - "gpt-6-astra"
   `reasoning_effort`: Reasoning effort.
 EOF
     exit 0
@@ -8956,7 +9111,7 @@ if ! rhyolite_read_preference \
 fi
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
     "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
-    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-astra ]] ||
     fail 'Mock Bash run persisted incorrect launcher preferences.'
 grep -Fxq \
     'Starting 3 - Full review plus whole-repository exact-commit evidence-based provenance of agentically generated code; public research enabled; provenance enabled.' \
@@ -9088,7 +9243,7 @@ if (state.RequestedCommit !== "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" ||
 }
 if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
-    state.Model !== "gpt-5.6-sol" ||
+    state.Model !== "gpt-6-astra" ||
     state.ReasoningEffort !== "max" ||
     state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
@@ -9214,7 +9369,7 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.SessionTimeoutMinutes !== 240 ||
     reviewPlan.ThrottleLimit !== 2 ||
     reviewPlan.MaxRepositories !== 5 ||
-    reviewPlan.Model !== "gpt-5.6-sol" ||
+    reviewPlan.Model !== "gpt-6-astra" ||
     reviewPlan.FleetMode !== "native" ||
     reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
