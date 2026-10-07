@@ -307,11 +307,13 @@ fi
 
 # Claude Code shows a hook systemMessage to the user without adding it to the
 # model context; the plaque keeps the same color rules as the Copilot hooks.
+# Claude Code prefixes the message with a "<hook> says:" label, so the plaque
+# starts on its own line to keep every banner row aligned.
 if [[ "${mode}" == "claude-session-start" ]]; then
     cat >/dev/null
     if launcher_started_immediately; then
         printf '{"systemMessage":"%s"}\n' \
-            "$(json_escape "$(review_plaque)")"
+            "$(json_escape $'\n'"$(review_plaque)")"
         exit 0
     fi
     progress_message="${display_name} v${version} Beta loaded — run rhyolite --harness claude to start a guided review."
@@ -326,7 +328,7 @@ if [[ "${mode}" == "claude-prompt-plaque" ]]; then
     fi
     if prompt_requests_review_start "${hook_input}"; then
         printf '{"systemMessage":"%s"}\n' \
-            "$(json_escape "$(review_plaque)")"
+            "$(json_escape $'\n'"$(review_plaque)")"
     fi
     exit 0
 fi

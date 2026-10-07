@@ -2285,7 +2285,8 @@ claude_launcher_plaque="$(
         NO_COLOR=1 |
         claude_hook_message
 )"
-[[ "${claude_launcher_plaque}" == *'automatic guided setup is starting.'* &&
+[[ "${claude_launcher_plaque}" == $'\n'* &&
+    "${claude_launcher_plaque}" == *'automatic guided setup is starting.'* &&
     "${claude_launcher_plaque}" == *'v0.7.0 Beta'* &&
     "${claude_launcher_plaque}" != *$'\033'* ]] ||
     fail 'Claude Code launcher plaque ignored NO_COLOR.'
