@@ -5,6 +5,49 @@ initial and default module and is currently the only shipped module.
 This release is delivered as a GitHub Copilot plugin, and production runtime
 harness support remains Copilot-only.
 
+![Rhyolite launcher starting guided repo-review setup in GitHub Copilot CLI](images/rhy-ss1.png)
+
+## Quickstart
+
+Requirements: Fedora Linux 44 (the only validated platform), GitHub
+Copilot CLI, Git 2.41 or newer, Python 3, and curl.
+
+1. Sign in to GitHub Copilot from a directory outside every Git worktree:
+
+   ```bash
+   copilot login
+   ```
+
+2. Clone Rhyolite and launch a review of an anonymously readable public
+   HTTPS Git repository:
+
+   ```bash
+   git clone https://github.com/xjamesmorris/rhyolite
+   cd rhyolite
+   ./rhyolite --repo https://github.com/owner/repository
+   ```
+
+3. Press Enter at each launcher prompt to accept the default execution
+   mode, model, reasoning effort, and context. Copilot CLI then opens with
+   the `repo-review` agent selected and starts guided setup, as in the
+   screenshot above.
+4. Answer the numbered setup questions for the output location and review
+   scope. Choose `Scope 1 - Core repository review` for your first run.
+5. Check the `EFFECTIVE REVIEW PLAN`, then select `Run review`.
+6. While the review runs, type `/rhyolite:status` to check progress, or
+   `stop` to cancel it.
+7. When it completes, read the `RHYOLITE EXECUTIVE SUMMARY`, then open
+   `index.html` in the printed run output folder to browse every report.
+
+Run `./rhyolite --help` for launcher options such as `--yolo` and
+`--allow-unlisted-model`; [Install for development](#install-for-development)
+describes them in detail. To use the published marketplace instead, follow
+[Install from a published marketplace](#install-from-a-published-marketplace),
+then start a new Copilot CLI session from a directory outside every Git
+worktree and type `/rhyolite:start`.
+
+## What's included
+
 The current plugin combines:
 
 - The `repo-review` command agent, write-disabled main review worker, and
@@ -17,8 +60,6 @@ The current plugin combines:
 - A Linux Bash launcher that collects public sources, native fleet mode,
   and the review model before selecting the restricted agent from a
   clean non-Git orchestration directory.
-- Separate repository-only development validators for finite pickers and
-  terminal/runtime UI.
 - The `readonly-repository-review` skill.
 - A private `research-source-assessment` skill that maps fresh,
   subject-specific community, research, and commercial sources.
@@ -55,14 +96,7 @@ validated or supported. See
 
 **Review harness support:** GitHub Copilot is the only production runtime
 harness. The harness abstraction is a fixed, fail-closed internal seam; it
-does not make other CLIs supported. Contributor and coding-agent guidance is
-canonicalized in [AGENTS.md](AGENTS.md), with the architecture in
-[docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) and the
-Contract-v4 implementation playbook in
-[docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
-worker under `tests/fixtures/harnesses/` are development-only contract
-fixtures; they are not registered, packaged, selectable, or exposed in
-production.
+does not make other CLIs supported.
 
 Rhyolite is licensed under the GNU General Public License version 2
 only (`GPL-2.0-only`). See [LICENSE](LICENSE).
@@ -71,144 +105,18 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 - Recommended model: use a current frontier reasoning model at the
   maximum available reasoning effort and context (as of October 3, 2026,
-  examples include Sol 5.6 and Fable 5). Use maximum available reasoning
-  effort by default for every repository development task. This policy
-  persists across sessions, and development handoffs must carry it
-  forward. Downgrade only mechanical or fully scoped work, and only to
-  high; keep analytical or open-ended work at maximum effort. Never use
-  none, minimal, low, or medium effort.
+  examples include Sol 5.6 and Fable 5).
 - Run `copilot login` and complete Copilot sign-in before starting a
   review.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
   for questions and feature requests.
-- Read [AGENTS.md](AGENTS.md) before contributing, then see
-  [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
-  matrix.
+- Contributors should start with [Development](#development).
 - Scope `3` is evidence-based provenance review for agentically generated
   code. It is separately opt-in and requires human review before sharing.
   It also covers code and architecture lineage, and its generation
   assessment includes documentation and proposal material.
 - **Strongly recommended:** select `1 - Core repository review` for the
   first run; broader scopes can be resource-intensive and long-running.
-
-## Install for development
-
-The recommended reliable checkout entrypoint is the repository-root
-wrapper on Fedora Linux 44:
-
-```bash
-./rhyolite --repo https://github.com/owner/repository
-```
-
-The optional `--yolo` switch changes the outer Copilot session permissions
-for that launch:
-
-```bash
-./rhyolite --repo https://github.com/owner/repository --yolo
-```
-
-`--yolo` is disabled by default. It explicitly opts the outer Copilot
-orchestrator into all permissions for that launch and is not persisted in
-launcher context, copied into trusted setup, or remembered as a preference.
-It does not change report handling. Guided planning and execution both use
-the never-open policy, while restricted child review sessions retain
-runner-enforced tool isolation and remove inherited `COPILOT_ALLOW_ALL`
-state.
-
-The former launcher `--autopilot` option is retired. The packaged launcher
-rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
-be mistaken for initial request text. Rhyolite setup and effective-plan
-approval remain interactive, and the launcher now passes
-`--mode interactive` explicitly. Switching the outer session to plan or
-autopilot mode during setup or execution is unsupported: return to
-interactive mode before continuing. A mode-related UI notice does not change
-the model recorded in the approved plan or the explicit model passed to the
-isolated review workers.
-
-Exact `stop` and `cancel` requests are control intents, not review prompts.
-The orchestrator immediately stops the active runner, and the runner
-propagates interruption signals through its tracked repository, timeout,
-Copilot worker, and broker processes before writing truthful `Interrupted`
-artifacts.
-
-The wrapper resolves the checkout's physical location, supports
-symlinked invocation and paths containing spaces, and forwards every
-argument unchanged to the canonical packaged Bash launcher at
-`./plugins/rhyolite/bin/rhyolite`.
-
-The checkout wrapper delegates to the packaged launcher, and the
-packaged launchers resolve their plugin root, choose a `-C` directory
-outside every Git worktree, pass `--plugin-dir`, preselect
-`rhyolite:repo-review`, and submit a trusted `-i` setup block while
-preserving any optional initial request after removing control
-characters. Before Copilot starts, they syntactically canonicalize the
-selected public HTTPS repository URLs without removing a terminal `.git`
-endpoint, ask whether to use native Copilot fleet mode, and confirm the
-validated review runtime. Known model choices are `gpt-5.6-sol` (recommended)
-and `claude-fable-5`; the selector can list the model IDs in Copilot's
-offline catalog, as reported by `copilot help config`, including `gpt-6-sol`
-when available. That catalog is built into the CLI rather than fetched for
-your account, so it can omit models that your account can use. Every model
-must match that catalog exactly unless you pass `--allow-unlisted-model`,
-which also accepts a safe model ID outside it (`auto` is always rejected).
-The effective plan then binds `ModelCatalogMembership` `unlisted` into
-approval, and Copilot checks availability when the review starts: an
-unavailable model fails the review without substituting another model.
-Copilot may still run the interactive setup session on its default model when
-the selected model is unavailable.
-Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
-context is selectable as `long_context` (recommended) or `default`. The
-launcher displays harness, model, effort, and context together and asks the
-user to confirm or modify them. Native mode adds the process-level `--fleet` flag,
-and every launch passes the selected `--model`, `--reasoning-effort`,
-and `--context`. Because setup starts immediately,
-launcher-started sessions suppress the ordinary plugin load line
-(`Rhyolite v... Beta loaded — type /rhyolite:start to start.`) and show
-automatic-guided-mode copy that tells the user to wait for the first
-setup prompt.
-
-The checkout wrapper preserves that trusted launcher/helper behavior by
-delegating in place to the canonical packaged launcher. Per-launch
-context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
-(falling back to
-`~/.local/state/rhyolite/launcher`). The launcher creates that state
-with user-only permissions and does not persist the initial review
-request or selected source in its context file.
-After the user approves the effective plan, the runner atomically saves
-only the canonical repository URL, fleet mode, model, reasoning effort,
-context tier, and update time
-in a user-only hashed preference file below the same launcher state
-root. Future launcher runs reuse a preference only when every selected
-repository has the same valid setting; mixed, missing, or malformed
-preferences are never chosen silently.
-
-To inspect or install the checkout manually:
-
-```bash
-copilot --plugin-dir ./plugins/rhyolite plugin list
-copilot plugin install ./plugins/rhyolite
-```
-
-Installation includes the Bash launcher, Rhyolite agent, skill,
-short-command extension, helpers, and local display-only onboarding
-hooks. The repository-only validator agents are not packaged. Current
-Copilot CLI releases load extension-provided commands in experimental
-mode.
-
-If a launcher cannot be used, start manually from outside every Git
-worktree:
-
-```text
-copilot --experimental -C <clean-directory> --plugin-dir <absolute-path-to-plugins/rhyolite>
-```
-
-Then use `/rhyolite:start` as the in-session compatibility path;
-`/rhyolite:repo-review` remains an alias, and `/repo-review` is the
-shorthand when extension commands are active.
-New sessions show one plain versioned line directing users to
-`/rhyolite:start`. After a review-start command, a display-only hook
-renders the large Rhyolite plaque, then the agent asks for one or more
-anonymous public HTTPS Git repository URLs.
 
 ## Install from a published marketplace
 
@@ -252,11 +160,11 @@ copilot plugin marketplace remove repository-review-tools
 
 ## Use interactively
 
-Prefer the checkout wrapper shown above. The canonical packaged launcher
-at `./plugins/rhyolite/bin/rhyolite` remains equivalent when you need to
-exercise that path directly. For an already-running Copilot CLI session
-started from a clean directory that is not inside any Git worktree, use
-the compatibility path:
+Prefer the checkout wrapper shown in [Quickstart](#quickstart). The
+canonical packaged launcher at `./plugins/rhyolite/bin/rhyolite` remains
+equivalent when you need to exercise that path directly. For an
+already-running Copilot CLI session started from a clean directory that is
+not inside any Git worktree, use the compatibility path:
 
 ```text
 copilot --experimental -C <clean-directory>
@@ -451,16 +359,6 @@ per-repository transport ledger for local analysis. Raw values are never
 shown to a model or rendered report. The optional jar starts empty,
 replays only bounded exact-host Secure cookies, is isolated per
 repository/run, and is never imported or reused.
-
-During development, the repository-only `rhyolite-ui-validator` agent
-checks only finite-picker lead-ins, questions, option order, mappings,
-defaults, and native Other/custom-answer behavior. The separate
-repository-only `rhyolite-tui-runtime-validator` checks ANSI/TrueColor
-rendering, width, no-color behavior, command handoff, and screenshot
-regressions. `tests/validate-tui-runtime.mjs` provides the deterministic
-Linux artifact contract used by the Fedora validator.
-Neither development agent is packaged with or invoked by installed
-Rhyolite sessions.
 
 When public research is enabled, the trusted runner launches a dedicated
 research worker before the main reviewer. The worker receives snapshot
@@ -927,7 +825,152 @@ Important defaults:
 - Users run under their own Git and Copilot identity.
 - No telemetry or report upload is implemented by this plugin.
 
-## Validate
+## Name
+
+The project name references the historical RHYOLITE
+signals-intelligence satellite program. This software is unrelated to
+that program.
+
+## Development
+
+Contributor and coding-agent guidance is canonicalized in
+[AGENTS.md](AGENTS.md). Read it before contributing, then see
+[DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
+matrix. The harness architecture is in
+[docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
+Contract-v4 implementation playbook is in
+[docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
+worker under `tests/fixtures/harnesses/` are development-only contract
+fixtures; they are not registered, packaged, selectable, or exposed in
+production.
+
+**Development reasoning policy:** Use maximum available reasoning effort by
+default for every repository development task. This policy persists across
+sessions, and development handoffs must carry it forward. Downgrade only
+mechanical or fully scoped work, and only to high; keep analytical or
+open-ended work at maximum effort. Never use none, minimal, low, or medium
+effort.
+
+### Install for development
+
+The recommended reliable checkout entrypoint is the repository-root
+wrapper on Fedora Linux 44:
+
+```bash
+./rhyolite --repo https://github.com/owner/repository
+```
+
+The optional `--yolo` switch changes the outer Copilot session permissions
+for that launch:
+
+```bash
+./rhyolite --repo https://github.com/owner/repository --yolo
+```
+
+`--yolo` is disabled by default. It explicitly opts the outer Copilot
+orchestrator into all permissions for that launch and is not persisted in
+launcher context, copied into trusted setup, or remembered as a preference.
+It does not change report handling. Guided planning and execution both use
+the never-open policy, while restricted child review sessions retain
+runner-enforced tool isolation and remove inherited `COPILOT_ALLOW_ALL`
+state.
+
+The former launcher `--autopilot` option is retired. The packaged launcher
+rejects it with a `RHYOLITE ERROR` diagnostic and exit code `2`, so it cannot
+be mistaken for initial request text. Rhyolite setup and effective-plan
+approval remain interactive, and the launcher now passes
+`--mode interactive` explicitly. Switching the outer session to plan or
+autopilot mode during setup or execution is unsupported: return to
+interactive mode before continuing. A mode-related UI notice does not change
+the model recorded in the approved plan or the explicit model passed to the
+isolated review workers.
+
+Exact `stop` and `cancel` requests are control intents, not review prompts.
+The orchestrator immediately stops the active runner, and the runner
+propagates interruption signals through its tracked repository, timeout,
+Copilot worker, and broker processes before writing truthful `Interrupted`
+artifacts.
+
+The wrapper resolves the checkout's physical location, supports
+symlinked invocation and paths containing spaces, and forwards every
+argument unchanged to the canonical packaged Bash launcher at
+`./plugins/rhyolite/bin/rhyolite`.
+
+The checkout wrapper delegates to the packaged launcher, and the
+packaged launchers resolve their plugin root, choose a `-C` directory
+outside every Git worktree, pass `--plugin-dir`, preselect
+`rhyolite:repo-review`, and submit a trusted `-i` setup block while
+preserving any optional initial request after removing control
+characters. Before Copilot starts, they syntactically canonicalize the
+selected public HTTPS repository URLs without removing a terminal `.git`
+endpoint, ask whether to use native Copilot fleet mode, and confirm the
+validated review runtime. Known model choices are `gpt-5.6-sol` (recommended)
+and `claude-fable-5`; the selector can list the model IDs in Copilot's
+offline catalog, as reported by `copilot help config`, including `gpt-6-sol`
+when available. That catalog is built into the CLI rather than fetched for
+your account, so it can omit models that your account can use. Every model
+must match that catalog exactly unless you pass `--allow-unlisted-model`,
+which also accepts a safe model ID outside it (`auto` is always rejected).
+The effective plan then binds `ModelCatalogMembership` `unlisted` into
+approval, and Copilot checks availability when the review starts: an
+unavailable model fails the review without substituting another model.
+Copilot may still run the interactive setup session on its default model when
+the selected model is unavailable.
+Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
+context is selectable as `long_context` (recommended) or `default`. The
+launcher displays harness, model, effort, and context together and asks the
+user to confirm or modify them. Native mode adds the process-level `--fleet` flag,
+and every launch passes the selected `--model`, `--reasoning-effort`,
+and `--context`. Because setup starts immediately,
+launcher-started sessions suppress the ordinary plugin load line
+(`Rhyolite v... Beta loaded — type /rhyolite:start to start.`) and show
+automatic-guided-mode copy that tells the user to wait for the first
+setup prompt.
+
+The checkout wrapper preserves that trusted launcher/helper behavior by
+delegating in place to the canonical packaged launcher. Per-launch
+context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
+(falling back to
+`~/.local/state/rhyolite/launcher`). The launcher creates that state
+with user-only permissions and does not persist the initial review
+request or selected source in its context file.
+After the user approves the effective plan, the runner atomically saves
+only the canonical repository URL, fleet mode, model, reasoning effort,
+context tier, and update time
+in a user-only hashed preference file below the same launcher state
+root. Future launcher runs reuse a preference only when every selected
+repository has the same valid setting; mixed, missing, or malformed
+preferences are never chosen silently.
+
+To inspect or install the checkout manually:
+
+```bash
+copilot --plugin-dir ./plugins/rhyolite plugin list
+copilot plugin install ./plugins/rhyolite
+```
+
+Installation includes the Bash launcher, Rhyolite agent, skill,
+short-command extension, helpers, and local display-only onboarding
+hooks. The repository-only validator agents are not packaged. Current
+Copilot CLI releases load extension-provided commands in experimental
+mode.
+
+If a launcher cannot be used, start manually from outside every Git
+worktree:
+
+```text
+copilot --experimental -C <clean-directory> --plugin-dir <absolute-path-to-plugins/rhyolite>
+```
+
+Then use `/rhyolite:start` as the in-session compatibility path;
+`/rhyolite:repo-review` remains an alias, and `/repo-review` is the
+shorthand when extension commands are active.
+New sessions show one plain versioned line directing users to
+`/rhyolite:start`. After a review-start command, a display-only hook
+renders the large Rhyolite plaque, then the agent asks for one or more
+anonymous public HTTPS Git repository URLs.
+
+### Validate
 
 Run validation on Fedora Linux 44:
 
@@ -943,16 +986,20 @@ placeholders, split picker/TUI runtime validation, Bash syntax, line
 endings, and forbidden permission defaults. They do not execute code
 from a reviewed repository.
 
+During development, the repository-only `rhyolite-ui-validator` agent
+checks only finite-picker lead-ins, questions, option order, mappings,
+defaults, and native Other/custom-answer behavior. The separate
+repository-only `rhyolite-tui-runtime-validator` checks ANSI/TrueColor
+rendering, width, no-color behavior, command handoff, and screenshot
+regressions. `tests/validate-tui-runtime.mjs` provides the deterministic
+Linux artifact contract used by the Fedora validator.
+Neither development agent is packaged with or invoked by installed
+Rhyolite sessions.
+
 `AGENTS.md` is the canonical development contract. Harness changes must also
 follow `docs/ADDING-A-HARNESS.md`; production support remains Copilot-only
 until a separately approved adapter satisfies that playbook in full.
 
-## Name
-
-The project name references the historical RHYOLITE
-signals-intelligence satellite program. This software is unrelated to
-that program.
-
-## Publishing
+### Publishing
 
 See [docs/PUBLISHING.md](docs/PUBLISHING.md).
