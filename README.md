@@ -7,6 +7,10 @@ harness support remains Copilot-only.
 
 ![Rhyolite launcher starting guided repo-review setup in GitHub Copilot CLI](images/rhy-ss1.png)
 
+For example output, see this
+[sample scope 3 review](docs/sample-reviews/astra-6-rhyolite-test-1-review.md)
+of the public `rhyolite-test-1` test repository.
+
 ## Quickstart
 
 Requirements: Fedora Linux 44 (the only validated platform), GitHub
