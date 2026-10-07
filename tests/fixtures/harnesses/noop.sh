@@ -347,6 +347,34 @@ harness_report_repair_env() {
     )
 }
 
+# The development fixture has no public-research capability; every research
+# function fails closed so a scope 2/3 run can never reach a worker.
+noop_fixture_research_unavailable() {
+    rhyolite_harness_set_error \
+        'The development-only no-op fixture has no public-research worker.'
+    return 1
+}
+
+harness_write_research_mcp_config() {
+    noop_fixture_require_success harness_write_research_mcp_config || return 1
+    noop_fixture_research_unavailable
+}
+
+harness_research_worker_argv() {
+    noop_fixture_require_success harness_research_worker_argv || return 1
+    noop_fixture_research_unavailable
+}
+
+harness_research_worker_env() {
+    noop_fixture_require_success harness_research_worker_env || return 1
+    noop_fixture_research_unavailable
+}
+
+harness_finalize_research_session() {
+    noop_fixture_require_success harness_finalize_research_session || return 1
+    noop_fixture_research_unavailable
+}
+
 harness_render_request() {
     local request_path="$2"
 

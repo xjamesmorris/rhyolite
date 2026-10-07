@@ -9,10 +9,19 @@ readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_S
 readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'
 readonly RHYOLITE_DEFAULT_MODEL='gpt-5.6-sol'
 readonly RHYOLITE_ALTERNATE_MODEL='claude-fable-5'
+readonly RHYOLITE_CLAUDE_DEFAULT_MODEL='claude-opus-5-5'
+readonly RHYOLITE_CLAUDE_ALTERNATE_MODEL='claude-opus-5'
 readonly RHYOLITE_DEFAULT_REASONING_EFFORT='max'
 readonly RHYOLITE_DEFAULT_CONTEXT_TIER='long_context'
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
+LAUNCHER_HARNESS='copilot'
+LAUNCHER_HARNESS_DISPLAY='Copilot'
+LAUNCHER_DEFAULT_MODEL="${RHYOLITE_DEFAULT_MODEL}"
+LAUNCHER_ALTERNATE_MODEL="${RHYOLITE_ALTERNATE_MODEL}"
+LAUNCHER_DEFAULT_MODEL_FORMAT='GPT-5.6 Sol (Recommended) - %s'
+LAUNCHER_ALTERNATE_MODEL_FORMAT='Claude Fable 5 - %s'
+LAUNCHER_MODEL_IDS_HINT='copilot help config'
 
 fail() {
     local stage="$1"
@@ -377,18 +386,18 @@ prompt_for_model() {
         if [[ -n "${remembered_model}" ]]; then
             printf '  1. Keep previously used (%s)\n' \
                 "${remembered_model}" >&2
-            printf '  2. GPT-5.6 Sol (Recommended) - %s\n' \
-                "${RHYOLITE_DEFAULT_MODEL}" >&2
-            printf '  3. Claude Fable 5 - %s\n' \
-                "${RHYOLITE_ALTERNATE_MODEL}" >&2
+            printf "  2. ${LAUNCHER_DEFAULT_MODEL_FORMAT}\n" \
+                "${LAUNCHER_DEFAULT_MODEL}" >&2
+            printf "  3. ${LAUNCHER_ALTERNATE_MODEL_FORMAT}\n" \
+                "${LAUNCHER_ALTERNATE_MODEL}" >&2
             printf '  4. List available model IDs\n' >&2
             printf '  5. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
             IFS= read -r answer
             case "${answer:-1}" in
                 1) candidate_model="${remembered_model}" ;;
-                2) candidate_model="${RHYOLITE_DEFAULT_MODEL}" ;;
-                3) candidate_model="${RHYOLITE_ALTERNATE_MODEL}" ;;
+                2) candidate_model="${LAUNCHER_DEFAULT_MODEL}" ;;
+                3) candidate_model="${LAUNCHER_ALTERNATE_MODEL}" ;;
                 4)
                     print_available_models
                     continue
@@ -397,17 +406,17 @@ prompt_for_model() {
                 *) printf 'Enter one of the displayed choice numbers.\n' >&2; continue ;;
             esac
         else
-            printf '  1. GPT-5.6 Sol (Recommended) - %s\n' \
-                "${RHYOLITE_DEFAULT_MODEL}" >&2
-            printf '  2. Claude Fable 5 - %s\n' \
-                "${RHYOLITE_ALTERNATE_MODEL}" >&2
+            printf "  1. ${LAUNCHER_DEFAULT_MODEL_FORMAT}\n" \
+                "${LAUNCHER_DEFAULT_MODEL}" >&2
+            printf "  2. ${LAUNCHER_ALTERNATE_MODEL_FORMAT}\n" \
+                "${LAUNCHER_ALTERNATE_MODEL}" >&2
             printf '  3. List available model IDs\n' >&2
             printf '  4. Enter another frontier model ID\n' >&2
             printf 'Select model [1]: ' >&2
             IFS= read -r answer
             case "${answer:-1}" in
-                1) candidate_model="${RHYOLITE_DEFAULT_MODEL}" ;;
-                2) candidate_model="${RHYOLITE_ALTERNATE_MODEL}" ;;
+                1) candidate_model="${LAUNCHER_DEFAULT_MODEL}" ;;
+                2) candidate_model="${LAUNCHER_ALTERNATE_MODEL}" ;;
                 3)
                     print_available_models
                     continue
@@ -427,7 +436,7 @@ prompt_for_model() {
             return
         fi
         printf 'Model selection rejected: %s\n' \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-not available to this Copilot CLI installation}" >&2
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-not available to this ${LAUNCHER_HARNESS_DISPLAY} CLI installation}" >&2
         if launcher_model_unlisted; then
             printf '%s\n' \
                 'Restart the launcher with --allow-unlisted-model to use a model ID outside the offline catalog.' >&2
@@ -441,10 +450,10 @@ print_available_models() {
 
     if ! available_models="$(harness_list_models)"; then
         printf 'Could not list models: %s\n' \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Copilot model catalog unavailable.}" >&2
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-${LAUNCHER_HARNESS_DISPLAY} model catalog unavailable.}" >&2
         return
     fi
-    printf '\nAvailable Copilot model IDs\n' >&2
+    printf '\nAvailable %s model IDs\n' "${LAUNCHER_HARNESS_DISPLAY}" >&2
     while IFS= read -r model; do
         [[ -n "${model}" ]] && printf '  %s\n' "${model}" >&2
     done <<< "${available_models}"
@@ -545,19 +554,16 @@ prompt_to_confirm_runtime_settings() {
     esac
 }
 
-build_initial_prompt() {
-    local initial_request="$1"
-    local fleet_mode="$2"
-    local model="$3"
-    local reasoning_effort="$4"
-    local context_tier="$5"
-    local allow_unlisted_model="$6"
-    shift 6
+build_launcher_setup_block() {
+    local fleet_mode="$1"
+    local model="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
+    local allow_unlisted_model="$5"
+    shift 5
     local repository
 
-    printf '%s\n%s\n' \
-        "${RHYOLITE_START_MARKER}" \
-        "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
+    printf '%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
     for repository in "$@"; do
         printf 'Source=%s\n' "${repository}"
     done
@@ -570,11 +576,36 @@ build_initial_prompt() {
     printf 'ContextTier=%s\n' "${context_tier}"
     printf 'RememberPreferences=true\n'
     printf 'END_%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
+}
+
+build_start_request() {
+    local initial_request="$1"
+
     printf "Begin Rhyolite's guided repository-review setup now."
     if [ -n "${initial_request}" ]; then
         printf "\nTreat the following text as the user's initial review request:\n\n%s" \
             "${initial_request}"
     fi
+}
+
+build_initial_prompt() {
+    local initial_request="$1"
+    local fleet_mode="$2"
+    local model="$3"
+    local reasoning_effort="$4"
+    local context_tier="$5"
+    local allow_unlisted_model="$6"
+    shift 6
+
+    printf '%s\n' "${RHYOLITE_START_MARKER}"
+    build_launcher_setup_block \
+        "${fleet_mode}" \
+        "${model}" \
+        "${reasoning_effort}" \
+        "${context_tier}" \
+        "${allow_unlisted_model}" \
+        "$@"
+    build_start_request "${initial_request}"
 }
 
 write_launch_context() {
@@ -625,21 +656,26 @@ Options:
   --harness ID        Select a registered review harness.
   --model MODEL       Select an exact ID from Copilot's offline model catalog
                       (default: gpt-5.6-sol; alternate: claude-fable-5).
+                      With --harness claude, select from Rhyolite's Claude
+                      Code catalog (default: claude-opus-5-5; alternate:
+                      claude-opus-5).
   --allow-unlisted-model
                       Also accept a safe model ID that is missing from that
                       catalog; Copilot verifies availability when the review
                       runs, and the review never substitutes another model.
   --reasoning-effort  Select high, xhigh, or max (recommended).
   --context TIER      Select default or long_context (recommended).
-  --yolo         Start Copilot in YOLO mode for this launch.
+  --yolo         Start Copilot in YOLO mode for this launch (Claude Code:
+                 skip permission prompts).
 
 Available harnesses:
 $(rhyolite_harness_list_registered | sed 's/^/  - /')
 
-Starts Copilot outside Git worktrees with the checkout-loaded Rhyolite plugin,
-collects launcher settings, selects ${RHYOLITE_AGENT}, starts explicit
-interactive mode, and begins guided setup immediately. Approved fleet/model/
-effort/context settings are remembered per repository.
+Starts Copilot (or Claude Code with --harness claude) outside Git worktrees
+with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
+${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
+immediately. Approved fleet/model/effort/context settings are remembered per
+repository and harness. Claude Code has no native fleet mode.
 EOF
 }
 
@@ -680,11 +716,18 @@ main() {
     local is_interactive=0
     local copilot_path
     local copilot_exit_code
+    local harness_cli
+    local harness_fleet_capability
+    local claude_settings
+    local claude_setup_block
+    local claude_start_prompt
+    local escaped_plugin_root
     local preferences_helper
     local -a request_parts=()
     local -a repository_inputs=()
     local -a repositories=()
     local -a copilot_arguments=()
+    local -a claude_arguments=()
 
     script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
     script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
@@ -915,14 +958,78 @@ main() {
             'Use --harness copilot with a complete Rhyolite plugin installation.' \
             2
 
-    copilot_path="$(command -v copilot || true)"
-    [ -n "${copilot_path}" ] ||
+    if ! rhyolite_harness_capture \
+        LAUNCHER_HARNESS_DISPLAY harness_display_name ||
+        ! rhyolite_harness_capture harness_cli harness_cli_name ||
+        ! rhyolite_harness_capture \
+            harness_fleet_capability harness_capability fleet; then
         fail \
-            'Copilot CLI discovery' \
-            'The GitHub Copilot CLI is not available.' \
-            "The 'copilot' executable was not found on PATH." \
-            'Install GitHub Copilot CLI or add it to PATH, then retry.' \
-            127
+            'launcher harness validation' \
+            'The requested launcher harness metadata is unavailable.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness metadata could not be resolved.}" \
+            'Restore the complete Rhyolite plugin installation and retry.' \
+            2
+    fi
+    LAUNCHER_HARNESS="${harness}"
+    case "${harness}" in
+        copilot)
+            copilot_path="$(command -v copilot || true)"
+            [ -n "${copilot_path}" ] ||
+                fail \
+                    'Copilot CLI discovery' \
+                    'The GitHub Copilot CLI is not available.' \
+                    "The 'copilot' executable was not found on PATH." \
+                    'Install GitHub Copilot CLI or add it to PATH, then retry.' \
+                    127
+            ;;
+        claude)
+            for required_claude_asset in \
+                .claude-plugin/plugin.json \
+                claude/agents/repo-review.md \
+                claude/agents/repo-review-worker.md \
+                claude/commands/start.md \
+                claude/hooks.json; do
+                [ -f "${plugin_root}/${required_claude_asset}" ] ||
+                    fail \
+                        'plugin validation' \
+                        'A required Claude Code plugin asset is missing.' \
+                        "${required_claude_asset} was not found under ${plugin_root}." \
+                        'Restore the complete Rhyolite plugin installation and retry.' \
+                        2
+            done
+            LAUNCHER_DEFAULT_MODEL="${RHYOLITE_CLAUDE_DEFAULT_MODEL}"
+            LAUNCHER_ALTERNATE_MODEL="${RHYOLITE_CLAUDE_ALTERNATE_MODEL}"
+            LAUNCHER_DEFAULT_MODEL_FORMAT='Claude Opus 5.5 (Recommended) - %s'
+            LAUNCHER_ALTERNATE_MODEL_FORMAT='Claude Opus 5 - %s'
+            LAUNCHER_MODEL_IDS_HINT='rhyolite --harness claude model picker'
+            copilot_path="$(command -v "${harness_cli}" || true)"
+            [ -n "${copilot_path}" ] ||
+                fail \
+                    'Claude Code CLI discovery' \
+                    'The Claude Code CLI is not available.' \
+                    "The '${harness_cli}' executable was not found on PATH." \
+                    'Install Claude Code or add it to PATH, then retry.' \
+                    127
+            ;;
+        *)
+            fail \
+                'launcher harness validation' \
+                'The requested launcher harness has no supported outer session.' \
+                "Harness '${harness}' cannot start an interactive Rhyolite session." \
+                'Use --harness copilot or --harness claude with a complete Rhyolite plugin installation.' \
+                2
+            ;;
+    esac
+    if [[ "${harness_fleet_capability}" != yes ]]; then
+        [[ "${fleet_mode}" != native ]] ||
+            fail \
+                'launcher argument validation' \
+                'Native fleet mode is unavailable for the selected harness.' \
+                "${LAUNCHER_HARNESS_DISPLAY} has no native process-level fleet mode." \
+                'Omit --fleet-mode or pass --fleet-mode standard, then retry.' \
+                2
+        fleet_mode='standard'
+    fi
 
     original_dir="$(pwd -P)"
     assert_control_free_path "${original_dir}"
@@ -942,8 +1049,10 @@ main() {
 
     launcher_home="$(rhyolite_launcher_home)"
     session_dir="$(create_session_dir "${launcher_home}")"
-    log_dir="${session_dir}/copilot-logs"
-    mkdir -p "${log_dir}"
+    log_dir="${session_dir}/${harness}-logs"
+    if [[ "${harness}" == copilot ]]; then
+        mkdir -p "${log_dir}"
+    fi
 
     initial_request="$(join_initial_request "${request_parts[@]}")"
     if [[ ${#repository_inputs[@]} -eq 0 && -n "${initial_request}" ]]; then
@@ -1027,8 +1136,8 @@ main() {
         ! launcher_model_accepted \
             "${remembered_model}" "${allow_unlisted_model}"; then
         if launcher_model_unlisted; then
-            printf 'Rhyolite launcher ignored saved settings because model %s is not in the offline Copilot model catalog; pass --allow-unlisted-model to reuse it.\n' \
-                "${remembered_model}" >&2
+            printf 'Rhyolite launcher ignored saved settings because model %s is not in the offline %s model catalog; pass --allow-unlisted-model to reuse it.\n' \
+                "${remembered_model}" "${LAUNCHER_HARNESS_DISPLAY}" >&2
         else
             printf 'Rhyolite launcher ignored saved settings because model %s is no longer available.\n' \
                 "${remembered_model}" >&2
@@ -1043,21 +1152,21 @@ main() {
         if launcher_model_unlisted; then
             fail \
                 'launcher model validation' \
-                "The requested model is not in Copilot's offline model catalog." \
-                "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
-                'Pass --allow-unlisted-model with this exact model ID so Copilot verifies it when the review runs, or pass one of the IDs shown by copilot help config.' \
+                "The requested model is not in ${LAUNCHER_HARNESS_DISPLAY}'s offline model catalog." \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the ${LAUNCHER_HARNESS_DISPLAY} model catalog.}" \
+                "Pass --allow-unlisted-model with this exact model ID so ${LAUNCHER_HARNESS_DISPLAY} verifies it when the review runs, or pass one of the IDs shown by ${LAUNCHER_MODEL_IDS_HINT}." \
                 2
         fi
         fail \
             'launcher model validation' \
             'The requested model is not available.' \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
-            'Run the launcher interactively and choose List available model IDs, or pass one of the IDs shown by copilot help config.' \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the ${LAUNCHER_HARNESS_DISPLAY} model catalog.}" \
+            "Run the launcher interactively and choose List available model IDs, or pass one of the IDs shown by ${LAUNCHER_MODEL_IDS_HINT}." \
             2
     fi
 
     if [[ -z "${fleet_mode}" ]]; then
-        if ((is_interactive)); then
+        if ((is_interactive)) && [[ "${harness_fleet_capability}" == yes ]]; then
             fleet_mode="$(
                 prompt_for_fleet_mode "${remembered_fleet_mode}"
             )"
@@ -1072,14 +1181,14 @@ main() {
                     "${remembered_model}" "${allow_unlisted_model}"
             )"
         else
-            model="${remembered_model:-${RHYOLITE_DEFAULT_MODEL}}"
+            model="${remembered_model:-${LAUNCHER_DEFAULT_MODEL}}"
         fi
     fi
     if ! launcher_model_accepted "${model}" "${allow_unlisted_model}"; then
         fail \
             'launcher model validation' \
             'The selected model is not available.' \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the ${LAUNCHER_HARNESS_DISPLAY} model catalog.}" \
             'Choose another model from the available catalog and retry.' \
             2
     fi
@@ -1186,6 +1295,63 @@ main() {
     export RHYOLITE_LAUNCHER_MODEL="${model}"
     export RHYOLITE_LAUNCHER_REASONING_EFFORT="${reasoning_effort}"
     export RHYOLITE_LAUNCHER_CONTEXT_TIER="${context_tier}"
+
+    if [[ "${harness}" == claude ]]; then
+        escaped_plugin_root="${plugin_root//\\/\\\\}"
+        escaped_plugin_root="${escaped_plugin_root//\"/\\\"}"
+        claude_settings="$(
+            printf '{"permissions":{"allow":["Bash(bash %s/skills/readonly-repository-review/scripts/run-parallel-reviews.sh *)"]}}' \
+                "${escaped_plugin_root}"
+        )"
+        # Claude Code renders the startup plaque after the first visible
+        # prompt, so the trusted setup block travels in the system prompt and
+        # the visible prompt stays two lines long.
+        claude_setup_block="$(
+            build_launcher_setup_block \
+                "${fleet_mode}" \
+                "${model}" \
+                "${reasoning_effort}" \
+                "${context_tier}" \
+                "${allow_unlisted_model}" \
+                "${repositories[@]}"
+        )"
+        claude_start_prompt="$(
+            printf '%s\n' "${RHYOLITE_START_MARKER}"
+            build_start_request "${initial_request}"
+        )"
+        claude_arguments=(
+            --plugin-dir "${plugin_root}"
+            --agent "${RHYOLITE_AGENT}"
+            --model "${model}"
+            --effort "${reasoning_effort}"
+            --name "rhyolite-$(basename "${session_dir}")"
+            --strict-mcp-config
+            --settings "${claude_settings}"
+            --permission-mode default
+            --append-system-prompt "${claude_setup_block}"
+        )
+        if ((yolo)); then
+            claude_arguments=(--dangerously-skip-permissions "${claude_arguments[@]}")
+        fi
+        set +e
+        (
+            cd "${launch_dir}" &&
+                "${copilot_path}" "${claude_arguments[@]}" -- "${claude_start_prompt}"
+        )
+        copilot_exit_code=$?
+        set -e
+        if [ "${copilot_exit_code}" -ne 0 ]; then
+            fail \
+                'Claude Code session' \
+                'The Claude Code session exited before Rhyolite completed normally.' \
+                "Claude Code returned exit code ${copilot_exit_code}." \
+                'Address the reported Claude Code failure and retry from a clean non-Git directory.' \
+                "${copilot_exit_code}" \
+                "${session_dir}/launch-context.txt" \
+                'Claude Code and guided repository-review setup did not start or complete.'
+        fi
+        return 0
+    fi
 
     copilot_arguments=(
         --experimental

@@ -90,7 +90,6 @@ RESEARCH_WEB_PROVIDER_ID="duckduckgo-html-v1"
 RESEARCH_WEB_AVAILABLE="true"
 RESEARCH_TOOLS_JSON='[]'
 RESEARCH_TOOL_NAMES='research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary'
-RESEARCH_RUNTIME_TOOL_NAMES='rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary'
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 
@@ -118,9 +117,10 @@ Options:
   --result-root PATH               Deprecated alias for --output-root
   --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
   --commit SHA                     Exact 40-character commit for one repository
-  --harness ID                     Review harness (default: copilot)
+  --harness ID                     Review harness: copilot (default) or claude
   --model MODEL                    gpt-5.6-sol (recommended), claude-fable-5,
-                                   or another available model ID
+                                   or another available model ID; with
+                                   --harness claude, claude-opus-5-5 (recommended)
   --allow-unlisted-model           Accept a safe model ID that is missing from the
                                    harness's offline model catalog; the harness
                                    verifies availability when the review runs
@@ -147,6 +147,7 @@ Options:
 
 Available harnesses:
   - copilot
+  - claude
 EOF
 }
 
@@ -306,7 +307,10 @@ count = repair.get("AttemptCount")
 if type(count) is not int or count not in (0, 1):
     raise SystemExit("Invalid report-repair attempt count")
 normalization = repair.get("TableNormalization", "NotRun")
-raise SystemExit(0 if count == 1 or normalization == "Applied" else 1)
+confidence = repair.get("ConfidenceNormalization", "NotRun")
+raise SystemExit(
+    0 if count == 1 or "Applied" in (normalization, confidence) else 1
+)
 ' "${state_path}"
 }
 
@@ -314,6 +318,7 @@ errors_report_unavailable_model() {
     grep -Eq \
         -e '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*"[^"]* is not available' \
         -e "[Mm]odel '[A-Za-z0-9][A-Za-z0-9._-]*'[^']* is not available" \
+        -e '\[claude-code:unrecognized_model\] \{"model":"[A-Za-z0-9][A-Za-z0-9._-]*"' \
         "$1" 2>/dev/null
 }
 
@@ -1036,7 +1041,7 @@ compute_approval_hash() {
 }
 
 report_repair_policy_json() {
-    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
+    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
         "${REPORT_REPAIR_ATTEMPT_LIMIT}" "${REPORT_REPAIR_TIMEOUT_SECONDS}"
 }
 
@@ -2245,15 +2250,14 @@ if ((ENABLE_PUBLIC_RESEARCH)); then
             'Restore the complete harness adapter and retry.'
         exit 2
     fi
-    if [[ "${HARNESS}" != copilot ||
-        "${harness_web_research_capability}" != yes ]]; then
+    if [[ "${harness_web_research_capability}" != yes ]]; then
         print_runner_error \
             'The selected review harness cannot run Rhyolite public research.' \
             "harness ${HARNESS} harness_capability" \
             "Harness ${HARNESS}" \
-            'The dedicated public-research worker remains runner-owned and Copilot-specific.' \
+            "The ${HARNESS_DISPLAY_NAME} adapter has not proven the dedicated public-research worker contract (web_research is ${harness_web_research_capability})." \
             'Review planning and execution did not start.' \
-            'Use scope 1 with this development fixture or select the supported Copilot harness for scope 2 or 3.'
+            'Use scope 1 with this harness, or select a harness that supports public research for scope 2 or 3.'
         exit 2
     fi
 fi
@@ -3336,6 +3340,8 @@ report_repair_json() {
   "AttemptCount": ${REPORT_REPAIR_ATTEMPT_COUNT:-0},
   "TableNormalization": "$(json_escape "${REPORT_REPAIR_TABLE_NORMALIZATION:-NotRun}")",
   "TablesConverted": ${REPORT_REPAIR_TABLES_CONVERTED:-0},
+  "ConfidenceNormalization": "$(json_escape "${REPORT_REPAIR_CONFIDENCE_NORMALIZATION:-NotRun}")",
+  "ConfidenceFieldsNormalized": ${REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED:-0},
   "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC:-}")",
   "FinalDiagnostic": "$(json_escape "${REPORT_REPAIR_FINAL_DIAGNOSTIC:-}")",
   "PreservationCheck": "$(json_escape "${REPORT_REPAIR_PRESERVATION:-NotRun}")",
@@ -3392,6 +3398,8 @@ checks = {"NotRun", "Passed", "Failed"}
 normalizations = {"NotRun", "Applied", "NotEligible", "Failed"}
 normalization = data.get("TableNormalization", "NotRun")
 tables = data.get("TablesConverted", 0)
+confidence = data.get("ConfidenceNormalization", "NotRun")
+confidence_fields = data.get("ConfidenceFieldsNormalized", 0)
 if (data["Status"] not in statuses or
     any(data[key] not in checks for key in
         ("PreservationCheck", "FinalValidation", "Cleanup")) or
@@ -3401,7 +3409,11 @@ if (data["Status"] not in statuses or
     normalization not in normalizations or
     type(tables) is not int or
     tables < 0 or
-    (tables > 0) != (normalization == "Applied")):
+    (tables > 0) != (normalization == "Applied") or
+    confidence not in normalizations or
+    type(confidence_fields) is not int or
+    confidence_fields < 0 or
+    (confidence_fields > 0) != (confidence == "Applied")):
     raise SystemExit("Invalid trusted report-repair state")
 summary = "{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".format(
     data["Status"], data["AttemptCount"], data["AttemptLimit"],
@@ -3409,6 +3421,9 @@ summary = "{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".forma
 if normalization != "NotRun":
     summary += "; table normalization {} ({} converted)".format(
         normalization, tables)
+if confidence != "NotRun":
+    summary += "; confidence delimiter normalization {} ({} fields)".format(
+        confidence, confidence_fields)
 print(summary)
 '
 }
@@ -3645,6 +3660,146 @@ run_report_table_normalization() {
     return 2
 }
 
+# A diagnostic is eligible for the model-free confidence delimiter correction
+# only when its first invalid field holds one level directly followed by
+# explanatory words; compound levels and bare "<Level> confidence" prefixes
+# remain for the bounded model edit.
+report_confidence_delimiter_diagnostic() {
+    local diagnostic="$1"
+    local value
+
+    [[ "${diagnostic}" =~ ^[A-Z][A-Z\ -]*\ has\ an\ invalid\ confidence\ level:\ (High|Medium|Low)[[:space:]]+([A-Za-z\(].*)$ ]] ||
+        return 1
+    value="${BASH_REMATCH[2]}"
+    [[ "${value,,}" != confidence* ]] || return 1
+    [[ ! "${value}" =~ (^|[^A-Za-z])(High|Medium|Low)([^A-Za-z]|$) ]]
+}
+
+run_report_confidence_normalization() {
+    local source_candidate="$1"
+    local normalization_status=0
+    local normalized_count=""
+    local normalized_diagnostic=""
+    local normalized_candidate="${REPORT_REPAIR_DIRECTORY}/confidence-normalized-candidate.txt"
+    local normalized_diagnostic_path="${REPORT_REPAIR_DIRECTORY}/confidence-normalized-diagnostic.txt"
+
+    REPORT_REPAIR_STATUS='Running'
+    REPORT_REPAIR_REQUEST_PATH=""
+    if normalized_count="$(
+        normalize_review_report_confidence_delimiters \
+            "${source_candidate}" "${normalized_candidate}" \
+            2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+    )"; then
+        normalization_status=0
+    else
+        normalization_status=$?
+    fi
+    if ((normalization_status == 0)) &&
+        ! {
+            [[ "${normalized_count}" =~ ^[1-9][0-9]{0,5}$ ]] &&
+            chmod 600 -- "${normalized_candidate}"
+        } 2>> "${error_path}"; then
+        printf '%s\n' \
+            'report repair helper error: the confidence-normalized candidate could not be verified' \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        normalization_status=1
+    fi
+    if ((normalization_status == 42)); then
+        rm -f -- "${normalized_candidate}"
+        : > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        REPORT_REPAIR_CONFIDENCE_NORMALIZATION='NotEligible'
+        write_report_repair_state || return 1
+        return 3
+    fi
+    if ((normalization_status != 0)); then
+        rm -f -- "${normalized_candidate}"
+        REPORT_REPAIR_CONFIDENCE_NORMALIZATION='Failed'
+        REPORT_REPAIR_STATUS='Failed'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        )"
+        if [[ -z "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" ]]; then
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='report repair helper error: the confidence normalizer returned no diagnostic'
+            printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+                > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        fi
+        printf 'Report repair %s: %s\n' \
+            "${REPORT_REPAIR_STATUS}" "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            >> "${error_path}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report validation' \
+            'candidate rejected; no eligible content-preserving correction'
+        return 1
+    fi
+
+    REPORT_REPAIR_NORMALIZED_PATH="${normalized_candidate}"
+    REPORT_REPAIR_CONFIDENCE_NORMALIZATION='Applied'
+    REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED="${normalized_count}"
+    REPORT_REPAIR_PRESERVATION='Passed'
+    write_report_repair_state || return 1
+    review_progress "${slug}" 'report repair' \
+        "inserted the accepted delimiter in ${normalized_count} assessment confidence field(s) without a model; every word preserved; strict revalidation follows"
+
+    if normalized_diagnostic="$(
+        validate_final_review_report "${REPORT_REPAIR_NORMALIZED_PATH}" \
+            "${SCOPE}" 2>&1
+    )"; then
+        REPORT_REPAIR_VALIDATION='Passed'
+        if {
+            cp -- "${REPORT_REPAIR_NORMALIZED_PATH}" "${report_path}.tmp" &&
+            chmod 600 -- "${report_path}.tmp" &&
+            mv -- "${report_path}.tmp" "${report_path}"
+        } 2>> "${error_path}"; then
+            REPORT_REPAIR_STATUS='Succeeded'
+            REPORT_REPAIR_PROMOTED=1
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Confidence delimiter normalization preserved every word and passed strict validation.'
+        else
+            REPORT_REPAIR_STATUS='Failed'
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair canonical promotion failed.'
+        fi
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        if ((REPORT_REPAIR_PROMOTED)); then
+            review_progress "${slug}" 'report repair' \
+                'strict revalidation passed; unchanged findings promoted to canonical report'
+            return 0
+        fi
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+
+    REPORT_REPAIR_VALIDATION='Failed'
+    printf 'Confidence-normalized report validation failed: %s\n' \
+        "${normalized_diagnostic}" >> "${error_path}"
+    if ! {
+        printf '%s\n' "${normalized_diagnostic}" \
+            > "${normalized_diagnostic_path}" &&
+        chmod 600 -- "${normalized_diagnostic_path}"
+    } 2>> "${error_path}"; then
+        rm -f -- "${normalized_diagnostic_path}"
+        REPORT_REPAIR_STATUS='Failed'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair could not preserve the confidence-normalized candidate diagnostic.'
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+    REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH="${normalized_diagnostic_path}"
+    write_report_repair_state || return 1
+    return 2
+}
+
 run_report_repair() {
     local initial_candidate="$1"
     local initial_diagnostic="$2"
@@ -3663,6 +3818,7 @@ run_report_repair() {
     local repair_source_path=""
     local repair_source_diagnostic_path=""
     local normalization_status=0
+    local confidence_status=0
     local -a repair_arguments=()
     local -a repair_environment=()
 
@@ -3696,6 +3852,23 @@ run_report_repair() {
                 repair_source_path="${REPORT_REPAIR_NORMALIZED_PATH}"
                 repair_source_diagnostic_path="${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
                 ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+    if report_confidence_delimiter_diagnostic         "$(cat -- "${repair_source_diagnostic_path}")"; then
+        run_report_confidence_normalization "${repair_source_path}" ||
+            confidence_status=$?
+        case "${confidence_status}" in
+            0)
+                return 0
+                ;;
+            2)
+                repair_source_path="${REPORT_REPAIR_NORMALIZED_PATH}"
+                repair_source_diagnostic_path="${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
+                ;;
+            3) ;;
             *)
                 return 1
                 ;;
@@ -4433,154 +4606,6 @@ new_session_id() {
         "${hex:16:4}" "${hex:20:12}"
 }
 
-sanitize_and_remove_runtime_copilot_home() {
-    local runtime_home="$1"
-    local attempt
-
-    [[ -n "${runtime_home}" && -e "${runtime_home}" ]] || return 0
-    if [[ -f "${runtime_home}/config.json" ]]; then
-        if ! rm -f -- "${runtime_home}/config.json"; then
-            {
-                printf '%s\n' \
-                    '// User settings belong in settings.json.' \
-                    '// This file is managed automatically.' \
-                    '{}'
-            } > "${runtime_home}/config.json" 2>/dev/null || true
-            chmod 600 -- "${runtime_home}/config.json" 2>/dev/null || true
-        fi
-    fi
-
-    for attempt in 1 2 3; do
-        rm -rf -- "${runtime_home}" 2>/dev/null || true
-        [[ ! -e "${runtime_home}" ]] && return 0
-        sleep 1
-    done
-    return 1
-}
-
-write_isolated_copilot_settings() {
-    local settings_path="$1"
-    local store_token_plaintext="$2"
-    local reasoning_effort="$3"
-    local context_tier="$4"
-
-    {
-        printf '{\n'
-        if ((store_token_plaintext)); then
-            printf '  "storeTokenPlaintext": true,\n'
-        fi
-        cat <<EOF
-  "disableAllHooks": true,
-  "customAgents": {
-    "defaultLocalOnly": true
-  },
-  "subagents": {
-    "agents": {
-      "explore": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "task": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "code-review": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "general-purpose": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "research": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "security-review": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      },
-      "rubber-duck": {
-        "model": "inherit",
-        "effortLevel": "${reasoning_effort}",
-        "contextTier": "${context_tier}"
-      }
-    }
-  }
-}
-EOF
-    } > "${settings_path}"
-}
-
-initialize_runtime_copilot_home() {
-    local runtime_home="$1"
-
-    if [[ -d "${runtime_home}" ]]; then
-        chmod 700 -- "${runtime_home}"
-    else
-        mkdir -m 700 -- "${runtime_home}"
-    fi
-    write_isolated_copilot_settings \
-        "${runtime_home}/settings.json" \
-        "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}" \
-        "${REASONING_EFFORT}" \
-        "${CONTEXT_TIER}"
-    {
-        printf '%s\n' \
-            '// User settings belong in settings.json.' \
-            '// This file is managed automatically.'
-        printf '%s\n' "${COPILOT_AUTH_BRIDGE_JSON}"
-    } > "${runtime_home}/config.json"
-    chmod 600 -- \
-        "${runtime_home}/settings.json" \
-        "${runtime_home}/config.json"
-}
-
-write_research_mcp_config() {
-    local path="$1"
-    local runtime_root="$2"
-    local network_root="$3"
-    local repository="$4"
-
-    cat > "${path}" <<EOF
-{
-  "mcpServers": {
-    "rhyolite-research": {
-      "type": "local",
-      "command": "$(json_escape "${RESEARCH_BROKER_LAUNCHER}")",
-      "args": [
-        "--runtime-root",
-        "$(json_escape "${runtime_root}")",
-        "--policy",
-        "$(json_escape "${RESEARCH_POLICY_PATH}")",
-        "--scope",
-        "$(json_escape "${SCOPE}")",
-        "--web-search-provider",
-        "$(json_escape "${RESEARCH_WEB_SEARCH_PROVIDER}")",
-        "--cookies",
-        "$(json_escape "${RESEARCH_COOKIES}")",
-        "--network-root",
-        "$(json_escape "${network_root}")",
-        "--repository-url",
-        "$(json_escape "${repository}")",
-        "--expected-policy-digest",
-        "$(json_escape "${RESEARCH_POLICY_DIGEST}")"
-      ],
-      "tools": ${RESEARCH_TOOLS_JSON},
-      "timeout": 120000
-    }
-  }
-}
-EOF
-    chmod 600 -- "${path}"
-}
-
 ensure_research_failure_artifacts() {
     local network_root="$1"
     local failure_status="$2"
@@ -5040,6 +5065,8 @@ process_repository() {
     local REPORT_REPAIR_ATTEMPT_COUNT=0
     local REPORT_REPAIR_TABLE_NORMALIZATION='NotRun'
     local REPORT_REPAIR_TABLES_CONVERTED=0
+    local REPORT_REPAIR_CONFIDENCE_NORMALIZATION='NotRun'
+    local REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED=0
     local REPORT_REPAIR_INITIAL_DIAGNOSTIC=""
     local REPORT_REPAIR_FINAL_DIAGNOSTIC=""
     local REPORT_REPAIR_PRESERVATION='NotRun'
@@ -5096,7 +5123,38 @@ process_repository() {
         "${clone_path}" 2> "${error_path}"
     local clone_exit_code=$?
     set -e
+    # A blob-filtered clone fetches the checkout blobs in a second anonymous
+    # request. A transient refusal of that request leaves a complete commit
+    # graph without a working tree, so retry only that object fetch.
+    if ((clone_exit_code != 0)) &&
+        [[ -d "${clone_path}/.git" ]] &&
+        grep -Fq 'Clone succeeded, but checkout failed' "${error_path}"; then
+        local checkout_attempt
+        for checkout_attempt in 1 2; do
+            review_progress "${slug}" 'clone' \
+                "checkout object fetch was refused; anonymous retry ${checkout_attempt}/2"
+            sleep $((checkout_attempt * 5))
+            set +e
+            anonymous_git_repository "${curl_resolve}" \
+                -C "${clone_path}" \
+                reset --quiet --hard HEAD 2>> "${error_path}"
+            clone_exit_code=$?
+            set -e
+            if ((clone_exit_code == 0)); then
+                : > "${error_path}"
+                review_progress "${slug}" 'clone' \
+                    "checkout objects fetched after anonymous retry ${checkout_attempt}/2"
+                break
+            fi
+        done
+    fi
     if ((clone_exit_code != 0)); then
+        if grep -Eq 'unable to get password from user|could not read (Username|Password)|Authentication failed' \
+            "${error_path}"; then
+            printf '%s\n' \
+                'The remote answered an anonymous Git request with an authentication challenge. Rhyolite never sends credentials and keeps Git prompts disabled, so the repository or one of its objects was not anonymously readable at that moment.' \
+                >> "${error_path}"
+        fi
         cat > "${report_path}" <<'EOF'
 ================================================================================
 REPOSITORY REVIEW REPORT
@@ -5387,7 +5445,12 @@ EOF
         local research_network_root="${RESEARCH_DIRECTORY}/network"
         local research_runtime_root="${session_root}/research-runtime"
         local research_mcp_config="${session_root}/research-mcp-config.json"
-        local research_runtime_copilot_home=""
+        local research_runtime_home=""
+        local research_ready=1
+        local research_authentication_names
+        local -a research_broker_arguments=()
+        local -a research_arguments=()
+        local -a research_environment=()
         local research_session_id=""
         local research_session_name=""
         local research_exit_code=1
@@ -5402,11 +5465,28 @@ EOF
         mkdir -m 700 -- "${RESEARCH_DIRECTORY}" "${research_runtime_root}"
         : > "${research_error_path}"
         chmod 600 -- "${research_error_path}"
-        write_research_mcp_config \
+        research_broker_arguments=(
+            --runtime-root "${research_runtime_root}"
+            --policy "${RESEARCH_POLICY_PATH}"
+            --scope "${SCOPE}"
+            --web-search-provider "${RESEARCH_WEB_SEARCH_PROVIDER}"
+            --cookies "${RESEARCH_COOKIES}"
+            --network-root "${research_network_root}"
+            --repository-url "${repository}"
+            --expected-policy-digest "${RESEARCH_POLICY_DIGEST}"
+        )
+        if ! rhyolite_harness_invoke harness_write_research_mcp_config \
             "${research_mcp_config}" \
-            "${research_runtime_root}" \
-            "${research_network_root}" \
-            "${repository}"
+            "${RESEARCH_BROKER_LAUNCHER}" \
+            research_broker_arguments \
+            "${RESEARCH_TOOLS_JSON}" \
+            >/dev/null 2>> "${research_error_path}"; then
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_write_research_mcp_config" \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research MCP configuration failed.}" \
+                >> "${research_error_path}"
+            research_ready=0
+        fi
 
         while IFS= read -r template_line || [[ -n "${template_line}" ]]; do
             case "${template_line}" in
@@ -5469,50 +5549,44 @@ EOF
         ))
         local research_session_slug="${slug:0:research_maximum_slug_length}"
         research_session_name="${research_session_prefix}${research_session_slug}${research_session_suffix}"
-        local research_available_tools
-        research_available_tools="view,glob,rg,skill,${RESEARCH_RUNTIME_TOOL_NAMES}"
-        local -a research_copilot_arguments=(
-            -C "${session_root}"
-            --plugin-dir "${PLUGIN_ROOT}"
-            --name "${research_session_name}"
-            --session-id "${research_session_id}"
-            --agent rhyolite:repo-research-worker
-            --model "${MODEL}"
-            --reasoning-effort "${REASONING_EFFORT}"
-            --context "${CONTEXT_TIER}"
-            --no-ask-user
-            --no-color
-            --no-custom-instructions
-            --disable-builtin-mcps
-            --additional-mcp-config "@${research_mcp_config}"
-            --disallow-temp-dir
-            --no-remote-export
-            --secret-env-vars "$(IFS=,; printf '%s' "${authentication_variables[*]}")"
-            --available-tools "${research_available_tools}"
-            --allow-tool read
-            --allow-tool 'rhyolite-research(research_capabilities)'
-            --allow-tool 'rhyolite-research(fetch_public_url)'
-            --allow-tool 'rhyolite-research(search_public_github)'
-            --allow-tool 'rhyolite-research(search_public_web)'
-            --allow-tool 'rhyolite-research(research_network_summary)'
-            --deny-tool write
-            --deny-tool shell
-            --stream off
-            --share "${research_transcript_path}"
-            --silent
-        )
-
-        research_runtime_copilot_home="$(
-            mktemp -d "${TMPDIR:-/tmp}/rhyolite-repo-research-copilot.XXXXXXXX"
+        research_authentication_names="$(
+            IFS=,
+            printf '%s' "${authentication_variables[*]}"
         )"
-        initialize_runtime_copilot_home "${research_runtime_copilot_home}"
-        RESEARCH_RUNTIME_HOME_TO_CLEAN="${research_runtime_copilot_home}"
+        if ((research_ready)) &&
+            ! rhyolite_harness_invoke harness_research_worker_argv \
+                research_arguments \
+                "${session_root}" \
+                "${PLUGIN_ROOT}" \
+                "${research_session_name}" \
+                "${research_session_id}" \
+                "${MODEL}" \
+                "${REASONING_EFFORT}" \
+                "${CONTEXT_TIER}" \
+                "${research_authentication_names}" \
+                "${research_mcp_config}" \
+                "${RESEARCH_TOOL_NAMES}" \
+                "${research_transcript_path}" \
+                >/dev/null 2>> "${research_error_path}"; then
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_research_worker_argv" \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research argument construction failed.}" \
+                >> "${research_error_path}"
+            research_ready=0
+        fi
+
+        if ((research_ready)); then
+            research_runtime_home="$(
+                mktemp -d "${TMPDIR:-/tmp}/rhyolite-repo-research-${HARNESS}.XXXXXXXX"
+            )"
+            RESEARCH_RUNTIME_HOME_TO_CLEAN="${research_runtime_home}"
+        fi
         RESEARCH_BROKER_RUNTIME_TO_CLEAN="${research_runtime_root}"
         RESEARCH_MCP_CONFIG_TO_CLEAN="${research_mcp_config}"
         RESEARCH_NETWORK_ROOT_TO_CLEAN="${research_network_root}"
         trap '
             if [[ -n "${RESEARCH_RUNTIME_HOME_TO_CLEAN-}" ]]; then
-                sanitize_and_remove_runtime_copilot_home \
+                rhyolite_harness_invoke harness_sanitize_runtime_home \
                     "${RESEARCH_RUNTIME_HOME_TO_CLEAN}" \
                     >/dev/null 2>&1 || true
             fi
@@ -5525,6 +5599,29 @@ EOF
                     >/dev/null 2>&1 || true
             fi
         ' EXIT
+        if ((research_ready)) &&
+            ! rhyolite_harness_invoke harness_prepare_worker_home \
+                "${research_runtime_home}" \
+                "${REASONING_EFFORT}" \
+                "${CONTEXT_TIER}" \
+                research \
+                >/dev/null 2>> "${research_error_path}"; then
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_prepare_worker_home" \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research-home preparation failed.}" \
+                >> "${research_error_path}"
+            research_ready=0
+        fi
+        if ((research_ready)) &&
+            ! rhyolite_harness_invoke harness_research_worker_env \
+                research_environment \
+                >/dev/null 2>> "${research_error_path}"; then
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_research_worker_env" \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research environment construction failed.}" \
+                >> "${research_error_path}"
+            research_ready=0
+        fi
 
         case "${SCOPE}" in
             2) research_timeout_minutes=60 ;;
@@ -5533,53 +5630,63 @@ EOF
         if ((SESSION_TIMEOUT_MINUTES < research_timeout_minutes)); then
             research_timeout_minutes="${SESSION_TIMEOUT_MINUTES}"
         fi
-        review_progress \
-            "${slug}" \
-            'research' \
-            "${MODEL} dedicated research started; cookies ${RESEARCH_COOKIES}"
-        set +e
-        timeout \
-            --signal=TERM \
-            --kill-after=30s \
-            "${research_timeout_minutes}m" \
-            env \
-            -u COPILOT_ALLOW_ALL \
-            -u COPILOT_SKILLS_DIRS \
-            -u COPILOT_CUSTOM_INSTRUCTIONS_DIRS \
-            -u COPILOT_DYNAMIC_RETRIEVAL_SKILLS \
-            -u COPILOT_EMBEDDING_ONLY_SKILLS \
-            COPILOT_HOME="${research_runtime_copilot_home}" \
-            copilot "${research_copilot_arguments[@]}" \
-            < "${research_request_path}" \
-            > "${research_raw_output}" \
-            2> "${research_error_path}" &
-        local research_process_id=$!
-        RHYOLITE_ACTIVE_CHILD_PID="${research_process_id}"
-        local research_started_epoch
-        local research_last_heartbeat_epoch
-        research_started_epoch="$(date +%s)"
-        research_last_heartbeat_epoch="${research_started_epoch}"
-        while kill -0 "${research_process_id}" 2>/dev/null; do
-            sleep 1
-            if kill -0 "${research_process_id}" 2>/dev/null; then
-                local research_now_epoch
-                research_now_epoch="$(date +%s)"
-                if ((research_now_epoch - research_last_heartbeat_epoch >= 30)); then
-                    local research_elapsed_seconds=$(( \
-                        research_now_epoch - research_started_epoch \
-                    ))
-                    review_progress \
-                        "${slug}" \
-                        'research' \
-                        "still running; elapsed $((research_elapsed_seconds / 60))m $((research_elapsed_seconds % 60))s"
-                    research_last_heartbeat_epoch="${research_now_epoch}"
+        if ((research_ready)); then
+            review_progress \
+                "${slug}" \
+                'research' \
+                "${MODEL} dedicated research started; cookies ${RESEARCH_COOKIES}"
+            set +e
+            timeout \
+                --signal=TERM \
+                --kill-after=30s \
+                "${research_timeout_minutes}m" \
+                env \
+                "${research_environment[@]}" \
+                "${HARNESS_CLI_NAME}" "${research_arguments[@]}" \
+                < "${research_request_path}" \
+                > "${research_raw_output}" \
+                2> "${research_error_path}" &
+            local research_process_id=$!
+            RHYOLITE_ACTIVE_CHILD_PID="${research_process_id}"
+            local research_started_epoch
+            local research_last_heartbeat_epoch
+            research_started_epoch="$(date +%s)"
+            research_last_heartbeat_epoch="${research_started_epoch}"
+            while kill -0 "${research_process_id}" 2>/dev/null; do
+                sleep 1
+                if kill -0 "${research_process_id}" 2>/dev/null; then
+                    local research_now_epoch
+                    research_now_epoch="$(date +%s)"
+                    if ((research_now_epoch - research_last_heartbeat_epoch >= 30)); then
+                        local research_elapsed_seconds=$(( \
+                            research_now_epoch - research_started_epoch \
+                        ))
+                        review_progress \
+                            "${slug}" \
+                            'research' \
+                            "still running; elapsed $((research_elapsed_seconds / 60))m $((research_elapsed_seconds % 60))s"
+                        research_last_heartbeat_epoch="${research_now_epoch}"
+                    fi
                 fi
+            done
+            wait "${research_process_id}"
+            research_exit_code=$?
+            RHYOLITE_ACTIVE_CHILD_PID=""
+            set -e
+            if ! rhyolite_harness_invoke harness_finalize_research_session \
+                "${research_runtime_home}" \
+                "${research_raw_output}" \
+                >/dev/null 2>> "${research_error_path}"; then
+                printf '%s\n' \
+                    "Harness failure stage: harness ${HARNESS} harness_finalize_research_session" \
+                    "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research session finalization failed.}" \
+                    >> "${research_error_path}"
+                research_exit_code=1
             fi
-        done
-        wait "${research_process_id}"
-        research_exit_code=$?
-        RHYOLITE_ACTIVE_CHILD_PID=""
-        set -e
+        else
+            : > "${research_raw_output}"
+            research_exit_code=1
+        fi
 
         tr -d '\r' < "${research_raw_output}" |
             sanitize_review_text > "${research_timeline_path}"
@@ -5594,13 +5701,15 @@ EOF
                 sanitize_review_text > "${research_transcript_plain}"
         fi
 
-        if sanitize_and_remove_runtime_copilot_home \
-            "${research_runtime_copilot_home}"; then
-            research_runtime_copilot_home=""
+        if [[ -z "${research_runtime_home}" ]] ||
+            rhyolite_harness_invoke harness_sanitize_runtime_home \
+                "${research_runtime_home}" \
+                >/dev/null 2>/dev/null; then
+            research_runtime_home=""
             RESEARCH_RUNTIME_HOME_TO_CLEAN=""
         else
             printf '%s\n' \
-                "Could not remove the temporary research Copilot runtime home after three attempts: ${research_runtime_copilot_home}" \
+                "Could not remove the temporary research ${HARNESS_DISPLAY_NAME} runtime home after three attempts: ${research_runtime_home}" \
                 >> "${research_error_path}"
             research_cleanup_failed=1
         fi
@@ -5671,7 +5780,7 @@ EOF
 
         if [[ -f "${research_transcript_path}" ]]; then
             write_safe_markdown_document \
-                'Copilot Research Session Transcript' \
+                "${HARNESS_DISPLAY_NAME} Research Session Transcript" \
                 "${research_transcript_plain}" \
                 "${research_transcript_path}.tmp"
             mv -- \
@@ -5679,7 +5788,8 @@ EOF
                 "${research_transcript_path}"
             rm -f -- "${research_transcript_plain}"
         else
-            printf '# Copilot research session transcript\n\n%s\n' \
+            printf '# %s research session transcript\n\n%s\n' \
+                "${HARNESS_DISPLAY_NAME}" \
                 'No completed research session transcript is available.' \
                 > "${research_transcript_path}"
         fi

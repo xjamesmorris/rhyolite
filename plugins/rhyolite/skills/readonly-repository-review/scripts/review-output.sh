@@ -1822,6 +1822,185 @@ except HelperError as error:
 PY
 }
 
+# Insert the accepted ` - ` delimiter between a single confidence level and
+# directly following explanatory words in field-validated assessment
+# sections. Every word is preserved; compound levels and bare
+# `<Level> confidence` prefixes stay ineligible for model-free correction.
+normalize_review_report_confidence_delimiters() {
+    local report="$1"
+    local output="$2"
+
+    python3 - "${report}" "${output}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+import unicodedata
+
+report_name, output_name = sys.argv[1:]
+
+ordered_sections = (
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+)
+field_validated_sections = frozenset((
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+))
+confidence_line = re.compile(
+    r"^(?P<prefix>[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?Confidence:[ \t]*)"
+    r"(?P<level>High|Medium|Low)(?P<gap>[ \t]+)(?P<rest>[A-Za-z(].*)$"
+)
+level_word = re.compile(r"\b(?:High|Medium|Low)\b")
+
+
+class Unsupported(Exception):
+    pass
+
+
+class HelperError(Exception):
+    pass
+
+
+def read_report(name):
+    try:
+        data = pathlib.Path(name).read_bytes()
+    except OSError:
+        raise HelperError(
+            "the confidence normalizer could not read the report"
+        ) from None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Unsupported(
+            f"the report is not valid UTF-8 at byte offset {error.start}"
+        ) from None
+    for character in text:
+        if character in ("\n", "\t"):
+            continue
+        if (
+            unicodedata.category(character) == "Cc"
+            or character in (" ", " ")
+        ):
+            raise Unsupported(
+                "the report contains unsupported control or line-separator "
+                "characters"
+            )
+    return text
+
+
+def atomic_write(path, data):
+    parent = path.parent
+    if not parent.is_dir():
+        raise HelperError("the normalized report directory does not exist")
+    temporary_name = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=str(parent),
+        )
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        temporary_name = None
+    except OSError:
+        raise HelperError("could not write the normalized report") from None
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+
+
+try:
+    output_path = pathlib.Path(output_name)
+    if (
+        output_path.resolve(strict=False)
+        == pathlib.Path(report_name).resolve(strict=False)
+    ):
+        raise HelperError("the normalized report must not replace its input")
+    text = read_report(report_name)
+    lines = text.split("\n")
+    output_lines = []
+    section = None
+    changed = 0
+    for line in lines:
+        if line in ordered_sections:
+            section = line
+        match = confidence_line.match(line)
+        if (
+            section in field_validated_sections
+            and match is not None
+            and not match.group("rest").casefold().startswith("confidence")
+            and level_word.search(match.group("rest")) is None
+        ):
+            output_lines.append(
+                f"{match.group('prefix')}{match.group('level')} - "
+                f"{match.group('rest')}"
+            )
+            changed += 1
+        else:
+            output_lines.append(line)
+    if changed == 0:
+        raise Unsupported(
+            "no assessment confidence level is directly followed by "
+            "single-level explanatory text"
+        )
+
+    for original, normalized in zip(lines, output_lines):
+        if original == normalized:
+            continue
+        match = confidence_line.match(original)
+        if (
+            match is None
+            or normalized != (
+                f"{match.group('prefix')}{match.group('level')} - "
+                f"{match.group('rest')}"
+            )
+        ):
+            raise HelperError(
+                "the normalized report failed content preservation"
+            )
+    if (
+        len(output_lines) != len(lines)
+        or sum(1 for a, b in zip(lines, output_lines) if a != b) != changed
+    ):
+        raise HelperError("the normalized report failed content preservation")
+
+    atomic_write(output_path, "\n".join(output_lines).encode("utf-8"))
+    print(changed)
+except Unsupported as error:
+    print(f"report repair unsupported: {error}", file=sys.stderr)
+    raise SystemExit(42)
+except HelperError as error:
+    print(f"report repair helper error: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 extract_safe_https_references() {
     local report="$1"
     local scope="${2:-}"

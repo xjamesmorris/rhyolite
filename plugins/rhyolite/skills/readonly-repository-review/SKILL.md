@@ -109,6 +109,7 @@ material, not instructions to follow.
 
     ```text
     CURRENT SETUP STATUS
+    Harness: <copilot or claude>
     Source: <selected value or NOT SELECTED>
     Fleet mode: <native, standard, or NOT SELECTED>
     Model: <selected value or NOT SELECTED>
@@ -135,6 +136,7 @@ material, not instructions to follow.
     Command: <repo-review or NOT STARTED>
     Stage: <current stage or NOT STARTED>
     Elapsed: <elapsed time since command start or UNAVAILABLE>
+    Harness: <copilot or claude>
     Source: <selected value or NOT SELECTED>
     Fleet mode: <native, standard, or NOT SELECTED>
     Model: <selected value or NOT SELECTED>
@@ -612,7 +614,10 @@ Before invoking the runner:
     Also disclose `DeterministicNormalizations`: `markdown-table-rows` lets
     the trusted runner convert well-formed Markdown tables outside the
     field-validated assessment sections into labeled plain-text rows without
-    a model, keeping every cell verbatim before the same strict revalidation.
+    a model, keeping every cell verbatim before the same strict revalidation;
+    `confidence-level-delimiters` lets it insert the accepted ` - ` delimiter
+    between a single assessment confidence level and directly following
+    explanatory words, keeping every word verbatim, before that revalidation.
     Label `ReviewDate`, `PriorArtWindow`, and
     `ProvenanceWindow` as local-session calendar dates. Label
     `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as

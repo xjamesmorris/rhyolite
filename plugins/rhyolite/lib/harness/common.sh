@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=4
+RHYOLITE_HARNESS_CONTRACT_VERSION=5
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -34,6 +34,10 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_worker_env
     harness_report_repair_argv
     harness_report_repair_env
+    harness_write_research_mcp_config
+    harness_research_worker_argv
+    harness_research_worker_env
+    harness_finalize_research_session
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -44,7 +48,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
 )
 
 rhyolite_harness_list_registered() {
-    printf '%s\n' copilot
+    printf '%s\n' copilot claude
 }
 
 rhyolite_harness_set_error() {
@@ -164,6 +168,10 @@ rhyolite_harness_registry_lookup() {
         copilot)
             printf -v "${output_variable}" '%s' \
                 "${plugin_root%/}/lib/harness/copilot.sh"
+            ;;
+        claude)
+            printf -v "${output_variable}" '%s' \
+                "${plugin_root%/}/lib/harness/claude.sh"
             ;;
         *)
             rhyolite_harness_set_error \

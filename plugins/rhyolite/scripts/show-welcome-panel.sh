@@ -214,11 +214,17 @@ while (($# > 0)); do
         --prompt-plaque)
             mode="prompt-plaque"
             ;;
+        --claude-session-start)
+            mode="claude-session-start"
+            ;;
+        --claude-prompt-plaque)
+            mode="claude-prompt-plaque"
+            ;;
         --mode)
             shift
             [[ $# -gt 0 ]] || fail 'missing value after --mode'
             case "$1" in
-                panel|progress|prompt-plaque)
+                panel|progress|prompt-plaque|claude-session-start|claude-prompt-plaque)
                     mode="$1"
                     ;;
                 *)
@@ -294,6 +300,32 @@ if [[ "${mode}" == "prompt-plaque" ]]; then
     fi
     if prompt_requests_review_start "${hook_input}"; then
         printf '{"type":"progress","message":"%s"}\n' \
+            "$(json_escape "$(review_plaque)")"
+    fi
+    exit 0
+fi
+
+# Claude Code shows a hook systemMessage to the user without adding it to the
+# model context; the plaque keeps the same color rules as the Copilot hooks.
+if [[ "${mode}" == "claude-session-start" ]]; then
+    cat >/dev/null
+    if launcher_started_immediately; then
+        printf '{"systemMessage":"%s"}\n' \
+            "$(json_escape "$(review_plaque)")"
+        exit 0
+    fi
+    progress_message="${display_name} v${version} Beta loaded — run rhyolite --harness claude to start a guided review."
+    printf '{"systemMessage":"%s"}\n' "$(json_escape "${progress_message}")"
+    exit 0
+fi
+
+if [[ "${mode}" == "claude-prompt-plaque" ]]; then
+    hook_input="$(cat)"
+    if launcher_started_immediately; then
+        exit 0
+    fi
+    if prompt_requests_review_start "${hook_input}"; then
+        printf '{"systemMessage":"%s"}\n' \
             "$(json_escape "$(review_plaque)")"
     fi
     exit 0

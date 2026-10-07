@@ -599,8 +599,11 @@ sections into labeled plain-text rows without a model. Every cell stays
 verbatim and every other line is unchanged; malformed, field-section, or
 action-menu tables remain ineligible. The converted candidate must pass the
 same strict validation, or it becomes the input to the bounded confidence
-edit. The effective plan discloses this as `DeterministicNormalizations`
-`markdown-table-rows`.
+edit. When an assessment `Confidence:` value has a single level directly
+followed by explanatory words, the runner likewise inserts the accepted ` - `
+delimiter without a model, keeping every word verbatim. The effective plan
+discloses these as `DeterministicNormalizations` `markdown-table-rows` and
+`confidence-level-delimiters`.
 
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material

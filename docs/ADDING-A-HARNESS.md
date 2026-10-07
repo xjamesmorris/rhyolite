@@ -500,7 +500,7 @@ approved `--timeout-minutes 1` plan uses 60 seconds. The compact policy object
 keeps exact key order:
 
 ```json
-{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows"]}
+{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}
 ```
 
 `DeterministicNormalizations` lists runner-owned, model-free corrections that

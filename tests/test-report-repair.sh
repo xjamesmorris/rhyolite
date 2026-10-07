@@ -4,7 +4,7 @@ set -euo pipefail
 
 export LC_ALL=C.utf8
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_HELPER="${ROOT}/plugins/rhyolite/skills/readonly-repository-review/scripts/review-output.sh"
 FIXTURE_ROOT="$(mktemp -d)"
 
@@ -1863,5 +1863,88 @@ assert_not_contains \
     "${handoff_without_summary}" \
     'Report repair summary:' \
     'default handoff behavior'
+
+confidence_base="${FIXTURE_ROOT}/confidence-base.txt"
+confidence_report="${FIXTURE_ROOT}/confidence-report.txt"
+confidence_normalized="${FIXTURE_ROOT}/confidence-normalized.txt"
+confidence_expected="${FIXTURE_ROOT}/confidence-expected.txt"
+write_report \
+    "${confidence_base}" \
+    3 \
+    claims \
+    'High for the synthetic claim inventory, which is direct.' \
+    ''
+insert_after_exact_line \
+    "${confidence_base}" "${confidence_report}" \
+    'No qualifying findings.' \
+    '  Confidence: High for the finding text, which stays unchanged.'
+validate_review_report_contract "${confidence_report}" 3 \
+    > "${FIXTURE_ROOT}/confidence-initial.diagnostic" 2>&1 &&
+    fail 'strict validator accepted a level directly followed by words'
+assert_contains "${FIXTURE_ROOT}/confidence-initial.diagnostic" \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level: High for the synthetic claim inventory' \
+    'confidence delimiter initial diagnostic'
+confidence_count="$(
+    normalize_review_report_confidence_delimiters \
+        "${confidence_report}" "${confidence_normalized}"
+)" || fail 'eligible confidence field was not normalized'
+[[ "${confidence_count}" == '1' ]] ||
+    fail "confidence normalization reported ${confidence_count} fields"
+[[ "$(stat -c '%a' -- "${confidence_normalized}")" == '600' ]] ||
+    fail 'confidence-normalized candidate is not mode 600'
+validate_review_report_contract "${confidence_normalized}" 3 ||
+    fail 'confidence-normalized report failed strict validation'
+sed 's/^Confidence: High for the synthetic claim inventory, which is direct\.$/Confidence: High - for the synthetic claim inventory, which is direct./' \
+    "${confidence_report}" > "${confidence_expected}"
+cmp -s -- "${confidence_expected}" "${confidence_normalized}" ||
+    fail 'confidence normalization changed anything other than the inserted delimiter'
+assert_contains "${confidence_normalized}" \
+    '  Confidence: High for the finding text, which stays unchanged.' \
+    'confidence normalization outside assessment sections'
+
+confidence_multi_step="${FIXTURE_ROOT}/confidence-multi-step.txt"
+confidence_multi_report="${FIXTURE_ROOT}/confidence-multi-report.txt"
+confidence_multi_normalized="${FIXTURE_ROOT}/confidence-multi-normalized.txt"
+write_report \
+    "${confidence_multi_step}" \
+    2 \
+    community \
+    'Medium for counts derived from the trusted wrapper metadata.' \
+    '1. '
+sed 's/^1\. Confidence: Medium\.$/1. Confidence: Low for the synthetic fixture window only./' \
+    "${confidence_multi_step}" > "${confidence_multi_report}"
+confidence_multi_count="$(
+    normalize_review_report_confidence_delimiters \
+        "${confidence_multi_report}" "${confidence_multi_normalized}"
+)" || fail 'several eligible confidence fields were not normalized'
+[[ "${confidence_multi_count}" -ge 2 ]] ||
+    fail "multi-field confidence normalization reported ${confidence_multi_count}"
+assert_contains "${confidence_multi_normalized}" \
+    '1. Confidence: Medium - for counts derived from the trusted wrapper metadata.' \
+    'list-marked confidence normalization'
+validate_review_report_contract "${confidence_multi_normalized}" 2 ||
+    fail 'multi-field confidence normalization failed strict validation'
+
+for ineligible_confidence in \
+    'High for observed constructs; Medium for absence outside normalized text.' \
+    'High confidence overall with direct evidence.' \
+    'Certain for every item.'; do
+    confidence_ineligible="${FIXTURE_ROOT}/confidence-ineligible.txt"
+    write_report \
+        "${confidence_ineligible}" 3 claims "${ineligible_confidence}" ''
+    expect_status 42 \
+        "ineligible confidence value: ${ineligible_confidence}" \
+        "${FIXTURE_ROOT}/confidence-ineligible-output.txt" \
+        normalize_review_report_confidence_delimiters \
+        "${confidence_ineligible}" \
+        "${FIXTURE_ROOT}/confidence-ineligible-output.txt"
+done
+expect_status 1 \
+    'confidence normalization replacing its input' \
+    "${FIXTURE_ROOT}/confidence-unused-output.txt" \
+    normalize_review_report_confidence_delimiters \
+    "${confidence_report}" "${confidence_report}"
+cmp -s -- "${confidence_report}" "${confidence_report}" ||
+    fail 'confidence normalization modified its input'
 
 printf '%s\n' 'Report repair helper tests passed.'

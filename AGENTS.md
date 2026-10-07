@@ -277,9 +277,14 @@ supported and must not drive new work.
   runner convert each well-formed table outside the field-validated
   assessment sections into labeled plain-text rows without a model, keeping
   every cell verbatim and every other line unchanged. Malformed,
-  field-section, and action-menu tables stay ineligible. The normalized
-  candidate must pass the same strict validation; otherwise it becomes the
-  only input to the bounded confidence edit. The confidence edit is
+  field-section, and action-menu tables stay ineligible. When strict
+  validation rejects an assessment `Confidence:` value whose single level is
+  directly followed by explanatory words, the entry
+  `confidence-level-delimiters` inserts the accepted ` - ` delimiter in every
+  such field of the field-validated assessment sections, keeping every word
+  verbatim; compound levels and bare `<Level> confidence` prefixes stay
+  ineligible. The normalized candidate must pass the same strict validation;
+  otherwise it becomes the only input to the bounded confidence edit. The confidence edit is
   scope-gated: it may target only an assessment section that the approved
   scope requires. Missing, duplicated, or empty labels and tables in
   assessment sections still fail explicitly.

@@ -539,7 +539,7 @@ harness_prepare_worker_home() {
     local phase="${4:-review}"
 
     case "${phase}" in
-        review|report-repair) ;;
+        review|report-repair|research) ;;
         *)
             rhyolite_harness_set_error \
                 'The Copilot runtime-home phase is unsupported.'
@@ -547,6 +547,9 @@ harness_prepare_worker_home() {
             ;;
     esac
 
+    # The dedicated research worker uses the same isolated settings as the
+    # review worker; only its argv grants the local broker tools.
+    [[ "${phase}" != research ]] || phase=review
     COPILOT_RUNTIME_HOME="${runtime_home}"
     chmod 700 -- "${runtime_home}" || {
         rhyolite_harness_set_error \
@@ -727,6 +730,132 @@ harness_report_repair_env() {
     }
     copilot_populate_worker_environment \
         "${destination_name}" "${runtime_home}"
+}
+
+copilot_json_string() {
+    local value="$1"
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "${value}"
+}
+
+harness_write_research_mcp_config() {
+    local config_path="$1"
+    local broker_launcher="$2"
+    local arguments_name="$3"
+    local tools_json="$4"
+    local argument
+    local separator=''
+
+    copilot_require_array_destination "${arguments_name}" || return 1
+    local -n copilot_research_broker_arguments_ref="${arguments_name}"
+    [[ "${config_path}" == /* && "${broker_launcher}" == /* ]] || {
+        rhyolite_harness_set_error \
+            'The Copilot research MCP configuration paths are invalid.'
+        return 1
+    }
+    [[ "${tools_json}" =~ ^\[\ *\"[a-z_]+\"(\ *,\ *\"[a-z_]+\")*\ *\]$ ]] || {
+        rhyolite_harness_set_error \
+            'The Copilot research broker tool list is invalid.'
+        return 1
+    }
+    if ! {
+        printf '{\n  "mcpServers": {\n    "rhyolite-research": {\n'
+        printf '      "type": "local",\n'
+        printf '      "command": %s,\n' "$(copilot_json_string "${broker_launcher}")"
+        printf '      "args": [\n'
+        for argument in "${copilot_research_broker_arguments_ref[@]}"; do
+            printf '%s        %s' "${separator}" "$(copilot_json_string "${argument}")"
+            separator=$',\n'
+        done
+        printf '\n      ],\n'
+        printf '      "tools": %s,\n' "${tools_json}"
+        printf '      "timeout": 120000\n'
+        printf '    }\n  }\n}\n'
+    } > "${config_path}" || ! chmod 600 -- "${config_path}"; then
+        rhyolite_harness_set_error \
+            'Could not write the Copilot research MCP configuration.'
+        return 1
+    fi
+}
+
+harness_research_worker_argv() {
+    local destination_name="$1"
+    local session_root="$2"
+    local plugin_root="$3"
+    local session_name="$4"
+    local session_id="$5"
+    local model="$6"
+    local reasoning_effort="$7"
+    local context_tier="$8"
+    local authentication_variables="$9"
+    local mcp_config_path="${10}"
+    local broker_tools="${11}"
+    local transcript_path="${12}"
+    local tool_name
+    local runtime_tools=''
+    local separator=''
+    local -a allow_arguments=()
+
+    copilot_require_array_destination "${destination_name}" || return 1
+    [[ "${broker_tools}" =~ ^[a-z_]+(,[a-z_]+)*$ ]] || {
+        rhyolite_harness_set_error \
+            'The Copilot research broker tool list is invalid.'
+        return 1
+    }
+    [[ "${mcp_config_path}" == /* && "${transcript_path}" == /* ]] || {
+        rhyolite_harness_set_error \
+            'The Copilot research worker paths are invalid.'
+        return 1
+    }
+    while IFS= read -r tool_name; do
+        runtime_tools+="${separator}rhyolite-research-${tool_name}"
+        separator=','
+        allow_arguments+=(--allow-tool "rhyolite-research(${tool_name})")
+    done < <(printf '%s\n' "${broker_tools//,/$'\n'}")
+
+    local -n output_arguments="${destination_name}"
+    output_arguments=(
+        -C "${session_root}"
+        --plugin-dir "${plugin_root}"
+        --name "${session_name}"
+        --session-id "${session_id}"
+        --agent rhyolite:repo-research-worker
+        --model "${model}"
+        --reasoning-effort "${reasoning_effort}"
+        --context "${context_tier}"
+        --no-ask-user
+        --no-color
+        --no-custom-instructions
+        --disable-builtin-mcps
+        --additional-mcp-config "@${mcp_config_path}"
+        --disallow-temp-dir
+        --no-remote-export
+        --secret-env-vars "${authentication_variables}"
+        --available-tools "view,glob,rg,skill,${runtime_tools}"
+        --allow-tool read
+        "${allow_arguments[@]}"
+        --deny-tool write
+        --deny-tool shell
+        --stream off
+        --share "${transcript_path}"
+        --silent
+    )
+}
+
+harness_research_worker_env() {
+    copilot_populate_worker_environment "$1" "${COPILOT_RUNTIME_HOME}"
+}
+
+# Copilot writes the research transcript itself through --share and its
+# worker is bound to the approved model by the CLI, so there is no
+# additional session record to export or verify.
+harness_finalize_research_session() {
+    return 0
 }
 
 harness_render_request() {

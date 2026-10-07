@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_ROOT="${ROOT}/plugins/rhyolite"
 HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
@@ -45,6 +45,10 @@ required_contract_functions=(
     harness_worker_env
     harness_report_repair_argv
     harness_report_repair_env
+    harness_write_research_mcp_config
+    harness_research_worker_argv
+    harness_research_worker_env
+    harness_finalize_research_session
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -203,7 +207,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '4' \
+assert_equal '5' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 production_registry_path=''
@@ -267,7 +271,7 @@ if bash -c '
     fail 'Incomplete Copilot adapter unexpectedly loaded.'
 fi
 
-for unsupported_id in noop bogus codex claude; do
+for unsupported_id in noop bogus codex gemini; do
     if bash -c '
         set -euo pipefail
         unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
@@ -283,6 +287,34 @@ for unsupported_id in noop bogus codex claude; do
         fail "Unsupported harness unexpectedly loaded: ${unsupported_id}"
     fi
 done
+production_registry_path=''
+rhyolite_harness_registry_lookup \
+    production_registry_path "${PLUGIN_ROOT}" claude ||
+    fail 'Production fixed registry did not resolve Claude Code.'
+assert_equal \
+    "${PLUGIN_ROOT}/lib/harness/claude.sh" \
+    "${production_registry_path}" \
+    'Production fixed Claude Code registry path'
+assert_equal \
+    'copilot claude' \
+    "$(rhyolite_harness_list_registered | tr '\n' ' ' | sed 's/ $//')" \
+    'Production registered harness list'
+if ! bash -c '
+    set -euo pipefail
+    unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+    # shellcheck source=/dev/null
+    source "$1"
+    rhyolite_harness_load "$2" claude
+    [[ "${RHYOLITE_HARNESS_LOADED_ID}" == claude ]]
+' bash \
+    "${HARNESS_COMMON}" \
+    "${PLUGIN_ROOT}" \
+    >"${fixture_root}/claude-load.stdout" \
+    2>"${fixture_root}/claude-load.stderr"; then
+    fail 'Claude Code harness adapter did not load from the production registry.'
+fi
+[[ ! -s "${fixture_root}/claude-load.stdout" ]] ||
+    fail 'Claude Code harness adapter load wrote unexpected stdout.'
 
 assert_equal 'copilot' "$(harness_id)" 'Copilot harness ID'
 assert_equal 'Copilot' \
@@ -892,6 +924,104 @@ for forbidden_repair_argument in \
             fail "Copilot report repair gained forbidden argument ${forbidden_repair_argument}."
     done
 done
+
+research_mcp_config_path="${fixture_root}/copilot-research-mcp.json"
+research_transcript_path="${fixture_root}/copilot-research/research-session.md"
+research_broker_launcher="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/launch-research-egress-broker.sh"
+declare -a research_broker_arguments=(
+    --runtime-root "${fixture_root}/research runtime"
+    --policy "${fixture_root}/policy.json"
+    --scope 2
+    --web-search-provider duckduckgo-html-v1
+    --cookies off
+    --network-root "${fixture_root}/research-network"
+    --repository-url 'https://github.com/octocat/Hello-World'
+    --expected-policy-digest "$(printf '%064d' 0)"
+)
+harness_write_research_mcp_config \
+    "${research_mcp_config_path}" \
+    "${research_broker_launcher}" \
+    research_broker_arguments \
+    '["research_capabilities", "fetch_public_url", "search_public_github", "search_public_web", "research_network_summary"]' ||
+    fail 'Copilot adapter could not write the research MCP configuration.'
+assert_equal 600 "$(stat -c '%a' "${research_mcp_config_path}")" \
+    'Copilot research MCP configuration mode'
+node - "${research_mcp_config_path}" "${research_broker_launcher}" \
+    "${research_broker_arguments[@]}" <<'JS'
+const fs = require("fs");
+const [configPath, launcher, ...args] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const expected = {mcpServers: {"rhyolite-research": {
+  type: "local",
+  command: launcher,
+  args,
+  tools: ["research_capabilities", "fetch_public_url", "search_public_github",
+    "search_public_web", "research_network_summary"],
+  timeout: 120000,
+}}};
+if (JSON.stringify(config) !== JSON.stringify(expected)) {
+  throw new Error("Copilot research MCP configuration changed");
+}
+JS
+if harness_write_research_mcp_config "${research_mcp_config_path}" \
+    "${research_broker_launcher}" \
+    research_broker_arguments '["fetch_public_url", "../x"]' >/dev/null 2>&1; then
+    fail 'Copilot research MCP configuration accepted an unsafe tool list.'
+fi
+declare -a copilot_research_arguments=()
+harness_research_worker_argv \
+    copilot_research_arguments \
+    "${worker_session_root}" \
+    "${PLUGIN_ROOT}" \
+    research-fixture-run \
+    "${worker_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    "${authentication_variables_csv}" \
+    "${research_mcp_config_path}" \
+    research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary \
+    "${research_transcript_path}" ||
+    fail 'Copilot adapter could not build the research worker argv.'
+expected_copilot_research_arguments=(
+    -C "${worker_session_root}"
+    --plugin-dir "${PLUGIN_ROOT}"
+    --name research-fixture-run
+    --session-id "${worker_session_id}"
+    --agent rhyolite:repo-research-worker
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --no-ask-user
+    --no-color
+    --no-custom-instructions
+    --disable-builtin-mcps
+    --additional-mcp-config "@${research_mcp_config_path}"
+    --disallow-temp-dir
+    --no-remote-export
+    --secret-env-vars "${authentication_variables_csv}"
+    --available-tools 'view,glob,rg,skill,rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary'
+    --allow-tool read
+    --allow-tool 'rhyolite-research(research_capabilities)'
+    --allow-tool 'rhyolite-research(fetch_public_url)'
+    --allow-tool 'rhyolite-research(search_public_github)'
+    --allow-tool 'rhyolite-research(search_public_web)'
+    --allow-tool 'rhyolite-research(research_network_summary)'
+    --deny-tool write
+    --deny-tool shell
+    --stream off
+    --share "${research_transcript_path}"
+    --silent
+)
+printf '%s\0' "${expected_copilot_research_arguments[@]}" \
+    > "${fixture_root}/copilot-research-expected.vector"
+printf '%s\0' "${copilot_research_arguments[@]}" \
+    > "${fixture_root}/copilot-research-actual.vector"
+cmp -s "${fixture_root}/copilot-research-expected.vector" \
+    "${fixture_root}/copilot-research-actual.vector" ||
+    fail 'Copilot research worker argv changed from the pre-Contract-v5 runner vector.'
+harness_finalize_research_session "${fixture_root}" /dev/null ||
+    fail 'Copilot research finalization is not an explicit success.'
 
 for path_isolation_fragment in \
     'canonicalize_directory_path "${report_repair_workdir}"' \
@@ -1819,7 +1949,7 @@ for hash_fragment in \
 done
 assert_contains \
     "${RUNNER}" \
-    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
     'Report-repair policy compact key order'
 assert_contains \
     "${RUNNER}" \
@@ -1900,7 +2030,7 @@ for index, plan in enumerate(plans):
         "ProtocolVersion": 1,
         "AttemptLimit": 1,
         "TimeoutSeconds": 300,
-        "DeterministicNormalizations": ["markdown-table-rows"],
+        "DeterministicNormalizations": ["markdown-table-rows", "confidence-level-delimiters"],
     }:
         raise SystemExit(f"plan {index} changed the fixed report-repair policy")
     provider = plan.get("Provider")
@@ -1941,7 +2071,7 @@ if timeout_one.get("ReportRepairPolicy") != {
     "ProtocolVersion": 1,
     "AttemptLimit": 1,
     "TimeoutSeconds": 60,
-    "DeterministicNormalizations": ["markdown-table-rows"],
+    "DeterministicNormalizations": ["markdown-table-rows", "confidence-level-delimiters"],
 }:
     raise SystemExit("one-minute plan did not cap report repair at 60 seconds")
 if timeout_one.get("ApprovalHash") in hashes:
@@ -1949,11 +2079,11 @@ if timeout_one.get("ApprovalHash") in hashes:
 PY
 assert_contains \
     "${plan_default}" \
-    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":300,"DeterministicNormalizations":["markdown-table-rows"]}' \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":300,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
     'Default report-repair policy JSON'
 assert_contains \
     "${plan_timeout_one}" \
-    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows"]}' \
+    '"ReportRepairPolicy": {"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":1,"TimeoutSeconds":60,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
     'Capped report-repair policy JSON'
 
 copy_identity_fixture() {
@@ -2403,10 +2533,10 @@ assert_pre_activity_failure \
     codex \
     unset
 assert_pre_activity_failure \
-    claude-load \
-    'harness claude load' \
+    gemini-load \
+    'harness gemini load' \
     explicit \
-    claude \
+    gemini \
     unset
 assert_pre_activity_failure \
     empty-environment-harness \
@@ -2623,7 +2753,9 @@ set -euo pipefail
 if (($# == 2)) && [[ "${1-}" == "-" && "${2-}" == */config.json ]]; then
     exec /usr/bin/python3 "$@"
 fi
-if (($# == 3)) && [[ "${1-}" == "-" ]]; then
+# Only the runner's DNS resolver passes a host and port; helpers that pass a
+# file path, such as strict report validation, run real Python.
+if (($# == 3)) && [[ "${1-}" == "-" && "${2-}" != /* ]]; then
     printf '%s:%s:93.184.216.34\n' "$2" "$3"
     exit 0
 fi
@@ -2675,12 +2807,29 @@ assert_anonymous_clone_operation() {
 command_name=""
 for argument in "$@"; do
     case "${argument}" in
-        version|ls-remote|init|clone|cat-file|fetch|checkout|rev-parse|config|ls-files|ls-tree|for-each-ref|log|status|diff|archive)
+        version|ls-remote|init|clone|cat-file|fetch|checkout|rev-parse|config|ls-files|ls-tree|for-each-ref|log|status|diff|archive|reset)
             command_name="${argument}"
             break
             ;;
     esac
 done
+
+# RHYOLITE_MOCK_CHECKOUT_REFUSALS=N refuses the next N checkout object
+# fetches (the blob-filtered clone's checkout first, then each reset).
+mock_checkout_refused() {
+    local remaining
+
+    [[ -n "${RHYOLITE_MOCK_CHECKOUT_REFUSALS-}" ]] || return 1
+    : "${RHYOLITE_MOCK_CHECKOUT_COUNTER:?}"
+    remaining="$(cat "${RHYOLITE_MOCK_CHECKOUT_COUNTER}" 2>/dev/null ||
+        printf '%s' "${RHYOLITE_MOCK_CHECKOUT_REFUSALS}")"
+    ((remaining > 0)) || return 1
+    printf '%s\n' "$((remaining - 1))" > "${RHYOLITE_MOCK_CHECKOUT_COUNTER}"
+    printf '%s\n' \
+        'fatal: unable to get password from user' \
+        'fatal: the remote end hung up unexpectedly' \
+        'fatal: could not fetch 068fa1f26b262ffe51d998a34d60d21a55cadd00 from promisor remote' >&2
+}
 
 working_directory=""
 previous=""
@@ -2714,6 +2863,15 @@ case "${command_name}" in
         printf '%s\n' \
             "${RHYOLITE_MOCK_REPOSITORY_CONTENT:-# mock repository}" \
             > "${destination}/README.md"
+        if mock_checkout_refused; then
+            printf '%s\n' 'warning: Clone succeeded, but checkout failed.' >&2
+            exit 128
+        fi
+        ;;
+    reset)
+        if mock_checkout_refused; then
+            exit 128
+        fi
         ;;
     fetch|cat-file|checkout|status|diff)
         ;;
@@ -2875,33 +3033,37 @@ if [[ "${RHYOLITE_MOCK_UNSAFE_TEXT:-0}" == 1 ]]; then
     exit 17
 fi
 
+canonical_report="$(dirname -- "${BASH_SOURCE[0]}")/canonical-report.txt"
 if [[ "${RHYOLITE_MOCK_INCOMPLETE:-0}" == 1 ]]; then
-    cat > "${share_path}" <<'TRANSCRIPT'
-# Mock Copilot session
-
-### Copilot
-
-================================================================================
-REPOSITORY REVIEW REPORT
-Complete report available only through transcript extraction.
-================================================================================
-TRANSCRIPT
-    cat <<'REPORT'
-================================================================================
-REPOSITORY REVIEW REPORT
-Incomplete standard output.
-REPORT
+    {
+        printf '# Mock Copilot session\n\n### Copilot\n\n'
+        cat -- "${canonical_report}"
+    } > "${share_path}"
+    sed -n '1,4p' "${canonical_report}"
     exit 0
 fi
 
 printf '# Mock Copilot session\n' > "${share_path}"
-cat <<'REPORT'
-================================================================================
-REPOSITORY REVIEW REPORT
-Mock deterministic repository review.
-================================================================================
-REPORT
+if [[ "${RHYOLITE_MOCK_PLACEHOLDER_REPORT:-0}" == 1 ]]; then
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY REVIEW REPORT' \
+        'Mock placeholder that omits every required section.' \
+        '================================================================================'
+    exit 0
+fi
+cat -- "${canonical_report}"
 MOCK_RUNNER_COPILOT
+# A complete canonical scope-1 report, so strict report validation runs for
+# real in every runner seam test.
+awk '
+    $0 == "### NOOP FIXTURE FINAL RESPONSE" { inside = 1; next }
+    $0 == "### END NOOP FIXTURE FINAL RESPONSE" { inside = 0 }
+    inside && ($0 != "" || started) { started = 1; print }
+' "${NOOP_WORKER_FIXTURE}" |
+    sed -e '$ { /^$/d }' > "${runner_mock_bin}/canonical-report.txt"
+grep -Fq 'REPOSITORY REVIEW REPORT' "${runner_mock_bin}/canonical-report.txt" ||
+    fail 'Runner mock canonical report could not be derived.'
 
 cp -- "${REPOSITORY_DISCOVERY_CURL_FIXTURE}" \
     "${runner_mock_bin}/curl"
@@ -3159,7 +3321,7 @@ for (const [index, plan] of plans.entries()) {
         ProtocolVersion: 1,
         AttemptLimit: 1,
         TimeoutSeconds: 300,
-        DeterministicNormalizations: ["markdown-table-rows"],
+        DeterministicNormalizations: ["markdown-table-rows", "confidence-level-delimiters"],
       }) ||
       plan.Provider?.Id !== "github-copilot" ||
       plan.Provider?.Host !== "managed-provider" ||
@@ -3171,6 +3333,35 @@ if (new Set(plans.map((plan) => plan.ApprovalHash)).size !== 1) {
   throw new Error("runner seam default/explicit approval hashes differ");
 }
 JS
+
+runner_placeholder_capture="${runner_capture_root}/placeholder"
+runner_placeholder_output="${fixture_root}/runner-placeholder-output"
+mkdir -p -- "${runner_placeholder_capture}"
+set +e
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    COPILOT_HOME="${runner_source_home}" \
+    RHYOLITE_WORKER_CAPTURE="${runner_placeholder_capture}" \
+    RHYOLITE_MOCK_PLACEHOLDER_REPORT=1 \
+    TMPDIR="${runner_tmp_root}" \
+    PATH="${runner_mock_bin}:/usr/bin:/bin" \
+    "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_workspace}" \
+    --output-root "${runner_placeholder_output}" \
+    --non-interactive \
+    --no-open-html >"${fixture_root}/runner-placeholder.stdout" \
+    2>"${fixture_root}/runner-placeholder.stderr"
+runner_placeholder_status=$?
+set -e
+((runner_placeholder_status != 0)) ||
+    fail 'Runner seam accepted a placeholder report without strict validation.'
+runner_placeholder_errors="$(
+    find "${runner_placeholder_output}" -path '*/github--octocat--hello-world/errors.txt' -print -quit
+)"
+assert_contains "${runner_placeholder_errors}" \
+    'Final report contract validation failed' \
+    'Runner seam strict report validation'
 
 noop_test_plugin="${fixture_root}/noop-test-plugin"
 noop_test_skill="${noop_test_plugin}/skills/readonly-repository-review"
@@ -3635,7 +3826,7 @@ if noop.get("ReportRepairPolicy") != {
     "ProtocolVersion": 1,
     "AttemptLimit": 1,
     "TimeoutSeconds": 300,
-    "DeterministicNormalizations": ["markdown-table-rows"],
+    "DeterministicNormalizations": ["markdown-table-rows", "confidence-level-delimiters"],
 }:
     raise SystemExit("no-op plan changed the fixed report-repair policy")
 if noop.get("Provider") != {
@@ -3678,14 +3869,14 @@ env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
 noop_research_status=$?
 set -e
 ((noop_research_status == 2)) ||
-    fail 'No-op fixture unexpectedly reached Copilot-specific public research.'
+    fail 'No-op fixture unexpectedly reached the dedicated public research worker.'
 assert_contains \
     "${noop_research_stderr}" \
     'Stage: harness noop harness_capability' \
     'No-op public-research rejection stage'
 assert_contains \
     "${noop_research_stderr}" \
-    'The dedicated public-research worker remains runner-owned and Copilot-specific.' \
+    'adapter has not proven the dedicated public-research worker contract (web_research is no).' \
     'No-op public-research rejection detail'
 [[ ! -e "${noop_research_workspace}" &&
     ! -e "${noop_research_output}" ]] ||
@@ -5192,5 +5383,8 @@ assert_unlisted_launcher_vector \
     launcher-unlisted-preference-flag \
     example-unlisted-model \
     'AllowUnlistedModel=true'
+
+# shellcheck source=harness-contract-claude.sh
+source "${ROOT}/tests/harness-contract-claude.sh"
 
 printf 'Harness contract validation passed.\n'

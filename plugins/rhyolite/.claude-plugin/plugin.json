@@ -1,0 +1,22 @@
+{
+  "name": "rhyolite",
+  "description": "Rhyolite is an open-source software analysis platform. This Claude Code plugin ships repo-review as its initial, default, and currently only shipped module for evidence-based, read-only analysis of untrusted public HTTPS Git repositories.",
+  "version": "0.7.0",
+  "author": {
+    "name": "Rhyolite maintainers"
+  },
+  "keywords": [
+    "rhyolite",
+    "repository-review",
+    "security",
+    "prior-art",
+    "provenance"
+  ],
+  "agents": [
+    "./claude/agents/repo-review.md",
+    "./claude/agents/repo-review-worker.md",
+    "./claude/agents/repo-research-worker.md"
+  ],
+  "commands": "./claude/commands/",
+  "hooks": "./claude/hooks.json"
+}

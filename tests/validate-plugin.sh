@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_LAUNCHER="${ROOT}/rhyolite"
 PLUGIN_ROOT="${ROOT}/plugins/rhyolite"
 SKILL_ROOT="${PLUGIN_ROOT}/skills/readonly-repository-review"
@@ -1196,8 +1196,10 @@ for normalization_disclosure_surface in "${AGENT}" "${SKILL}"; do
     grep -Fq '`DeterministicNormalizations`' \
         "${normalization_disclosure_surface}" &&
         grep -Fq '`markdown-table-rows`' \
+            "${normalization_disclosure_surface}" &&
+        grep -Fq '`confidence-level-delimiters`' \
             "${normalization_disclosure_surface}" ||
-        fail "Effective plan does not disclose deterministic table normalization: ${normalization_disclosure_surface}"
+        fail "Effective plan does not disclose deterministic normalizations: ${normalization_disclosure_surface}"
 done
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' \
@@ -2045,24 +2047,25 @@ done
 
 grep -Fq -- '--disable-builtin-mcps' "${COPILOT_HARNESS}" ||
     fail 'Copilot adapter does not disable built-in MCP servers.'
-grep -Fq -- '--disable-builtin-mcps' "${RUNNER}" ||
+grep -Fq -- '--disable-builtin-mcps' "${COPILOT_HARNESS}" ||
     fail 'Dedicated research worker does not disable built-in MCP servers.'
-grep -Fq -- '--additional-mcp-config' "${RUNNER}" ||
-    fail 'Bash runner does not configure the local research MCP broker.'
-grep -Fq 'rhyolite:repo-research-worker' "${RUNNER}" ||
-    fail 'Bash runner does not launch the dedicated research worker.'
+grep -Fq -- '--additional-mcp-config' "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not configure the local research MCP broker.'
+grep -Fq 'rhyolite:repo-research-worker' "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not launch the dedicated research worker.'
 grep -Fq 'research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary' \
     "${RUNNER}" ||
     fail 'Bash runner does not preserve the exact research tool contract.'
-grep -Fq 'rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary' \
-    "${RUNNER}" ||
-    fail 'Bash runner does not allow the namespaced research MCP tools.'
+grep -Fq 'runtime_tools+="${separator}rhyolite-research-${tool_name}"' \
+    "${COPILOT_HARNESS}" &&
+    grep -Fq 'allow_arguments+=(--allow-tool "rhyolite-research(${tool_name})")' \
+        "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not allow the namespaced research MCP tools.'
 ! grep -Fq 'web_fetch' "${RUNNER}" ||
     fail 'Bash runner still exposes raw web_fetch to a child.'
 ! grep -Fq -- '--allow-all-urls' "${RUNNER}" "${COPILOT_HARNESS}" ||
     fail 'Bash runner still grants broad child URL permission.'
-grep -Fq -- '--disallow-temp-dir' "${COPILOT_HARNESS}" &&
-grep -Fq -- '--disallow-temp-dir' "${RUNNER}" ||
+grep -Fq -- '--disallow-temp-dir' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not disable temporary-directory access.'
 grep -Fq -- '--secret-env-vars' "${COPILOT_HARNESS}" ||
     fail 'Bash runner does not protect inherited authentication.'
@@ -2110,8 +2113,18 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=4' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 4.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=5' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 5.'
+for research_function in \
+    harness_write_research_mcp_config \
+    harness_research_worker_argv \
+    harness_research_worker_env \
+    harness_finalize_research_session; do
+    grep -Fxq "    ${research_function}" "${HARNESS_COMMON}" &&
+        grep -Fq "${research_function}() {" "${COPILOT_HARNESS}" &&
+        grep -Fq "rhyolite_harness_invoke ${research_function}" "${RUNNER}" ||
+        fail "Harness contract-v5 research function is incomplete: ${research_function}"
+done
 grep -Fq 'harness_resume_policy' "${HARNESS_COMMON}" &&
     grep -Fq 'harness_resume_policy() {' "${COPILOT_HARNESS}" ||
     fail 'Harness contract-v4 resume policy is incomplete.'
@@ -2138,7 +2151,7 @@ for hash_fragment in \
         fail "Approval hash material is missing ${hash_fragment}."
 done
 grep -Fq \
-    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows"]}' \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
     "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_ATTEMPT_LIMIT=1' "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_TIMEOUT_SECONDS=300' "${RUNNER}" &&
@@ -2343,9 +2356,8 @@ grep -Fq 'duckduckgo-html-v1 (default) or none' "${RUNNER}" &&
     grep -Fq 'duckduckgo-html-v1' "${README}" &&
     grep -Fq 'repository assets, never people' "${PROMPT}" ||
     fail 'Provider or heuristic provenance documentation is incomplete.'
-grep -Fq -- '--deny-tool write' "${COPILOT_HARNESS}" &&
-    grep -Fq -- '--deny-tool write' "${RUNNER}" ||
-    fail 'Bash runner does not deny write tools.'
+grep -Fq -- '--deny-tool write' "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not deny write tools.'
 ! grep -Fq 'shell(git' "${RUNNER}" ||
     fail 'A child runner still grants direct Git shell access.'
 grep -Fq -- '--deny-tool shell' "${COPILOT_HARNESS}" ||
@@ -5581,7 +5593,7 @@ function assertCommonPlan(
       plan.ReportRepairPolicy?.TimeoutSeconds !==
         Math.min(300, plan.SessionTimeoutMinutes * 60) ||
       JSON.stringify(plan.ReportRepairPolicy?.DeterministicNormalizations) !==
-        JSON.stringify(["markdown-table-rows"]) ||
+        JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
       !Array.isArray(plan.Sources) ||
       plan.Sources.length !== 1) {
     throw new Error(`${label} common plan contract is invalid`);
@@ -9172,7 +9184,7 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
     JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-      JSON.stringify(["markdown-table-rows"]) ||
+      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
     reviewPlan.ResearchTransport?.Enabled !== true ||
     reviewPlan.ResearchTransport?.Mode !==
       "dedicated-worker-local-stdio-mcp" ||
@@ -10718,7 +10730,7 @@ if (reviewPlan.ReportRepairPolicy?.Mode !==
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
     JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-      JSON.stringify(["markdown-table-rows"]) ||
+      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy)) {
   throw new Error("approval-bound report-repair policy is invalid");
@@ -11191,7 +11203,7 @@ for (const [label, value] of [
   }
 }
 if (JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-    JSON.stringify(["markdown-table-rows"]) ||
+    JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy)) {
   failWith("approval-bound normalization policy is missing");

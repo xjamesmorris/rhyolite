@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 077
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="${ROOT}/.test-output/install-test-$$"
 TEST_HOME="${TEST_ROOT}/home"
 COPILOT_HOME="${TEST_HOME}/copilot-checkout"
@@ -96,7 +96,12 @@ const required = [
     "agents/repo-research-worker.agent.md", "commands/start.md",
     "commands/repo-review.md", "commands/help.md", "commands/status.md",
     "commands/version.md", "extensions/repo-review/extension.mjs",
-    "lib/harness/common.sh", "lib/harness/copilot.sh", "scripts/launcher-preferences.sh",
+    "lib/harness/common.sh", "lib/harness/copilot.sh", "lib/harness/claude.sh",
+    "scripts/launcher-preferences.sh", ".claude-plugin/plugin.json",
+    "claude/agents/repo-review.md", "claude/agents/repo-review-worker.md",
+    "claude/commands/start.md", "claude/commands/repo-review.md",
+    "claude/commands/help.md", "claude/commands/status.md",
+    "claude/commands/version.md", "claude/hooks.json",
     "skills/readonly-repository-review/SKILL.md",
     "skills/readonly-repository-review/review-prompt.txt",
     "skills/readonly-repository-review/research-prompt.txt",
@@ -123,6 +128,11 @@ expect(!fs.existsSync(path.join(root, "rhyolite")),
 expect(fs.readFileSync(path.join(root, "commands/version.md"), "utf8")
     .split("\n").includes(`Rhyolite v${version} Beta`),
     "Packaged version command is stale");
+expect(fs.readFileSync(path.join(root, "claude/commands/version.md"), "utf8")
+    .split("\n").includes(`Rhyolite v${version} Beta`),
+    "Packaged Claude Code version command is stale");
+expect(json(path.join(root, ".claude-plugin/plugin.json")).version === version,
+    "Packaged Claude Code plugin version does not match the selected release");
 
 function inventory(directory, prefix = "") {
     const files = [];
@@ -272,7 +282,12 @@ const manifestPath = path.join(root, "previous/plugins/rhyolite/plugin.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 manifest.version = previous;
 fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-for (const file of ["commands/version.md", "agents/repo-review.agent.md"]) {
+const claudeManifestPath = path.join(root, "previous/plugins/rhyolite/.claude-plugin/plugin.json");
+const claudeManifest = JSON.parse(fs.readFileSync(claudeManifestPath, "utf8"));
+claudeManifest.version = previous;
+fs.writeFileSync(claudeManifestPath, `${JSON.stringify(claudeManifest, null, 2)}\n`);
+for (const file of ["commands/version.md", "agents/repo-review.agent.md",
+    "claude/commands/version.md", "claude/agents/repo-review.md"]) {
     const target = path.join(root, "previous/plugins/rhyolite", file);
     fs.writeFileSync(target, fs.readFileSync(target, "utf8")
         .replaceAll(`v${current} Beta`, `v${previous} Beta`));
