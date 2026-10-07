@@ -49,6 +49,8 @@ HARNESS_PROVIDER_ID=""
 HARNESS_PROVIDER_HOST=""
 HARNESS_RESUME_POLICY=""
 MODEL_FROM_HARNESS=0
+ALLOW_UNLISTED_MODEL=0
+MODEL_CATALOG_MEMBERSHIP="listed"
 FLEET_MODE="standard"
 REMEMBER_PREFERENCES=0
 ENABLE_PUBLIC_RESEARCH=0
@@ -119,6 +121,9 @@ Options:
   --harness ID                     Review harness (default: copilot)
   --model MODEL                    gpt-5.6-sol (recommended), claude-fable-5,
                                    or another available model ID
+  --allow-unlisted-model           Accept a safe model ID that is missing from the
+                                   harness's offline model catalog; the harness
+                                   verifies availability when the review runs
   --reasoning-effort LEVEL         high, xhigh, or max (default: max)
   --context TIER                   default or long_context (default: long_context)
   --fleet-mode MODE                Outer launcher mode: native or standard
@@ -305,6 +310,13 @@ raise SystemExit(0 if count == 1 or normalization == "Applied" else 1)
 ' "${state_path}"
 }
 
+errors_report_unavailable_model() {
+    grep -Eq \
+        -e '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*"[^"]* is not available' \
+        -e "[Mm]odel '[A-Za-z0-9][A-Za-z0-9._-]*'[^']* is not available" \
+        "$1" 2>/dev/null
+}
+
 repository_failure_stage() {
     local status="$1"
     local errors_path="$2"
@@ -352,6 +364,8 @@ repository_failure_stage() {
                 'cleanup|broker-exit|ephemeral MCP config|research runtime' \
                 "${errors_path}" 2>/dev/null; then
                 printf 'research cleanup'
+            elif errors_report_unavailable_model "${errors_path}"; then
+                printf 'model availability'
             elif grep -Eq \
                 'dossier|REPOSITORY RESEARCH DOSSIER|successful public response' \
                 "${errors_path}" 2>/dev/null; then
@@ -365,6 +379,8 @@ repository_failure_stage() {
                 'temporary harness runtime home|cleanup' \
                 "${errors_path}" 2>/dev/null; then
                 printf 'cleanup'
+            elif errors_report_unavailable_model "${errors_path}"; then
+                printf 'model availability'
             elif report_repair_attempted \
                 "${errors_path%/errors.txt}/state.json"; then
                 printf 'report repair'
@@ -419,6 +435,10 @@ repository_failure_summary() {
                 'research validation')
                     printf 'The dedicated research phase did not produce a valid dossier with a successful public response.'
                     ;;
+                'model availability')
+                    printf 'The dedicated research worker could not start because %s rejected the approved model as unavailable.' \
+                        "${HARNESS_DISPLAY_NAME}"
+                    ;;
                 *)
                     printf 'The dedicated public-research worker failed before the main repository review began.'
                     ;;
@@ -435,6 +455,10 @@ repository_failure_summary() {
                 'report repair')
                     printf 'Bounded report-only recovery did not produce a fully valid, content-preserving report.'
                     ;;
+                'model availability')
+                    printf 'The repository-review worker could not start because %s rejected the approved model as unavailable.' \
+                        "${HARNESS_DISPLAY_NAME}"
+                    ;;
                 harness\ *)
                     printf 'The selected review harness failed while preparing, running, or finalizing the worker session.'
                     ;;
@@ -447,6 +471,11 @@ repository_failure_summary() {
             printf 'The repository review did not complete.'
             ;;
     esac
+}
+
+model_availability_remediation() {
+    printf 'Select a model that your %s account can use, regenerate and approve the plan, and retry. Rhyolite never substitutes another model.' \
+        "${HARNESS_DISPLAY_NAME}"
 }
 
 repository_failure_remediation() {
@@ -496,6 +525,9 @@ repository_failure_remediation() {
                     printf '%s' \
                         'Inspect the sanitized research errors, timeline, state, and network summary, then retry; do not bypass the dedicated research phase.'
                     ;;
+                'model availability')
+                    model_availability_remediation
+                    ;;
                 *)
                     printf '%s' \
                         'Inspect the sanitized research errors, timeline, state, and network summary. Repair the reported broker or worker failure and retry.'
@@ -507,6 +539,9 @@ repository_failure_remediation() {
                 cleanup)
                     printf '%s' \
                         'Securely remove the reported temporary runtime path, correct local permissions or locks, and retry.'
+                    ;;
+                'model availability')
+                    model_availability_remediation
                     ;;
                 'report validation')
                     printf '%s' \
@@ -964,6 +999,8 @@ write_approval_hash_material() {
     printf 'ThrottleLimit=%s\n' "${THROTTLE_LIMIT}"
     printf 'MaxRepositories=%s\n' "${MAX_REPOSITORIES}"
     printf 'Model=%s\n' "$(approval_hash_string "${MODEL}")"
+    printf 'ModelCatalogMembership=%s\n' \
+        "$(approval_hash_string "${MODEL_CATALOG_MEMBERSHIP}")"
     printf 'FleetMode=%s\n' "$(approval_hash_string "${FLEET_MODE}")"
     printf 'RememberPreferences=%s\n' \
         "$(json_boolean "${REMEMBER_PREFERENCES}")"
@@ -1190,11 +1227,21 @@ write_review_plan_json() {
   "ThrottleLimit": ${THROTTLE_LIMIT},
   "MaxRepositories": ${MAX_REPOSITORIES},
   "Model": "$(json_escape "${MODEL}")",
+  "ModelCatalogMembership": "$(json_escape "${MODEL_CATALOG_MEMBERSHIP}")",
   "FleetMode": "$(json_escape "${FLEET_MODE}")",
   "RememberPreferences": $(json_boolean "${REMEMBER_PREFERENCES}"),
   "OpenHtmlPolicy": "$(json_escape "$(review_plan_open_html_policy)")"
 }
 EOF
+}
+
+model_catalog_membership_text() {
+    if [[ "${MODEL_CATALOG_MEMBERSHIP}" == unlisted ]]; then
+        printf 'unlisted (allowed by --allow-unlisted-model; %s verifies availability when the review runs)' \
+            "${HARNESS_DISPLAY_NAME}"
+    else
+        printf 'listed (offline %s model catalog)' "${HARNESS_DISPLAY_NAME}"
+    fi
 }
 
 write_review_plan_text() {
@@ -1271,6 +1318,7 @@ write_review_plan_text() {
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
+    printf '%-20s %s\n' 'Model catalog:' "$(model_catalog_membership_text)"
     printf '%-20s %s\n' 'Fleet mode:' "${FLEET_MODE}"
     printf '%-20s %s\n' 'Remember settings:' \
         "$(status_word "${REMEMBER_PREFERENCES}")"
@@ -1358,6 +1406,10 @@ while (($# > 0)); do
             require_value "$1" "${2-}"
             MODEL="$2"
             shift 2
+            ;;
+        --allow-unlisted-model)
+            ALLOW_UNLISTED_MODEL=1
+            shift
             ;;
         --reasoning-effort)
             require_value "$1" "${2-}"
@@ -1713,6 +1765,7 @@ if [[ -n "${EXPECTED_PLAN_HASH}" ]]; then
 fi
 if ! rhyolite_harness_invoke \
     harness_validate_model_id "${MODEL}" >/dev/null 2>&1; then
+    model_validation_status="${RHYOLITE_HARNESS_LAST_STATUS}"
     if ((MODEL_FROM_HARNESS)); then
         print_runner_error \
             'The selected review harness returned an invalid default model.' \
@@ -1723,14 +1776,25 @@ if ! rhyolite_harness_invoke \
             'Restore the complete harness adapter and retry.'
         exit 2
     fi
-    print_runner_error \
-        'The selected model is not available.' \
-        "harness ${HARNESS} harness_validate_model_id" \
-        "Harness ${HARNESS}" \
-        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the harness model catalog.}" \
-        'Review planning and execution did not start.' \
-        'List the available model IDs, select one exact value, and retry.'
-    exit 2
+    if [[ "${model_validation_status}" == \
+        "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS}" ]] &&
+        ((ALLOW_UNLISTED_MODEL)); then
+        MODEL_CATALOG_MEMBERSHIP="unlisted"
+    else
+        model_validation_remediation='List the available model IDs, select one exact value, and retry.'
+        if [[ "${model_validation_status}" == \
+            "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS}" ]]; then
+            model_validation_remediation="Select a listed model ID, or pass --allow-unlisted-model so ${HARNESS_DISPLAY_NAME} verifies this exact ID when the review runs, then retry."
+        fi
+        print_runner_error \
+            'The selected model is not available.' \
+            "harness ${HARNESS} harness_validate_model_id" \
+            "Harness ${HARNESS}" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the harness model catalog.}" \
+            'Review planning and execution did not start.' \
+            "${model_validation_remediation}"
+        exit 2
+    fi
 fi
 if [[ -z "${REASONING_EFFORT}" ]]; then
     if ! rhyolite_harness_capture \
@@ -2851,6 +2915,7 @@ if ((VALIDATE_ONLY)); then
     printf 'Provider env vars:    %s\n' \
         "$(provider_forwarded_env_var_names_text)"
     printf 'Model:                %s\n' "${MODEL}"
+    printf 'Model catalog:        %s\n' "$(model_catalog_membership_text)"
     printf 'Fleet mode:           %s\n' "${FLEET_MODE}"
     printf 'Remember settings:    %s\n' "${REMEMBER_PREFERENCES}"
     exit 0

@@ -313,7 +313,7 @@ harness_list_models() {
         copilot help config 2>/dev/null
     )" || {
         rhyolite_harness_set_error \
-            'Copilot did not return its available model catalog.'
+            'Copilot did not return its offline model catalog.'
         return 1
     }
     while IFS= read -r model; do
@@ -348,7 +348,7 @@ harness_list_models() {
     )
     ((found)) || {
         rhyolite_harness_set_error \
-            'Copilot returned an empty available model catalog.'
+            'Copilot returned an empty offline model catalog.'
         return 1
     }
 }
@@ -363,6 +363,13 @@ harness_validate_model_id() {
             'The model identifier contains unsupported characters.'
         return 1
     }
+    # Copilot's auto selector picks and substitutes models, so it is never an
+    # exact model even if a future catalog lists it.
+    if [[ "${requested_model}" =~ ^[Aa][Uu][Tt][Oo]$ ]]; then
+        rhyolite_harness_set_error \
+            "Model '${requested_model}' lets Copilot choose a model automatically; select an exact model ID."
+        return 1
+    fi
     if ! available_models="$(harness_list_models)"; then
         rhyolite_harness_set_error \
             'Copilot model-catalog discovery failed during model validation.'
@@ -371,8 +378,11 @@ harness_validate_model_id() {
     while IFS= read -r available_model; do
         [[ "${available_model}" == "${requested_model}" ]] && return 0
     done <<< "${available_models}"
+    # Copilot rejects an unavailable explicit model in non-interactive
+    # workers without substitution, so a safe unlisted ID is opt-in eligible.
     rhyolite_harness_set_error \
-        "Model '${requested_model}' is not in Copilot's available model catalog."
+        "Model '${requested_model}' is not in Copilot's offline model catalog."
+    return "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS:-1}"
 }
 
 harness_model_choices() {

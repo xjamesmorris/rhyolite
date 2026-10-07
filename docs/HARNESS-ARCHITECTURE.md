@@ -114,7 +114,7 @@ detail remains available for sanitized reporting. The runner rejects empty,
 malformed, duplicated, or otherwise invalid contract values before using them.
 
 In addition to the loader's identity and tri-state capability checks, the
-runner validates adapter-provided display and CLI names, the live model
+runner validates adapter-provided display and CLI names, the offline model
 catalog, default and explicit model IDs, selected reasoning effort, selected
 context tier, resume policy, strict provider JSON, and the protected
 secret-environment list. Provider JSON must contain exactly
@@ -154,8 +154,8 @@ Every mapped adapter must define all functions below.
 | `harness_require_cli` | Verify that the required CLI is available without starting it. |
 | `harness_capability` | Return exactly `yes`, `no`, or `unverified` for the requested capability. |
 | `harness_default_model` | Return the adapter's default model ID. |
-| `harness_list_models` | Return the current available model IDs from the harness CLI's local help/config surface. |
-| `harness_validate_model_id` | Accept only an exact member of the current model catalog without substitution. |
+| `harness_list_models` | Return the model IDs in the harness CLI's offline local help/config catalog. |
+| `harness_validate_model_id` | Return 0 only for an exact member of the offline catalog, without substitution. Return `RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS` (3) only for a safe ID that is absent from a successfully discovered catalog, is not a selector that permits substitution, and that the harness's non-interactive workers reject without substitution when it is unavailable. Any other nonzero status rejects. |
 | `harness_model_choices` | Return the adapter-owned guided model choices. |
 | `harness_max_reasoning_effort` | Return the strongest supported reasoning-effort value for the supplied model. |
 | `harness_reasoning_effort_choices` | Return the ordered guided effort choices. |
@@ -226,8 +226,17 @@ Copilot is the only mapped I1a adapter.
 - CLI: `copilot`
 - Default model: `gpt-5.6-sol`
 - Guided alternate model: `claude-fable-5`
-- Model catalog: parsed from local `copilot help config`; safe syntax alone is
+- Model catalog: parsed from local `copilot help config`, a static list built
+  into the CLI rather than the account's live catalog; safe syntax alone is
   not availability
+- Unlisted models: a safe ID outside that catalog returns status 3 and is
+  accepted only with explicit `--allow-unlisted-model`, disclosed as
+  approval-bound `ModelCatalogMembership` `unlisted`; `auto` is always
+  rejected. Non-interactive review, research, and repair children fail
+  closed when Copilot reports `Model "<id>" from --model flag is not
+  available.`, and the runner reports a `model availability` stage. The
+  launcher's interactive orchestrator session instead falls back to
+  Copilot's default model, so it cannot prove availability.
 - Reasoning effort: `max` recommended; `xhigh` and `high` selectable
 - Context tier: `long_context` recommended; `default` selectable
 - Provider summary ID: `github-copilot`
@@ -471,7 +480,11 @@ that data contract:
 Contract v4 retains plan schema `5`, state schema `6`, provider identity,
 preference schema, and the Copilot-only fixed registry. It adds only the three
 required repair lifecycle functions, the optional `report-repair` home phase,
-and their fail-closed extraction/isolation contract.
+and their fail-closed extraction/isolation contract. A backward-compatible
+amendment adds the optional unlisted-model status for
+`harness_validate_model_id` and the additive approval-bound plan field
+`ModelCatalogMembership` (`listed` or `unlisted`); adapters that never
+return that status keep exact-catalog behavior.
 
 ## Adding a future adapter
 

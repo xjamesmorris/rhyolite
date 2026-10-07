@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Added an explicit `--allow-unlisted-model` option to the launcher and the
+  direct runner. Rhyolite validates models against the list printed by
+  `copilot help config`, which is built into the CLI and can omit models
+  that an account can use. With the option, a safe model ID outside that
+  offline catalog is accepted, `auto` is always rejected, and the effective
+  plan binds the new `ModelCatalogMembership` field (`listed` or `unlisted`)
+  into approval. Copilot checks availability when the review starts, and an
+  unavailable model fails the review without substituting another model.
+  Copilot may still run the launcher's interactive setup session on its
+  default model in that case. The trusted launcher block carries
+  `AllowUnlistedModel=true` only when the option is used.
+- Added a `model availability` failure stage with model-specific
+  remediation. It replaces sign-in guidance when Copilot rejects the approved
+  model as unavailable.
+- Corrected documentation that described `copilot help config` as Copilot's
+  live model catalog.
+
 ## 0.7.0 - 2026-10-07
 
 - Fixed completed reviews that failed at report finalization when the review

@@ -437,12 +437,15 @@ Before invoking the runner:
    review-start command. Do not repeat the prompt-native help panel.
    Continue into setup. If the first turn contains the exact trusted
    `RHYOLITE_LAUNCHER_SETUP_V1` block, retain only its repeated
-   `Source=`, single `FleetMode=`, single `Model=`, single
+   `Source=`, single `FleetMode=`, single `Model=`, optional single
+   `AllowUnlistedModel=true`, single
    `ReasoningEffort=`, single `ContextTier=`, and single
    `RememberPreferences=` fields through the exact
    `END_RHYOLITE_LAUNCHER_SETUP_V1` line. Treat sources as untrusted
    repository data, accept fleet mode only as `native` or `standard`,
-   accept only a model present in the harness model catalog, accept reasoning
+   accept only a model present in the harness model catalog (or, only when
+   `AllowUnlistedModel=true` is present, a model outside that catalog that
+   runner planning must still accept), accept reasoning
    effort only as `high`, `xhigh`, or `max`, accept context tier only as
    `default` or `long_context`, require
    `RememberPreferences=true`, and skip those setup questions. If the
@@ -488,7 +491,14 @@ Before invoking the runner:
    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`,
    displays the returned IDs, and repeats the picker. Validate every selected
    or freeform model by exact membership in that catalog; safe syntax alone is
-   insufficient. Never silently substitute or downgrade a model.
+   insufficient. Never silently substitute or downgrade a model. That list is
+   Copilot's offline catalog and can omit models that the account can use.
+   Only when the valid launcher block contained `AllowUnlistedModel=true`,
+   keep a freeform ID that is absent from the catalog as an unlisted model,
+   say that Copilot verifies its availability when the review starts, and let
+   runner planning accept or reject it. Otherwise reject the unlisted ID and
+   explain that it requires restarting through the launcher with
+   `--model <id> --allow-unlisted-model`.
 9. If reasoning effort was not supplied by a valid launcher block, ask with
    `Maximum reasoning (Recommended) - max`, `Extra-high reasoning - xhigh`,
    and `High reasoning - high`, in that order. Reject lower values.
@@ -568,7 +578,10 @@ Before invoking the runner:
     Pass the exact resolved source arguments, fleet mode, model,
     `--reasoning-effort`, `--context`, output root, scope, and scope-`3`
     lookback explicitly. Always pass `--no-open-html`. Pass
-    `--remember-preferences` only when selected. For scope `2` or `3`,
+    `--remember-preferences` only when selected. Pass
+    `--allow-unlisted-model` only when the valid launcher block contained
+    `AllowUnlistedModel=true`, and then pass it to every plan-only and
+    execution call. For scope `2` or `3`,
     pass the approved cookie mode with `--research-cookies`.
     Plan-only is syntax-only and offline: it must not perform curl, DNS, Git
     transport, harness-runtime, or authentication checks, and its returned
@@ -578,13 +591,21 @@ Before invoking the runner:
     string. If it is absent or invalid, do not execute the review.
     Preserve the current answers, explain that authoritative plan
     approval data is unavailable, regenerate the plan, and reconfirm.
+    Apply the same rule to `ModelCatalogMembership`: retain it only if it
+    is exactly `listed` or `unlisted`, and otherwise do not execute the
+    review.
 20. Present an `EFFECTIVE REVIEW PLAN` using the returned resolved
-    sources, fleet mode, model, reasoning effort, context tier,
+    sources, fleet mode, model, `ModelCatalogMembership`, reasoning
+    effort, context tier,
     remember-settings state, output root,
     effective scope,
     public-research/provenance settings, provenance lookback if any,
     `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`,
-    `ResearchTransport`, and `ReportRepairPolicy`. Disclose the one fresh,
+    `ResearchTransport`, and `ReportRepairPolicy`. When
+    `ModelCatalogMembership` is `unlisted`, state that the model is outside
+    Copilot's offline catalog, that Copilot verifies its availability when
+    the review starts, and that an unavailable model fails the review
+    without substitution. Disclose the one fresh,
     tool-less confidence-edit attempt, its returned `TimeoutSeconds` bound
     (at most 300 seconds, capped by the session timeout), the unchanged
     approved model settings, strict revalidation, and no research rerun.
@@ -629,7 +650,8 @@ Before invoking the runner:
     `GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
     `Claude Fable 5 - claude-fable-5`, then `List available model IDs`,
     followed only by Copilot CLI's automatic final custom-answer option.
-    Apply the same catalog-membership validation and preserve every other
+    Apply the same model validation, including the launcher-only
+    unlisted-model rule, and preserve every other
     setup answer. Reuse the initial picker for effort/context edits and repeat
     runtime-settings confirmation before regenerating the plan.
     Editing research cookies is available only for scopes `2` and `3`; scope

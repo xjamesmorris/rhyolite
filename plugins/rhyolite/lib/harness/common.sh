@@ -3,6 +3,9 @@
 RHYOLITE_HARNESS_CONTRACT_VERSION=4
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
+# harness_validate_model_id returns this status only for a safe model ID that
+# is absent from the offline catalog and eligible for explicit operator opt-in.
+RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
 RHYOLITE_HARNESS_LOADED_ID=''
 RHYOLITE_HARNESS_LOADED_PATH=''
 RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(

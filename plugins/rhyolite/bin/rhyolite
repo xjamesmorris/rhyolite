@@ -349,8 +349,27 @@ prompt_for_fleet_mode() {
     done
 }
 
+launcher_model_accepted() {
+    local candidate_model="$1"
+    local allow_unlisted_model="$2"
+
+    if rhyolite_harness_invoke \
+        harness_validate_model_id "${candidate_model}" >/dev/null 2>&1; then
+        return 0
+    fi
+    [[ "${allow_unlisted_model}" == 1 &&
+        "${RHYOLITE_HARNESS_LAST_STATUS}" == \
+            "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS}" ]]
+}
+
+launcher_model_unlisted() {
+    [[ "${RHYOLITE_HARNESS_LAST_STATUS}" == \
+        "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS}" ]]
+}
+
 prompt_for_model() {
     local remembered_model="$1"
+    local allow_unlisted_model="$2"
     local answer candidate_model
 
     while true; do
@@ -402,13 +421,17 @@ prompt_for_model() {
             printf 'Available model ID: ' >&2
             IFS= read -r candidate_model
         fi
-        if rhyolite_harness_invoke \
-            harness_validate_model_id "${candidate_model}" >/dev/null 2>&1; then
+        if launcher_model_accepted \
+            "${candidate_model}" "${allow_unlisted_model}"; then
             printf '%s\n' "${candidate_model}"
             return
         fi
         printf 'Model selection rejected: %s\n' \
             "${RHYOLITE_HARNESS_ERROR_DETAIL:-not available to this Copilot CLI installation}" >&2
+        if launcher_model_unlisted; then
+            printf '%s\n' \
+                'Restart the launcher with --allow-unlisted-model to use a model ID outside the offline catalog.' >&2
+        fi
     done
 }
 
@@ -528,7 +551,8 @@ build_initial_prompt() {
     local model="$3"
     local reasoning_effort="$4"
     local context_tier="$5"
-    shift 5
+    local allow_unlisted_model="$6"
+    shift 6
     local repository
 
     printf '%s\n%s\n' \
@@ -539,6 +563,9 @@ build_initial_prompt() {
     done
     printf 'FleetMode=%s\n' "${fleet_mode}"
     printf 'Model=%s\n' "${model}"
+    if [[ "${allow_unlisted_model}" == 1 ]]; then
+        printf 'AllowUnlistedModel=true\n'
+    fi
     printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
     printf 'ContextTier=%s\n' "${context_tier}"
     printf 'RememberPreferences=true\n'
@@ -560,6 +587,7 @@ write_launch_context() {
     local model="$7"
     local reasoning_effort="$8"
     local context_tier="$9"
+    local allow_unlisted_model="${10}"
 
     {
         printf 'StartedAtUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -569,6 +597,9 @@ write_launch_context() {
         printf 'PluginRoot=%s\n' "${plugin_root}"
         printf 'FleetMode=%s\n' "${fleet_mode}"
         printf 'Model=%s\n' "${model}"
+        if [[ "${allow_unlisted_model}" == 1 ]]; then
+            printf 'AllowUnlistedModel=true\n'
+        fi
         printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
         printf 'ContextTier=%s\n' "${context_tier}"
         printf 'RememberPreferences=true\n'
@@ -585,14 +616,19 @@ Usage:
   rhyolite [--help]
   rhyolite [--version]
   rhyolite [--repo URL ...] [--harness ID] [--fleet-mode native|standard]
-           [--model MODEL] [--reasoning-effort high|xhigh|max]
+           [--model MODEL] [--allow-unlisted-model]
+           [--reasoning-effort high|xhigh|max]
            [--context default|long_context] [--yolo]
            [--] [initial review request...]
 
 Options:
   --harness ID        Select a registered review harness.
-  --model MODEL       Select an exact ID from the active Copilot model catalog
+  --model MODEL       Select an exact ID from Copilot's offline model catalog
                       (default: gpt-5.6-sol; alternate: claude-fable-5).
+  --allow-unlisted-model
+                      Also accept a safe model ID that is missing from that
+                      catalog; Copilot verifies availability when the review
+                      runs, and the review never substitutes another model.
   --reasoning-effort  Select high, xhigh, or max (recommended).
   --context TIER      Select default or long_context (recommended).
   --yolo         Start Copilot in YOLO mode for this launch.
@@ -627,6 +663,7 @@ main() {
     local model=''
     local reasoning_effort=''
     local context_tier=''
+    local allow_unlisted_model=0
     local yolo=0
     local remembered_fleet_mode=''
     local remembered_model=''
@@ -799,6 +836,10 @@ main() {
                         2
                 model="$2"
                 shift 2
+                ;;
+            --allow-unlisted-model)
+                allow_unlisted_model=1
+                shift
                 ;;
             --reasoning-effort)
                 [ "$#" -ge 2 ] &&
@@ -983,18 +1024,30 @@ main() {
     fi
 
     if [[ -n "${remembered_model}" ]] &&
-        ! rhyolite_harness_invoke \
-            harness_validate_model_id "${remembered_model}" >/dev/null 2>&1; then
-        printf 'Rhyolite launcher ignored saved settings because model %s is no longer available.\n' \
-            "${remembered_model}" >&2
+        ! launcher_model_accepted \
+            "${remembered_model}" "${allow_unlisted_model}"; then
+        if launcher_model_unlisted; then
+            printf 'Rhyolite launcher ignored saved settings because model %s is not in the offline Copilot model catalog; pass --allow-unlisted-model to reuse it.\n' \
+                "${remembered_model}" >&2
+        else
+            printf 'Rhyolite launcher ignored saved settings because model %s is no longer available.\n' \
+                "${remembered_model}" >&2
+        fi
         remembered_fleet_mode=''
         remembered_model=''
         remembered_reasoning_effort=''
         remembered_context_tier=''
     fi
     if [[ -n "${model}" ]] &&
-        ! rhyolite_harness_invoke \
-            harness_validate_model_id "${model}" >/dev/null 2>&1; then
+        ! launcher_model_accepted "${model}" "${allow_unlisted_model}"; then
+        if launcher_model_unlisted; then
+            fail \
+                'launcher model validation' \
+                "The requested model is not in Copilot's offline model catalog." \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the Copilot model catalog.}" \
+                'Pass --allow-unlisted-model with this exact model ID so Copilot verifies it when the review runs, or pass one of the IDs shown by copilot help config.' \
+                2
+        fi
         fail \
             'launcher model validation' \
             'The requested model is not available.' \
@@ -1014,13 +1067,15 @@ main() {
     fi
     if [[ -z "${model}" ]]; then
         if ((is_interactive)); then
-            model="$(prompt_for_model "${remembered_model}")"
+            model="$(
+                prompt_for_model \
+                    "${remembered_model}" "${allow_unlisted_model}"
+            )"
         else
             model="${remembered_model:-${RHYOLITE_DEFAULT_MODEL}}"
         fi
     fi
-    if ! rhyolite_harness_invoke \
-        harness_validate_model_id "${model}" >/dev/null 2>&1; then
+    if ! launcher_model_accepted "${model}" "${allow_unlisted_model}"; then
         fail \
             'launcher model validation' \
             'The selected model is not available.' \
@@ -1077,7 +1132,9 @@ main() {
             case "${confirmation_action}" in
                 confirm) break ;;
                 model)
-                    model="$(prompt_for_model "${model}")"
+                    model="$(
+                        prompt_for_model "${model}" "${allow_unlisted_model}"
+                    )"
                     ;;
                 effort)
                     reasoning_effort="$(
@@ -1103,6 +1160,7 @@ main() {
             "${model}" \
             "${reasoning_effort}" \
             "${context_tier}" \
+            "${allow_unlisted_model}" \
             "${repositories[@]}"
     )"
     write_launch_context \
@@ -1114,7 +1172,8 @@ main() {
         "${fleet_mode}" \
         "${model}" \
         "${reasoning_effort}" \
-        "${context_tier}"
+        "${context_tier}" \
+        "${allow_unlisted_model}"
 
     export RHYOLITE_LAUNCHER_CALLER_DIR="${original_dir}"
     export RHYOLITE_LAUNCHER_LAUNCH_DIR="${launch_dir}"

@@ -196,9 +196,9 @@ it must not be silently translated into another mode.
 | Function | Signature and output | Required validation |
 | --- | --- | --- |
 | `harness_default_model` | No arguments. Print one model ID. | Must pass the same adapter validator used for explicit models. |
-| `harness_list_models` | No arguments. Print the current available model IDs, one per line. | Use only a local non-interactive help/config surface; reject empty, unsafe, or duplicated IDs. |
-| `harness_validate_model_id` | One model ID. Status only. | Require exact membership in the current catalog. Never substitute, normalize, alias, or silently downgrade it. |
-| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default and one choice may list the live catalog. Do not print an explicit `Other`; Copilot CLI owns the final custom-answer option. |
+| `harness_list_models` | No arguments. Print the model IDs in the offline catalog, one per line. | Use only a local non-interactive help/config surface; reject empty, unsafe, or duplicated IDs. A static help catalog can omit models that an account can use. |
+| `harness_validate_model_id` | One model ID. Status only: `0`, `RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS` (`3`), or another nonzero rejection. | Return `0` only for exact membership in the offline catalog. Never substitute, normalize, alias, or silently downgrade it. Reject selectors that let the CLI choose a model, such as Copilot `auto`, before testing membership. Return `3` only for a safe ID that is absent from a successfully discovered catalog and that the harness's non-interactive workers reject without substitution when unavailable; the runner accepts it only with explicit `--allow-unlisted-model`. |
+| `harness_model_choices` | No arguments. Print one or more ordered picker labels, one per line. | The first choice is the recommended default and one choice may list the offline catalog. Do not print an explicit `Other`; Copilot CLI owns the final custom-answer option. |
 | `harness_max_reasoning_effort` | One already validated model ID. Print one effort token. | The value must be safe, supported by that model, and the strongest available setting. It is the default approval-bound effort. |
 | `harness_reasoning_effort_choices` | No arguments. Print ordered guided effort labels. | Include only supported values at or above the project hard minimum. |
 | `harness_validate_reasoning_effort` | One effort token. Status only. | Accept only exact supported values. |
@@ -561,6 +561,7 @@ schema 5. It includes these exact top-level fields:
     ]
   },
   "Model": "gpt-5.6-sol",
+  "ModelCatalogMembership": "listed",
   "ReasoningEffort": "max",
   "ContextTier": "long_context"
 }
@@ -570,17 +571,21 @@ The provider array shown above is abbreviated.
 
 Requirements:
 
-- Resolve and validate `Harness`, `Provider`, `Model`, `ReasoningEffort`, and
-  `ContextTier` before computing the plan.
+- Resolve and validate `Harness`, `Provider`, `Model`,
+  `ModelCatalogMembership`, `ReasoningEffort`, and `ContextTier` before
+  computing the plan. `ModelCatalogMembership` is `listed` for an exact
+  offline-catalog member and `unlisted` only for an adapter status-3 ID
+  accepted with explicit `--allow-unlisted-model`.
 - Surface them in both JSON and text `EFFECTIVE REVIEW PLAN` output.
 - Add them to approval-hash material field by field. Hash the harness ID,
   provider ID, provider host, every forwarded variable name with its stable
-  index, model, reasoning effort, and context tier. Never hash or serialize
-  secret values.
+  index, model, model catalog membership, reasoning effort, and context tier.
+  Never hash or serialize secret values. The opt-in flag alone must not change
+  the hash of a listed model.
 - Keep default Copilot and explicit `--harness copilot` plans byte-equivalent
   apart from ordinary non-hash timestamps, with the same approval hash.
-- Any adapter, provider summary, forwarded-name order, model, effort, or
-  context change invalidates the approved plan.
+- Any adapter, provider summary, forwarded-name order, model, model catalog
+  membership, effort, or context change invalidates the approved plan.
 - Plan-only mode may use only the local CLI help/config surface required to
   validate the model catalog; it does not prepare authentication.
 - Actual execution re-resolves the metadata and refuses to run if it no longer

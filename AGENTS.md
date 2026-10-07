@@ -392,7 +392,8 @@ supported and must not drive new work.
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
 - Plan-only output includes `ApprovalHash`, `FleetMode`, `Model`,
-  `RememberPreferences`, and `ResearchTransport`. Preserve approved settings,
+  `ModelCatalogMembership`, `RememberPreferences`, and `ResearchTransport`.
+  Preserve approved settings,
   pass the hash unchanged to execution with `--expected-plan-hash`, and never
   execute without a valid hash.
 - `EFFECTIVE REVIEW PLAN` surfaces `ReviewDate`, `PriorArtWindow`,
@@ -462,11 +463,22 @@ supported and must not drive new work.
   provider summary, argv, environment, runtime home, persistence, extraction,
   cleanup, isolation, and allow-all detection are adapter-owned outputs that
   the runner validates before use.
+- `harness_validate_model_id` returns 0 only for an exact member of the
+  harness CLI's offline model catalog. It may return
+  `RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS` only for a safe ID that is absent
+  from a successfully discovered catalog, is not a selector that permits
+  substitution (such as Copilot `auto`, which is always rejected), and that
+  the harness's non-interactive workers reject without substitution when it
+  is unavailable. The launcher and runner accept such an ID only with
+  explicit `--allow-unlisted-model`, and `ModelCatalogMembership` is
+  approval-bound plan data.
 - Adapter output is data. Do not evaluate it, build shell command strings,
   accept success-shaped fallbacks, copy broad runtime homes, or expose secret
   values in plans, state, logs, handoffs, or provider summaries.
 - Plan-only resolution is syntax-only and offline. It must not require curl,
-  DNS, Git transport, the harness CLI, or runtime authentication, and it must
+  DNS, Git transport, runtime authentication, or any harness CLI surface other
+  than the offline local help/config output that validates the model catalog,
+  and it must
   preserve the selected source URL unchanged. Execution performs transport and
   authentication checks only after the approved plan still matches.
 

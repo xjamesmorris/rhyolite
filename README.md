@@ -145,9 +145,17 @@ characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
 endpoint, ask whether to use native Copilot fleet mode, and confirm the
 validated review runtime. Known model choices are `gpt-5.6-sol` (recommended)
-and `claude-fable-5`; the selector can list the live model IDs reported by
-`copilot help config`, including `gpt-6-sol` when available. Every model must
-match that catalog exactly.
+and `claude-fable-5`; the selector can list the model IDs in Copilot's
+offline catalog, as reported by `copilot help config`, including `gpt-6-sol`
+when available. That catalog is built into the CLI rather than fetched for
+your account, so it can omit models that your account can use. Every model
+must match that catalog exactly unless you pass `--allow-unlisted-model`,
+which also accepts a safe model ID outside it (`auto` is always rejected).
+The effective plan then binds `ModelCatalogMembership` `unlisted` into
+approval, and Copilot checks availability when the review starts: an
+unavailable model fails the review without substituting another model.
+Copilot may still run the interactive setup session on its default model when
+the selected model is unavailable.
 Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
 context is selectable as `long_context` (recommended) or `default`. The
 launcher displays harness, model, effort, and context together and asks the
@@ -363,7 +371,8 @@ The agent asks one question at a time:
 1. Which source to review.
 2. Whether to continue in standard mode or restart through the launcher
    for native fleet mode when setup did not come from the launcher.
-3. Which available review model to use, with an option to list live model IDs.
+3. Which available review model to use, with an option to list model IDs from
+   Copilot's offline catalog.
 4. Which reasoning effort to use.
 5. Which context tier to use.
 6. Whether to confirm the validated harness/model/effort/context settings or
@@ -399,7 +408,9 @@ choices:
 
 The final custom-answer option accepts a model ID containing only letters,
 numbers, dots, underscores, and hyphens. Rhyolite does not hard-allowlist
-models or silently replace a selected custom ID.
+models or silently replace a selected custom ID. A custom ID must be in
+Copilot's offline catalog unless the session was started with the launcher's
+`--allow-unlisted-model` option.
 
 The output picker resolves and displays these full paths:
 

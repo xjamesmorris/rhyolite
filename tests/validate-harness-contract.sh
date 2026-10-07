@@ -345,6 +345,57 @@ if harness_max_reasoning_effort '../model' >/dev/null 2>&1; then
     fail 'Copilot maximum-effort resolution accepted an unsafe model ID.'
 fi
 
+assert_equal 3 \
+    "${RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS}" \
+    'Unlisted-model adapter status'
+adapter_catalog_bin="${fixture_root}/adapter-catalog-bin"
+mkdir -p -- "${adapter_catalog_bin}"
+cat > "${adapter_catalog_bin}/copilot" <<'MOCK_ADAPTER_CATALOG'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1-}" == help && "${2-}" == config ]] || exit 97
+[[ -z "${RHYOLITE_MOCK_CATALOG_FAIL-}" ]] || exit 1
+printf '%s\n' '  `model`: AI model to use for Copilot CLI.'
+for listed_model in gpt-5.6-sol claude-fable-5 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
+    printf '    - "%s"\n' "${listed_model}"
+done
+printf '%s\n' '  `reasoning_effort`: Reasoning effort.'
+MOCK_ADAPTER_CATALOG
+chmod +x "${adapter_catalog_bin}/copilot"
+
+assert_adapter_model_status() {
+    local expected_status="$1"
+    local model="$2"
+    local extra_models="$3"
+    local catalog_fail="$4"
+    local expected_detail="$5"
+
+    PATH="${adapter_catalog_bin}:${PATH}" \
+        RHYOLITE_MOCK_EXTRA_MODELS="${extra_models}" \
+        RHYOLITE_MOCK_CATALOG_FAIL="${catalog_fail}" \
+        rhyolite_harness_invoke harness_validate_model_id "${model}" \
+        >/dev/null 2>&1 || true
+    [[ "${RHYOLITE_HARNESS_LAST_STATUS}" == "${expected_status}" ]] ||
+        fail "Copilot model '${model}' returned status ${RHYOLITE_HARNESS_LAST_STATUS}, expected ${expected_status}."
+    [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"${expected_detail}"* ]] ||
+        fail "Copilot model '${model}' returned detail '${RHYOLITE_HARNESS_ERROR_DETAIL}'."
+}
+
+assert_adapter_model_status 0 gpt-5.6-sol '' '' ''
+assert_adapter_model_status 3 example-unlisted-model '' '' \
+    "Model 'example-unlisted-model' is not in Copilot's offline model catalog."
+assert_adapter_model_status 0 example-unlisted-model example-unlisted-model '' ''
+for selector_model in auto Auto AUTO; do
+    assert_adapter_model_status 1 "${selector_model}" auto '' \
+        'lets Copilot choose a model automatically'
+done
+for unsafe_model in '' '../model' '-model' 'model name' 'model/name'; do
+    assert_adapter_model_status 1 "${unsafe_model}" '' '' \
+        'The model identifier contains unsupported characters.'
+done
+assert_adapter_model_status 1 example-unlisted-model '' 1 \
+    'Copilot model-catalog discovery failed during model validation.'
+
 declare -A expected_capabilities=(
     [fleet]=yes
     [structured_questions]=yes
@@ -2027,6 +2078,207 @@ assert_contains \
     'Strict provider summary validation'
 [[ ! -e "${plan_workspace}" && ! -e "${plan_output}" ]] ||
     fail 'Plan-only harness validation created workspace or output roots.'
+
+unlisted_bin="${fixture_root}/unlisted-model-bin"
+unlisted_guard_log="${fixture_root}/unlisted-model-guard.log"
+unlisted_workspace="${fixture_root}/unlisted-model-workspace"
+unlisted_output="${fixture_root}/unlisted-model-output"
+mkdir -p -- "${unlisted_bin}"
+cp -- "${plan_mock_bin}/date" "${unlisted_bin}/date"
+cat > "${unlisted_bin}/copilot" <<'MOCK_UNLISTED_COPILOT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == help && "${2-}" == config ]]; then
+    [[ -z "${RHYOLITE_MOCK_CATALOG_FAIL-}" ]] || exit 1
+    printf '%s\n' '  `model`: AI model to use for Copilot CLI.'
+    for listed_model in gpt-5.6-sol claude-fable-5 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
+        printf '    - "%s"\n' "${listed_model}"
+    done
+    printf '%s\n' '  `reasoning_effort`: Reasoning effort.'
+    exit 0
+fi
+printf 'copilot %s\n' "$*" >> "${RHYOLITE_GUARD_LOG:?}"
+exit 96
+MOCK_UNLISTED_COPILOT
+cat > "${unlisted_bin}/git" <<'MOCK_UNLISTED_GIT'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *' rev-parse --git-dir '* ]]; then
+    exec "${RHYOLITE_REAL_GIT:?}" "$@"
+fi
+printf 'git %s\n' "$*" >> "${RHYOLITE_GUARD_LOG:?}"
+exit 95
+MOCK_UNLISTED_GIT
+cat > "${unlisted_bin}/curl" <<'MOCK_UNLISTED_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'curl %s\n' "$*" >> "${RHYOLITE_GUARD_LOG:?}"
+exit 94
+MOCK_UNLISTED_CURL
+chmod +x \
+    "${unlisted_bin}/copilot" \
+    "${unlisted_bin}/git" \
+    "${unlisted_bin}/curl" \
+    "${unlisted_bin}/date"
+unlisted_real_git="$(command -v git)"
+
+run_unlisted_runner() {
+    local name="$1"
+    local extra_models="$2"
+    local catalog_fail="$3"
+    shift 3
+
+    rm -f -- "${unlisted_guard_log}"
+    set +e
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        RHYOLITE_GUARD_LOG="${unlisted_guard_log}" \
+        RHYOLITE_REAL_GIT="${unlisted_real_git}" \
+        RHYOLITE_MOCK_EXTRA_MODELS="${extra_models}" \
+        RHYOLITE_MOCK_CATALOG_FAIL="${catalog_fail}" \
+        PATH="${unlisted_bin}:/usr/bin:/bin" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 1 \
+            --workspace-root "${unlisted_workspace}" \
+            --output-root "${unlisted_output}" \
+            --non-interactive \
+            --no-open-html \
+            "$@" \
+            >"${fixture_root}/${name}.stdout" \
+            2>"${fixture_root}/${name}.stderr"
+    unlisted_status=$?
+    set -e
+    [[ ! -e "${unlisted_guard_log}" ]] ||
+        fail "${name}: runner started Copilot, Git transport, or curl activity."
+}
+
+unlisted_plan_json_value() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)[sys.argv[2]])
+PY
+}
+
+run_unlisted_runner unlisted-no-flag '' '' \
+    --plan-only --model example-unlisted-model
+((unlisted_status == 2)) ||
+    fail "Unlisted model without opt-in returned ${unlisted_status}, expected 2."
+[[ ! -s "${fixture_root}/unlisted-no-flag.stdout" ]] ||
+    fail 'Unlisted model without opt-in produced a plan.'
+assert_contains "${fixture_root}/unlisted-no-flag.stderr" \
+    'Stage: harness copilot harness_validate_model_id' \
+    'Unlisted model without opt-in'
+assert_contains "${fixture_root}/unlisted-no-flag.stderr" \
+    "Model 'example-unlisted-model' is not in Copilot's offline model catalog." \
+    'Unlisted model without opt-in'
+assert_contains "${fixture_root}/unlisted-no-flag.stderr" \
+    'pass --allow-unlisted-model so Copilot verifies this exact ID' \
+    'Unlisted model without opt-in remediation'
+
+run_unlisted_runner unlisted-flag '' '' \
+    --plan-only --model example-unlisted-model --allow-unlisted-model
+((unlisted_status == 0)) &&
+    [[ ! -s "${fixture_root}/unlisted-flag.stderr" ]] ||
+    fail 'Opted-in unlisted model did not produce a clean plan.'
+run_unlisted_runner unlisted-listed example-unlisted-model '' \
+    --plan-only --model example-unlisted-model
+((unlisted_status == 0)) ||
+    fail 'Listed placeholder model did not produce a plan.'
+run_unlisted_runner unlisted-listed-flag example-unlisted-model '' \
+    --plan-only --model example-unlisted-model --allow-unlisted-model
+((unlisted_status == 0)) ||
+    fail 'Listed placeholder model with opt-in did not produce a plan.'
+python3 - "${fixture_root}" <<'PY'
+import json
+import sys
+
+root = sys.argv[1]
+
+
+def load(name):
+    with open(f"{root}/{name}.stdout", encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+unlisted = load("unlisted-flag")
+listed = load("unlisted-listed")
+listed_with_flag = load("unlisted-listed-flag")
+if unlisted["Model"] != "example-unlisted-model":
+    raise SystemExit("Opted-in plan changed the selected model")
+if unlisted["ModelCatalogMembership"] != "unlisted":
+    raise SystemExit("Opted-in plan did not disclose unlisted membership")
+if listed["ModelCatalogMembership"] != "listed":
+    raise SystemExit("Listed plan did not disclose listed membership")
+if listed != listed_with_flag:
+    raise SystemExit("The opt-in flag changed a listed-model plan")
+if unlisted["ApprovalHash"] == listed["ApprovalHash"]:
+    raise SystemExit("ModelCatalogMembership is not approval-hash material")
+for plan in (unlisted, listed):
+    del plan["ApprovalHash"]
+    del plan["ModelCatalogMembership"]
+if unlisted != listed:
+    raise SystemExit("Plans differ beyond catalog membership and approval hash")
+PY
+unlisted_listed_hash="$(
+    unlisted_plan_json_value \
+        "${fixture_root}/unlisted-listed.stdout" ApprovalHash
+)"
+unlisted_unlisted_hash="$(
+    unlisted_plan_json_value \
+        "${fixture_root}/unlisted-flag.stdout" ApprovalHash
+)"
+
+run_unlisted_runner unlisted-cross-listed-hash '' '' \
+    --model example-unlisted-model --allow-unlisted-model \
+    --expected-plan-hash "${unlisted_listed_hash}"
+((unlisted_status == 2)) ||
+    fail 'A listed-catalog approval authorized an unlisted-catalog run.'
+assert_contains "${fixture_root}/unlisted-cross-listed-hash.stderr" \
+    'approved plan changed; regenerate and reconfirm' \
+    'Listed approval reused for an unlisted catalog'
+run_unlisted_runner unlisted-cross-unlisted-hash example-unlisted-model '' \
+    --model example-unlisted-model --allow-unlisted-model \
+    --expected-plan-hash "${unlisted_unlisted_hash}"
+((unlisted_status == 2)) ||
+    fail 'An unlisted-catalog approval authorized a listed-catalog run.'
+assert_contains "${fixture_root}/unlisted-cross-unlisted-hash.stderr" \
+    'approved plan changed; regenerate and reconfirm' \
+    'Unlisted approval reused for a listed catalog'
+run_unlisted_runner unlisted-execute-without-flag '' '' \
+    --model example-unlisted-model \
+    --expected-plan-hash "${unlisted_unlisted_hash}"
+((unlisted_status == 2)) ||
+    fail 'An unlisted approval executed without --allow-unlisted-model.'
+assert_contains "${fixture_root}/unlisted-execute-without-flag.stderr" \
+    'Stage: harness copilot harness_validate_model_id' \
+    'Unlisted execution without opt-in'
+
+run_unlisted_runner unlisted-auto auto '' \
+    --plan-only --model auto --allow-unlisted-model
+((unlisted_status == 2)) ||
+    fail 'The Copilot auto selector was accepted as an unlisted model.'
+assert_contains "${fixture_root}/unlisted-auto.stderr" \
+    'lets Copilot choose a model automatically' \
+    'Copilot auto selector'
+run_unlisted_runner unlisted-catalog-failure '' 1 \
+    --plan-only --model example-unlisted-model --allow-unlisted-model
+((unlisted_status == 2)) ||
+    fail 'Catalog-discovery failure was accepted as an unlisted model.'
+assert_contains "${fixture_root}/unlisted-catalog-failure.stderr" \
+    'Copilot model-catalog discovery failed during model validation.' \
+    'Unlisted model with catalog-discovery failure'
+run_unlisted_runner unlisted-validate-only '' '' \
+    --validate-only --model example-unlisted-model --allow-unlisted-model
+((unlisted_status == 0)) ||
+    fail 'Opted-in unlisted model failed validate-only mode.'
+assert_contains "${fixture_root}/unlisted-validate-only.stdout" \
+    'Model catalog:        unlisted (allowed by --allow-unlisted-model; Copilot verifies availability when the review runs)' \
+    'Unlisted validate-only disclosure'
+[[ ! -e "${unlisted_workspace}" && ! -e "${unlisted_output}" ]] ||
+    fail 'Unlisted-model planning created workspace or output roots.'
 
 guard_bin="${fixture_root}/guard-bin"
 guard_log="${fixture_root}/guard-activity.log"
@@ -4796,5 +5048,149 @@ expected_launcher_vector="${fixture_root}/launcher-expected.vector"
 printf '%s\0' "${expected_launcher_args[@]}" > "${expected_launcher_vector}"
 cmp -s "${expected_launcher_vector}" "${launcher_default_vector}" ||
     fail 'Copilot outer-launcher argv changed from the I1a baseline.'
+
+run_unlisted_launcher() {
+    local name="$1"
+    local state_path="$2"
+    shift 2
+
+    launcher_unlisted_capture="${fixture_root}/${name}.launcher.capture"
+    launcher_unlisted_stderr="${fixture_root}/${name}.launcher.stderr"
+    rm -f -- "${launcher_unlisted_capture}"
+    set +e
+    (
+        cd "${launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            NO_COLOR=1 \
+            XDG_STATE_HOME="${state_path}" \
+            RHYOLITE_LAUNCHER_CAPTURE="${launcher_unlisted_capture}" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "${LAUNCHER}" \
+                --repo https://example.com/owner/repository.git \
+                --fleet-mode standard \
+                "$@"
+    ) >"${fixture_root}/${name}.launcher.stdout" \
+        2>"${launcher_unlisted_stderr}"
+    launcher_unlisted_status=$?
+    set -e
+}
+
+assert_unlisted_launcher_vector() {
+    local name="$1"
+    local expected_model="$2"
+    local expected_allow_line="$3"
+    local vector_path="${fixture_root}/${name}.vector"
+    local expected_vector_path="${fixture_root}/${name}-expected.vector"
+    local prompt
+
+    ((launcher_unlisted_status == 0)) ||
+        fail "${name}: launcher returned ${launcher_unlisted_status}, expected 0."
+    normalize_launcher_capture \
+        "${launcher_unlisted_capture}" \
+        "${vector_path}"
+    prompt="RHYOLITE_START_COMMAND_V1"$'\n'
+    prompt+="RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    prompt+="Source=https://example.com/owner/repository.git"$'\n'
+    prompt+="FleetMode=standard"$'\n'
+    prompt+="Model=${expected_model}"$'\n'
+    if [[ -n "${expected_allow_line}" ]]; then
+        prompt+="${expected_allow_line}"$'\n'
+    fi
+    prompt+="ReasoningEffort=max"$'\n'
+    prompt+="ContextTier=long_context"$'\n'
+    prompt+="RememberPreferences=true"$'\n'
+    prompt+="END_RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    prompt+="Begin Rhyolite's guided repository-review setup now."
+    printf '%s\0' \
+        --experimental \
+        -C "${launcher_caller}" \
+        --plugin-dir "${PLUGIN_ROOT}" \
+        --mode interactive \
+        --agent rhyolite:repo-review \
+        --model "${expected_model}" \
+        --reasoning-effort max \
+        --context long_context \
+        --log-dir '<generated-log-dir>' \
+        --no-custom-instructions \
+        -i "${prompt}" > "${expected_vector_path}"
+    cmp -s "${expected_vector_path}" "${vector_path}" ||
+        fail "${name}: launcher argv or setup block is not the expected opt-in vector."
+}
+
+launcher_unlisted_state="${fixture_root}/launcher-unlisted-state"
+mkdir -p -- "${launcher_unlisted_state}"
+chmod 0700 -- "${launcher_unlisted_state}"
+run_unlisted_launcher launcher-unlisted-no-flag \
+    "${launcher_unlisted_state}" \
+    --model example-unlisted-model
+((launcher_unlisted_status == 2)) ||
+    fail "Launcher unlisted model without opt-in returned ${launcher_unlisted_status}, expected 2."
+assert_contains "${launcher_unlisted_stderr}" \
+    'Stage: launcher model validation' \
+    'Launcher unlisted model without opt-in'
+assert_contains "${launcher_unlisted_stderr}" \
+    "The requested model is not in Copilot's offline model catalog." \
+    'Launcher unlisted model without opt-in'
+assert_contains "${launcher_unlisted_stderr}" \
+    'Pass --allow-unlisted-model with this exact model ID' \
+    'Launcher unlisted model without opt-in remediation'
+[[ ! -e "${launcher_unlisted_capture}" ]] ||
+    fail 'Launcher started a Copilot session for an unlisted model without opt-in.'
+
+run_unlisted_launcher launcher-unlisted-flag \
+    "${launcher_unlisted_state}" \
+    --model example-unlisted-model \
+    --allow-unlisted-model
+assert_unlisted_launcher_vector \
+    launcher-unlisted-flag \
+    example-unlisted-model \
+    'AllowUnlistedModel=true'
+grep -R -F -x -q 'AllowUnlistedModel=true' \
+    --include=launch-context.txt "${launcher_unlisted_state}" ||
+    fail 'Launcher context did not record the unlisted-model opt-in.'
+
+run_unlisted_launcher launcher-unlisted-auto \
+    "${launcher_unlisted_state}" \
+    --model auto \
+    --allow-unlisted-model
+((launcher_unlisted_status == 2)) ||
+    fail 'Launcher accepted the Copilot auto selector as an unlisted model.'
+assert_contains "${launcher_unlisted_stderr}" \
+    'lets Copilot choose a model automatically' \
+    'Launcher auto selector'
+[[ ! -e "${launcher_unlisted_capture}" ]] ||
+    fail 'Launcher started a Copilot session for the auto selector.'
+
+launcher_unlisted_preference_state="${fixture_root}/launcher-unlisted-preference-state"
+mkdir -p -- "${launcher_unlisted_preference_state}"
+chmod 0700 -- "${launcher_unlisted_preference_state}"
+rhyolite_write_preference \
+    https://example.com/owner/repository.git \
+    copilot \
+    standard \
+    example-unlisted-model \
+    max \
+    long_context \
+    "${launcher_unlisted_preference_state}/rhyolite/launcher" ||
+    fail 'Could not seed an unlisted-model launcher preference.'
+run_unlisted_launcher launcher-unlisted-preference-no-flag \
+    "${launcher_unlisted_preference_state}"
+assert_contains "${launcher_unlisted_stderr}" \
+    'ignored saved settings because model example-unlisted-model is not in the offline Copilot model catalog; pass --allow-unlisted-model to reuse it.' \
+    'Launcher saved unlisted preference without opt-in'
+assert_unlisted_launcher_vector \
+    launcher-unlisted-preference-no-flag \
+    gpt-5.6-sol \
+    ''
+run_unlisted_launcher launcher-unlisted-preference-flag \
+    "${launcher_unlisted_preference_state}" \
+    --allow-unlisted-model
+assert_not_contains "${launcher_unlisted_stderr}" \
+    'ignored saved settings' \
+    'Launcher saved unlisted preference with opt-in'
+assert_unlisted_launcher_vector \
+    launcher-unlisted-preference-flag \
+    example-unlisted-model \
+    'AllowUnlistedModel=true'
 
 printf 'Harness contract validation passed.\n'

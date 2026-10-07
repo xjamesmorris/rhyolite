@@ -865,6 +865,19 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${AGENT}" ||
     fail 'Agent fleet/model preference setup contract is incomplete.'
+for unlisted_contract_file in "${AGENT}" "${SKILL}"; do
+    grep -Fq '`AllowUnlistedModel=true`' "${unlisted_contract_file}" &&
+        grep -Fq '`--allow-unlisted-model`' "${unlisted_contract_file}" &&
+        grep -Fq '`--model <id> --allow-unlisted-model`' \
+            "${unlisted_contract_file}" &&
+        grep -Fq 'Apply the same rule to `ModelCatalogMembership`: retain it only if it' \
+            "${unlisted_contract_file}" &&
+        grep -Fq 'is exactly `listed` or `unlisted`, and otherwise do not execute the' \
+            "${unlisted_contract_file}" ||
+        fail "Unlisted-model opt-in contract is incomplete: ${unlisted_contract_file}"
+done
+grep -Fq '`AllowUnlistedModel=true`' "${UI_VALIDATOR_AGENT}" ||
+    fail 'UI validator does not recognize the launcher unlisted-model opt-in.'
 grep -Fq 'If the user edits `Scope` to `1` or `2`, immediately clear any stored' \
     "${AGENT}" ||
     fail 'Agent does not clear provenance when editing scope away from 3.'
@@ -2109,6 +2122,7 @@ for hash_fragment in \
     'ReasoningEffort=%s' \
     'ContextTier=%s' \
     'Provider=%s' \
+    'ModelCatalogMembership=%s' \
     'ReportRepairPolicy=%s'; do
     grep -Fq "${hash_fragment}" "${RUNNER}" ||
         fail "Approval hash material is missing ${hash_fragment}."
@@ -3189,12 +3203,14 @@ launcher_version="$("${launcher_link}" --version)"
     "${launcher_help}" == *'  - copilot'* &&
     "${launcher_help}" == *'--reasoning-effort'* &&
     "${launcher_help}" == *'--context'* &&
+    "${launcher_help}" == *'--allow-unlisted-model'* &&
     "${launcher_help}" != *'--autopilot'* ]] ||
     fail 'Unix launcher --help output is incomplete.'
 runner_help="$("${RUNNER}" --help)"
 [[ "${runner_help}" == *'gpt-5.6-sol (recommended)'* &&
     "${runner_help}" == *'claude-fable-5'* &&
     "${runner_help}" == *'another available model ID'* &&
+    "${runner_help}" == *'--allow-unlisted-model'* &&
     "${runner_help}" == *'--list-models'* &&
     "${runner_help}" == *'Explicitly open the HTML run index after completion'* &&
     "${runner_help}" == *'Compatibility spelling for the default never-open policy'* ]] ||
@@ -5495,6 +5511,7 @@ function assertCommonPlan(
     "Harness",
     "MaxRepositories",
     "Model",
+    "ModelCatalogMembership",
     "OpenHtmlPolicy",
     "OutputRoot",
     "PriorArtWindow",
@@ -5544,6 +5561,7 @@ function assertCommonPlan(
         "GITHUB_COPILOT_API_TOKEN",
       ]) ||
       plan.Model !== "gpt-5.6-sol" ||
+      plan.ModelCatalogMembership !== "listed" ||
       plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
       plan.OpenHtmlPolicy !== expectedOpenHtmlPolicy ||
@@ -9070,6 +9088,7 @@ assertKeys(reviewPlan, [
   "Harness",
   "MaxRepositories",
   "Model",
+  "ModelCatalogMembership",
   "OpenHtmlPolicy",
   "OutputRoot",
   "PriorArtWindow",
@@ -9118,6 +9137,7 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ApprovalHash !== expectedApprovalHash ||
     reviewPlan.RunId !== runId ||
     reviewPlan.Harness !== "copilot" ||
+    reviewPlan.ModelCatalogMembership !== "listed" ||
     reviewPlan.ReasoningEffort !== "max" ||
     reviewPlan.ContextTier !== "long_context" ||
     reviewPlan.Provider?.Id !== "github-copilot" ||
@@ -11947,7 +11967,7 @@ JS
 ! grep -Fq 'PHASE=report-repair' "${mock_log}" ||
     fail 'Incomplete report unexpectedly started a repair worker.'
 
-for failure_case in worker timeout; do
+for failure_case in worker timeout model; do
     case "${failure_case}" in
         worker)
             failure_exit=33
@@ -11960,6 +11980,12 @@ for failure_case in worker timeout; do
             failure_message='mock worker timeout detail retained'
             expected_stage='worker timeout'
             expected_status='TimedOut'
+            ;;
+        model)
+            failure_exit=1
+            failure_message='Error: Model "example-unlisted-model" from --model flag is not available.'
+            expected_stage='model availability'
+            expected_status='ReviewFailed'
             ;;
     esac
     case_output="${fixture_dir}/${failure_case}-failure-output"
@@ -11990,6 +12016,13 @@ for failure_case in worker timeout; do
         grep -Fq '[credential omitted]' "${case_stdout}" &&
             ! grep -Fq 'worker-secret-value' "${case_stdout}" ||
             fail 'Bash worker terminal summary did not redact credentials.'
+    fi
+    if [[ "${failure_case}" == 'model' ]]; then
+        grep -Fq 'Remediation: Select a model that your Copilot account can use' \
+            "${case_stdout}" &&
+            grep -Fq 'Rhyolite never substitutes another model.' \
+                "${case_stdout}" ||
+            fail 'Bash model-availability failure lost its model remediation.'
     fi
     case_run="$(
         find "${case_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1

@@ -102,7 +102,9 @@ The list choice must use the bundled runner's `--list-models` mode, display
 the returned newline-delimited IDs, and repeat the same picker. The automatic
 final custom-answer option accepts another exact catalog ID. Safe syntax alone
 is insufficient; every selected model must be validated by exact catalog
-membership.
+membership, except that a session whose trusted launcher block carried
+`AllowUnlistedModel=true` may keep an ID outside that offline catalog as an
+unlisted model for runner planning to accept or reject.
 The initial setup model picker and `Edit setup` -> `Model` must reuse this
 same choice order, validation, and custom-answer behavior without resetting
 other setup values.
