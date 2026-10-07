@@ -128,10 +128,14 @@ date-time as `CommandStartedAt` and set `Stage` to `Setup`.
 
 Preserve setup answers across turns: source selection, model, reasoning
 effort, context tier, runtime-settings confirmation, remember-preferences
-choice, output root, scope, and the allow-unlisted-model opt-in. Also
-preserve the command start, stage, effective plan, background runner task,
-run ID, run status, latest progress line, and artifact paths. Never reset or
-advance setup state when handling these exact setup intents:
+choice, output root, scope, optional provenance lookback months,
+research-cookie consent, and the allow-unlisted-model opt-in. Also preserve
+the command start, stage, effective plan, background runner task, run ID,
+run status, latest progress line, and artifact paths. If the selected scope
+ever becomes anything other than `3`, immediately clear any stored provenance
+lookback and treat it as `NOT SELECTED`. If the selected scope becomes `1`,
+also clear any research-cookie choice and treat it as `NOT SELECTED`. Never
+reset or advance setup state when handling these exact setup intents:
 
 - Exact `help`: output the exact prompt-native panel above verbatim again,
   then immediately output this live block using the selected value or
@@ -147,9 +151,13 @@ advance setup state when handling these exact setup intents:
   Remember settings: <YES, NO, or NOT SELECTED>
   Output: <selected value or NOT SELECTED>
   Scope: <selected value or NOT SELECTED>
+  Provenance lookback months: <selected value or NOT SELECTED>
+  Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>
   ```
 
-  Then continue with the pending setup question or confirmation.
+  If the current scope is not `3`, show `Provenance lookback months: NOT
+  SELECTED`; if it is `1`, also show `Research cookies: NOT SELECTED`. Then
+  continue with the pending setup question or confirmation.
 - Exact `status`, or the status request from `/rhyolite:status`: do not start
   work or advance setup, and do not call any tool. Output:
 
@@ -166,6 +174,8 @@ advance setup state when handling these exact setup intents:
   Remember settings: <YES, NO, or NOT SELECTED>
   Output: <effective output directory or NOT SELECTED>
   Scope: <selected value or NOT SELECTED>
+  Provenance lookback months: <selected value or NOT SELECTED>
+  Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>
   Review run: <run id and status, NOT STARTED, or UNAVAILABLE>
   Background runner: <running, completed, stopped, failed, NONE, or UNAVAILABLE>
   Latest progress: <latest RHYOLITE PROGRESS line already reported, NONE, or UNAVAILABLE>
@@ -183,10 +193,9 @@ advance setup state when handling these exact setup intents:
   requires human review before sharing). Include the published rough planning
   ranges. State that every scope assesses claims and reputation integrity and
   community health, scopes `2`/`3` add prior art and originality, and scope
-  `3` adds code and architecture provenance. State that this Claude Code
-  release runs scope `1` only; scopes `2` and `3` currently require the
-  Copilot harness because the dedicated research worker is not yet available
-  for Claude Code.
+  `3` adds code and architecture provenance. Scopes `2` and `3` first run a
+  separate, write-disabled Claude Code research worker whose only network
+  access is Rhyolite's local research broker.
 
 ## Questions
 
@@ -201,10 +210,12 @@ path, ask in plain text and use the user's next message as the answer.
 
 Collect answers in this order: repository URL(s), review model, reasoning
 effort, validated runtime-settings confirmation, remember-preferences choice,
-output root, and scope. A valid trusted launcher setup block already supplies
-the source, model, reasoning effort, context tier, and remember-preferences
-values. Without a launcher block, use context tier `long_context` and fleet
-mode `standard`; Claude Code has no native fleet mode.
+output root, scope, scope `3` provenance lookback when required, and scope
+`2`/`3` research-cookie consent. A valid trusted launcher setup block already
+supplies the source, model, reasoning effort, context tier, and
+remember-preferences values. Without a launcher block, use context tier
+`long_context` and fleet mode `standard`; Claude Code has no native fleet
+mode.
 
 Ask for one or more anonymous, publicly readable HTTPS Git repository URLs
 before asking about output or scope. The host does not need to be GitHub. Do
@@ -290,11 +301,42 @@ Then ask `Scope` with these choices:
 - `Scope 2 - Core + public prior-art/community research - 30-90+ minutes`
 - `Scope 3 - Full + generated-code provenance review - 60-120+ minutes`
 
-Map them to scope values `1`, `2`, and `3`. If the user selects scope `2` or
-`3`, explain that this Claude Code release cannot run the dedicated public
-research worker yet, that scopes `2` and `3` currently require the Copilot
-harness, and repeat the scope question without losing other answers. Never
-downgrade a selected scope silently.
+Map them to scope values `1`, `2`, and `3`. Never downgrade a selected scope
+silently.
+
+If the user selects scope `3`, ask `Provenance lookback months [6]` with
+these choices:
+
+- `6 months (Recommended)`
+- `3 months`
+- `12 months`
+- `24 months`
+
+The free-text answer accepts another whole number from `1` through `60` or
+instructions to change the setup. Use `6` only when the user selects
+`6 months (Recommended)`, and pass the chosen value explicitly with
+`--provenance-lookback-months`. For scope `1` or `2`, skip this question and
+clear any stored provenance lookback immediately.
+
+For scope `2` or `3`, explain before the next question that raw Set-Cookie
+values are kept only in a private per-repository transport ledger in either
+mode and are never shown to a model or included in a rendered report. Then
+ask `Research cookies` with these choices:
+
+- `Do not replay research cookies (Recommended)`
+- `Allow a fresh per-repository research cookie jar`
+
+Map them to `off` and `ephemeral`. The ephemeral jar starts empty, is
+isolated to one repository and run, accepts only bounded exact-host Secure
+cookies, and is never imported or reused. Scope `1` skips this question and
+clears any previous cookie choice immediately.
+
+Scopes `2` and `3` use the runner's fixed anonymous `duckduckgo-html-v1`
+general-web-search provider. Provider selection is an advanced direct-runner
+option, not a guided question. Never invent or pass a configurable endpoint,
+credential, header, request body, proxy, challenge bypass, or fallback
+provider. State that all timing estimates are rough and can increase
+substantially for a large repository or broad research topic.
 
 ## Errors
 
@@ -307,7 +349,9 @@ worker result reported by the runner, handle that specific result:
 2. Read only the run output folder and artifact paths returned by the runner,
    plus artifact paths recorded inside that folder's trusted `state.json` or
    `manifest.json`. For a failed run, inspect the run state plus each failed
-   repository's `state.json`, `errors.txt`, and `analysis-timeline.txt`.
+   repository's `state.json`, `errors.txt`, and `analysis-timeline.txt`, and
+   the returned research state, errors, timeline, and network-summary paths
+   when present.
 3. Strip terminal controls and redact email addresses, credential-bearing URL
    userinfo, authorization headers, access tokens, passwords, secrets, and API
    keys before repeating detail.
@@ -323,16 +367,20 @@ worker result reported by the runner, handle that specific result:
    available to this account. A `harness claude harness_verify_isolation`
    stage that reports a different model means Claude Code answered with a
    model other than the approved one, so Rhyolite rejected the review; choose
-   another approved model rather than retrying the same one. Timeouts may use
-   a larger runner timeout; incomplete reports require a rerun; cleanup
-   failures require securing or removing the reported temporary runtime path.
+   another approved model rather than retrying the same one; the same
+   applies to the research phase. Timeouts may use a larger runner timeout or
+   a narrower scope; incomplete reports require a rerun; research-capability
+   failures require restoring the exact bundled broker and tool contract;
+   research failures require the dedicated research phase to succeed before
+   the main analysis; cleanup failures require securing or removing the
+   reported temporary runtime path.
 
 Use this boundary format, omitting no available safe field:
 
 ```text
 RHYOLITE ERROR
 Summary: <plain-language cause supported by returned evidence>
-Stage: <setup validation, plan, preflight, clone, commit, snapshot, worker, model availability, report validation, cleanup, or finalization>
+Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, report validation, cleanup, or finalization>
 Source: <repository URL or NOT APPLICABLE>
 Details: <safe returned status, exit code, and underlying detail>
 Consequence: <what did not run or complete>
@@ -354,9 +402,11 @@ After the answers are collected, do not start the review yet:
 
 1. Build the exact resolved runner arguments: `--harness claude`, one
    `--repo <url>` per source, `--fleet-mode standard`, `--model`,
-   `--reasoning-effort`, `--context`, `--output-root`, `--scope 1`, and
-   `--no-open-html`. Pass `--remember-preferences` only when selected, and
-   `--allow-unlisted-model` only when the valid launcher block contained
+   `--reasoning-effort`, `--context`, `--output-root`, `--scope`, and
+   `--no-open-html`. For scope `3`, pass `--provenance-lookback-months` with
+   the chosen value. For scope `2` or `3`, pass the selected cookie mode with
+   `--research-cookies`. Pass `--remember-preferences` only when selected,
+   and `--allow-unlisted-model` only when the valid launcher block contained
    `AllowUnlistedModel=true`, on every plan-only and execution call.
 2. Run plan-only in the foreground with the exact resolved inputs:
    `bash <RUNNER> --harness claude --plan-only --non-interactive --no-open-html ...`
@@ -370,12 +420,19 @@ After the answers are collected, do not start the review yet:
 4. Present an `EFFECTIVE REVIEW PLAN` section summarizing the returned
    harness, provider, sources, model, `ModelCatalogMembership`, reasoning
    effort, context tier, remember-settings state, output root, effective
-   scope, public research setting, provenance setting, `ReviewDate`,
-   `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`,
+   scope, public research setting, provenance setting, provenance lookback if
+   any, `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`,
    `ResearchTransport`, and `ReportRepairPolicy`. Label `ReviewDate`,
    `PriorArtWindow`, and `ProvenanceWindow` as local-session calendar dates
-   and `GeneratedAt` as UTC; show prior art and provenance as disabled for
-   scope `1`. When `ModelCatalogMembership` is `unlisted`, state that the
+   and `GeneratedAt` as UTC. Show prior art as disabled for scope `1` and
+   otherwise give the returned `PriorArtWindow` start and end dates. Show the
+   returned `ProvenanceWindow` start and end dates for scope `3` and
+   provenance as disabled otherwise. For `ResearchTransport`, show the
+   dedicated-worker mode, broker and policy schema versions, provider IDs,
+   policy digest, resource profile, exact tools, anonymous GitHub no-auth
+   mode, selected general-web-search provider and availability, cookie
+   replay mode, private raw Set-Cookie retention, private unsupported-body
+   retention, and network-log policy. When `ModelCatalogMembership` is `unlisted`, state that the
    model is outside Rhyolite's offline Claude Code catalog, that Claude Code
    verifies its availability when the review starts, and that an unavailable
    model fails the review without substitution. Explain that the fixed repair
@@ -393,15 +450,21 @@ After the answers are collected, do not start the review yet:
    `Explain scope`, in that order.
 
 If the user answers exact `Change scope`, treat it as `Edit setup` ->
-`Scope`.
+`Scope or research` -> `Scope`.
 
 If the user selects `Edit setup`, ask `Edit setup` with the exact choices
-`Source`, `Model or reasoning effort`, `Output`, and `Scope`. For
-`Model or reasoning effort`, ask a follow-up with `Model` and
-`Reasoning effort`. Re-ask only the selected field, preserve the others,
-repeat the runtime-settings confirmation after a model or effort change, and
-then regenerate the authoritative plan. If a re-entered value is invalid,
-explain the problem and re-ask only that field.
+`Source`, `Model or reasoning effort`, `Output`, and `Scope or research`.
+For `Model or reasoning effort`, ask a follow-up with `Model` and
+`Reasoning effort`. For `Scope or research`, ask a follow-up with `Scope`
+and, when the current scope is `2` or `3`, `Research cookies`, plus
+`Provenance lookback months` when the current scope is `3`. Re-ask only the
+selected field, preserve the others, repeat the runtime-settings
+confirmation after a model or effort change, and then regenerate the
+authoritative plan. After a scope edit, ask the provenance lookback question
+only when the new scope is `3` and the research-cookie question only when it
+is `2` or `3`, keeping an existing answer only when it still applies. If a
+re-entered value is invalid, explain the problem and re-ask only that
+field.
 
 If the user selects `Explain scope`, explain scopes again without losing
 answers, then repeat the `Review plan` question. Handle exact `help`,
@@ -413,9 +476,9 @@ Never run the actual review until the user selects exact `Run review`.
 ## Execution
 
 Before starting, tell the user that Rhyolite reports clone, exact-commit,
-snapshot, analysis, artifact, heartbeat, and finalization milestones,
-including report-only repair when eligible, and that reviews take many
-minutes.
+snapshot, dedicated research (scopes `2` and `3`), analysis, artifact,
+heartbeat, and finalization milestones, including report-only repair when
+eligible, and that reviews take many minutes.
 
 When the user selects `Run review`, run the same runner with explicit
 `--harness claude` and the identical resolved inputs from the accepted plan,
@@ -434,11 +497,21 @@ refreshed `EFFECTIVE REVIEW PLAN`, and reconfirm before any execution.
 Every completed canonical report must contain the exact all-scope
 `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`,
 `CLAIMS AND REPUTATION INTEGRITY ASSESSMENT`, and
-`COMMUNITY HEALTH ASSESSMENT` sections with their required fields. These
-assessments evaluate claims, artifacts, and aggregate public signals, never a
-person's character, intent, motive, or misconduct. Preserve their neutral
-wording, confidence, limitations, and human-review requirement in the
-executive summary.
+`COMMUNITY HEALTH ASSESSMENT` sections with their required fields. Scopes
+`2`/`3` must also contain the exact `PRIOR ART AND ORIGINALITY ASSESSMENT`
+section, and scope `3` must also contain the exact
+`CODE AND ARCHITECTURE PROVENANCE ASSESSMENT` and
+`GENERATED-CODE PROVENANCE ASSESSMENT` sections, each with its required
+fields. These assessments evaluate claims, artifacts, and aggregate public
+signals, never a person's character, intent, motive, or misconduct. Preserve
+their neutral wording, confidence, limitations, and human-review requirement
+in the executive summary. For generated-code provenance, never infer human
+generation from absent evidence or treat style, quality, verbosity, test
+density, bulk commits, generic fingerprints, or tool configuration alone as
+proof; keep model, effort, and harness attribution direct-evidence-only, and
+keep heuristic model candidates about repository assets, explicitly
+non-attributive, and at Not applicable, Low, or Medium confidence, never
+High.
 
 If the user asks to review a private or internal repository, stop and explain
 that the `0.7.0` beta release supports anonymously readable public HTTPS Git

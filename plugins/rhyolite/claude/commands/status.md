@@ -24,6 +24,8 @@ Context tier: <default, long_context, or NOT SELECTED>
 Remember settings: <YES, NO, or NOT SELECTED>
 Output: <effective output directory or NOT SELECTED>
 Scope: <selected value or NOT SELECTED>
+Provenance lookback months: <selected value or NOT SELECTED>
+Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>
 Review run: <run id and status, NOT STARTED, or UNAVAILABLE>
 Background runner: <running, completed, stopped, failed, NONE, or UNAVAILABLE>
 Latest progress: <latest RHYOLITE PROGRESS line already reported, NONE, or UNAVAILABLE>

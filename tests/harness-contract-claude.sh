@@ -333,8 +333,8 @@ claude_clear_auth_environment=(
         [structured_questions]=yes
         [subagents]=no
         [builtin_security_specialist]=no
-        [builtin_research_specialist]=no
-        [web_research]=no
+        [builtin_research_specialist]=yes
+        [web_research]=yes
         [shell_denial]=yes
         [final_message_file]=no
     )
@@ -1398,6 +1398,50 @@ if (plan.Model !== "claude-opus-9" || plan.ModelCatalogMembership !== "unlisted"
 ' "${claude_plan_unlisted}"
 claude_plan_unlisted_hash="$(contract_plan_hash "${claude_plan_unlisted}")"
 
+# Scopes 2 and 3 plan through the dedicated research worker contract.
+claude_scope_plan() {
+    local label="$1"
+    shift
+    local output_path="${fixture_root}/claude-plan-${label}.json"
+
+    "${claude_runner_environment[@]}" \
+        PATH="${runner_mock_bin}:/usr/bin:/bin" \
+        "${RUNNER}" \
+        --harness claude \
+        --repo https://github.com/octocat/Hello-World \
+        --workspace-root "${plan_workspace}" \
+        --output-root "${plan_output}" \
+        --non-interactive \
+        --no-open-html \
+        "$@" \
+        --plan-only >"${output_path}" 2>"${output_path}.stderr" ||
+        fail "Claude Code ${label} plan failed: $(cat -- "${output_path}.stderr")"
+    CLAUDE_SCOPE_PLAN="${output_path}"
+}
+claude_scope_plan scope-2 --scope 2 --research-cookies ephemeral
+node -e '
+const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (plan.Harness !== "claude" || plan.Scope.Number !== 2 ||
+    plan.Scope.PublicResearch !== true || plan.Scope.ProvenanceResearch !== false ||
+    plan.PriorArtWindow?.Enabled !== true || plan.ProvenanceWindow !== null ||
+    plan.ResearchTransport?.Enabled !== true ||
+    plan.ResearchTransport.Mode !== "dedicated-worker-local-stdio-mcp" ||
+    plan.ResearchTransport.Cookies?.ReplayMode !== "ephemeral") {
+  throw new Error("Claude Code scope-2 plan is invalid");
+}
+' "${CLAUDE_SCOPE_PLAN}"
+claude_scope_plan scope-3 --scope 3 --provenance-lookback-months 12 \
+    --research-cookies off
+node -e '
+const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (plan.Harness !== "claude" || plan.Scope.Number !== 3 ||
+    plan.Scope.PublicResearch !== true || plan.Scope.ProvenanceResearch !== true ||
+    plan.ProvenanceWindow?.LookbackMonths !== 12 ||
+    plan.ResearchTransport?.Cookies?.ReplayMode !== "off") {
+  throw new Error("Claude Code scope-3 plan is invalid");
+}
+' "${CLAUDE_SCOPE_PLAN}"
+
 claude_pre_activity_failure() {
     local label="$1"
     local expected_detail="$2"
@@ -1433,12 +1477,6 @@ claude_pre_activity_failure copilot-hash \
 claude_pre_activity_failure claude-hash-for-copilot \
     'approved plan changed; regenerate and reconfirm' \
     --harness copilot --scope 1 --expected-plan-hash "${claude_plan_hash}"
-claude_pre_activity_failure scope-2 \
-    'Stage: harness claude harness_capability' \
-    --harness claude --scope 2
-claude_pre_activity_failure scope-3 \
-    'Stage: harness claude harness_capability' \
-    --harness claude --scope 3
 claude_pre_activity_failure alias-model \
     'is a Claude Code alias' \
     --harness claude --scope 1 --model opus
@@ -2426,9 +2464,25 @@ for claude_orchestrator_contract in \
     '`run_in_background` set to true' \
     'RHYOLITE EXECUTIVE SUMMARY' \
     '`Run output: <absolute path>`' \
-    'never add an `Other` option'; do
+    'never add an `Other` option' \
+    'ask `Provenance lookback months [6]` with' \
+    '- `Do not replay research cookies (Recommended)`' \
+    '`--research-cookies`' \
+    '`--provenance-lookback-months`' \
+    '`PRIOR ART AND ORIGINALITY ASSESSMENT`' \
+    '`GENERATED-CODE PROVENANCE ASSESSMENT`'; do
     assert_contains "${claude_orchestrator}" "${claude_orchestrator_contract}" \
         'Claude Code orchestrator contract'
+done
+assert_not_contains "${claude_orchestrator}" '--scope 1`' \
+    'Claude Code orchestrator passes the selected scope'
+assert_not_contains "${claude_orchestrator}" 'require the Copilot' \
+    'Claude Code orchestrator offers scopes 2 and 3'
+for claude_status_surface in "${claude_orchestrator}" \
+    "${PLUGIN_ROOT}/claude/commands/status.md"; do
+    assert_contains "${claude_status_surface}" \
+        'Research cookies: <OFF, EPHEMERAL, or NOT SELECTED>' \
+        'Claude Code status research-cookie line'
 done
 assert_contains "${PLUGIN_ROOT}/claude/commands/status.md" 'Harness: claude' \
     'Claude Code status command harness'
@@ -2636,36 +2690,10 @@ JS
         fail 'Claude Code research home cleanup failed.'
 )
 
-# A staged copy proves the runner reaches the Claude Code research worker
-# through the adapter and fails closed with cleanup. web_research stays no in
-# production until a real broker-backed run supplies evidence.
-claude_research_plugin="${fixture_root}/claude-research-capability-plugin"
-mkdir -p -- "${claude_research_plugin}"
-cp -R -- \
-    "${PLUGIN_ROOT}/lib" \
-    "${PLUGIN_ROOT}/scripts" \
-    "${PLUGIN_ROOT}/branding" \
-    "${PLUGIN_ROOT}/skills" \
-    "${PLUGIN_ROOT}/claude" \
-    "${PLUGIN_ROOT}/.claude-plugin" \
-    "${claude_research_plugin}/"
-cat >> "${claude_research_plugin}/lib/harness/claude.sh" <<'RESEARCH_CAPABILITY'
-
-harness_capability() {
-    case "$1" in
-        shell_denial|structured_questions|web_research)
-            printf '%s\n' 'yes'
-            ;;
-        fleet|subagents|builtin_security_specialist|builtin_research_specialist|final_message_file)
-            printf '%s\n' 'no'
-            ;;
-        *)
-            printf '%s\n' 'unverified'
-            ;;
-    esac
-}
-RESEARCH_CAPABILITY
-claude_research_runner="${claude_research_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
+# The runner reaches the Claude Code research worker through the adapter
+# with the exact broker grant, and a research worker that stops before using
+# the broker fails the run closed with cleanup.
+claude_research_runner="${RUNNER}"
 claude_research_case="${fixture_root}/claude-research-run"
 mkdir -p -- "${claude_research_case}/tmp" "${claude_research_case}/capture"
 "${claude_runner_environment[@]}" \
@@ -2676,7 +2704,7 @@ mkdir -p -- "${claude_research_case}/tmp" "${claude_research_case}/capture"
     --output-root "${claude_research_case}/output" \
     --non-interactive --no-open-html --plan-only \
     >"${claude_research_case}/plan.json" 2>"${claude_research_case}/plan.stderr" ||
-    fail "Claude Code staged scope-2 plan failed: $(cat -- "${claude_research_case}/plan.stderr")"
+    fail "Claude Code scope-2 research plan failed: $(cat -- "${claude_research_case}/plan.stderr")"
 set +e
 "${claude_runner_environment[@]}" \
     "RHYOLITE_CLAUDE_CAPTURE=${claude_research_case}/capture" \
@@ -2692,10 +2720,10 @@ set +e
 claude_research_exit=$?
 set -e
 ((claude_research_exit != 0)) ||
-    fail 'Claude Code staged research failure did not fail the run.'
+    fail 'Claude Code research failure did not fail the run.'
 claude_research_capture="${claude_research_case}/capture/research"
 [[ -f "${claude_research_capture}/started" ]] ||
-    fail 'Claude Code staged research never reached the research worker.'
+    fail 'Claude Code research never reached the research worker.'
 [[ ! -e "${claude_research_case}/capture/review" ]] ||
     fail 'Claude Code main worker started after research failed.'
 mapfile -d '' -t claude_research_argv < "${claude_research_capture}/argv"
@@ -2732,17 +2760,17 @@ assert_equal \
 assert_contains "${claude_research_capture}/environment" 'MCP_TOOL_TIMEOUT' \
     'Claude Code research environment'
 [[ -z "$(find "${claude_research_case}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
-    fail 'Claude Code staged research left a temporary runtime home.'
+    fail 'Claude Code research left a temporary runtime home.'
 claude_research_repository="$(
     find "${claude_research_case}/output" -mindepth 2 -maxdepth 2 \
         -name github--octocat--hello-world -type d
 )"
 assert_contains "${claude_research_repository}/state.json" '"Status": "ResearchCapabilityFailed"' \
-    'Claude Code staged research state'
+    'Claude Code research failure state'
 assert_contains "${claude_research_repository}/research/research-session.md" \
     '# Claude Code Research Session Transcript' \
     'Claude Code research transcript artifact'
 assert_contains "${claude_research_repository}/research/research-session.md" \
     '    ### Tool call: Read' 'Claude Code research transcript content'
 claude_assert_no_credentials "${claude_research_case}/output" \
-    'Claude Code staged research output'
+    'Claude Code research output'

@@ -111,7 +111,7 @@ function in the same order). Module globals, set only via
 | --- | --- |
 | `harness_id` / `harness_display_name` / `harness_cli_name` | `claude` / `Claude Code` / `claude` |
 | `harness_require_cli` | `command -v claude` only |
-| `harness_capability` | `shell_denial=yes`, `structured_questions=yes` (AskUserQuestion), `final_message_file=no`, `fleet=no`, `subagents=no`, `builtin_security_specialist=no`, `builtin_research_specialist=no`, `web_research=no` (Phase 3 flips `web_research` to `yes` after evidence) |
+| `harness_capability` | `shell_denial=yes`, `structured_questions=yes` (AskUserQuestion), `final_message_file=no`, `fleet=no`, `subagents=no`, `builtin_security_specialist=no`, `builtin_research_specialist=yes`, `web_research=yes` (flipped in Phase 3 after real run R5) |
 | `harness_default_model` | `claude-opus-5-5` |
 | `harness_list_models` | Adapter-owned offline catalog constant (ordered): `claude-opus-5-5`, `claude-fable-5-1`, `claude-sonnet-5-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`. Claude Code exposes no local catalog surface; document this interpretation in `docs/ADDING-A-HARNESS.md` (static catalog may omit models an account can use; unlisted path covers the rest). |
 | `harness_validate_model_id` | Reject unsafe IDs and selector aliases `opus`, `sonnet`, `haiku`, `fable`, `default`, `auto` (case-insensitive) with status 1; exact catalog member -> 0; safe ID matching `^claude-[a-z0-9][a-z0-9.-]*$` -> status 3 (`RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS`); anything else -> 1. `[1m]` suffixed IDs are unsafe under the runner grammar and stay rejected. |
@@ -585,7 +585,8 @@ Deviations from the plan above, each backed by probe evidence:
   moved into `copilot.sh` with the argv pinned by a golden vector; the scope
   2/3 gate is now capability-based. Claude Code implements research with a
   stdio MCP config, `--allowedTools mcp__rhyolite-research__*`, and
-  `claude/agents/repo-research-worker.md`, but keeps `web_research=no`.
+  `claude/agents/repo-research-worker.md`. It kept `web_research=no`
+  until real run R5.
   Deviation: no `harness_research_tool_names`; runtime tool names stay
   adapter-internal and the runner passes the broker tool list.
 
@@ -603,7 +604,10 @@ Next:
    evidence file). Remaining: one real review through
    `rhyolite --harness claude` (interactive; operator).
 2. Done: guided alternate is now `claude-opus-5`.
-3. Operator: one staged real scope-2 run that completes (R4 hit the output
-   token limit; rerun after the fix); then flip `web_research` and
-   `builtin_research_specialist` for Claude Code.
+3. Done: staged real scope-2 run R5 completed (after R4 hit the output
+   token limit), and the operator approved the flip. `web_research` and
+   `builtin_research_specialist` are now `yes` for Claude Code. The guided
+   orchestrator offers scopes 2 and 3 with the provenance-lookback and
+   research-cookie questions. Remaining: one real guided scope-2/3 review
+   (interactive; operator).
 4. Phase 4 docs/validators/release (Contract v5 docs, support claims).

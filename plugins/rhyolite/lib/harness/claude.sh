@@ -561,10 +561,10 @@ harness_require_cli() {
 
 harness_capability() {
     case "$1" in
-        shell_denial|structured_questions)
+        shell_denial|structured_questions|web_research|builtin_research_specialist)
             printf '%s\n' 'yes'
             ;;
-        fleet|subagents|builtin_security_specialist|builtin_research_specialist|web_research|final_message_file)
+        fleet|subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
         *)
