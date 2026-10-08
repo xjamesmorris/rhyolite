@@ -17,9 +17,13 @@ of the public `rhyolite-test-1` test repository.
 
 ## Quickstart
 
-Requirements: Fedora Linux 44 (the only validated platform), GitHub
+Requirements: Linux with Bash (validated on Fedora Linux 44), GitHub
 Copilot CLI or Claude Code, Git 2.41 or newer, Python 3, and curl. The steps
 below use GitHub Copilot CLI, the default harness.
+
+Other Fedora versions and Linux distributions may work, but all validation
+so far has been on Fedora Linux 44. Contributions and test reports from
+other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
 
 1. Sign in to GitHub Copilot from a directory outside every Git worktree:
 
@@ -105,8 +109,10 @@ provider or endpoint is configurable.
 
 **Platform support:** Fedora Linux 44 is the sole development and
 validation baseline for this release. Runtime support is Linux-only.
-Other operating systems and Linux distributions are not currently
-validated or supported. See
+Other Fedora versions and Linux distributions may work, but all validation
+so far has been on Fedora Linux 44. Contributions and test reports from
+other Linux flavors are welcome; this does not imply validated support.
+Non-Linux operating systems remain unsupported. See
 [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
 
 **Review harness support:** GitHub Copilot CLI (`copilot`, the default) and
@@ -1115,3 +1121,7 @@ adapter that satisfies that playbook in full.
 ### Publishing
 
 See [docs/PUBLISHING.md](docs/PUBLISHING.md).
+
+## Acknowledgments
+
+Rhyolite is inspired by [Raptor](https://github.com/gadievron/raptor).

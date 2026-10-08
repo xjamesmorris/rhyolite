@@ -61,9 +61,13 @@ source-loaded plugin.
 ## Platform plan of record
 
 `docs/PLAN-OF-RECORD.md` is authoritative. Fedora Linux 44 is the sole
-development and validation platform. Rhyolite runtime support is Linux-only,
+development and release validation baseline. Other Fedora versions and Linux
+distributions may work, but all validation so far has been on Fedora Linux 44.
+Contributions and test reports from other Linux flavors are welcome; they do
+not by themselves establish validated support or replace the Fedora 44 gate.
+Rhyolite runtime support is Linux-only,
 Bash-first, and validated locally; hosted CI is not part of the release gate.
-Other Linux distributions, Windows, PowerShell, macOS, alternate shells, and
+Windows, PowerShell, macOS, alternate shells, and
 Bash/PowerShell parity are out of scope unless a later explicit project
 decision restores them.
 

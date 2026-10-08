@@ -8,12 +8,13 @@
 
 ## Decision
 
-Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
+Rhyolite is a **Linux-only, Bash-first** product for this release, with
+**Fedora Linux 44** as its development and release validation baseline.
 
-- Fedora Linux 44 is the only supported development and validation
-  platform.
-- Runtime support is Linux-only; other Linux distributions are not
-  currently validated.
+- All validation so far has been on Fedora Linux 44.
+- Runtime support is Linux-only. Other Fedora versions and Linux
+  distributions may work; contributions and test reports from other Linux
+  flavors are welcome, without implying validated support.
 - Bash is the canonical launcher, helper, runner, and validation
   implementation.
 - The bundled Python 3 standard-library research egress broker is the one
@@ -22,17 +23,17 @@ Rhyolite is a **Fedora Linux 44, Bash-only** product for this release.
   and artifact finalization.
 - Validation is local only. Hosted continuous integration is not part of
   the current release gate.
-- Additional operating systems, shells, and Linux distributions are not
+- Non-Linux operating systems and alternate shells are not
   supported or validated.
 - GitHub Copilot CLI and Claude Code are the supported production review
   harnesses. Claude Code was approved after the evidence recorded in
   [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md). The fixed harness
   seam does not advertise or imply support for other CLIs.
 
-Broader platform support may be reconsidered after the Fedora/Bash
-implementation is stable and easier to maintain. Reconsideration
-requires a new explicit project decision; compatibility must not be
-preserved speculatively.
+Contributions and test reports for other Linux flavors can help establish
+compatibility evidence, but do not replace the Fedora Linux 44 release gate.
+Expanding validated platform support requires a new explicit project
+decision; compatibility must not be preserved speculatively.
 
 ## Immediate engineering policy
 
@@ -46,7 +47,9 @@ preserved speculatively.
    before the legacy monolithic plugin validator.
 4. No hosted workflow is required or shipped. Maintainers run release
    validation locally on Fedora Linux 44.
-5. Public documentation advertises only the Fedora/Linux/Bash workflow.
+5. Public documentation describes the Linux/Bash workflow, identifies Fedora
+   Linux 44 as the only platform validated so far, and welcomes contributions
+   and test reports from other Fedora versions and Linux distributions.
 
 ## Contributor and harness guidance
 

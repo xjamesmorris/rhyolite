@@ -1,8 +1,11 @@
 # Developer guide
 
 Rhyolite is developed, validated, and released on **Fedora Linux 44**.
-Other operating systems and Linux distributions are outside the current
-validation matrix. See [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
+Other Fedora versions and Linux distributions may work, but all validation
+so far has been on Fedora Linux 44. Contributions and test reports from
+other Linux flavors are welcome; Fedora Linux 44 remains the release
+validation baseline. Non-Linux operating systems remain unsupported.
+See [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
 Read [AGENTS.md](AGENTS.md) first; it is the canonical repository-wide
 development contract for human contributors and coding agents.
 

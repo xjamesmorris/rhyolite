@@ -21,7 +21,8 @@ work must also follow `docs/ADDING-A-HARNESS.md`.
       mutation was introduced.
 - [ ] Scope 3 is still described as evidence-based provenance review for
       agentically generated code.
-- [ ] Fedora Linux 44 remains the sole supported validation platform.
+- [ ] Fedora Linux 44 remains the release validation baseline; contributions
+      and test reports from other Linux flavors do not imply validated support.
 - [ ] Maximum reasoning effort remains the cross-session default; only
       mechanical or fully scoped work may downgrade, and only to high.
 - [ ] Production runtime harness support remains limited to GitHub Copilot

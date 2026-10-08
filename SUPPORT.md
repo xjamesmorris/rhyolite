@@ -21,6 +21,13 @@
 
 ## Response expectations
 
+Other Fedora versions and Linux distributions may work, but all validation
+so far has been on Fedora Linux 44. Contributions and test reports from
+other Linux flavors are welcome, whether successful or not. Include the
+distribution and version, commands run, and results; see
+[Contributing](CONTRIBUTING.md). Fedora Linux 44 remains the release
+validation baseline.
+
 Support is best-effort and may vary by maintainer availability. Include
 the plugin version, the review harness (`copilot` or `claude`, shown on the
 `Harness:` line of `status`) and its CLI version, operating system,
