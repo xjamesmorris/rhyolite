@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Open-source software analysis platform; repo-review is the initial, default, and currently only shipped module",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "plugins": [
     {
       "name": "rhyolite",
       "description": "Rhyolite is an open-source software analysis platform. Its initial, default, and currently only shipped module is repo-review, delivered here as a GitHub Copilot plugin for read-only analysis of public HTTPS Git repositories and optional provenance review for agentically generated code.",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "source": "plugins/rhyolite",
       "author": {
         "name": "Rhyolite maintainers"

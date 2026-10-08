@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-10-08
+
 - Added Claude Code as a second production review harness. Use
   `rhyolite --harness claude`, or `--harness claude` with the direct runner,
   to run the guided setup, plan approval, scopes 1-3 with dedicated research,

@@ -23,7 +23,7 @@ the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
 The prompt-native panel below intentionally duplicates the current
-banner text, immediate subordinate right-aligned version line `v0.7.0 Beta`,
+banner text, immediate subordinate right-aligned version line `v0.8.0 Beta`,
 tagline, and metadata-aware documentation/support lines from the
 branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
@@ -85,7 +85,7 @@ Always recognize exact setup intents `help`, `status`, and
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                            v0.7.0 Beta
+                                                            v0.8.0 Beta
 Open-source software analysis platform; repo-review is the initial and default module.
 
 Stage: Setup
@@ -199,7 +199,7 @@ through the same DNS-pinned, credential-free Git boundary. The actual
 child invocation still verifies environment-token, system-keychain,
 GitHub CLI fallback, BYOK, or temporary bridged authentication. If the
 runner reports a repository-access preflight failure, stop and explain
-that the `0.7.0` beta release supports only publicly accessible
+that the `0.8.0` beta release supports only publicly accessible
 repositories and does not attempt authentication. If the child reports a Copilot
 authentication failure, tell the user to run `copilot login` from a
 clean non-Git directory, complete sign-in, and retry. Do not invoke
@@ -627,7 +627,7 @@ misconduct. Preserve their neutral wording, confidence, limitations, and
 human-review requirement in the executive summary.
 
 If the user asks to review a private or internal repository, stop and
-explain that the `0.7.0` beta release supports anonymously readable
+explain that the `0.8.0` beta release supports anonymously readable
 public HTTPS Git repositories only.
 
 At completion, take the run output folder from the runner's final

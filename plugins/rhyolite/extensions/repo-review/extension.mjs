@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_REVIEW_AGENT_ID = "rhyolite:repo-review";
 const RESUME_ARGUMENT = "--rhyolite-resume";
-const RHYOLITE_VERSION = "0.7.0";
+const RHYOLITE_VERSION = "0.8.0";
 const PUBLIC_PLACEHOLDER_PATTERN = /<PUBLIC_[A-Z0-9_:-]+>/u;
 const EXTENSION_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(EXTENSION_DIRECTORY, "..", "..");

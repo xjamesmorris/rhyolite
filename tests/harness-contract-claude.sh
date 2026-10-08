@@ -2398,8 +2398,9 @@ process.stdin.on("end", () => {
 });
 '
 }
+claude_release_version="$(tr -d '\r\n' < "${ROOT}/VERSION")"
 assert_equal \
-    'Rhyolite v0.7.0 Beta loaded — run rhyolite --harness claude to start a guided review.' \
+    "Rhyolite v${claude_release_version} Beta loaded — run rhyolite --harness claude to start a guided review." \
     "$(claude_hook_output claude-session-start '{"source":"startup"}' | claude_hook_message)" \
     'Claude Code session-start load line'
 claude_launcher_plaque="$(
@@ -2410,7 +2411,7 @@ claude_launcher_plaque="$(
 )"
 [[ "${claude_launcher_plaque}" == $'\n'* &&
     "${claude_launcher_plaque}" == *'automatic guided setup is starting.'* &&
-    "${claude_launcher_plaque}" == *'v0.7.0 Beta'* &&
+    "${claude_launcher_plaque}" == *"v${claude_release_version} Beta"* &&
     "${claude_launcher_plaque}" != *$'\033'* ]] ||
     fail 'Claude Code launcher plaque ignored NO_COLOR.'
 claude_color_plaque="$(

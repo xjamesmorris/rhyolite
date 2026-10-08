@@ -25,7 +25,7 @@ work. High is the hard minimum; never use none, minimal, low, or medium
 effort.
 
 The prompt-native panel below intentionally duplicates the current banner
-text, immediate subordinate right-aligned version line `v0.7.0 Beta`, tagline,
+text, immediate subordinate right-aligned version line `v0.8.0 Beta`, tagline,
 and metadata-aware documentation/support lines from the branding asset and
 helper output. Validation guards this duplication. It is used for exact
 in-session `help`; do not execute a helper to render that help panel.
@@ -103,7 +103,7 @@ repository URL in the same turn. Always recognize exact setup intents `help`,
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                            v0.7.0 Beta
+                                                            v0.8.0 Beta
 Open-source software analysis platform; repo-review is the initial and default module.
 
 Stage: Setup
@@ -514,7 +514,7 @@ non-attributive, and at Not applicable, Low, or Medium confidence, never
 High.
 
 If the user asks to review a private or internal repository, stop and explain
-that the `0.7.0` beta release supports anonymously readable public HTTPS Git
+that the `0.8.0` beta release supports anonymously readable public HTTPS Git
 repositories only.
 
 ## Completion
