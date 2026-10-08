@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Changed the recommended GitHub Copilot CLI review model to `gpt-6-astra`.
+  The launcher and the Copilot setup questions now offer `claude-opus-5.5`
+  and then `claude-fable-5.1` as the alternates, replacing `gpt-5.6-sol` and
+  `claude-fable-5`. Saved model preferences are unchanged, and Claude Code
+  keeps `claude-opus-5-5` with `claude-opus-5` as its alternate. The
+  launcher now builds each harness's model menu from its own ordered list.
+  Prompts and documentation name GPT-6 Astra, Claude Opus 5.5, and Claude
+  Fable 5.1 as current frontier-model examples.
+
 ## 0.8.0 - 2026-10-08
 
 - Added Claude Code as a second production review harness. Use

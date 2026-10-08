@@ -678,12 +678,13 @@ Open follow-ups:
    and a new Claude Code session: the `Rhyolite v0.8.0 Beta` load line, the
    large plaque after `/rhyolite:start`, and exact `help`, `status` (Claude
    Code shows `Harness: claude`), and `explain scopes`.
-3. The unmerged `chore/update-recommended-models` branch (`fd7acdd`, cut from
-   `d91fe6f` before the Claude Code work) makes GPT-6 Astra the Copilot
-   default. It touches `bin/rhyolite`, `AGENTS.md`, README, both harness
-   docs, the agents, prompts, and both validators, so it conflicts with 0.8.0.
-   Rebase it onto `main` and keep the Claude Code defaults (`claude-opus-5-5`,
-   alternate `claude-opus-5`) adapter-owned in `claude.sh`.
+3. Done: `chore/update-recommended-models` was rebased onto `main` and
+   merged as `732e495`. GPT-6 Astra is now the Copilot default, with
+   `claude-opus-5.5` and `claude-fable-5.1` as alternates. The launcher
+   builds each harness's model menu from its own ordered list, so Claude Code
+   keeps `claude-opus-5-5` and `claude-opus-5`. `tests/validate-plugin.sh`
+   renders the real picker for both harnesses. The change is listed under
+   CHANGELOG `Unreleased` and is not in a release yet.
 4. Evidence open items in `docs/CLAUDE-HARNESS-EVIDENCE.md`: a long run that
    crosses access-token expiry with the copied credentials; a guided review
    with the default `claude-opus-5-5` on a non-adversarial repository; and
