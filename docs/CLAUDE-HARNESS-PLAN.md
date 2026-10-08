@@ -1,8 +1,10 @@
 # Claude Code harness: implementation handoff
 
-Status: Phases 0-3 implemented on branch `feature/claude-code-harness`
-(uncommitted working tree); Phase 4 and the operator evidence runs pending. See "Progress"
-at the end of this file and `docs/CLAUDE-HARNESS-EVIDENCE.md`.
+Status (2026-10-08): Phases 0-4 are complete and released in Rhyolite 0.8.0;
+`main` and the annotated tag `v0.8.0` point to `1fbd538`. The feature branch
+was merged and deleted. "Handoff (2026-10-08)" at the end of this file lists
+the open follow-ups; `docs/CLAUDE-HARNESS-EVIDENCE.md` holds the probe and
+real-run evidence.
 
 Development reasoning policy (from AGENTS.md, carried into this handoff): use a
 current frontier reasoning model at maximum available reasoning effort and the
@@ -619,7 +621,73 @@ Next:
    Claude Code harness. `tests/validate-plugin.sh` pins the new wording and
    rejects stale Copilot-only claims. `tests/test-install.sh` validates both
    Claude Code manifests and installs the plugin from the local Claude Code
-   marketplace into an isolated configuration. Remaining: the release itself
-   (`VERSION`, both manifests and registries, CHANGELOG heading, public
-   export and preflight, tag). Under the `AGENTS.md` release contract, that
-   is a separate, explicitly requested step.
+   marketplace into an isolated configuration.
+5. Done: released as 0.8.0 (see the handoff below).
+
+## Handoff (2026-10-08)
+
+Release 0.8.0:
+
+- `chore: prepare 0.8.0 release` synchronized `VERSION`, both plugin
+  manifests, both marketplace registries, the version commands, the
+  orchestrator panels, the extension, `SKILL.md`, `PRIVACY.md`, and the
+  CHANGELOG heading `0.8.0 - 2026-10-08`. The Claude Code contract tests read
+  the version from `VERSION`.
+- `main` had gained a README quickstart, a screenshot, and a sample scope 3
+  review. A merge commit (`1fbd538`) brought them into the release candidate
+  so `main` fast-forwarded; README conflicts kept main's layout and
+  reapplied the Claude Code wording.
+- On `1fbd538`: `bash ./tests/validate-all.sh`, `bash ./tests/test-install.sh`,
+  `bash ./tools/public-release/test-public-release.sh`, and
+  `tools/public-release/public-export.sh` with preflight (0 findings; the
+  exported tree's own gate passed) all passed. Copilot CLI lists
+  `rhyolite (v0.8.0)` and `claude plugin validate` passes for the plugin and
+  the marketplace.
+- `main` and `v0.8.0` were pushed to GitHub and verified to resolve to
+  `1fbd538`. All five version surfaces in the tag read `0.8.0`.
+
+Post-release smoke test (`docs/PUBLISHING.md` checklist step 9), run in
+isolated homes against the release commit:
+
+- Fresh install, Copilot CLI and Claude Code: the plugin lists v0.8.0; the
+  installed payload is byte-identical to the `v0.8.0` tag's `plugins/rhyolite`
+  with executables intact; `claude plugin validate` passes on the installed
+  copy; the launcher, both load lines, and both review-start plaques report
+  `v0.8.0 Beta`.
+- Copilot CLI manual update: installing the real 0.7.0 release and running
+  `plugin marketplace update` plus `plugin update` after moving the
+  marketplace source to `v0.8.0` gave v0.8.0 with a byte-identical payload.
+  Claude Code has no update path to test because 0.7.0 shipped no Claude Code
+  plugin.
+- Installs used local-path marketplaces cloned from the canonical checkout,
+  not GitHub. The GitHub repository is private: anonymous `git ls-remote`
+  asks for credentials and the anonymous API returns 404, and Copilot CLI
+  treats `file://` sources as local paths. Copilot loads local-path
+  marketplaces live from the source tree, so its update check proves the
+  update commands accept 0.7.0 to 0.8.0, not a remote download.
+
+Open follow-ups:
+
+1. Repository visibility is an administrative decision. Until the repository
+   is public, the README and `docs/PUBLISHING.md` `marketplace add` commands
+   work only for accounts with access. After a visibility change, repeat the
+   smoke test with `https://github.com/xjamesmorris/rhyolite` as the
+   marketplace source for both CLIs, and complete the other pre-publication
+   gates in `docs/PUBLISHING.md`.
+2. Interactive checks of the installed plugin, in a new Copilot CLI session
+   and a new Claude Code session: the `Rhyolite v0.8.0 Beta` load line, the
+   large plaque after `/rhyolite:start`, and exact `help`, `status` (Claude
+   Code shows `Harness: claude`), and `explain scopes`.
+3. The unmerged `chore/update-recommended-models` branch (`fd7acdd`, cut from
+   `d91fe6f` before the Claude Code work) makes GPT-6 Astra the Copilot
+   default. It touches `bin/rhyolite`, `AGENTS.md`, README, both harness
+   docs, the agents, prompts, and both validators, so it conflicts with 0.8.0.
+   Rebase it onto `main` and keep the Claude Code defaults (`claude-opus-5-5`,
+   alternate `claude-opus-5`) adapter-owned in `claude.sh`.
+4. Evidence open items in `docs/CLAUDE-HARNESS-EVIDENCE.md`: a long run that
+   crosses access-token expiry with the copied credentials; a guided review
+   with the default `claude-opus-5-5` on a non-adversarial repository; and
+   joining a mid-stream resume (`Your response above was cut off
+   mid-stream`) that continues partial report text, which currently fails
+   closed.
+5. New work starts from `main`; there is no Claude Code feature branch.
