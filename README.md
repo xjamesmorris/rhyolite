@@ -8,6 +8,9 @@ Claude Code.
 
 ![Rhyolite launcher starting guided repo-review setup in GitHub Copilot CLI](images/rhy-ss1.png)
 
+For more screenshots of setup, plan approval, and progress in Claude Code and
+GitHub Copilot CLI, see [Screencaps](SCREENCAPS.md).
+
 For example output, see this
 [sample scope 3 review](docs/sample-reviews/astra-6-rhyolite-test-1-review.md)
 of the public `rhyolite-test-1` test repository.
