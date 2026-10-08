@@ -31,7 +31,7 @@ Provenance research mode:
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for repository analysis and every security, research, and provenance specialist
-(as of October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+(as of October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
 Claude Fable 5.1). Do not automatically fall back to a less capable model. If
 the required capability is unavailable, fail clearly.
 Maximum reasoning effort is the default and high is the hard minimum. Never

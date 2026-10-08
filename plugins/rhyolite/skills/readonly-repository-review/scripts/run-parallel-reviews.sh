@@ -118,7 +118,7 @@ Options:
   --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
   --commit SHA                     Exact 40-character commit for one repository
   --harness ID                     Review harness: copilot (default) or claude
-  --model MODEL                    gpt-6-astra (recommended), claude-opus-5.5,
+  --model MODEL                    gpt-5.6-sol (recommended), claude-opus-5.5,
                                    claude-fable-5.1,
                                    or another available model ID; with
                                    --harness claude, claude-opus-5-5 (recommended)

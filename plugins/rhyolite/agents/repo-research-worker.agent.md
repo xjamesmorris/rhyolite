@@ -33,7 +33,7 @@ Use `research_network_summary` before finalizing the dossier.
 
 Prioritize completeness, clarity, and correctness. Use a current frontier
 reasoning model at the maximum available reasoning effort and context (as of
-October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
 Claude Fable 5.1). Do not automatically fall back to a less capable model.
 Maximum effort is the default and high is the hard minimum; never use none,
 minimal, low, or medium effort.

@@ -2,7 +2,7 @@
 name: rhyolite-ui-validator
 description: Development-only validator for Rhyolite finite ask_user picker drafts, checking explanations, choice order, labels, defaults, and native picker behavior before release.
 tools: []
-model: gpt-6-astra
+model: gpt-5.6-sol
 disable-model-invocation: false
 user-invocable: true
 ---
@@ -93,7 +93,7 @@ For the model interaction, require exactly these explicit choices in this
 order:
 
 ```text
-GPT-6 Astra (Recommended) - gpt-6-astra
+GPT-5.6 Sol (Recommended) - gpt-5.6-sol
 Claude Opus 5.5 - claude-opus-5.5
 Claude Fable 5.1 - claude-fable-5.1
 List available model IDs

@@ -15,7 +15,7 @@ dependencies, or access credentials.
 Prioritize completeness, clarity, and correctness over speed. Use a current
 frontier reasoning model at the maximum available reasoning effort and context
 for orchestration and every analytical, security, research, or provenance task
-(as of October 7, 2026, examples include GPT-6 Astra, Claude Opus 5.5, and
+(as of October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
 Claude Fable 5.1). Never automatically fall back to a less capable model.
 If the required capability is unavailable, stop and report that clearly.
 Maximum reasoning effort is the default for all project work. High is
@@ -260,7 +260,7 @@ cannot be applied reliably after this session starts. Otherwise store
 If the model was not supplied by a valid trusted launcher block, use
 `ask_user` with these exact choices:
 
-- `GPT-6 Astra (Recommended) - gpt-6-astra`
+- `GPT-5.6 Sol (Recommended) - gpt-5.6-sol`
 - `Claude Opus 5.5 - claude-opus-5.5`
 - `Claude Fable 5.1 - claude-fable-5.1`
 - `List available model IDs`
@@ -561,7 +561,7 @@ choice without losing any stored answers.
 If a re-entered source or output value is invalid, explain the specific problem and
 re-ask only that same field without losing the other stored answers.
 If `Model` is selected, reuse the same ordered picker:
-`GPT-6 Astra (Recommended) - gpt-6-astra`, then
+`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`, then
 `Claude Opus 5.5 - claude-opus-5.5`, then
 `Claude Fable 5.1 - claude-fable-5.1`, then `List available model IDs`,
 followed only by Copilot CLI's automatic final custom-answer option. Apply the

@@ -592,7 +592,7 @@ schema 5. It includes these exact top-level fields:
       "GITHUB_TOKEN"
     ]
   },
-  "Model": "gpt-6-astra",
+  "Model": "gpt-5.6-sol",
   "ModelCatalogMembership": "listed",
   "ReasoningEffort": "max",
   "ContextTier": "long_context"
@@ -647,7 +647,7 @@ to explain how the approved review ran:
       "GITHUB_TOKEN"
     ]
   },
-  "Model": "gpt-6-astra",
+  "Model": "gpt-5.6-sol",
   "ReasoningEffort": "max",
   "ContextTier": "long_context"
 }

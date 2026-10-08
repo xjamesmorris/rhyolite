@@ -7,7 +7,7 @@ readonly RHYOLITE_AGENT='rhyolite:repo-review'
 readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'
 readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'
 readonly RHYOLITE_LAUNCHER_SETUP_MARKER='RHYOLITE_LAUNCHER_SETUP_V1'
-readonly RHYOLITE_DEFAULT_MODEL='gpt-6-astra'
+readonly RHYOLITE_DEFAULT_MODEL='gpt-5.6-sol'
 readonly RHYOLITE_OPUS_MODEL='claude-opus-5.5'
 readonly RHYOLITE_FABLE_MODEL='claude-fable-5.1'
 readonly RHYOLITE_CLAUDE_DEFAULT_MODEL='claude-opus-5-5'
@@ -27,7 +27,7 @@ LAUNCHER_MODEL_IDS=(
     "${RHYOLITE_FABLE_MODEL}"
 )
 LAUNCHER_MODEL_LABELS=(
-    'GPT-6 Astra (Recommended)'
+    'GPT-5.6 Sol (Recommended)'
     'Claude Opus 5.5'
     'Claude Fable 5.1'
 )
@@ -655,7 +655,7 @@ Usage:
 Options:
   --harness ID        Select a registered review harness.
   --model MODEL       Select an exact ID from Copilot's offline model catalog
-                      (default: gpt-6-astra; alternates: claude-opus-5.5,
+                      (default: gpt-5.6-sol; alternates: claude-opus-5.5,
                       claude-fable-5.1).
                       With --harness claude, select from Rhyolite's Claude
                       Code catalog (default: claude-opus-5-5; alternate:

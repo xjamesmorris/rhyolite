@@ -384,7 +384,7 @@ claude_clear_auth_environment=(
     for alias_model in opus Opus OPUS sonnet haiku fable default auto best opusplan; do
         claude_model_status 1 "${alias_model}" 'is a Claude Code alias'
     done
-    for foreign_model in gpt-6-astra example-unlisted-model claude_opus Claude-Opus-5-5; do
+    for foreign_model in gpt-5.6-sol example-unlisted-model claude_opus Claude-Opus-5-5; do
         claude_model_status 1 "${foreign_model}" 'is not a Claude model identifier'
     done
     for unsafe_model in '' '../model' '-model' 'model name' 'model/name' \
@@ -2407,7 +2407,7 @@ claude_launch_rejected native-fleet 'launcher argument validation' \
     fail 'Claude Code native-fleet rejection created launcher state.'
 claude_launch_rejected copilot-model 'launcher model validation' \
     'is not a Claude model identifier' \
-    "${LAUNCHER}" --harness claude --model gpt-6-astra \
+    "${LAUNCHER}" --harness claude --model gpt-5.6-sol \
     --repo https://example.com/owner/repository.git
 claude_launch_rejected alias-model 'launcher model validation' \
     'is a Claude Code alias' \
@@ -2444,7 +2444,7 @@ mkdir -p -- "${claude_preference_state}"
 chmod 0700 -- "${claude_preference_state}"
 rhyolite_write_preference \
     https://example.com/owner/repository.git \
-    copilot standard gpt-6-astra max long_context \
+    copilot standard gpt-5.6-sol max long_context \
     "${claude_preference_state}/rhyolite/launcher" ||
     fail 'Could not seed a Copilot launcher preference.'
 CLAUDE_LAUNCH_STATE="${claude_preference_state}"

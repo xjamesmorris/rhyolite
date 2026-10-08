@@ -321,11 +321,11 @@ assert_equal 'Copilot' \
     "$(harness_display_name)" \
     'Copilot display name'
 assert_equal 'copilot' "$(harness_cli_name)" 'Copilot CLI name'
-assert_equal 'gpt-6-astra' \
+assert_equal 'gpt-5.6-sol' \
     "$(harness_default_model)" \
     'Copilot default model'
 assert_equal 'max' \
-    "$(harness_max_reasoning_effort gpt-6-astra)" \
+    "$(harness_max_reasoning_effort gpt-5.6-sol)" \
     'Copilot default-model reasoning effort'
 assert_equal 'max' \
     "$(harness_max_reasoning_effort claude-opus-5.5)" \
@@ -337,7 +337,7 @@ assert_equal 'max' \
 mapfile -t model_choices < <(harness_model_choices)
 [[ ${#model_choices[@]} -eq 4 &&
     "${model_choices[0]}" == \
-        'GPT-6 Astra (Recommended) - gpt-6-astra' &&
+        'GPT-5.6 Sol (Recommended) - gpt-5.6-sol' &&
     "${model_choices[1]}" == \
         'Claude Opus 5.5 - claude-opus-5.5' &&
     "${model_choices[2]}" == \
@@ -345,12 +345,12 @@ mapfile -t model_choices < <(harness_model_choices)
     "${model_choices[3]}" == 'List available model IDs' ]] ||
     fail 'Copilot model choices lost their exact text or order.'
 mapfile -t available_models < <(harness_list_models)
-[[ " ${available_models[*]} " == *' gpt-6-astra '* &&
+[[ " ${available_models[*]} " == *' gpt-5.6-sol '* &&
     " ${available_models[*]} " == *' claude-opus-5.5 '* &&
     " ${available_models[*]} " == *' claude-fable-5.1 '* &&
     " ${available_models[*]} " == *' gpt-6-sol '* ]] ||
     fail 'Copilot available-model catalog lost expected current model IDs.'
-for valid_model in gpt-6-astra claude-opus-5.5 claude-fable-5.1 gpt-6-sol; do
+for valid_model in gpt-5.6-sol claude-opus-5.5 claude-fable-5.1 gpt-6-sol; do
     harness_validate_model_id "${valid_model}" ||
         fail "Copilot adapter rejected an available model ID: ${valid_model}"
 done
@@ -394,7 +394,7 @@ set -euo pipefail
 [[ "${1-}" == help && "${2-}" == config ]] || exit 97
 [[ -z "${RHYOLITE_MOCK_CATALOG_FAIL-}" ]] || exit 1
 printf '%s\n' '  `model`: AI model to use for Copilot CLI.'
-for listed_model in gpt-6-astra claude-opus-5.5 claude-fable-5.1 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
+for listed_model in gpt-5.6-sol claude-opus-5.5 claude-fable-5.1 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
     printf '    - "%s"\n' "${listed_model}"
 done
 printf '%s\n' '  `reasoning_effort`: Reasoning effort.'
@@ -419,7 +419,7 @@ assert_adapter_model_status() {
         fail "Copilot model '${model}' returned detail '${RHYOLITE_HARNESS_ERROR_DETAIL}'."
 }
 
-assert_adapter_model_status 0 gpt-6-astra '' '' ''
+assert_adapter_model_status 0 gpt-5.6-sol '' '' ''
 assert_adapter_model_status 3 example-unlisted-model '' '' \
     "Model 'example-unlisted-model' is not in Copilot's offline model catalog."
 assert_adapter_model_status 0 example-unlisted-model example-unlisted-model '' ''
@@ -517,7 +517,7 @@ rhyolite_write_preference \
     "${preference_contract_repository}" \
     copilot \
     native \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     "${preference_contract_root}" ||
@@ -567,7 +567,7 @@ if (
         "https://github.com/octocat/Hello-World.git"
     or preference["harness"] != "copilot"
     or preference["fleetMode"] != "native"
-    or preference["model"] != "gpt-6-astra"
+    or preference["model"] != "gpt-5.6-sol"
     or preference["reasoningEffort"] != "max"
     or preference["contextTier"] != "long_context"
 ):
@@ -580,7 +580,7 @@ rhyolite_read_preference \
     fail 'Contract-v4 preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
     "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
-    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-astra &&
+    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == max &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == long_context ]] ||
     fail 'Contract-v4 preference values did not round-trip.'
@@ -613,7 +613,7 @@ cat > "${legacy_preference_path}" <<'EOF'
   "schemaVersion": 1,
   "canonicalRepository": "https://github.com/octocat/Spoon-Knife",
   "fleetMode": "standard",
-  "model": "gpt-6-astra",
+  "model": "gpt-5.6-sol",
   "updatedAt": "2026-10-01T12:00:00Z"
 }
 EOF
@@ -760,7 +760,7 @@ write_worker_vector() {
             "${PLUGIN_ROOT}" \
             "${worker_session_name}" \
             "${worker_session_id}" \
-            gpt-6-astra \
+            gpt-5.6-sol \
             max \
             long_context \
             "${authentication_variables_csv}" \
@@ -786,7 +786,7 @@ expected_worker_arguments=(
     --name "${worker_session_name}"
     --session-id "${worker_session_id}"
     --agent rhyolite:repo-review-worker
-    --model gpt-6-astra
+    --model gpt-5.6-sol
     --reasoning-effort max
     --context long_context
     --no-ask-user
@@ -815,7 +815,7 @@ expected_research_worker_arguments=(
     --name "${worker_session_name}"
     --session-id "${worker_session_id}"
     --agent rhyolite:repo-review-worker
-    --model gpt-6-astra
+    --model gpt-5.6-sol
     --reasoning-effort max
     --context long_context
     --no-ask-user
@@ -862,7 +862,7 @@ harness_report_repair_argv \
     "${repair_workdir}" \
     "${repair_session_name}" \
     "${repair_session_id}" \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     "${authentication_variables_csv}" \
@@ -872,7 +872,7 @@ expected_repair_arguments=(
     -C "${repair_workdir}"
     --name "${repair_session_name}"
     --session-id "${repair_session_id}"
-    --model gpt-6-astra
+    --model gpt-5.6-sol
     --reasoning-effort max
     --context long_context
     --mode interactive
@@ -981,7 +981,7 @@ harness_research_worker_argv \
     "${PLUGIN_ROOT}" \
     research-fixture-run \
     "${worker_session_id}" \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     "${authentication_variables_csv}" \
@@ -995,7 +995,7 @@ expected_copilot_research_arguments=(
     --name research-fixture-run
     --session-id "${worker_session_id}"
     --agent rhyolite:repo-research-worker
-    --model gpt-6-astra
+    --model gpt-5.6-sol
     --reasoning-effort max
     --context long_context
     --no-ask-user
@@ -1094,7 +1094,7 @@ if harness_report_repair_argv \
     "${repair_workdir}" \
     "${repair_session_name}" \
     "${repair_session_id}" \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     "${authentication_variables_csv}" \
@@ -1107,7 +1107,7 @@ if harness_report_repair_argv \
     "${repair_workdir}" \
     "${repair_session_name}" \
     "${repair_session_id}" \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     "${authentication_variables_csv}" \
@@ -1120,7 +1120,7 @@ if harness_report_repair_argv \
     "${repair_workdir}" \
     "${repair_session_name}" \
     "${repair_session_id}" \
-    gpt-6-astra \
+    gpt-5.6-sol \
     max \
     long_context \
     'COPILOT_GITHUB_TOKEN,unsafe-name!' \
@@ -2227,7 +2227,7 @@ set -euo pipefail
 if [[ "${1-}" == help && "${2-}" == config ]]; then
     [[ -z "${RHYOLITE_MOCK_CATALOG_FAIL-}" ]] || exit 1
     printf '%s\n' '  `model`: AI model to use for Copilot CLI.'
-    for listed_model in gpt-6-astra claude-opus-5.5 claude-fable-5.1 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
+    for listed_model in gpt-5.6-sol claude-opus-5.5 claude-fable-5.1 ${RHYOLITE_MOCK_EXTRA_MODELS-}; do
         printf '    - "%s"\n' "${listed_model}"
     done
     printf '%s\n' '  `reasoning_effort`: Reasoning effort.'
@@ -2959,7 +2959,7 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
     - "gpt-6-sol"
-    - "gpt-6-astra"
+    - "gpt-5.6-sol"
     - "claude-opus-5.5"
     - "claude-fable-5.1"
   `reasoning_effort`: Reasoning effort.
@@ -3129,7 +3129,7 @@ const fs = require("fs");
 const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
-    state.Model !== "gpt-6-astra" ||
+    state.Model !== "gpt-5.6-sol" ||
     state.ReasoningEffort !== "max" ||
     state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
@@ -3172,7 +3172,7 @@ JS
         --name "${state_values[0]}"
         --session-id "${state_values[1]}"
         --agent rhyolite:repo-review-worker
-        --model gpt-6-astra
+        --model gpt-5.6-sol
         --reasoning-effort max
         --context long_context
         --no-ask-user
@@ -3320,7 +3320,7 @@ for (const [index, plan] of plans.entries()) {
     throw new Error(`runner seam plan ${index} has invalid hash`);
   }
   if (plan.Harness !== "copilot" ||
-      plan.Model !== "gpt-6-astra" ||
+      plan.Model !== "gpt-5.6-sol" ||
       plan.ReasoningEffort !== "max" ||
       plan.ContextTier !== "long_context" ||
       JSON.stringify(plan.ReportRepairPolicy) !== JSON.stringify({
@@ -3475,7 +3475,7 @@ done
         'No-op default model'
     harness_validate_model_id noop-fixture-model ||
         fail 'No-op adapter rejected its fixture model.'
-    if harness_validate_model_id gpt-6-astra; then
+    if harness_validate_model_id gpt-5.6-sol; then
         fail 'No-op adapter accepted the Copilot model.'
     fi
     assert_equal \
@@ -4752,7 +4752,7 @@ const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
 const workerStarted = workerStartedText === "1";
 if (state.SchemaVersion !== 6 ||
     state.Harness !== "copilot" ||
-    state.Model !== "gpt-6-astra" ||
+    state.Model !== "gpt-5.6-sol" ||
     state.ReasoningEffort !== "max" ||
     state.ContextTier !== "long_context" ||
     state.Provider?.Id !== "github-copilot" ||
@@ -4950,7 +4950,7 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
     cat <<'EOF'
   `model`: AI model to use for Copilot CLI.
     - "gpt-6-sol"
-    - "gpt-6-astra"
+    - "gpt-5.6-sol"
     - "claude-opus-5.5"
     - "claude-fable-5.1"
   `reasoning_effort`: Reasoning effort.
@@ -5111,7 +5111,7 @@ assert_launcher_state_path_failure() {
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \
                 --fleet-mode standard \
-                --model gpt-6-astra
+                --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
     set -e
@@ -5161,7 +5161,7 @@ assert_launcher_state_path_failure \
         "${LAUNCHER}" \
             --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
-            --model gpt-6-astra
+            --model gpt-5.6-sol
 )
 (
     cd "${launcher_caller}"
@@ -5174,7 +5174,7 @@ assert_launcher_state_path_failure \
             --harness copilot \
             --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
-            --model gpt-6-astra
+            --model gpt-5.6-sol
 )
 
 normalize_launcher_capture() {
@@ -5222,7 +5222,7 @@ RHYOLITE_START_COMMAND_V1
 RHYOLITE_LAUNCHER_SETUP_V1
 Source=https://example.com/owner/repository.git
 FleetMode=standard
-Model=gpt-6-astra
+Model=gpt-5.6-sol
 ReasoningEffort=max
 ContextTier=long_context
 RememberPreferences=true
@@ -5236,7 +5236,7 @@ expected_launcher_args=(
     --plugin-dir "${PLUGIN_ROOT}"
     --mode interactive
     --agent rhyolite:repo-review
-    --model gpt-6-astra
+    --model gpt-5.6-sol
     --reasoning-effort max
     --context long_context
     --log-dir '<generated-log-dir>'
@@ -5379,7 +5379,7 @@ assert_contains "${launcher_unlisted_stderr}" \
     'Launcher saved unlisted preference without opt-in'
 assert_unlisted_launcher_vector \
     launcher-unlisted-preference-no-flag \
-    gpt-6-astra \
+    gpt-5.6-sol \
     ''
 run_unlisted_launcher launcher-unlisted-preference-flag \
     "${launcher_unlisted_preference_state}" \

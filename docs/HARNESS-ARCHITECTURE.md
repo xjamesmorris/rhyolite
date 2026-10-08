@@ -240,7 +240,7 @@ Copilot was the only mapped I1a adapter and remains the default harness.
 - Canonical ID: `copilot`
 - Display name: `Copilot`
 - CLI: `copilot`
-- Default model: `gpt-6-astra`
+- Default model: `gpt-5.6-sol`
 - Guided alternate models: `claude-opus-5.5`, then `claude-fable-5.1`
 - Model catalog: parsed from local `copilot help config`, a static list built
   into the CLI rather than the account's live catalog; safe syntax alone is

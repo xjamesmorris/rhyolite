@@ -2,14 +2,14 @@
 
 ## Unreleased
 
-- Changed the recommended GitHub Copilot CLI review model to `gpt-6-astra`.
-  The launcher and the Copilot setup questions now offer `claude-opus-5.5`
-  and then `claude-fable-5.1` as the alternates, replacing `gpt-5.6-sol` and
-  `claude-fable-5`. Saved model preferences are unchanged, and Claude Code
-  keeps `claude-opus-5-5` with `claude-opus-5` as its alternate. The
-  launcher now builds each harness's model menu from its own ordered list.
-  Prompts and documentation name GPT-6 Astra, Claude Opus 5.5, and Claude
-  Fable 5.1 as current frontier-model examples.
+- The launcher and the Copilot setup questions now offer `claude-opus-5.5`
+  and then `claude-fable-5.1` as the alternates, replacing `claude-fable-5`.
+  `gpt-5.6-sol` remains the recommended GitHub Copilot CLI review model.
+  Saved model preferences are unchanged, and Claude Code keeps
+  `claude-opus-5-5` with `claude-opus-5` as its alternate. The launcher now
+  builds each harness's model menu from its own ordered list. Prompts and
+  documentation name GPT-5.6 Sol, Claude Opus 5.5, and Claude Fable 5.1 as
+  current frontier-model examples.
 - Fixed a complete review being discarded when the worker wrapped a required
   assessment field label across two lines. The longest label,
   `Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:`,

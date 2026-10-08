@@ -122,7 +122,7 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 
 - Recommended models: use a current frontier reasoning model at the
   maximum available reasoning effort and context (as of October 7, 2026,
-  examples include GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1).
+  examples include GPT-5.6 Sol, Claude Opus 5.5, and Claude Fable 5.1).
 - Sign in before starting a review: run `copilot login` for GitHub Copilot
   CLI, or `claude auth login` for Claude Code.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
@@ -399,7 +399,7 @@ The initial model picker and `Edit setup` -> `Model` use the same ordered
 choices:
 
 ```text
-1. GPT-6 Astra (Recommended) - gpt-6-astra
+1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
 2. Claude Opus 5.5 - claude-opus-5.5
 3. Claude Fable 5.1 - claude-fable-5.1
 4. List available model IDs
@@ -1015,7 +1015,7 @@ preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
 endpoint, ask whether to use native Copilot fleet mode, and confirm the
-validated review runtime. Known model choices are `gpt-6-astra`
+validated review runtime. Known model choices are `gpt-5.6-sol`
 (recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
 list the model IDs in Copilot's offline catalog, as reported by
 `copilot help config`, including `gpt-6-sol` when available. That catalog is built into the CLI rather than fetched for
