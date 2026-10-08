@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-10-08
+
 - The launcher and the Copilot setup questions now offer `claude-opus-5.5`
   and then `claude-fable-5.1` as the alternates, replacing `claude-fable-5`.
   `gpt-5.6-sol` remains the recommended GitHub Copilot CLI review model.
