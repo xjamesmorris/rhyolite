@@ -71,9 +71,11 @@ preserved speculatively.
   model settings. Research is never
   repeated, and strict validation plus deterministic preservation remain
   authoritative. The same policy discloses runner-owned, model-free
-  `markdown-table-rows` normalization for eligible Markdown tables and
+  `markdown-table-rows` normalization for eligible Markdown tables,
   `confidence-level-delimiters` normalization for assessment confidence
-  values whose single level is directly followed by explanatory words.
+  values whose single level is directly followed by explanatory words, and
+  `wrapped-field-labels` normalization for a missing required assessment
+  field label wrapped across one line break at a space in its own section.
 - The no-op harness is development-only under `tests/fixtures`. It is
   never registered by production code, packaged, exposed through launcher or
   runner choices, or described as supported runtime behavior.

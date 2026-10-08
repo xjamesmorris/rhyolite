@@ -1857,6 +1857,148 @@ JS
 assert_contains "${CLAUDE_RUN_REPOSITORY}/review.txt" \
     'Confidence: High - for the fixture claim inventory, which is direct.' \
     'Chained confidence normalization preservation'
+
+# Wrap one exact report line after its label's leading words.
+claude_wrap_label() {
+    local source="$1"
+    local output="$2"
+    local head="$3"
+
+    python3 - "${source}" "${output}" "${head}" <<'PY'
+import pathlib
+import sys
+
+source, output, head = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+matches = [index for index, line in enumerate(lines) if line.startswith(head + " ")]
+if len(matches) != 1:
+    raise SystemExit(f"expected one line starting with {head!r}")
+line = lines[matches[0]]
+lines[matches[0]:matches[0] + 1] = [head, line[len(head) + 1:]]
+pathlib.Path(output).write_text("\n".join(lines), encoding="utf-8")
+PY
+}
+claude_wrapped_report="${fixture_root}/claude-report-wrapped-label.txt"
+claude_wrap_label "${claude_canonical_report}" "${claude_wrapped_report}" \
+    'Source/docs/commit/ref metadata poisoning and dataset/benchmark'
+claude_run_case wrapped-label 0 \
+    --env "RHYOLITE_MOCK_CLAUDE_REPORT=${claude_wrapped_report}"
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" "${CLAUDE_RUN_ROOT}/capture" \
+    "${CLAUDE_RUN_PATH}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [statePath, capturePath, runPath] = process.argv.slice(2);
+const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const state = readJson(statePath);
+const repair = state.ReportRepair;
+const runState = readJson(path.join(runPath, "state.json"));
+const manifest = readJson(path.join(runPath, "manifest.json"));
+const summary = "Succeeded; attempts 0/1; preservation Passed; validation Passed; " +
+  "cleanup NotRun; wrapped label normalization Applied (1 labels)";
+for (const copy of [manifest[0]?.ReportRepair,
+                    runState.Repositories?.[0]?.ReportRepair]) {
+  if (JSON.stringify(copy) !== JSON.stringify(repair)) {
+    throw new Error("wrapped-label repair state diverged across artifacts");
+  }
+}
+for (const surface of ["handoff.md", "index.html"]) {
+  if (!fs.readFileSync(path.join(runPath, surface), "utf8").includes(summary)) {
+    throw new Error(`run ${surface} lost the wrapped-label repair summary`);
+  }
+}
+if (JSON.stringify(runState.ReportRepairPolicy?.DeterministicNormalizations) !==
+    JSON.stringify(["markdown-table-rows", "confidence-level-delimiters", "wrapped-field-labels"])) {
+  throw new Error("approval-bound wrapped-label normalization policy is missing");
+}
+if (state.Status !== "Completed" ||
+    repair.Status !== "Succeeded" || repair.AttemptCount !== 0 ||
+    repair.LabelNormalization !== "Applied" ||
+    repair.LabelsRejoined !== 1 ||
+    repair.ConfidenceNormalization !== "NotRun" ||
+    repair.TableNormalization !== "NotRun" ||
+    repair.CanonicalPromoted !== true ||
+    repair.InitialDiagnostic !==
+      "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT is missing or duplicates required field: " +
+      "Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:" ||
+    repair.FinalDiagnostic !==
+      "Wrapped field label normalization preserved every word and passed strict validation." ||
+    !repair.Artifacts.NormalizedCandidate.endsWith("label-normalized-candidate.txt")) {
+  throw new Error(`unexpected wrapped-label repair state: ${JSON.stringify(repair)}`);
+}
+if (fs.existsSync(`${capturePath}/report-repair`)) {
+  throw new Error("wrapped-label normalization invoked a model repair");
+}
+JS
+cmp -s "${claude_canonical_report}" "${CLAUDE_RUN_REPOSITORY}/review.txt" ||
+    fail 'Wrapped-label normalization did not restore the exact report.'
+assert_contains "${CLAUDE_RUN_ROOT}/stdout" \
+    'rejoined 1 wrapped assessment field label(s) without a model; every word preserved' \
+    'Wrapped-label normalization progress'
+assert_contains "${CLAUDE_RUN_REPOSITORY}/handoff.md" \
+    'wrapped label normalization Applied (1 labels)' \
+    'Wrapped-label normalization handoff summary'
+
+# A confidence-delimiter error in an earlier section must not hide a wrapped
+# label in a later section.
+claude_report_variant "${fixture_root}/claude-report-confidence-first.txt" \
+    'High for the fixture claim inventory, which is direct.' ''
+claude_wrapped_late_report="${fixture_root}/claude-report-wrapped-late.txt"
+claude_wrap_label "${fixture_root}/claude-report-confidence-first.txt" \
+    "${claude_wrapped_late_report}" \
+    'Governance, security policy, and release'
+claude_run_case wrapped-label-after-confidence 0 \
+    --env "RHYOLITE_MOCK_CLAUDE_REPORT=${claude_wrapped_late_report}"
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" "${CLAUDE_RUN_ROOT}/capture" <<'JS'
+const fs = require("fs");
+const [statePath, capturePath] = process.argv.slice(2);
+const repair = JSON.parse(fs.readFileSync(statePath, "utf8")).ReportRepair;
+if (repair.Status !== "Succeeded" || repair.AttemptCount !== 0 ||
+    repair.ConfidenceNormalization !== "Applied" ||
+    repair.ConfidenceFieldsNormalized !== 1 ||
+    repair.LabelNormalization !== "Applied" ||
+    repair.LabelsRejoined !== 1 ||
+    repair.CanonicalPromoted !== true ||
+    !repair.InitialDiagnostic.startsWith(
+      "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level:") ||
+    !repair.Artifacts.NormalizedCandidate.endsWith("label-normalized-candidate.txt")) {
+  throw new Error(`unexpected chained wrapped-label state: ${JSON.stringify(repair)}`);
+}
+if (fs.existsSync(`${capturePath}/report-repair`)) {
+  throw new Error("chained deterministic normalizations invoked a model repair");
+}
+JS
+assert_contains "${CLAUDE_RUN_REPOSITORY}/review.txt" \
+    'Governance, security policy, and release practices: Not assessed;' \
+    'Chained wrapped-label normalization preservation'
+
+claude_wrapped_word_report="${fixture_root}/claude-report-wrapped-word.txt"
+claude_wrap_label "${claude_canonical_report}" \
+    "${fixture_root}/claude-report-wrapped-word.step" \
+    'Source/docs/commit/ref metadata poisoning and dataset/benchmark'
+sed -e 's#^Source/docs/commit/ref metadata poisoning and dataset/benchmark$#Source/docs/commit/ref metadata poisoning and dataset/bench#' \
+    -e 's#^poisoning: Not assessed;#mark poisoning: Not assessed;#' \
+    "${fixture_root}/claude-report-wrapped-word.step" \
+    > "${claude_wrapped_word_report}"
+claude_run_case wrapped-label-mid-word 1 \
+    --env "RHYOLITE_MOCK_CLAUDE_REPORT=${claude_wrapped_word_report}"
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const repair = state.ReportRepair;
+if (state.Status !== "ReviewFailed" ||
+    repair.Status !== "NotEligible" || repair.AttemptCount !== 0 ||
+    repair.LabelNormalization !== "NotEligible" ||
+    repair.LabelsRejoined !== 0 ||
+    repair.CanonicalPromoted !== false ||
+    repair.FinalDiagnostic !==
+      "report repair unsupported: no missing required field label is wrapped across one line break at a space in its own section" ||
+    repair.Artifacts.NormalizedCandidate !== "") {
+  throw new Error(`unexpected mid-word wrapped-label state: ${JSON.stringify(repair)}`);
+}
+JS
+assert_contains "${CLAUDE_RUN_REPOSITORY}/errors.txt" \
+    'Report repair NotEligible: report repair unsupported: no missing required field label is wrapped' \
+    'Mid-word wrapped-label failure detail'
 claude_run_case unavailable 1 \
     --env RHYOLITE_MOCK_CLAUDE_MODE=unavailable \
     --model claude-opus-9 --allow-unlisted-model

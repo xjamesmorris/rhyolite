@@ -619,7 +619,10 @@ Before invoking the runner:
     a model, keeping every cell verbatim before the same strict revalidation;
     `confidence-level-delimiters` lets it insert the accepted ` - ` delimiter
     between a single assessment confidence level and directly following
-    explanatory words, keeping every word verbatim, before that revalidation.
+    explanatory words, keeping every word verbatim, before that revalidation;
+    `wrapped-field-labels` lets it rejoin a missing required assessment field
+    label that was wrapped across one line break at a space within its own
+    section, keeping every word verbatim, before that revalidation.
     Label `ReviewDate`, `PriorArtWindow`, and
     `ProvenanceWindow` as local-session calendar dates. Label
     `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as
@@ -882,7 +885,9 @@ recommendations inside the report or executive summary.
   trailing colon, include the label exactly once in its mandatory section, and
   give it a non-empty value. A label may start at column 0 or follow one plain `-`, `*`, `+`, `1.`, or `1)` list marker.
   Put a non-empty value after the colon or on the immediately following
-  continuation line or lines.
+  continuation line or lines. Never wrap, break, or hyphenate a heading or
+  field label across lines; keep each whole label on one line even when that
+  line exceeds the wrap width.
 - `Confidence:` and `Evidence basis:` are repeatable assessment labels. Each
   mandatory assessment section must contain at least one `Confidence:` whose
   value starts with the exact level `High`, `Medium`, or `Low`. The level may
@@ -989,14 +994,16 @@ recommendations inside the report or executive summary.
 - End with `PRIORITIZED REMEDIATION` and `OVERALL ASSESSMENT`.
 - Produce plain UTF-8 text suitable for Linux email: LF line endings, no
   ANSI escapes, no Markdown tables, simple headings and lists, and lines
-  wrapped near 78 columns where practical.
+  wrapped near 78 columns where practical, never wrapping a heading or
+  field label.
 - Write each field value as plain text or a numbered list. Never use a
   Markdown table in any ASSESSMENT section, or anywhere in the report.
 - Before returning the report, self-check it and correct any failure: every
   required heading for the scope appears exactly once, on its own line, and
   in order, and no heading for another scope appears; every required label
-  appears exactly once at the start of a line in its section with a
-  non-empty value; every assessment section has a valid `Confidence:` and an
+  appears exactly once at the start of a line in its section, whole and
+  unwrapped on that one line, with a non-empty value; every assessment
+  section has a valid `Confidence:` and an
   evidence basis; and no line between the delimiters begins and ends with
   `|`.
 - Return the canonical plain-text report to the trusted runner. Do not

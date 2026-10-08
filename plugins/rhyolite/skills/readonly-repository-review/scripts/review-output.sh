@@ -2001,6 +2001,291 @@ except HelperError as error:
 PY
 }
 
+# Rejoin a required assessment field label that was wrapped across one line
+# break at a space. Only a label that is absent intact from its own
+# field-validated section and wrapped exactly once there is eligible; every
+# word is preserved, and splits inside a word, at a hyphen or slash, or
+# outside the label's section stay ineligible for model-free correction.
+normalize_review_report_wrapped_field_labels() {
+    local report="$1"
+    local output="$2"
+
+    python3 - "${report}" "${output}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+import unicodedata
+
+report_name, output_name = sys.argv[1:]
+
+ordered_sections = (
+    "REVIEW CONTEXT",
+    "EXECUTIVE SUMMARY",
+    "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT",
+    "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS",
+    "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+)
+section_fields = {
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT": (
+        "Prompt injection and reviewer-directed instructions:",
+        "Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:",
+        "Encoded/invisible instructions and tool-call bait:",
+        "Recursive/resource-exhaustion tarpits:",
+        "Tracking pixels/callback beacons/trackers/sensors:",
+        "Limitations of available evidence:",
+    ),
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT": (
+        "Capability, maturity, and security claims versus implementation:",
+        "Roadmap and delivery commitments:",
+        "Conference, CFP, proposal, and paper submission indicators:",
+        "Media coverage, endorsement, award, and affiliation claims:",
+        "Adoption, popularity, and engagement authenticity:",
+        "Reputation-building pattern indicators:",
+        "Supply-chain precursor indicators:",
+        "Limitations of available evidence:",
+    ),
+    "COMMUNITY HEALTH ASSESSMENT": (
+        "Contributor and maintainer base:",
+        "Activity and maintenance cadence:",
+        "Issue, pull request, and review practices:",
+        "Governance, security policy, and release practices:",
+        "Independent adoption and engagement:",
+        "Limitations of available evidence:",
+    ),
+    "PRIOR ART AND ORIGINALITY ASSESSMENT": (
+        "Closest prior art and ecosystem:",
+        "Novelty and differentiation:",
+        "Repackaging indicators:",
+        "Citation and attribution integrity:",
+        "Limitations of available evidence:",
+    ),
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT": (
+        "Code lineage and reuse:",
+        "Architecture lineage:",
+        "License and attribution consistency:",
+        "Chronology and submission timeline:",
+        "Coverage/window:",
+        "Alternative explanations:",
+    ),
+    "GENERATED-CODE PROVENANCE ASSESSMENT": (
+        "Generation assessment:",
+        "Direct model attribution:",
+        "Heuristic model candidates (not attribution):",
+        "Heuristic model confidence:",
+        "Direct effort attribution:",
+        "Direct harness attribution:",
+        "Coverage/window:",
+        "Alternative explanations:",
+    ),
+}
+# The strict validator's view of a line: stripped, then one list marker removed.
+list_marker = re.compile(r"^(?:(?:[-*+])|(?:\d+[.)]))[ \t]+")
+head_line = re.compile(
+    r"^(?P<prefix>[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?)"
+    r"(?P<text>\S(?:.*\S)?)[ \t]*$"
+)
+tail_line = re.compile(r"^[ \t]*(?P<text>\S.*)$")
+
+
+class Unsupported(Exception):
+    pass
+
+
+class HelperError(Exception):
+    pass
+
+
+def read_report(name):
+    try:
+        data = pathlib.Path(name).read_bytes()
+    except OSError:
+        raise HelperError(
+            "the wrapped-label normalizer could not read the report"
+        ) from None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Unsupported(
+            f"the report is not valid UTF-8 at byte offset {error.start}"
+        ) from None
+    for character in text:
+        if character in ("\n", "\t"):
+            continue
+        if (
+            unicodedata.category(character) == "Cc"
+            or character in (" ", " ")
+        ):
+            raise Unsupported(
+                "the report contains unsupported control or line-separator "
+                "characters"
+            )
+    return text
+
+
+def label_text(line):
+    return list_marker.sub("", line.strip(), count=1)
+
+
+def joined_line(head, tail):
+    head_match = head_line.match(head)
+    return (
+        f"{head_match.group('prefix')}{head_match.group('text')} "
+        f"{tail_line.match(tail).group('text')}"
+    )
+
+
+def section_body(lines, section):
+    start = lines.index(section) + 1
+    end = start
+    while end < len(lines) and lines[end] not in ordered_sections:
+        end += 1
+    return range(start, end)
+
+
+def wrapped_positions(lines, body, label):
+    words = label.split(" ")
+    remainders = {
+        " ".join(words[:split]): " ".join(words[split:])
+        for split in range(1, len(words))
+    }
+    positions = []
+    for index in body:
+        if index + 1 not in body:
+            continue
+        head = head_line.match(lines[index])
+        tail = tail_line.match(lines[index + 1])
+        if head is None or tail is None:
+            continue
+        remainder = remainders.get(head.group("text"))
+        if remainder is not None and tail.group("text").startswith(remainder):
+            positions.append(index)
+    return positions
+
+
+def atomic_write(path, data):
+    parent = path.parent
+    if not parent.is_dir():
+        raise HelperError("the normalized report directory does not exist")
+    temporary_name = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=str(parent),
+        )
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        temporary_name = None
+    except OSError:
+        raise HelperError("could not write the normalized report") from None
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+
+
+try:
+    output_path = pathlib.Path(output_name)
+    if (
+        output_path.resolve(strict=False)
+        == pathlib.Path(report_name).resolve(strict=False)
+    ):
+        raise HelperError("the normalized report must not replace its input")
+    text = read_report(report_name)
+    lines = text.split("\n")
+    if any(lines.count(section) > 1 for section in ordered_sections):
+        raise Unsupported("a report section heading is duplicated")
+
+    joins = set()
+    joined_lines = set()
+    rejoined = []
+    for section, fields in section_fields.items():
+        if section not in lines:
+            continue
+        body = section_body(lines, section)
+        for label in fields:
+            if any(label_text(lines[index]).startswith(label) for index in body):
+                continue
+            positions = wrapped_positions(lines, body, label)
+            if len(positions) > 1:
+                raise Unsupported(
+                    f"{section} wraps required field more than once: {label}"
+                )
+            if positions:
+                position = positions[0]
+                if {position, position + 1} & joined_lines:
+                    raise HelperError(
+                        "wrapped field labels overlap in the report"
+                    )
+                joins.add(position)
+                joined_lines.update((position, position + 1))
+                rejoined.append((section, label))
+    if not joins:
+        raise Unsupported(
+            "no missing required field label is wrapped across one line "
+            "break at a space in its own section"
+        )
+
+    output_lines = []
+    index = 0
+    while index < len(lines):
+        if index in joins:
+            output_lines.append(joined_line(lines[index], lines[index + 1]))
+            index += 2
+        else:
+            output_lines.append(lines[index])
+            index += 1
+
+    output_text = "\n".join(output_lines)
+    if (
+        len(output_lines) != len(lines) - len(joins)
+        or output_text.split() != text.split()
+        or any(
+            output_lines.count(section) != lines.count(section)
+            for section in ordered_sections
+        )
+    ):
+        raise HelperError("the normalized report failed content preservation")
+    for section, label in rejoined:
+        body = section_body(output_lines, section)
+        if sum(
+            1
+            for position in body
+            if label_text(output_lines[position]).startswith(label)
+        ) != 1:
+            raise HelperError(
+                "the normalized report failed content preservation"
+            )
+
+    atomic_write(output_path, output_text.encode("utf-8"))
+    print(len(joins))
+except Unsupported as error:
+    print(f"report repair unsupported: {error}", file=sys.stderr)
+    raise SystemExit(42)
+except HelperError as error:
+    print(f"report repair helper error: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 extract_safe_https_references() {
     local report="$1"
     local scope="${2:-}"

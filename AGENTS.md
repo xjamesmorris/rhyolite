@@ -307,11 +307,18 @@ supported and must not drive new work.
   `confidence-level-delimiters` inserts the accepted ` - ` delimiter in every
   such field of the field-validated assessment sections, keeping every word
   verbatim; compound levels and bare `<Level> confidence` prefixes stay
-  ineligible. The normalized candidate must pass the same strict validation;
-  otherwise it becomes the only input to the bounded confidence edit. The confidence edit is
+  ineligible. When strict validation reports a missing required assessment
+  field label, the entry `wrapped-field-labels` rejoins that label if it is
+  wrapped exactly once across one line break at a space inside its own
+  section and is not also present intact there, keeping every word verbatim;
+  splits inside a word, at a hyphen or slash, or outside the section stay
+  ineligible. Each normalization runs at most once, in the order strict
+  revalidation reports its diagnostic class. The normalized candidate must
+  pass the same strict validation; otherwise it becomes the only input to the
+  bounded confidence edit. The confidence edit is
   scope-gated: it may target only an assessment section that the approved
-  scope requires. Missing, duplicated, or empty labels and tables in
-  assessment sections still fail explicitly.
+  scope requires. Otherwise missing, duplicated, or empty labels and tables
+  in assessment sections still fail explicitly.
 - Release validation is local only on Fedora Linux 44. Do not add or require
   hosted CI workflows for the current release.
 

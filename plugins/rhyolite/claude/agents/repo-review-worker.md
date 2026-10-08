@@ -140,9 +140,11 @@ about any person, and requires human review. Write each field value as plain
 text or a numbered list and never use a Markdown table in any ASSESSMENT
 section or anywhere in the report. Before returning, confirm that every
 required heading for the scope appears exactly once and in order, every
-required label appears exactly once in its section with a non-empty value,
-every assessment section has a valid `Confidence:` and evidence basis, and no
-line between the delimiters begins and ends with `|`.
+required label appears exactly once in its section, whole and unwrapped on
+one line, with a non-empty value, every assessment section has a valid
+`Confidence:` and evidence basis, and no line between the delimiters begins
+and ends with `|`. Never wrap or hyphenate a heading or field label to meet a
+line width.
 
 Return one canonical plain-text report matching the request contract as your
 final message. The trusted parent runner writes all report, transcript,

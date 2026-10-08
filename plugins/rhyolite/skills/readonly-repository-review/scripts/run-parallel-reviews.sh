@@ -309,8 +309,9 @@ if type(count) is not int or count not in (0, 1):
     raise SystemExit("Invalid report-repair attempt count")
 normalization = repair.get("TableNormalization", "NotRun")
 confidence = repair.get("ConfidenceNormalization", "NotRun")
+labels = repair.get("LabelNormalization", "NotRun")
 raise SystemExit(
-    0 if count == 1 or "Applied" in (normalization, confidence) else 1
+    0 if count == 1 or "Applied" in (normalization, confidence, labels) else 1
 )
 ' "${state_path}"
 }
@@ -1042,7 +1043,7 @@ compute_approval_hash() {
 }
 
 report_repair_policy_json() {
-    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
+    printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters","wrapped-field-labels"]}' \
         "${REPORT_REPAIR_ATTEMPT_LIMIT}" "${REPORT_REPAIR_TIMEOUT_SECONDS}"
 }
 
@@ -3343,6 +3344,8 @@ report_repair_json() {
   "TablesConverted": ${REPORT_REPAIR_TABLES_CONVERTED:-0},
   "ConfidenceNormalization": "$(json_escape "${REPORT_REPAIR_CONFIDENCE_NORMALIZATION:-NotRun}")",
   "ConfidenceFieldsNormalized": ${REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED:-0},
+  "LabelNormalization": "$(json_escape "${REPORT_REPAIR_LABEL_NORMALIZATION:-NotRun}")",
+  "LabelsRejoined": ${REPORT_REPAIR_LABELS_REJOINED:-0},
   "InitialDiagnostic": "$(json_escape "${REPORT_REPAIR_INITIAL_DIAGNOSTIC:-}")",
   "FinalDiagnostic": "$(json_escape "${REPORT_REPAIR_FINAL_DIAGNOSTIC:-}")",
   "PreservationCheck": "$(json_escape "${REPORT_REPAIR_PRESERVATION:-NotRun}")",
@@ -3401,6 +3404,8 @@ normalization = data.get("TableNormalization", "NotRun")
 tables = data.get("TablesConverted", 0)
 confidence = data.get("ConfidenceNormalization", "NotRun")
 confidence_fields = data.get("ConfidenceFieldsNormalized", 0)
+labels = data.get("LabelNormalization", "NotRun")
+labels_rejoined = data.get("LabelsRejoined", 0)
 if (data["Status"] not in statuses or
     any(data[key] not in checks for key in
         ("PreservationCheck", "FinalValidation", "Cleanup")) or
@@ -3414,7 +3419,11 @@ if (data["Status"] not in statuses or
     confidence not in normalizations or
     type(confidence_fields) is not int or
     confidence_fields < 0 or
-    (confidence_fields > 0) != (confidence == "Applied")):
+    (confidence_fields > 0) != (confidence == "Applied") or
+    labels not in normalizations or
+    type(labels_rejoined) is not int or
+    labels_rejoined < 0 or
+    (labels_rejoined > 0) != (labels == "Applied")):
     raise SystemExit("Invalid trusted report-repair state")
 summary = "{}; attempts {}/{}; preservation {}; validation {}; cleanup {}".format(
     data["Status"], data["AttemptCount"], data["AttemptLimit"],
@@ -3425,6 +3434,9 @@ if normalization != "NotRun":
 if confidence != "NotRun":
     summary += "; confidence delimiter normalization {} ({} fields)".format(
         confidence, confidence_fields)
+if labels != "NotRun":
+    summary += "; wrapped label normalization {} ({} labels)".format(
+        labels, labels_rejoined)
 print(summary)
 '
 }
@@ -3801,6 +3813,136 @@ run_report_confidence_normalization() {
     return 2
 }
 
+# A diagnostic is eligible for the model-free wrapped-label correction only
+# when an assessment section lacks a required field label; the normalizer
+# decides whether that label was wrapped across one line break at a space.
+report_wrapped_label_diagnostic() {
+    [[ "$1" =~ ^[A-Z][A-Z\ -]*\ ASSESSMENT\ is\ missing\ or\ duplicates\ required\ field:\ [^[:cntrl:]]+:$ ]]
+}
+
+run_report_label_normalization() {
+    local source_candidate="$1"
+    local normalization_status=0
+    local normalized_count=""
+    local normalized_diagnostic=""
+    local normalized_candidate="${REPORT_REPAIR_DIRECTORY}/label-normalized-candidate.txt"
+    local normalized_diagnostic_path="${REPORT_REPAIR_DIRECTORY}/label-normalized-diagnostic.txt"
+
+    REPORT_REPAIR_STATUS='Running'
+    REPORT_REPAIR_REQUEST_PATH=""
+    if normalized_count="$(
+        normalize_review_report_wrapped_field_labels \
+            "${source_candidate}" "${normalized_candidate}" \
+            2> "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+    )"; then
+        normalization_status=0
+    else
+        normalization_status=$?
+    fi
+    if ((normalization_status == 0)) &&
+        ! {
+            [[ "${normalized_count}" =~ ^[1-9][0-9]{0,5}$ ]] &&
+            chmod 600 -- "${normalized_candidate}"
+        } 2>> "${error_path}"; then
+        printf '%s\n' \
+            'report repair helper error: the label-normalized candidate could not be verified' \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        normalization_status=1
+    fi
+    if ((normalization_status != 0)); then
+        rm -f -- "${normalized_candidate}"
+        if ((normalization_status == 42)); then
+            REPORT_REPAIR_LABEL_NORMALIZATION='NotEligible'
+            REPORT_REPAIR_STATUS='NotEligible'
+        else
+            REPORT_REPAIR_LABEL_NORMALIZATION='Failed'
+            REPORT_REPAIR_STATUS='Failed'
+        fi
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+            cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        )"
+        if [[ -z "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" ]]; then
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='report repair helper error: the wrapped-label normalizer returned no diagnostic'
+            printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+                > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        fi
+        printf 'Report repair %s: %s\n' \
+            "${REPORT_REPAIR_STATUS}" "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            >> "${error_path}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report validation' \
+            'candidate rejected; no eligible content-preserving correction'
+        return 1
+    fi
+
+    REPORT_REPAIR_NORMALIZED_PATH="${normalized_candidate}"
+    REPORT_REPAIR_LABEL_NORMALIZATION='Applied'
+    REPORT_REPAIR_LABELS_REJOINED="${normalized_count}"
+    REPORT_REPAIR_PRESERVATION='Passed'
+    write_report_repair_state || return 1
+    review_progress "${slug}" 'report repair' \
+        "rejoined ${normalized_count} wrapped assessment field label(s) without a model; every word preserved; strict revalidation follows"
+
+    if normalized_diagnostic="$(
+        validate_final_review_report "${REPORT_REPAIR_NORMALIZED_PATH}" \
+            "${SCOPE}" 2>&1
+    )"; then
+        REPORT_REPAIR_VALIDATION='Passed'
+        if {
+            cp -- "${REPORT_REPAIR_NORMALIZED_PATH}" "${report_path}.tmp" &&
+            chmod 600 -- "${report_path}.tmp" &&
+            mv -- "${report_path}.tmp" "${report_path}"
+        } 2>> "${error_path}"; then
+            REPORT_REPAIR_STATUS='Succeeded'
+            REPORT_REPAIR_PROMOTED=1
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Wrapped field label normalization preserved every word and passed strict validation.'
+        else
+            REPORT_REPAIR_STATUS='Failed'
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair canonical promotion failed.'
+        fi
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        write_report_repair_state || return 1
+        if ((REPORT_REPAIR_PROMOTED)); then
+            review_progress "${slug}" 'report repair' \
+                'strict revalidation passed; unchanged findings promoted to canonical report'
+            return 0
+        fi
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+
+    REPORT_REPAIR_VALIDATION='Failed'
+    printf 'Label-normalized report validation failed: %s\n' \
+        "${normalized_diagnostic}" >> "${error_path}"
+    if ! {
+        printf '%s\n' "${normalized_diagnostic}" \
+            > "${normalized_diagnostic_path}" &&
+        chmod 600 -- "${normalized_diagnostic_path}"
+    } 2>> "${error_path}"; then
+        rm -f -- "${normalized_diagnostic_path}"
+        REPORT_REPAIR_STATUS='Failed'
+        REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair could not preserve the label-normalized candidate diagnostic.'
+        printf '%s\n' "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" \
+            > "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        chmod 600 -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
+        printf 'Report repair exhausted: %s\n' \
+            "${REPORT_REPAIR_FINAL_DIAGNOSTIC}" >> "${error_path}"
+        write_report_repair_state || return 1
+        review_progress "${slug}" 'report repair' \
+            "${REPORT_REPAIR_STATUS}; normalized candidate was not promoted; noncanonical evidence preserved"
+        return 1
+    fi
+    REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH="${normalized_diagnostic_path}"
+    write_report_repair_state || return 1
+    return 2
+}
+
 run_report_repair() {
     local initial_candidate="$1"
     local initial_diagnostic="$2"
@@ -3818,8 +3960,8 @@ run_report_repair() {
     local repair_authentication_names
     local repair_source_path=""
     local repair_source_diagnostic_path=""
+    local repair_source_diagnostic=""
     local normalization_status=0
-    local confidence_status=0
     local -a repair_arguments=()
     local -a repair_environment=()
 
@@ -3858,10 +4000,24 @@ run_report_repair() {
                 ;;
         esac
     fi
-    if report_confidence_delimiter_diagnostic         "$(cat -- "${repair_source_diagnostic_path}")"; then
-        run_report_confidence_normalization "${repair_source_path}" ||
-            confidence_status=$?
-        case "${confidence_status}" in
+    # Each remaining model-free correction runs at most once, in whichever
+    # order strict revalidation reports its diagnostic class.
+    while :; do
+        repair_source_diagnostic="$(cat -- "${repair_source_diagnostic_path}")"
+        normalization_status=0
+        if [[ "${REPORT_REPAIR_LABEL_NORMALIZATION:-NotRun}" == 'NotRun' ]] &&
+            report_wrapped_label_diagnostic "${repair_source_diagnostic}"; then
+            run_report_label_normalization "${repair_source_path}" ||
+                normalization_status=$?
+        elif [[ "${REPORT_REPAIR_CONFIDENCE_NORMALIZATION:-NotRun}" == 'NotRun' ]] &&
+            report_confidence_delimiter_diagnostic \
+                "${repair_source_diagnostic}"; then
+            run_report_confidence_normalization "${repair_source_path}" ||
+                normalization_status=$?
+        else
+            break
+        fi
+        case "${normalization_status}" in
             0)
                 return 0
                 ;;
@@ -3869,12 +4025,14 @@ run_report_repair() {
                 repair_source_path="${REPORT_REPAIR_NORMALIZED_PATH}"
                 repair_source_diagnostic_path="${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
                 ;;
-            3) ;;
+            3)
+                break
+                ;;
             *)
                 return 1
                 ;;
         esac
-    fi
+    done
     REPORT_REPAIR_REQUEST_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-request.txt"
 
     prepare_review_report_repair \
@@ -5068,6 +5226,8 @@ process_repository() {
     local REPORT_REPAIR_TABLES_CONVERTED=0
     local REPORT_REPAIR_CONFIDENCE_NORMALIZATION='NotRun'
     local REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED=0
+    local REPORT_REPAIR_LABEL_NORMALIZATION='NotRun'
+    local REPORT_REPAIR_LABELS_REJOINED=0
     local REPORT_REPAIR_INITIAL_DIAGNOSTIC=""
     local REPORT_REPAIR_FINAL_DIAGNOSTIC=""
     local REPORT_REPAIR_PRESERVATION='NotRun'

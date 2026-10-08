@@ -10,6 +10,27 @@
   launcher now builds each harness's model menu from its own ordered list.
   Prompts and documentation name GPT-6 Astra, Claude Opus 5.5, and Claude
   Fable 5.1 as current frontier-model examples.
+- Fixed a complete review being discarded when the worker wrapped a required
+  assessment field label across two lines. The longest label,
+  `Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:`,
+  is 74 characters, so a worker wrapping near 72 columns split it, strict
+  validation reported the label missing, and no repair applied.
+- Added approval-bound, model-free `wrapped-field-labels` normalization to
+  `ReportRepairPolicy.DeterministicNormalizations`. When strict validation
+  reports a missing required assessment field label that is wrapped exactly
+  once across one line break at a space inside its own section, and is not
+  also present intact there, the runner rejoins the two lines, keeps every
+  word, and revalidates. A split inside a word, at a hyphen or slash, or
+  outside the label's section stays ineligible and now fails with that
+  reason. `ReportRepair` state adds `LabelNormalization` and
+  `LabelsRejoined`. Each normalization runs at most once in the order strict
+  revalidation reports its diagnostic, so a confidence-delimiter error in an
+  earlier section no longer hides a wrapped label in a later one. The policy
+  object is approval-hash material, so plans generated before this change
+  must be regenerated.
+- The worker request, its self-check, and the worker agents now say that a
+  heading or field label is never wrapped or hyphenated, even past the wrap
+  width.
 
 ## 0.8.0 - 2026-10-08
 

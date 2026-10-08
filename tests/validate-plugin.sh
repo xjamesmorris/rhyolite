@@ -1319,12 +1319,15 @@ for security_table_surface in "${PROMPT}" "${SKILL}" "${WORKER_AGENT}"; do
             fail "Security summary-table boundary is missing from ${security_table_surface}: ${security_table_phrase}"
     done
 done
-for normalization_disclosure_surface in "${AGENT}" "${SKILL}"; do
+for normalization_disclosure_surface in \
+    "${AGENT}" "${SKILL}" "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
     grep -Fq '`DeterministicNormalizations`' \
         "${normalization_disclosure_surface}" &&
         grep -Fq '`markdown-table-rows`' \
             "${normalization_disclosure_surface}" &&
         grep -Fq '`confidence-level-delimiters`' \
+            "${normalization_disclosure_surface}" &&
+        grep -Fq '`wrapped-field-labels`' \
             "${normalization_disclosure_surface}" ||
         fail "Effective plan does not disclose deterministic normalizations: ${normalization_disclosure_surface}"
 done
@@ -1958,6 +1961,57 @@ grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${PROMPT}" &&
     grep -Fq 'values that merely share an allowed prefix' "${SKILL}" &&
     grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${SKILL}" ||
     fail 'Report field formatting contract is not aligned with validation.'
+grep -Fq 'Never wrap, break, or hyphenate a heading or field label across lines.' \
+    "${PROMPT}" &&
+    grep -Fq 'section, whole and unwrapped on that one line, with a non-empty value.' \
+        "${PROMPT}" &&
+    grep -Fq 'Never wrap a heading or field label to meet that width.' \
+        "${PROMPT}" &&
+    grep -Fq 'Never wrap, break, or hyphenate a heading or' "${SKILL}" &&
+    grep -Fq 'never wrapping a heading or' "${SKILL}" &&
+    grep -Fq 'Never wrap or hyphenate a heading or field label' \
+        "${WORKER_AGENT}" &&
+    grep -Fq 'Never wrap or hyphenate a heading or field label' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md" ||
+    fail 'Worker instructions do not forbid wrapping a heading or field label.'
+# Every scope's required labels, after the longest allowed list marker, must
+# fit the requested wrap width so wrapping never forces a label split.
+python3 - "${PROMPT}" "${OUTPUT_HELPER}" <<'PY' ||
+import re
+import sys
+
+prompt_text = open(sys.argv[1], encoding="utf-8").read()
+helper_text = open(sys.argv[2], encoding="utf-8").read()
+width_match = re.search(r"wrap lines near (\d+) columns", prompt_text)
+if width_match is None:
+    raise SystemExit("the prompt does not state its wrap width")
+width = int(width_match.group(1))
+labels = []
+for paragraph in prompt_text.split("\n\n"):
+    if "exact field labels" not in " ".join(paragraph.split()):
+        continue
+    paragraph_lines = paragraph.split("\n")
+    intro_end = next(
+        index
+        for index, line in enumerate(paragraph_lines)
+        if line.endswith(":")
+    )
+    labels.extend(
+        line
+        for line in paragraph_lines[intro_end + 1:]
+        if line not in ("Confidence:", "Evidence basis:")
+    )
+if len(labels) != 39:
+    raise SystemExit(f"expected 39 required field labels, found {len(labels)}")
+for label in labels:
+    if not label.endswith(":") or f'"{label}",' not in helper_text:
+        raise SystemExit(f"prompt label is not a validated field: {label}")
+    if len("1. " + label) > width:
+        raise SystemExit(
+            f"label plus list marker exceeds {width} columns: {label}"
+        )
+PY
+    fail 'A required field label cannot fit on one line at the requested wrap width.'
 grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
     "${PROMPT}" &&
     grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
@@ -2293,7 +2347,7 @@ for hash_fragment in \
         fail "Approval hash material is missing ${hash_fragment}."
 done
 grep -Fq \
-    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters"]}' \
+    '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters","wrapped-field-labels"]}' \
     "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_ATTEMPT_LIMIT=1' "${RUNNER}" &&
     grep -Fq 'REPORT_REPAIR_TIMEOUT_SECONDS=300' "${RUNNER}" &&
@@ -5787,7 +5841,7 @@ function assertCommonPlan(
       plan.ReportRepairPolicy?.TimeoutSeconds !==
         Math.min(300, plan.SessionTimeoutMinutes * 60) ||
       JSON.stringify(plan.ReportRepairPolicy?.DeterministicNormalizations) !==
-        JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
+        JSON.stringify(["markdown-table-rows", "confidence-level-delimiters", "wrapped-field-labels"]) ||
       !Array.isArray(plan.Sources) ||
       plan.Sources.length !== 1) {
     throw new Error(`${label} common plan contract is invalid`);
@@ -9379,7 +9433,7 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
     JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
+      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters", "wrapped-field-labels"]) ||
     reviewPlan.ResearchTransport?.Enabled !== true ||
     reviewPlan.ResearchTransport?.Mode !==
       "dedicated-worker-local-stdio-mcp" ||
@@ -10925,7 +10979,7 @@ if (reviewPlan.ReportRepairPolicy?.Mode !==
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !==
       Math.min(300, reviewPlan.SessionTimeoutMinutes * 60) ||
     JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
+      JSON.stringify(["markdown-table-rows", "confidence-level-delimiters", "wrapped-field-labels"]) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy)) {
   throw new Error("approval-bound report-repair policy is invalid");
@@ -11398,7 +11452,7 @@ for (const [label, value] of [
   }
 }
 if (JSON.stringify(reviewPlan.ReportRepairPolicy?.DeterministicNormalizations) !==
-    JSON.stringify(["markdown-table-rows", "confidence-level-delimiters"]) ||
+    JSON.stringify(["markdown-table-rows", "confidence-level-delimiters", "wrapped-field-labels"]) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy)) {
   failWith("approval-bound normalization policy is missing");

@@ -325,6 +325,28 @@ pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
 PY
 }
 
+# Replace one exact line with zero or more lines; an empty replacement
+# deletes the line.
+replace_exact_line() {
+    local source="$1"
+    local destination="$2"
+    local anchor="$3"
+    local replacement="$4"
+
+    python3 - "${source}" "${destination}" "${anchor}" "${replacement}" <<'PY'
+import pathlib
+import sys
+
+source, destination, anchor, replacement = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+if lines.count(anchor) != 1:
+    raise SystemExit(f"synthetic anchor must occur exactly once: {anchor}")
+position = lines.index(anchor)
+lines[position:position + 1] = replacement.split("\n") if replacement else []
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+}
+
 assert_no_markdown_table() {
     local file="$1"
     local description="$2"
@@ -1946,5 +1968,189 @@ expect_status 1 \
     "${confidence_report}" "${confidence_report}"
 cmp -s -- "${confidence_report}" "${confidence_report}" ||
     fail 'confidence normalization modified its input'
+
+wrapped_label='Source/docs/commit/ref metadata poisoning and dataset/benchmark poisoning:'
+wrapped_head='Source/docs/commit/ref metadata poisoning and dataset/benchmark'
+wrapped_value='none found. The 12 commit subjects, 6 ref names and the'
+wrapped_base="${FIXTURE_ROOT}/wrapped-base.txt"
+wrapped_expected="${FIXTURE_ROOT}/wrapped-expected.txt"
+wrapped_report="${FIXTURE_ROOT}/wrapped-report.txt"
+wrapped_normalized="${FIXTURE_ROOT}/wrapped-normalized.txt"
+write_report "${wrapped_base}" 1 claims 'Medium.' ''
+
+# The failing run's split: the line ends with `dataset/benchmark` and the next
+# line starts with `poisoning:`.
+replace_exact_line "${wrapped_base}" "${wrapped_expected}" \
+    "${wrapped_label}" "${wrapped_label} ${wrapped_value}"
+replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+    "${wrapped_label}" "${wrapped_head}"$'\n'"poisoning: ${wrapped_value}"
+validate_review_report_contract "${wrapped_expected}" 1 ||
+    fail 'unwrapped label fixture failed strict validation'
+capture_diagnostic \
+    "${wrapped_report}" 1 "${FIXTURE_ROOT}/wrapped-initial.diagnostic"
+[[ "$(< "${FIXTURE_ROOT}/wrapped-initial.diagnostic")" == \
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT is missing or duplicates required field: ${wrapped_label}" ]] ||
+    fail 'wrapped label fixture did not reproduce the run diagnostic'
+wrapped_count="$(
+    normalize_review_report_wrapped_field_labels \
+        "${wrapped_report}" "${wrapped_normalized}"
+)" || fail 'the wrapped run label was not normalized'
+[[ "${wrapped_count}" == '1' ]] ||
+    fail "wrapped-label normalization reported ${wrapped_count} labels"
+[[ "$(stat -c '%a' -- "${wrapped_normalized}")" == '600' ]] ||
+    fail 'label-normalized candidate is not mode 600'
+cmp -s -- "${wrapped_expected}" "${wrapped_normalized}" ||
+    fail 'wrapped-label normalization changed more than the line break'
+validate_review_report_contract "${wrapped_normalized}" 1 ||
+    fail 'label-normalized report failed strict validation'
+
+# A list marker, indentation, and trailing head whitespace are kept or dropped
+# exactly as a single-space join requires.
+replace_exact_line "${wrapped_base}" "${wrapped_expected}" \
+    "${wrapped_label}" "  - ${wrapped_label} none found."
+replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+    "${wrapped_label}" \
+    $'  - Source/docs/commit/ref metadata poisoning and \t\n     dataset/benchmark poisoning: none found.'
+normalize_review_report_wrapped_field_labels \
+    "${wrapped_report}" "${wrapped_normalized}" > /dev/null ||
+    fail 'list-marked wrapped label was not normalized'
+cmp -s -- "${wrapped_expected}" "${wrapped_normalized}" ||
+    fail 'list-marked wrapped label was not rejoined with one space'
+validate_review_report_contract "${wrapped_normalized}" 1 ||
+    fail 'list-marked label normalization failed strict validation'
+
+read -r -a wrapped_words <<< "${wrapped_label}"
+for ((wrapped_split = 1; wrapped_split < ${#wrapped_words[@]}; wrapped_split++)); do
+    replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+        "${wrapped_label}" \
+        "${wrapped_words[*]:0:wrapped_split}"$'\n'"${wrapped_words[*]:wrapped_split}"
+    normalize_review_report_wrapped_field_labels \
+        "${wrapped_report}" "${wrapped_normalized}" > /dev/null ||
+        fail "label wrapped after word ${wrapped_split} was not normalized"
+    cmp -s -- "${wrapped_base}" "${wrapped_normalized}" ||
+        fail "label wrapped after word ${wrapped_split} was not rejoined exactly"
+done
+
+# Every multi-word required label of every scope-3 section, wrapped at its
+# last space at once, is rejoined to the original report.
+wrapped_all_base="${FIXTURE_ROOT}/wrapped-all-base.txt"
+wrapped_all_report="${FIXTURE_ROOT}/wrapped-all-report.txt"
+wrapped_all_normalized="${FIXTURE_ROOT}/wrapped-all-normalized.txt"
+write_report "${wrapped_all_base}" 3 claims 'Medium.' ''
+wrapped_all_expected="$(
+    python3 - "${wrapped_all_base}" "${wrapped_all_report}" \
+        "${OUTPUT_HELPER}" <<'PY'
+import pathlib
+import sys
+
+source, destination, helper = sys.argv[1:]
+helper_text = pathlib.Path(helper).read_text(encoding="utf-8")
+output = []
+wrapped = 0
+for line in pathlib.Path(source).read_text(encoding="utf-8").split("\n"):
+    label, colon, value = line.partition(":")
+    label += colon
+    if (
+        colon
+        and " " in label
+        and label != "Evidence basis:"
+        and f'"{label}",' in helper_text
+    ):
+        head, _, tail = label.rpartition(" ")
+        output.extend((head, tail + value))
+        wrapped += 1
+    else:
+        output.append(line)
+pathlib.Path(destination).write_text("\n".join(output), encoding="utf-8")
+print(wrapped)
+PY
+)"
+[[ "${wrapped_all_expected}" == '37' ]] ||
+    fail "expected to wrap 37 multi-word scope 3 labels, wrapped ${wrapped_all_expected}"
+wrapped_all_count="$(
+    normalize_review_report_wrapped_field_labels \
+        "${wrapped_all_report}" "${wrapped_all_normalized}"
+)" || fail 'scope 3 wrapped labels were not normalized'
+[[ "${wrapped_all_count}" == "${wrapped_all_expected}" ]] ||
+    fail "scope 3 wrapped-label normalization reported ${wrapped_all_count}"
+cmp -s -- "${wrapped_all_base}" "${wrapped_all_normalized}" ||
+    fail 'scope 3 wrapped labels were not rejoined to the original report'
+validate_review_report_contract "${wrapped_all_normalized}" 3 ||
+    fail 'scope 3 label-normalized report failed strict validation'
+
+expect_wrapped_label_ineligible() {
+    local description="$1"
+    local report="$2"
+    local expected_detail="$3"
+
+    expect_status 42 "${description}" \
+        "${FIXTURE_ROOT}/wrapped-ineligible-output.txt" \
+        normalize_review_report_wrapped_field_labels \
+        "${report}" "${FIXTURE_ROOT}/wrapped-ineligible-output.txt"
+    assert_contains "${FIXTURE_ROOT}/expect-status.stderr" \
+        "report repair unsupported: ${expected_detail}" "${description}"
+}
+
+wrapped_none_detail='no missing required field label is wrapped across one line break at a space in its own section'
+replace_exact_line "${wrapped_base}" "${wrapped_report}" "${wrapped_label}" ''
+capture_diagnostic \
+    "${wrapped_report}" 1 "${FIXTURE_ROOT}/wrapped-missing.diagnostic"
+assert_contains "${FIXTURE_ROOT}/wrapped-missing.diagnostic" \
+    "is missing or duplicates required field: ${wrapped_label}" \
+    'truly missing label diagnostic'
+expect_wrapped_label_ineligible 'truly missing label' \
+    "${wrapped_report}" "${wrapped_none_detail}"
+
+insert_after_exact_line "${wrapped_base}" "${wrapped_report}" \
+    'Limitations of available evidence: Trusted synthetic fixture only.' \
+    "${wrapped_head}"$'\n''poisoning: A second, wrapped assessment.'
+expect_wrapped_label_ineligible 'one wrapped and one intact label' \
+    "${wrapped_report}" "${wrapped_none_detail}"
+
+replace_exact_line "${wrapped_base}" "${wrapped_report}.step" \
+    "${wrapped_label}" "${wrapped_head}"$'\n''poisoning:'
+insert_after_exact_line "${wrapped_report}.step" "${wrapped_report}" \
+    'Limitations of available evidence: Trusted synthetic fixture only.' \
+    "${wrapped_head}"$'\n''poisoning: A second, wrapped assessment.'
+expect_wrapped_label_ineligible 'label wrapped twice in its section' \
+    "${wrapped_report}" \
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT wraps required field more than once: ${wrapped_label}"
+
+replace_exact_line "${wrapped_base}" "${wrapped_report}.step" \
+    "${wrapped_label}" ''
+insert_after_exact_line "${wrapped_report}.step" "${wrapped_report}" \
+    'Supply-chain precursor indicators: No supporting evidence.' \
+    "${wrapped_head}"$'\n''poisoning: Placed in the claims section.'
+expect_wrapped_label_ineligible 'label wrapped outside its section' \
+    "${wrapped_report}" "${wrapped_none_detail}"
+
+for wrapped_bad_split in \
+    $'Source/docs/commit/ref metadata poisoning and dataset/bench\nmark poisoning: none found.' \
+    $'Source/docs/commit/ref metadata poisoning and dataset/\nbenchmark poisoning: none found.' \
+    $'Source/docs/commit/ref metadata poisoning and dataset/bench-\nmark poisoning: none found.' \
+    $'Source/docs/commit/ref metadata\npoisoning and dataset/benchmark\npoisoning: none found.' \
+    $'Source/docs/commit/ref metadata poisoning and dataset/benchmark\n- poisoning: none found.'; do
+    replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+        "${wrapped_label}" "${wrapped_bad_split}"
+    expect_wrapped_label_ineligible \
+        "ineligible label split: ${wrapped_bad_split//$'\n'/ | }" \
+        "${wrapped_report}" "${wrapped_none_detail}"
+done
+replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+    'Prompt injection and reviewer-directed instructions: No supporting evidence.' \
+    $'Prompt injection and reviewer-\ndirected instructions: No supporting evidence.'
+expect_wrapped_label_ineligible 'label split at its own hyphen' \
+    "${wrapped_report}" "${wrapped_none_detail}"
+
+replace_exact_line "${wrapped_base}" "${wrapped_report}" \
+    "${wrapped_label}" "${wrapped_head}"$'\n''poisoning:'
+cp -- "${wrapped_report}" "${wrapped_report}.before"
+expect_status 1 \
+    'wrapped-label normalization replacing its input' \
+    "${FIXTURE_ROOT}/wrapped-unused-output.txt" \
+    normalize_review_report_wrapped_field_labels \
+    "${wrapped_report}" "${wrapped_report}"
+cmp -s -- "${wrapped_report}.before" "${wrapped_report}" ||
+    fail 'wrapped-label normalization modified its input'
 
 printf '%s\n' 'Report repair helper tests passed.'

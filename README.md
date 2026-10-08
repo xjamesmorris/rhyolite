@@ -580,7 +580,7 @@ explicit failures. `RHYOLITE PROGRESS` distinguishes validation, repair, and
 successful revalidation or exhaustion. The confidence edit is scope-gated: it
 can target only an assessment section that the approved scope requires.
 Missing, duplicated, or empty labels and tables in assessment sections still
-fail explicitly.
+fail explicitly, except for the wrapped-label rejoin described below.
 
 If strict validation rejects a complete report for Markdown table syntax,
 such as a copied security-specialist summary table, the trusted runner first
@@ -591,9 +591,15 @@ action-menu tables remain ineligible. The converted candidate must pass the
 same strict validation, or it becomes the input to the bounded confidence
 edit. When an assessment `Confidence:` value has a single level directly
 followed by explanatory words, the runner likewise inserts the accepted ` - `
-delimiter without a model, keeping every word verbatim. The effective plan
-discloses these as `DeterministicNormalizations` `markdown-table-rows` and
-`confidence-level-delimiters`.
+delimiter without a model, keeping every word verbatim. When a required
+assessment field label is missing because it was wrapped across one line
+break at a space, the runner rejoins those two lines into one, but only
+inside the label's own section, only when the label does not also appear
+intact there, and only when it is wrapped exactly once. Every word stays
+verbatim. A split inside a word, at a hyphen or slash, or outside the
+label's section remains a failure. The effective plan discloses these as
+`DeterministicNormalizations` `markdown-table-rows`,
+`confidence-level-delimiters`, and `wrapped-field-labels`.
 
 At completion, Rhyolite displays a brief three-to-five-bullet
 `RHYOLITE EXECUTIVE SUMMARY`, preserving report confidence and material

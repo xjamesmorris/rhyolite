@@ -441,10 +441,13 @@ After the answers are collected, do not start the review yet:
    strict validation, and that `DeterministicNormalizations` value
    `markdown-table-rows` lets the trusted runner convert well-formed Markdown
    tables outside the field-validated assessment sections into labeled
-   plain-text rows without a model, and that `confidence-level-delimiters`
+   plain-text rows without a model, that `confidence-level-delimiters`
    lets it insert the accepted ` - ` delimiter between a single assessment
    confidence level and directly following explanatory words, keeping every
-   word verbatim. Also state that the review fails rather
+   word verbatim, and that `wrapped-field-labels` lets it rejoin a missing
+   required assessment field label that was wrapped across one line break at
+   a space within its own section, keeping every word verbatim. Also state
+   that the review fails rather
    than accepting output from any model other than the approved one.
 5. Ask `Review plan` with the exact choices `Run review`, `Edit setup`, and
    `Explain scope`, in that order.

@@ -518,7 +518,11 @@ start the review yet. Instead:
    revalidation, and that its value `confidence-level-delimiters` lets the
    runner insert the accepted ` - ` delimiter between a single assessment
    confidence level and directly following explanatory words, keeping every
-   word verbatim, before that revalidation.
+   word verbatim, before that revalidation, and that its value
+   `wrapped-field-labels` lets the runner rejoin a missing required
+   assessment field label that was wrapped across one line break at a space
+   within its own section, keeping every word verbatim, before that
+   revalidation.
    Label `ReviewDate`, `PriorArtWindow`, and
    `ProvenanceWindow` as local-session calendar dates. Label
    `GeneratedAt` as UTC. For scope `1`, explicitly show prior-art as

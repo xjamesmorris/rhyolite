@@ -321,6 +321,9 @@ preserve the exact label text, case, slash characters, and trailing colon,
 include the label exactly once in its mandatory section, and give it a
 non-empty value. A label may start at column 0 or follow one plain `-`, `*`, `+`, `1.`, or `1)` list marker.
 Put a non-empty value after the colon or on the immediately following continuation line or lines.
+Never wrap, break, or hyphenate a heading or field label across lines. Keep
+each whole label on one line even when that line exceeds the wrap width; its
+value may start on the next line.
 
 `Confidence:` and `Evidence basis:` are repeatable assessment labels. Each
 mandatory assessment section must contain at least one `Confidence:` with the
@@ -439,7 +442,7 @@ Before returning the report, self-check it and correct any failure:
 1. Every required heading for the selected scope appears exactly once, on its
    own line, and in the order above, and no heading for another scope appears.
 2. Every required label appears exactly once at the start of a line in its
-   section, with a non-empty value.
+   section, whole and unwrapped on that one line, with a non-empty value.
 3. Every assessment section has at least one valid `Confidence:` and an
    evidence basis.
 4. No line between the delimiters begins and ends with `|`.
@@ -447,6 +450,7 @@ Before returning the report, self-check it and correct any failure:
 Format it as plain UTF-8 text for Linux-native email and mailing-list users.
 Use LF line endings, simple ASCII-compatible headings and numbered lists, no
 Markdown tables, no ANSI escapes, and wrap lines near 78 columns where practical.
+Never wrap a heading or field label to meet that width.
 
 After the overall assessment, do not stop until you copy this exact final line:
 ================================================================================

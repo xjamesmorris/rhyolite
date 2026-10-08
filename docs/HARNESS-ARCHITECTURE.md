@@ -324,11 +324,12 @@ seconds. The compact `ReportRepairPolicy` records the returned bound with key
 order `Mode`, `ProtocolVersion`, `AttemptLimit`, `TimeoutSeconds`,
 `DeterministicNormalizations`; that exact object is approval-hash material.
 Timer creation and enforcement remain runner-owned and adapters receive no
-timeout argument. The `markdown-table-rows` and
-`confidence-level-delimiters` normalizations are also runner-owned: they
-convert eligible Markdown tables and insert the accepted ` - ` delimiter after
-a single assessment confidence level without invoking any harness function or
-model.
+timeout argument. The `markdown-table-rows`,
+`confidence-level-delimiters`, and `wrapped-field-labels` normalizations are
+also runner-owned: they convert eligible Markdown tables, insert the accepted
+` - ` delimiter after a single assessment confidence level, and rejoin a
+wrapped required assessment field label without invoking any harness function
+or model.
 
 The repair environment uses the same clearing vector as the normal review
 worker: unset inherited Copilot allow-all and skill/custom-instruction
