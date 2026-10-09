@@ -271,13 +271,17 @@ source URLs, check dates and freshness where applicable, inaccessible
 resources and retrieval priorities when public research is enabled, sanitized
 research transport observations, and overall assessment.
 
-For every substantive finding, research assessment, provenance observation,
-source-landscape conclusion, remediation priority, and overall assessment,
-include Confidence: High, Confidence: Medium, or Confidence: Low and a concise
-evidence basis. High requires direct, specific, verifiable evidence. Medium
-requires multiple consistent signals with a material gap. Low-confidence
-possibilities belong in limitations, unresolved questions, or retrieval needs,
-not as established defects or provenance conclusions.
+Outside mandatory ASSESSMENT sections, substantive findings, conclusions,
+provenance observations, source-landscape conclusions, and remediation
+priorities may carry their own confidence and evidence basis as appropriate.
+Use Confidence: High, Confidence: Medium, or Confidence: Low with a concise
+evidence basis. Inside each mandatory ASSESSMENT section, synthesize exactly
+one overall `Confidence:` and exactly one separate non-empty `Evidence basis:`
+for the whole section. Do not emit confidence per category or assessment point
+there. High requires direct, specific, verifiable evidence. Medium requires
+multiple consistent signals with a material gap. Low-confidence possibilities
+belong in limitations, unresolved questions, or retrieval needs, not as
+established defects or provenance conclusions.
 
 Begin and end the final report with a line containing at least 80 `=`
 characters. The closing delimiter is mandatory and must be the final line.
@@ -325,24 +329,30 @@ Never wrap, break, or hyphenate a heading or field label across lines. Keep
 each whole label on one line even when that line exceeds the wrap width; its
 value may start on the next line.
 
-`Confidence:` and `Evidence basis:` are repeatable assessment labels. Each
-mandatory assessment section must contain at least one `Confidence:` with the
-exact level `High`, `Medium`, or `Low`. The level may stand alone, or use a
-terminal `.` or `;` when a separate non-empty `Evidence basis:` is present.
-Alternatively, the exact level may be followed by `. `, `; `, `: `, `, `, or
-` - ` and non-empty explanatory text; that suffix counts as the inline evidence
-basis whether or not it begins with `Evidence basis:`. For example,
-`Confidence: High - direct path-and-line evidence.` and `Confidence: High.
-Evidence basis: direct path-and-line evidence.` are valid. Values may continue
-on immediately following wrapped lines. Reject unknown levels, bare prefixes
-such as `High confidence`, delimiters without text, and true confidence or
+`Confidence:` and `Evidence basis:` must each appear exactly once in every
+mandatory assessment section. Each logical `Confidence:` field must express
+exactly one overall level: `High`, `Medium`, or `Low`. The level may stand
+alone, or use a terminal `.` or `;` when the separate non-empty
+`Evidence basis:` field is present. For backward-compatible accepted syntax,
+the exact level may instead be followed by `. `, `; `, `: `, `, `, or ` - `
+and non-empty explanatory text. Regardless of syntax, the field must not
+qualify confidence by component or include another confidence level.
+
+When evidence within a mandatory assessment section is materially mixed,
+choose the lowest applicable level for the section's single overall
+confidence. Use the separate `Evidence basis:` field to explain the
+distinctions. Use this canonical form:
+
+```text
+Confidence: Medium
+Evidence basis: Counts are directly observed; adoption interpretation remains inferential.
+```
+
+Never recommend or generate a compound confidence field. Single-level
+explanatory text and the evidence-basis value may continue on immediately
+following wrapped lines. Reject unknown levels, bare prefixes such as
+`High confidence`, delimiters without text, and true confidence or
 evidence-basis omissions.
-Use exactly one level per `Confidence:` label. This compound value is invalid:
-`Confidence: High for the two observed constructs; Medium for absence outside normalized text.`
-A conservative single-level correction that preserves the original detail is:
-`Confidence: Medium - Original confidence detail: High for the two observed constructs; Medium for absence outside normalized text.`
-That correction preserves explicit confidence intent; it does not silently
-reinterpret the original detail.
 
 Under AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT, include each of
 these exact field labels and assess every category even when no supporting
@@ -443,8 +453,8 @@ Before returning the report, self-check it and correct any failure:
    own line, and in the order above, and no heading for another scope appears.
 2. Every required label appears exactly once at the start of a line in its
    section, whole and unwrapped on that one line, with a non-empty value.
-3. Every assessment section has at least one valid `Confidence:` and an
-   evidence basis.
+3. Every mandatory assessment section has exactly one valid `Confidence:` and
+   exactly one separate non-empty `Evidence basis:`.
 4. No line between the delimiters begins and ends with `|`.
 
 Format it as plain UTF-8 text for Linux-native email and mailing-list users.

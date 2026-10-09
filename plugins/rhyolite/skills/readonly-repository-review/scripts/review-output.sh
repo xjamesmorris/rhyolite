@@ -478,6 +478,206 @@ def require_unique_fields(section, normalized, fields, stop_fields):
     return values
 
 
+confidence_pattern = re.compile(r"^(High|Medium|Low)(.*)$")
+delimited_suffix_pattern = re.compile(
+    r"^(?:[.,:;][ \t]+|[ \t]+-[ \t]+)(.+)$"
+)
+confidence_level_token = re.compile(
+    r"(?<![A-Za-z0-9])(High|Medium|Low)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+confidence_markdown_wrappers = ("**", "__", "*", "_", "`")
+confidence_explicit_left = re.compile(
+    r"(?:^|[^A-Za-z0-9])confidence"
+    r"(?:[ \t]+(?:is|was|remains)|[ \t]*[:=])[ \t]*$",
+    re.IGNORECASE,
+)
+confidence_assertion_left_boundary = re.compile(
+    r"(?:^|[.,;:!?(/])[ \t]*$|"
+    r"(?:^|[^A-Za-z0-9])(?:and|or|but|yet)[ \t]*$|"
+    r"(?:-|/)[ \t]*(?:to[ \t]*)?$",
+    re.IGNORECASE,
+)
+confidence_assertion_right_cue = re.compile(
+    r"^(?:"
+    r"[ \t]+(?:confidence|for|because|based(?:[ \t]+on)?|"
+    r"due(?:[ \t]+to)?|overall)\b|"
+    r"[ \t]*[-/][ \t]*(?:confidence|for|based|to)\b"
+    r")",
+    re.IGNORECASE,
+)
+confidence_parenthetical_right = re.compile(r"^[ \t]*\(")
+confidence_terminal_right = re.compile(r"^[ \t]*(?:[.,;:!?)]|$)")
+ordinary_level_noun_right = re.compile(
+    r"^[ \t]+(?:coverage|severity)\b",
+    re.IGNORECASE,
+)
+ordinary_level_hyphen_right = re.compile(
+    r"^-level\b",
+    re.IGNORECASE,
+)
+ordinary_residual_risk_left = re.compile(
+    r"(?:^|[^A-Za-z0-9])residual[ \t]+risk[ \t]+"
+    r"(?:is|was|remains|remained)[ \t]*$",
+    re.IGNORECASE,
+)
+word_part_pattern = re.compile(r"[A-Za-z0-9]+")
+confidence_ordering = {
+    "High": 3,
+    "Medium": 2,
+    "Low": 1,
+}
+confidence_level_fragments = ("high", "medium", "low")
+original_confidence_detail_prefix = "Original confidence detail:"
+
+
+def confidence_token_context(text, match):
+    left = text[:match.start()]
+    right = text[match.end():]
+    for wrapper in confidence_markdown_wrappers:
+        if left.endswith(wrapper) and right.startswith(wrapper):
+            return left[:-len(wrapper)], right[len(wrapper):]
+    return left, right
+
+
+# Exact level words use only bounded confidence and ordinary-evidence cues.
+# Unresolved uses stay ambiguous so strict validation and repair both fail closed.
+def classify_confidence_level_tokens(text, leading_level_is_assertion):
+    classifications = []
+    for match in confidence_level_token.finditer(text):
+        left, right = confidence_token_context(text, match)
+        if (
+            confidence_explicit_left.search(left)
+            or leading_level_is_assertion
+            and not left.strip()
+        ):
+            kind = "assertion"
+        elif (
+            ordinary_level_hyphen_right.match(right)
+            or ordinary_level_noun_right.match(right)
+            or ordinary_residual_risk_left.search(left)
+            and confidence_terminal_right.match(right)
+        ):
+            kind = "ordinary"
+        elif confidence_assertion_right_cue.match(right):
+            kind = "assertion"
+        elif (
+            confidence_assertion_left_boundary.search(left)
+            and (
+                confidence_parenthetical_right.match(right)
+                or confidence_terminal_right.match(right)
+            )
+        ):
+            kind = "assertion"
+        else:
+            kind = "ambiguous"
+        classifications.append(
+            {
+                "kind": kind,
+                "level": match.group(1),
+                "span": match.span(),
+            }
+        )
+    return classifications
+
+
+def has_secondary_confidence_level(text):
+    return any(
+        classification["kind"] != "ordinary"
+        for classification in classify_confidence_level_tokens(text, False)
+    )
+
+
+def explicit_confidence_assertion_levels(text):
+    classifications = classify_confidence_level_tokens(text, True)
+    if any(
+        classification["kind"] == "ambiguous"
+        for classification in classifications
+    ):
+        return None
+    explicit_levels = []
+    for classification in classifications:
+        if classification["kind"] != "assertion":
+            continue
+        level = classification["level"]
+        if level not in confidence_ordering:
+            return None
+        explicit_levels.append(level)
+    exact_level_spans = {
+        classification["span"]
+        for classification in classifications
+    }
+    for match in word_part_pattern.finditer(text):
+        if match.span() in exact_level_spans:
+            continue
+        folded_part = match.group(0).lower()
+        if any(
+            fragment in folded_part
+            for fragment in confidence_level_fragments
+        ):
+            return None
+    return explicit_levels
+
+
+def ordinary_confidence_value_is_valid(value):
+    match = confidence_pattern.fullmatch(value)
+    if match is None:
+        return False
+    remainder = match.group(2)
+    if remainder in ("", ".", ";"):
+        return True
+    suffix_match = delimited_suffix_pattern.fullmatch(remainder)
+    if suffix_match is None:
+        return False
+    inline_evidence = suffix_match.group(1).strip()
+    if inline_evidence.startswith("Evidence basis:"):
+        inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
+    return bool(inline_evidence) and not has_secondary_confidence_level(
+        inline_evidence
+    )
+
+
+def repair_detail_is_valid(leading_level, detail):
+    if (
+        not detail
+        or any(ord(character) > 127 for character in detail)
+        or original_confidence_detail_prefix in detail
+        or ordinary_confidence_value_is_valid(detail)
+    ):
+        return False
+    explicit_levels = explicit_confidence_assertion_levels(detail)
+    return (
+        explicit_levels is not None
+        and bool(explicit_levels)
+        and min(explicit_levels, key=confidence_ordering.__getitem__)
+        == leading_level
+    )
+
+
+def confidence_value_is_valid(value):
+    match = confidence_pattern.fullmatch(value)
+    if match is None:
+        return False
+    remainder = match.group(2)
+    if remainder in ("", ".", ";"):
+        return True
+    suffix_match = delimited_suffix_pattern.fullmatch(remainder)
+    if suffix_match is None:
+        return False
+    inline_evidence = suffix_match.group(1).strip()
+    if inline_evidence.startswith("Evidence basis:"):
+        inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
+        return bool(inline_evidence) and not has_secondary_confidence_level(
+            inline_evidence
+        )
+    if inline_evidence.startswith(original_confidence_detail_prefix):
+        detail = inline_evidence[len(original_confidence_detail_prefix):].strip()
+        return repair_detail_is_valid(match.group(1), detail)
+    return bool(inline_evidence) and not has_secondary_confidence_level(
+        inline_evidence
+    )
+
+
 def require_assessment_fields(section, fields):
     normalized = normalized_section_lines(section)
     assessment_fields = ("Confidence:", "Evidence basis:")
@@ -505,10 +705,6 @@ def require_assessment_fields(section, fields):
         )
 
     inline_evidence_count = 0
-    confidence_pattern = re.compile(r"^(High|Medium|Low)(.*)$")
-    delimited_suffix_pattern = re.compile(
-        r"^(?:[.,:;][ \t]+|[ \t]+-[ \t]+)(.+)$"
-    )
     for position in confidence_positions:
         value = field_value(
             normalized,
@@ -516,19 +712,15 @@ def require_assessment_fields(section, fields):
             "Confidence:",
             stop_fields,
         )
-        match = confidence_pattern.fullmatch(value)
-        if match is None:
+        if not confidence_value_is_valid(value):
             raise SystemExit(
                 f"{section} has an invalid confidence level: {value or '<empty>'}"
             )
+        match = confidence_pattern.fullmatch(value)
         remainder = match.group(2)
         if remainder in ("", ".", ";"):
             continue
         suffix_match = delimited_suffix_pattern.fullmatch(remainder)
-        if suffix_match is None:
-            raise SystemExit(
-                f"{section} has an invalid confidence level: {value or '<empty>'}"
-            )
         inline_evidence = suffix_match.group(1).strip()
         if inline_evidence.startswith("Evidence basis:"):
             inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
@@ -812,8 +1004,53 @@ confidence_pattern = re.compile(r"^(High|Medium|Low)(.*)$")
 delimited_suffix_pattern = re.compile(
     r"^(?:[.,:;][ \t]+|[ \t]+-[ \t]+)(.+)$"
 )
-word_token_pattern = re.compile(r"[A-Za-z0-9_]+")
-level_fragments = ("high", "medium", "low")
+confidence_level_token = re.compile(
+    r"(?<![A-Za-z0-9])(High|Medium|Low)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+confidence_markdown_wrappers = ("**", "__", "*", "_", "`")
+confidence_explicit_left = re.compile(
+    r"(?:^|[^A-Za-z0-9])confidence"
+    r"(?:[ \t]+(?:is|was|remains)|[ \t]*[:=])[ \t]*$",
+    re.IGNORECASE,
+)
+confidence_assertion_left_boundary = re.compile(
+    r"(?:^|[.,;:!?(/])[ \t]*$|"
+    r"(?:^|[^A-Za-z0-9])(?:and|or|but|yet)[ \t]*$|"
+    r"(?:-|/)[ \t]*(?:to[ \t]*)?$",
+    re.IGNORECASE,
+)
+confidence_assertion_right_cue = re.compile(
+    r"^(?:"
+    r"[ \t]+(?:confidence|for|because|based(?:[ \t]+on)?|"
+    r"due(?:[ \t]+to)?|overall)\b|"
+    r"[ \t]*[-/][ \t]*(?:confidence|for|based|to)\b"
+    r")",
+    re.IGNORECASE,
+)
+confidence_parenthetical_right = re.compile(r"^[ \t]*\(")
+confidence_terminal_right = re.compile(r"^[ \t]*(?:[.,;:!?)]|$)")
+ordinary_level_noun_right = re.compile(
+    r"^[ \t]+(?:coverage|severity)\b",
+    re.IGNORECASE,
+)
+ordinary_level_hyphen_right = re.compile(
+    r"^-level\b",
+    re.IGNORECASE,
+)
+ordinary_residual_risk_left = re.compile(
+    r"(?:^|[^A-Za-z0-9])residual[ \t]+risk[ \t]+"
+    r"(?:is|was|remains|remained)[ \t]*$",
+    re.IGNORECASE,
+)
+word_part_pattern = re.compile(r"[A-Za-z0-9]+")
+confidence_level_fragments = ("high", "medium", "low")
+confidence_ordering = {
+    "High": 3,
+    "Medium": 2,
+    "Low": 1,
+}
+original_confidence_detail_prefix = "Original confidence detail:"
 
 
 class UnsupportedRepair(Exception):
@@ -898,6 +1135,131 @@ def atomic_write(path, data):
                 pass
 
 
+def confidence_token_context(text, match):
+    left = text[:match.start()]
+    right = text[match.end():]
+    for wrapper in confidence_markdown_wrappers:
+        if left.endswith(wrapper) and right.startswith(wrapper):
+            return left[:-len(wrapper)], right[len(wrapper):]
+    return left, right
+
+
+# Exact level words use only bounded confidence and ordinary-evidence cues.
+# Unresolved uses stay ambiguous so strict validation and repair both fail closed.
+def classify_confidence_level_tokens(text, leading_level_is_assertion):
+    classifications = []
+    for match in confidence_level_token.finditer(text):
+        left, right = confidence_token_context(text, match)
+        if (
+            confidence_explicit_left.search(left)
+            or leading_level_is_assertion
+            and not left.strip()
+        ):
+            kind = "assertion"
+        elif (
+            ordinary_level_hyphen_right.match(right)
+            or ordinary_level_noun_right.match(right)
+            or ordinary_residual_risk_left.search(left)
+            and confidence_terminal_right.match(right)
+        ):
+            kind = "ordinary"
+        elif confidence_assertion_right_cue.match(right):
+            kind = "assertion"
+        elif (
+            confidence_assertion_left_boundary.search(left)
+            and (
+                confidence_parenthetical_right.match(right)
+                or confidence_terminal_right.match(right)
+            )
+        ):
+            kind = "assertion"
+        else:
+            kind = "ambiguous"
+        classifications.append(
+            {
+                "kind": kind,
+                "level": match.group(1),
+                "span": match.span(),
+            }
+        )
+    return classifications
+
+
+def has_secondary_confidence_level(text):
+    return any(
+        classification["kind"] != "ordinary"
+        for classification in classify_confidence_level_tokens(text, False)
+    )
+
+
+def explicit_confidence_assertion_levels(text):
+    classifications = classify_confidence_level_tokens(text, True)
+    if any(
+        classification["kind"] == "ambiguous"
+        for classification in classifications
+    ):
+        return None
+    explicit_levels = []
+    for classification in classifications:
+        if classification["kind"] != "assertion":
+            continue
+        level = classification["level"]
+        if level not in confidence_ordering:
+            return None
+        explicit_levels.append(level)
+    exact_level_spans = {
+        classification["span"]
+        for classification in classifications
+    }
+    for match in word_part_pattern.finditer(text):
+        if match.span() in exact_level_spans:
+            continue
+        folded_part = match.group(0).lower()
+        if any(
+            fragment in folded_part
+            for fragment in confidence_level_fragments
+        ):
+            return None
+    return explicit_levels
+
+
+def ordinary_confidence_value_is_valid(value):
+    match = confidence_pattern.fullmatch(value)
+    if match is None:
+        return False
+    remainder = match.group(2)
+    if remainder in ("", ".", ";"):
+        return True
+    suffix_match = delimited_suffix_pattern.fullmatch(remainder)
+    if suffix_match is None:
+        return False
+    inline_evidence = suffix_match.group(1).strip()
+    if inline_evidence.startswith("Evidence basis:"):
+        inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
+    return bool(inline_evidence) and not has_secondary_confidence_level(
+        inline_evidence
+    )
+
+
+def repair_detail_is_valid(leading_level, detail):
+    if (
+        not detail
+        or any(ord(character) > 127 for character in detail)
+        or original_confidence_detail_prefix in detail
+        or ordinary_confidence_value_is_valid(detail)
+    ):
+        return False
+    explicit_levels = explicit_confidence_assertion_levels(detail)
+    return (
+        explicit_levels is not None
+        and bool(explicit_levels)
+        and min(
+            explicit_levels,
+            key=confidence_ordering.__getitem__,
+        ) == leading_level
+    )
+
+
 def confidence_value_is_valid(value):
     match = confidence_pattern.fullmatch(value)
     if match is None:
@@ -911,7 +1273,15 @@ def confidence_value_is_valid(value):
     inline_evidence = suffix_match.group(1).strip()
     if inline_evidence.startswith("Evidence basis:"):
         inline_evidence = inline_evidence[len("Evidence basis:"):].strip()
-    return bool(inline_evidence)
+        return bool(inline_evidence) and not has_secondary_confidence_level(
+            inline_evidence
+        )
+    if inline_evidence.startswith(original_confidence_detail_prefix):
+        detail = inline_evidence[len(original_confidence_detail_prefix):].strip()
+        return repair_detail_is_valid(match.group(1), detail)
+    return bool(inline_evidence) and not has_secondary_confidence_level(
+        inline_evidence
+    )
 
 
 def confidence_value_has_inline_evidence(value):
@@ -939,29 +1309,21 @@ def conservative_level_for(value):
         raise UnsupportedRepair(
             "the invalid confidence value contains non-ASCII text"
         )
-    ordering = {
-        "High": 3,
-        "Medium": 2,
-        "Low": 1,
-    }
-    explicit_levels = []
-    for token in word_token_pattern.findall(value):
-        for part in token.split("_"):
-            if not part:
-                continue
-            if part in ordering:
-                explicit_levels.append(part)
-                continue
-            folded_part = part.lower()
-            if any(fragment in folded_part for fragment in level_fragments):
-                raise UnsupportedRepair(
-                    "the invalid confidence value contains noncanonical level text"
-                )
+    explicit_levels = explicit_confidence_assertion_levels(value)
+    if explicit_levels is None:
+        raise UnsupportedRepair(
+            "the invalid confidence value contains ambiguous or "
+            "noncanonical level text"
+        )
     if not explicit_levels:
         raise UnsupportedRepair(
-            "the invalid confidence value contains no exact known level"
+            "the invalid confidence value contains no safely classified "
+            "confidence assertion"
         )
-    return min(explicit_levels, key=ordering.__getitem__)
+    return min(
+        explicit_levels,
+        key=confidence_ordering.__getitem__,
+    )
 
 
 def normalized_line(line):
@@ -1391,6 +1753,168 @@ except RepairInputError as error:
 PY
 }
 
+review_report_confidence_delimiter_diagnostic() {
+    local diagnostic="$1"
+    local value
+
+    [[ "${diagnostic}" =~ ^[A-Z][A-Z\ -]*\ has\ an\ invalid\ confidence\ level:\ (High|Medium|Low)[[:space:]]+([A-Za-z\(].*)$ ]] ||
+        return 1
+    value="${BASH_REMATCH[2]}"
+    [[ "${value,,}" != confidence* ]] || return 1
+    [[ ! "${value}" =~ (^|[^A-Za-z])(High|Medium|Low)([^A-Za-z]|$) ]]
+}
+
+review_report_wrapped_label_diagnostic() {
+    [[ "$1" =~ ^[A-Z][A-Z\ -]*\ ASSESSMENT\ is\ missing\ or\ duplicates\ required\ field:\ [^[:cntrl:]]+:$ ]]
+}
+
+_sanitize_review_report_repair_diagnostic() {
+    printf '%s\n' "$1" | sanitize_review_text
+}
+
+_validate_review_report_repair_candidate() {
+    local candidate="$1"
+    local scope="$2"
+    local output_hint="$3"
+    local original_candidate="${candidate}"
+    local current_candidate="${candidate}"
+    local output_directory
+    local output_base
+    local next_candidate=""
+    local normalizer_error_path=""
+    local validation_error=""
+    local sanitized_validation_error=""
+    local normalizer_error=""
+    local normalized_count=""
+    local validation_status
+    local normalization_status
+    local confidence_normalized=0
+    local label_normalized=0
+    local normalizer=""
+    local normalization_kind=""
+
+    REVIEW_REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED=0
+    REVIEW_REPORT_REPAIR_LABELS_REJOINED=0
+    REVIEW_REPORT_REPAIR_NORMALIZED_DIAGNOSTIC=""
+    REVIEW_REPORT_REPAIR_VALIDATED_CANDIDATE_PATH=""
+
+    output_directory="$(dirname -- "${output_hint}")"
+    output_base="$(basename -- "${output_hint}")"
+    while :; do
+        if validation_error="$(
+            validate_review_report_contract \
+                "${current_candidate}" "${scope}" 2>&1
+        )"; then
+            REVIEW_REPORT_REPAIR_VALIDATED_CANDIDATE_PATH="${current_candidate}"
+            return 0
+        else
+            validation_status=$?
+        fi
+        if [[ "${validation_status}" -ne 1 ]]; then
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            printf '%s\n' \
+                'report repair helper error: candidate validation failed unexpectedly' \
+                >&2
+            return 1
+        fi
+        if ! sanitized_validation_error="$(
+            _sanitize_review_report_repair_diagnostic "${validation_error}"
+        )" || [[ -z "${sanitized_validation_error}" ]]; then
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            printf '%s\n' \
+                'report repair helper error: candidate diagnostic sanitization failed' \
+                >&2
+            return 1
+        fi
+
+        normalizer=""
+        normalization_kind=""
+        if ((label_normalized == 0)) &&
+            review_report_wrapped_label_diagnostic \
+                "${sanitized_validation_error}"; then
+            normalizer='normalize_review_report_wrapped_field_labels'
+            normalization_kind='label'
+        elif ((confidence_normalized == 0)) &&
+            review_report_confidence_delimiter_diagnostic \
+                "${sanitized_validation_error}"; then
+            normalizer='normalize_review_report_confidence_delimiters'
+            normalization_kind='confidence'
+        else
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            printf '%s\n' "${sanitized_validation_error}" >&2
+            return 42
+        fi
+
+        if ! next_candidate="$(
+            mktemp "${output_directory}/.${output_base}.${normalization_kind}.XXXXXX"
+        )" || ! normalizer_error_path="$(
+            mktemp "${output_directory}/.${output_base}.${normalization_kind}.error.XXXXXX"
+        )"; then
+            rm -f -- "${next_candidate}" "${normalizer_error_path}"
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            printf '%s\n' \
+                'report repair helper error: could not create a deterministic-normalization file' \
+                >&2
+            return 1
+        fi
+        if normalized_count="$(
+            "${normalizer}" \
+                "${current_candidate}" "${next_candidate}" \
+                2> "${normalizer_error_path}"
+        )"; then
+            normalization_status=0
+        else
+            normalization_status=$?
+        fi
+        normalizer_error="$(
+            _sanitize_review_report_repair_diagnostic "$(
+                cat -- "${normalizer_error_path}"
+            )"
+        )"
+        rm -f -- "${normalizer_error_path}"
+        normalizer_error_path=""
+        if [[ "${normalization_status}" -eq 42 ]]; then
+            rm -f -- "${next_candidate}"
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            printf '%s\n' "${sanitized_validation_error}" >&2
+            return 42
+        fi
+        if [[ "${normalization_status}" -ne 0 ||
+            ! "${normalized_count}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+            rm -f -- "${next_candidate}"
+            [[ "${current_candidate}" == "${original_candidate}" ]] ||
+                rm -f -- "${current_candidate}"
+            if [[ -n "${normalizer_error}" ]]; then
+                printf '%s\n' "${normalizer_error}" >&2
+            else
+                printf '%s\n' \
+                    'report repair helper error: deterministic normalization failed unexpectedly' \
+                    >&2
+            fi
+            return 1
+        fi
+
+        REVIEW_REPORT_REPAIR_NORMALIZED_DIAGNOSTIC="${sanitized_validation_error}"
+        if [[ "${normalization_kind}" == 'label' ]]; then
+            label_normalized=1
+            REVIEW_REPORT_REPAIR_LABELS_REJOINED="${normalized_count}"
+        else
+            confidence_normalized=1
+            REVIEW_REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED="${normalized_count}"
+        fi
+        if [[ "${current_candidate}" != "${original_candidate}" ]]; then
+            rm -f -- "${current_candidate}"
+        fi
+        current_candidate="${next_candidate}"
+        next_candidate=""
+    done
+}
+
 _preflight_review_report_repair_candidate() {
     local mode="$1"
     local report="$2"
@@ -1404,8 +1928,8 @@ _preflight_review_report_repair_candidate() {
     local output_base
     local temporary_candidate
     local helper_status
-    local validation_status
-    local validation_error
+    local candidate_status
+    local validated_candidate
 
     output_directory="$(dirname -- "${output_hint}")"
     output_base="$(basename -- "${output_hint}")"
@@ -1436,28 +1960,22 @@ _preflight_review_report_repair_candidate() {
         return "${helper_status}"
     fi
 
-    if validation_error="$(
-        validate_review_report_contract \
-            "${temporary_candidate}" "${scope}" 2>&1
-    )"; then
-        validation_status=0
+    if _validate_review_report_repair_candidate \
+        "${temporary_candidate}" "${scope}" "${output_hint}"; then
+        candidate_status=0
     else
-        validation_status=$?
+        candidate_status=$?
+    fi
+    validated_candidate="${REVIEW_REPORT_REPAIR_VALIDATED_CANDIDATE_PATH:-}"
+    if [[ -n "${validated_candidate}" &&
+        "${validated_candidate}" != "${temporary_candidate}" ]]; then
+        rm -f -- "${validated_candidate}"
     fi
     rm -f -- "${temporary_candidate}"
-    if [[ "${validation_status}" -eq 0 ]]; then
+    if [[ "${candidate_status}" -eq 0 ]]; then
         return 0
     fi
-    if [[ "${validation_status}" -eq 1 ]]; then
-        printf '%s\n' \
-            'report repair unsupported: one confidence edit does not satisfy strict report validation' \
-            >&2
-        return 42
-    fi
-    printf '%s\n' \
-        'report repair helper error: candidate preflight validation failed unexpectedly' \
-        >&2
-    return 1
+    return "${candidate_status}"
 }
 
 prepare_review_report_repair() {
@@ -1522,6 +2040,9 @@ apply_review_report_repair() {
     local diagnostic_mode="text"
     local validator_diagnostic
     local validator_status
+    local helper_status
+    local candidate_status
+    local validated_candidate
 
     if [[ ! "${scope}" =~ ^[123]$ ]]; then
         printf '%s\n' \
@@ -1560,7 +2081,7 @@ apply_review_report_repair() {
         "${validator_diagnostic}" ||
         return $?
 
-    _review_report_repair_helper \
+    if _review_report_repair_helper \
         apply \
         "${report}" \
         "${scope}" \
@@ -1568,7 +2089,48 @@ apply_review_report_repair() {
         "${initial_diagnostic}" \
         "${repair_reply}" \
         "${candidate}" \
-        "${validator_diagnostic}"
+        "${validator_diagnostic}"; then
+        helper_status=0
+    else
+        helper_status=$?
+    fi
+    if [[ "${helper_status}" -ne 0 ]]; then
+        rm -f -- "${candidate}"
+        return "${helper_status}"
+    fi
+
+    if _validate_review_report_repair_candidate \
+        "${candidate}" "${scope}" "${candidate}"; then
+        candidate_status=0
+    else
+        candidate_status=$?
+    fi
+    validated_candidate="${REVIEW_REPORT_REPAIR_VALIDATED_CANDIDATE_PATH:-}"
+    if [[ "${candidate_status}" -ne 0 ]]; then
+        if [[ -n "${validated_candidate}" &&
+            "${validated_candidate}" != "${candidate}" ]]; then
+            rm -f -- "${validated_candidate}"
+        fi
+        rm -f -- "${candidate}"
+        return "${candidate_status}"
+    fi
+    if [[ -n "${validated_candidate}" &&
+        "${validated_candidate}" != "${candidate}" ]]; then
+        if ! mv -- "${validated_candidate}" "${candidate}"; then
+            rm -f -- "${validated_candidate}" "${candidate}"
+            printf '%s\n' \
+                'report repair helper error: could not finalize the validated candidate' \
+                >&2
+            return 1
+        fi
+    fi
+    chmod 600 -- "${candidate}" || {
+        rm -f -- "${candidate}"
+        printf '%s\n' \
+            'report repair helper error: could not secure the validated candidate' \
+            >&2
+        return 1
+    }
 }
 
 normalize_review_report_markdown_tables() {

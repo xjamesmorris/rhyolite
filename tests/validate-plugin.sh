@@ -1955,8 +1955,16 @@ grep -Fq \
     fail 'Scope 1 report instructions still induce research headings.'
 grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${PROMPT}" &&
     grep -Fq 'immediately following continuation line or lines' "${PROMPT}" &&
-    grep -Fq 'suffix counts as the inline evidence' "${PROMPT}" &&
-    grep -Fq 'suffix counts as the inline evidence' "${SKILL}" &&
+    grep -Fq 'exactly one overall level: `High`, `Medium`, or `Low`.' \
+        "${PROMPT}" &&
+    grep -Fq 'exactly one overall level: `High`, `Medium`, or `Low`.' \
+        "${SKILL}" &&
+    grep -Fq 'choose the lowest applicable level for' "${PROMPT}" &&
+    grep -Fq 'choose the lowest applicable level for' "${SKILL}" &&
+    grep -Fq 'Use the separate `Evidence basis:` field to explain the' \
+        "${PROMPT}" &&
+    grep -Fq 'Use the separate `Evidence basis:` field to explain the' \
+        "${SKILL}" &&
     grep -Fq 'values that merely share an allowed prefix' "${PROMPT}" &&
     grep -Fq 'values that merely share an allowed prefix' "${SKILL}" &&
     grep -Fq 'plain `-`, `*`, `+`, `1.`, or `1)` list marker' "${SKILL}" ||
@@ -2012,13 +2020,62 @@ for label in labels:
         )
 PY
     fail 'A required field label cannot fit on one line at the requested wrap width.'
-grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
+for confidence_contract_file in \
+    "${PROMPT}" \
+    "${SKILL}" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    grep -Fq 'Outside mandatory ASSESSMENT sections' \
+        "${confidence_contract_file}" &&
+        grep -Fq \
+            'may carry their own confidence and evidence basis as appropriate.' \
+            "${confidence_contract_file}" &&
+        grep -Fq 'Inside each mandatory ASSESSMENT section' \
+            "${confidence_contract_file}" &&
+        grep -Fq 'Do not emit confidence per category' \
+            "${confidence_contract_file}" &&
+        grep -Fq 'exactly one separate non-empty' \
+            "${confidence_contract_file}" &&
+        grep -Fq \
+            'assessment section has exactly one valid `Confidence:`' \
+            "${confidence_contract_file}" &&
+        grep -Fq 'exactly one overall level' "${confidence_contract_file}" &&
+        grep -Fq 'lowest applicable level' "${confidence_contract_file}" &&
+        grep -Fq 'separate `Evidence basis:` field' "${confidence_contract_file}" &&
+        grep -Fq 'Never recommend or generate a compound confidence field.' \
+            "${confidence_contract_file}" &&
+        grep -Eq '^[[:space:]]*Confidence: Medium[[:space:]]*$' \
+            "${confidence_contract_file}" &&
+        grep -Eq \
+            '^[[:space:]]*Evidence basis: Counts are directly observed; adoption interpretation remains inferential\.[[:space:]]*$' \
+            "${confidence_contract_file}" &&
+        ! grep -Fq 'Confidence: High for' "${confidence_contract_file}" &&
+        ! grep -Fq 'each substantive finding or assessment point' \
+            "${confidence_contract_file}" &&
+        ! grep -Fq 'at least one valid `Confidence:`' \
+            "${confidence_contract_file}" ||
+        fail "Single-level confidence contract is incomplete: ${confidence_contract_file}"
+done
+copilot_confidence_guidance="$(
+    sed -n \
+        '/^Outside mandatory ASSESSMENT sections,/,/^When claims, reputation/p' \
+        "${WORKER_AGENT}"
+)"
+claude_confidence_guidance="$(
+    sed -n \
+        '/^Outside mandatory ASSESSMENT sections,/,/^When claims, reputation/p' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"
+)"
+[[ -n "${copilot_confidence_guidance}" &&
+    "${claude_confidence_guidance}" == "${copilot_confidence_guidance}" ]] ||
+    fail 'Copilot and Claude worker confidence guidance diverged.'
+grep -Fq '`Confidence:` and `Evidence basis:` must each appear exactly once' \
     "${PROMPT}" &&
-    grep -Fq '`Confidence:` and `Evidence basis:` are repeatable assessment labels.' \
+    grep -Fq '`Confidence:` and `Evidence basis:` must each appear exactly once' \
         "${SKILL}" &&
     grep -Fq 'do not repeat the URL in findings, remediation' "${PROMPT}" &&
     grep -Fq 'do not repeat the URL in findings, remediation' "${SKILL}" ||
-    fail 'Repeatable assessment fields or inert tracker citation rules are missing.'
+    fail 'Exactly-once assessment fields or inert tracker citation rules are missing.'
 for provenance_instruction_file in \
     "${PROMPT}" \
     "${RESEARCH_PROMPT}" \
@@ -4694,6 +4751,8 @@ EOF
 validate_review_report_contract "${scope_three_report}" 3 ||
     fail 'Bash scope 3 report contract rejected list markers or wrapped fields.'
 
+# The parser remains backward-compatible with repeated legacy labels even
+# though canonical generation requires exactly one pair per assessment.
 repeated_assessment_report="${fixture_dir}/repeated-assessment-report.txt"
 awk '
     { print }
@@ -4704,7 +4763,7 @@ awk '
     }
 ' "${fixture_report}" > "${repeated_assessment_report}"
 validate_review_report_contract "${repeated_assessment_report}" 1 ||
-    fail 'Bash report validation rejected repeated confidence/evidence labels.'
+    fail 'Bash report validation rejected repeated legacy confidence/evidence labels.'
 
 same_line_assessment_report="${fixture_dir}/same-line-assessment-report.txt"
 awk '
@@ -7749,7 +7808,7 @@ REPORT
         fi
         if [[ "${MOCK_MALFORMED_CONFIDENCE-}" == "1" ]]; then
             printf '%s\n' \
-                'Confidence: High for the two observed constructs; Medium for absence outside normalized text.'
+                'Confidence: High for counts and Medium for adoption interpretation.'
         else
             printf '%s\n' 'Confidence: High'
         fi
@@ -7813,9 +7872,68 @@ Evidence basis: bounded fixture output.
 REPORT
 }
 
+apply_post_confidence_report_defect() {
+    case "${MOCK_POST_CONFIDENCE_DEFECT-}" in
+        '')
+            cat
+            ;;
+        delimiter)
+            awk '
+                $0 == "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT" {
+                    in_claims = 1
+                }
+                $0 == "COMMUNITY HEALTH ASSESSMENT" {
+                    in_claims = 0
+                }
+                in_claims && $0 == "Confidence: High" {
+                    print "Confidence: High counts from bounded metadata."
+                    next
+                }
+                { print }
+            '
+            ;;
+        wrapped-label)
+            awk '
+                $0 == "Roadmap and delivery commitments: No roadmap or delivery commitment was found." {
+                    print "Roadmap and delivery"
+                    print "commitments: No roadmap or delivery commitment was found."
+                    next
+                }
+                { print }
+            '
+            ;;
+        irreparable)
+            grep -Fv \
+                'Roadmap and delivery commitments: No roadmap or delivery commitment was found.'
+            ;;
+        second-compound)
+            awk '
+                $0 == "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT" {
+                    in_claims = 1
+                }
+                $0 == "COMMUNITY HEALTH ASSESSMENT" {
+                    in_claims = 0
+                }
+                in_claims && $0 == "Confidence: High" {
+                    print "Confidence: Medium - for direct claims and Low for uncorroborated claims."
+                    next
+                }
+                { print }
+            '
+            ;;
+        *)
+            printf 'Unknown post-confidence defect: %s\n' \
+                "${MOCK_POST_CONFIDENCE_DEFECT}" >&2
+            return 1
+            ;;
+    esac
+}
+
 emit_core_report() {
-    emit_report_prefix
-    emit_report_tail
+    {
+        emit_report_prefix
+        emit_report_tail
+    } | apply_post_confidence_report_defect
 }
 
 emit_invalid_utf8_report() {
@@ -10705,7 +10823,7 @@ grep -Fq \
         "${mock_log}.review-request" ||
     fail 'Scope 1 review request lost the local claims/community or no-lineage contract.'
 
-observed_repair_confidence='High for the two observed constructs; Medium for absence outside normalized text.'
+production_repair_confidence='High for counts and Medium for adoption interpretation.'
 for repair_scope in 1 2 3; do
     repair_success_root="${fixture_dir}/repair-success-scope-${repair_scope}"
     repair_success_output="${repair_success_root}/output"
@@ -10777,7 +10895,7 @@ for repair_scope in 1 2 3; do
     python3 - \
         "${repair_success_initial}" \
         "${repair_success_report}" \
-        "${observed_repair_confidence}" <<'PY'
+        "${production_repair_confidence}" <<'PY'
 import pathlib
 import sys
 
@@ -10798,7 +10916,7 @@ PY
         "${repair_success_run}" \
         "${repair_success_log}" \
         "${repair_scope}" \
-        "${observed_repair_confidence}" \
+        "${production_repair_confidence}" \
         "${repair_success_mode}" \
         "${repair_success_host_cache}" <<'JS'
 const fs = require("fs");
@@ -11184,6 +11302,223 @@ JS
         fail "Scope ${repair_scope} repair progress milestones are incomplete."
 done
 
+for reverse_repair_case in \
+    delimiter \
+    wrapped-label \
+    irreparable \
+    second-compound; do
+    reverse_repair_root="${fixture_dir}/reverse-repair-${reverse_repair_case}"
+    reverse_repair_output="${reverse_repair_root}/output"
+    reverse_repair_workspace="${reverse_repair_root}/workspace"
+    reverse_repair_stdout="${reverse_repair_root}/stdout.txt"
+    reverse_repair_stderr="${reverse_repair_root}/stderr.txt"
+    reverse_repair_log="${reverse_repair_root}/copilot.log"
+    reverse_repair_status=0
+    reverse_repair_expect_success=0
+    case "${reverse_repair_case}" in
+        delimiter|wrapped-label)
+            reverse_repair_expect_success=1
+            ;;
+    esac
+    mkdir -p -- "${reverse_repair_root}"
+    : > "${reverse_repair_log}"
+    : > "${mock_git_log}"
+    configure_mock_repair "${reverse_repair_log}" valid
+    env \
+        MOCK_MALFORMED_CONFIDENCE=1 \
+        MOCK_POST_CONFIDENCE_DEFECT="${reverse_repair_case}" \
+        MOCK_LOG="${reverse_repair_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 1 \
+            --output-root "${reverse_repair_output}" \
+            --workspace-root "${reverse_repair_workspace}" \
+            --non-interactive \
+            --no-open-html >"${reverse_repair_stdout}" \
+            2>"${reverse_repair_stderr}" ||
+        reverse_repair_status=$?
+    if ((reverse_repair_expect_success)); then
+        [[ "${reverse_repair_status}" -eq 0 ]] || {
+            cat -- "${reverse_repair_stdout}" "${reverse_repair_stderr}" >&2
+            fail "Reverse repair ${reverse_repair_case} unexpectedly failed."
+        }
+    elif [[ "${reverse_repair_status}" -eq 0 ]]; then
+        fail "Reverse repair ${reverse_repair_case} unexpectedly succeeded."
+    fi
+    reverse_repair_run="$(
+        find "${reverse_repair_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${reverse_repair_run}" \
+        "${reverse_repair_log}" \
+        "${reverse_repair_case}" \
+        "${production_repair_confidence}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, mockLogPath, repairCase, originalValue] =
+  process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const repairDirectory = path.join(repository, "report-repair");
+const state = JSON.parse(fs.readFileSync(
+  path.join(repository, "state.json"),
+  "utf8",
+));
+const runState = JSON.parse(fs.readFileSync(
+  path.join(run, "state.json"),
+  "utf8",
+));
+const repair = state.ReportRepair;
+const initial = fs.readFileSync(
+  path.join(repairDirectory, "initial-candidate.txt"),
+  "utf8",
+);
+const initialDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "initial-diagnostic.txt"),
+  "utf8",
+).trim();
+const finalDiagnostic = fs.readFileSync(
+  path.join(repairDirectory, "attempt-1-diagnostic.txt"),
+  "utf8",
+).trim();
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const mockLog = fs.readFileSync(mockLogPath, "utf8");
+const targetDiagnostic =
+  "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid " +
+  `confidence level: ${originalValue}`;
+const targetReplacement =
+  `Confidence: Medium - Original confidence detail: ${originalValue}`;
+const phaseCount = mockLog.split("\n")
+  .filter((line) => line === "PHASE=report-repair").length;
+
+function failWith(detail) {
+  throw new Error(`${repairCase}: ${detail}: ${JSON.stringify({
+    status: state.Status,
+    repair,
+    initialDiagnostic,
+    finalDiagnostic,
+    errors,
+  })}`);
+}
+
+if (initialDiagnostic !== targetDiagnostic ||
+    repair.InitialDiagnostic !== targetDiagnostic ||
+    JSON.stringify(runState.Repositories?.[0]?.ReportRepair) !==
+      JSON.stringify(repair)) {
+  failWith("initial diagnostic or rolled-up repair state is wrong");
+}
+
+if (repairCase === "delimiter" || repairCase === "wrapped-label") {
+  const candidatePath = path.join(
+    repairDirectory,
+    "attempt-1-candidate.txt",
+  );
+  const candidate = fs.readFileSync(candidatePath, "utf8");
+  const normalizedDiagnostic = fs.readFileSync(
+    repair.Artifacts.NormalizedDiagnostic,
+    "utf8",
+  ).trim();
+  let expected = initial.replace(
+    `Confidence: ${originalValue}`,
+    targetReplacement,
+  );
+  let expectedResidual;
+  if (repairCase === "delimiter") {
+    expected = expected.replace(
+      "Confidence: High counts from bounded metadata.",
+      "Confidence: High - counts from bounded metadata.",
+    );
+    expectedResidual =
+      "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid " +
+      "confidence level: High counts from bounded metadata.";
+  } else {
+    expected = expected.replace(
+      "Roadmap and delivery\n" +
+        "commitments: No roadmap or delivery commitment was found.",
+      "Roadmap and delivery commitments: " +
+        "No roadmap or delivery commitment was found.",
+    );
+    expectedResidual =
+      "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT is missing or " +
+      "duplicates required field: Roadmap and delivery commitments:";
+  }
+  if (state.Status !== "Completed" ||
+      runState.Status !== "Completed" ||
+      repair.Status !== "Succeeded" ||
+      repair.AttemptCount !== 1 ||
+      repair.PreservationCheck !== "Passed" ||
+      repair.FinalValidation !== "Passed" ||
+      repair.Cleanup !== "Passed" ||
+      repair.CanonicalPromoted !== true ||
+      repair.FinalDiagnostic !==
+        "Strict validation and exact content preservation passed." ||
+      repair.Artifacts.Candidate !== candidatePath ||
+      repair.Artifacts.NormalizedCandidate !== candidatePath ||
+      normalizedDiagnostic !== expectedResidual ||
+      phaseCount !== 1 ||
+      candidate !== expected ||
+      report !== expected ||
+      !report.includes(targetReplacement) ||
+      errors.trim() !==
+        `Final report contract validation failed: ${targetDiagnostic}`) {
+    failWith("reverse-order normalizable repair was not bounded and exact");
+  }
+  if (repairCase === "delimiter" &&
+      (repair.ConfidenceNormalization !== "Applied" ||
+       repair.ConfidenceFieldsNormalized !== 1 ||
+       repair.LabelNormalization !== "NotRun" ||
+       repair.LabelsRejoined !== 0)) {
+    failWith("post-edit confidence normalization state is wrong");
+  }
+  if (repairCase === "wrapped-label" &&
+      (repair.LabelNormalization !== "Applied" ||
+       repair.LabelsRejoined !== 1 ||
+       repair.ConfidenceNormalization !== "NotRun" ||
+       repair.ConfidenceFieldsNormalized !== 0)) {
+    failWith("post-edit wrapped-label normalization state is wrong");
+  }
+} else {
+  const expectedResidual = repairCase === "irreparable"
+    ? "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT is missing or " +
+      "duplicates required field: Roadmap and delivery commitments:"
+    : "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid " +
+      "confidence level: Medium - for direct claims and Low for " +
+      "uncorroborated claims.";
+  if (state.Status !== "ReviewFailed" ||
+      runState.Status !== "Failed" ||
+      repair.Status !== "NotEligible" ||
+      repair.AttemptCount !== 0 ||
+      repair.PreservationCheck !== "NotRun" ||
+      repair.FinalValidation !== "NotRun" ||
+      repair.Cleanup !== "NotRun" ||
+      repair.CanonicalPromoted !== false ||
+      repair.FinalDiagnostic !== expectedResidual ||
+      finalDiagnostic !== expectedResidual ||
+      repair.Artifacts.Request !== "" ||
+      repair.Artifacts.Edit !== "" ||
+      repair.Artifacts.Candidate !== "" ||
+      repair.ConfidenceNormalization !== "NotRun" ||
+      repair.LabelNormalization !== "NotRun" ||
+      phaseCount !== 0 ||
+      !errors.includes(expectedResidual) ||
+      !report.includes("No canonical review was produced.") ||
+      report.includes(targetReplacement)) {
+    failWith("irreparable reverse-order candidate did not fail before attempt");
+  }
+}
+JS
+done
+
 for report_contract_case in \
     missing-agent-targeting \
     missing-claims \
@@ -11519,7 +11854,7 @@ if (tableCase === "findings-scope-1" || tableCase === "findings-scope-3") {
   const candidate = readText(repairPath("attempt-1-candidate.txt"));
   const repairRequest = readText(`${mockLogPath}.report-repair-request`);
   const originalConfidence =
-    "High for the two observed constructs; Medium for absence outside normalized text.";
+    "High for counts and Medium for adoption interpretation.";
   if (state.Status !== "Completed" ||
       repair.Status !== "Succeeded" ||
       repair.AttemptCount !== 1 ||
@@ -11692,7 +12027,7 @@ for repair_failure_mode in \
         "${repair_failure_log}" \
         "${repair_failure_mode}" \
         "${repair_failure_scope}" \
-        "${observed_repair_confidence}" <<'JS'
+        "${production_repair_confidence}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
@@ -11879,7 +12214,7 @@ repair_revalidation_run="$(
 )"
 node - \
     "${repair_revalidation_run}" \
-    "${observed_repair_confidence}" <<'JS'
+    "${production_repair_confidence}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
@@ -11965,7 +12300,7 @@ repair_timeout_run="$(
 node - \
     "${repair_timeout_run}" \
     "${repair_timeout_log}" \
-    "${observed_repair_confidence}" <<'JS'
+    "${production_repair_confidence}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
@@ -12404,7 +12739,7 @@ repair_interrupt_run="$(
 node - \
     "${repair_interrupt_run}" \
     "${repair_interrupt_log}" \
-    "${observed_repair_confidence}" <<'JS'
+    "${production_repair_confidence}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 
@@ -12584,7 +12919,7 @@ repair_post_success_run="$(
 node - \
     "${repair_post_success_run}" \
     "${repair_post_success_log}" \
-    "${observed_repair_confidence}" <<'JS'
+    "${production_repair_confidence}" <<'JS'
 const fs = require("fs");
 const path = require("path");
 

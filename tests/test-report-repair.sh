@@ -358,13 +358,90 @@ assert_no_markdown_table() {
 
 source "${OUTPUT_HELPER}"
 
-observed_value='High for the two observed constructs; Medium for absence outside normalized text.'
+python3 - "${OUTPUT_HELPER}" <<'PY' ||
+import ast
+import pathlib
+import re
+import sys
+
+helper_text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+programs = [
+    program
+    for program in re.findall(
+        r"<<'PY'\n(.*?)\nPY(?:\n|$)",
+        helper_text,
+        re.DOTALL,
+    )
+    if "def classify_confidence_level_tokens" in program
+]
+if len(programs) != 2:
+    raise SystemExit("expected two embedded confidence classifiers")
+
+parity_names = (
+    "confidence_level_token",
+    "confidence_markdown_wrappers",
+    "confidence_explicit_left",
+    "confidence_assertion_left_boundary",
+    "confidence_assertion_right_cue",
+    "confidence_parenthetical_right",
+    "confidence_terminal_right",
+    "ordinary_level_noun_right",
+    "ordinary_level_hyphen_right",
+    "ordinary_residual_risk_left",
+    "word_part_pattern",
+    "confidence_ordering",
+    "confidence_level_fragments",
+    "confidence_token_context",
+    "classify_confidence_level_tokens",
+    "has_secondary_confidence_level",
+    "explicit_confidence_assertion_levels",
+    "ordinary_confidence_value_is_valid",
+    "repair_detail_is_valid",
+    "confidence_value_is_valid",
+)
+
+
+def parity_definitions(program):
+    definitions = {}
+    for node in ast.parse(program).body:
+        if isinstance(node, ast.FunctionDef):
+            name = node.name
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            name = node.targets[0].id
+        else:
+            continue
+        if name in parity_names:
+            definitions[name] = ast.dump(node, include_attributes=False)
+    return definitions
+
+
+strict_definitions, repair_definitions = map(
+    parity_definitions,
+    programs,
+)
+for name in parity_names:
+    if (
+        name not in strict_definitions
+        or name not in repair_definitions
+        or strict_definitions[name] != repair_definitions[name]
+    ):
+        raise SystemExit(
+            f"embedded confidence classifier drifted: {name}"
+        )
+PY
+    fail 'embedded strict and repair confidence classifiers are not identical'
+
+production_confidence_value='High for counts and Medium for adoption interpretation.'
 single_high_value='High confidence based on the trusted synthetic fixture.'
 single_medium_value='Medium confidence based on the trusted synthetic fixture.'
 single_low_value='Low because the trusted synthetic fixture is intentionally bounded.'
 
 for scope_specification in \
-    "1|manipulation|${observed_value}|Medium|  7) " \
+    "1|manipulation|${production_confidence_value}|Medium|  7) " \
     "2|manipulation|${single_high_value}|High|  - " \
     "3|provenance|${single_low_value}|Low|  9. "; do
     IFS='|' read -r \
@@ -464,10 +541,13 @@ base_reply="${FIXTURE_ROOT}/scope-1-reply.txt"
 base_descriptor="$(extract_descriptor "${base_request}")"
 base_diagnostic_text="$(< "${base_diagnostic}")"
 
+[[ "${base_diagnostic_text}" == \
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: ${production_confidence_value}" ]] ||
+    fail 'production confidence regression did not produce the exact strict diagnostic'
 assert_contains \
     "${FIXTURE_ROOT}/scope-1-candidate.txt" \
-    "Confidence: Medium - Original confidence detail: ${observed_value}" \
-    'observed compound-confidence correction'
+    "Confidence: Medium - Original confidence detail: ${production_confidence_value}" \
+    'production compound-confidence correction'
 assert_contains \
     "${FIXTURE_ROOT}/scope-2-candidate.txt" \
     "Confidence: High - Original confidence detail: ${single_high_value}" \
@@ -644,6 +724,400 @@ exercise_generic_level_case \
     Low \
     '  9. ' \
     'CODE AND ARCHITECTURE PROVENANCE ASSESSMENT'
+exercise_generic_level_case \
+    'exact-counts-compound' \
+    1 \
+    manipulation \
+    'High for counts and Medium for unobserved paths.' \
+    Medium \
+    ''
+exercise_generic_level_case \
+    'delimited-counts-compound' \
+    1 \
+    manipulation \
+    'High - for counts and Medium for unobserved paths.' \
+    Medium \
+    ''
+# These cases exercise the duplicated strict-validator and repair classifiers
+# together; every repaired candidate must pass strict validation again.
+exercise_generic_level_case \
+    'clause-initial-parenthetical-compound' \
+    1 \
+    manipulation \
+    'High - Counts are direct; Medium (adoption interpretation).' \
+    Medium \
+    ''
+exercise_generic_level_case \
+    'wrapped-clause-initial-compound' \
+    1 \
+    manipulation \
+    'High - Counts are direct; _Medium_ for adoption interpretation.' \
+    Medium \
+    ''
+exercise_generic_level_case \
+    'conjunction-compound' \
+    1 \
+    manipulation \
+    'High - Counts are direct, and Medium for adoption interpretation.' \
+    Medium \
+    ''
+exercise_generic_level_case \
+    'leading-confidence-is-medium' \
+    1 \
+    manipulation \
+    'confidence is Medium for adoption interpretation.' \
+    Medium \
+    ''
+exercise_generic_level_case \
+    'compound-with-ordinary-level-words' \
+    1 \
+    manipulation \
+    'High for counts and Medium for adoption interpretation; residual risk was low; Low coverage was the main limitation; Medium severity and Low-level evidence were noted.' \
+    Medium \
+    ''
+
+wrapped_compound_base="${FIXTURE_ROOT}/wrapped-compound-base.txt"
+wrapped_compound_report="${FIXTURE_ROOT}/wrapped-compound-report.txt"
+wrapped_compound_diagnostic="${FIXTURE_ROOT}/wrapped-compound-diagnostic.txt"
+wrapped_compound_request="${FIXTURE_ROOT}/wrapped-compound-request.txt"
+wrapped_compound_reply="${FIXTURE_ROOT}/wrapped-compound-reply.txt"
+wrapped_compound_candidate="${FIXTURE_ROOT}/wrapped-compound-candidate.txt"
+wrapped_compound_expected="${FIXTURE_ROOT}/wrapped-compound-expected.txt"
+write_report \
+    "${wrapped_compound_base}" \
+    1 \
+    manipulation \
+    'High for counts and' \
+    ''
+insert_after_exact_line \
+    "${wrapped_compound_base}" \
+    "${wrapped_compound_report}" \
+    'Confidence: High for counts and' \
+    'Medium for unobserved paths.'
+capture_diagnostic \
+    "${wrapped_compound_report}" 1 "${wrapped_compound_diagnostic}"
+[[ "$(< "${wrapped_compound_diagnostic}")" == \
+    'AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: High for counts and Medium for unobserved paths.' ]] ||
+    fail 'wrapped compound confidence did not retain its logical-field diagnostic'
+prepare_review_report_repair \
+    "${wrapped_compound_report}" \
+    1 \
+    "${wrapped_compound_diagnostic}" \
+    "${wrapped_compound_request}" ||
+    fail 'wrapped compound confidence request preparation failed'
+extract_descriptor "${wrapped_compound_request}" \
+    > "${wrapped_compound_reply}"
+assert_contains \
+    "${wrapped_compound_request}" \
+    '"ConservativeLevel":"Medium"' \
+    'wrapped compound conservative level'
+apply_review_report_repair \
+    "${wrapped_compound_report}" \
+    1 \
+    "$(< "${wrapped_compound_diagnostic}")" \
+    "${wrapped_compound_reply}" \
+    "${wrapped_compound_candidate}" ||
+    fail 'wrapped compound confidence descriptor application failed'
+sed \
+    's/^Confidence: High for counts and$/Confidence: Medium - Original confidence detail: High for counts and/' \
+    "${wrapped_compound_report}" > "${wrapped_compound_expected}"
+cmp -s -- "${wrapped_compound_expected}" "${wrapped_compound_candidate}" ||
+    fail 'wrapped compound repair changed continuation or non-target bytes'
+validate_review_report_contract "${wrapped_compound_candidate}" 1 ||
+    fail 'wrapped compound confidence candidate failed strict validation'
+
+wrapped_markup_base="${FIXTURE_ROOT}/wrapped-markup-base.txt"
+wrapped_markup_report="${FIXTURE_ROOT}/wrapped-markup-report.txt"
+wrapped_markup_diagnostic="${FIXTURE_ROOT}/wrapped-markup-diagnostic.txt"
+wrapped_markup_request="${FIXTURE_ROOT}/wrapped-markup-request.txt"
+wrapped_markup_reply="${FIXTURE_ROOT}/wrapped-markup-reply.txt"
+wrapped_markup_candidate="${FIXTURE_ROOT}/wrapped-markup-candidate.txt"
+wrapped_markup_expected="${FIXTURE_ROOT}/wrapped-markup-expected.txt"
+write_report \
+    "${wrapped_markup_base}" \
+    1 \
+    manipulation \
+    'High - Counts are direct;' \
+    ''
+insert_after_exact_line \
+    "${wrapped_markup_base}" \
+    "${wrapped_markup_report}" \
+    'Confidence: High - Counts are direct;' \
+    '  _Medium_ for adoption interpretation.'
+capture_diagnostic \
+    "${wrapped_markup_report}" 1 "${wrapped_markup_diagnostic}"
+[[ "$(< "${wrapped_markup_diagnostic}")" == \
+    'AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: High - Counts are direct; _Medium_ for adoption interpretation.' ]] ||
+    fail 'wrapped markup compound did not retain its logical-field diagnostic'
+prepare_review_report_repair \
+    "${wrapped_markup_report}" \
+    1 \
+    "${wrapped_markup_diagnostic}" \
+    "${wrapped_markup_request}" ||
+    fail 'wrapped markup compound request preparation failed'
+extract_descriptor "${wrapped_markup_request}" \
+    > "${wrapped_markup_reply}"
+assert_contains \
+    "${wrapped_markup_request}" \
+    '"ConservativeLevel":"Medium"' \
+    'wrapped markup compound conservative level'
+apply_review_report_repair \
+    "${wrapped_markup_report}" \
+    1 \
+    "$(< "${wrapped_markup_diagnostic}")" \
+    "${wrapped_markup_reply}" \
+    "${wrapped_markup_candidate}" ||
+    fail 'wrapped markup compound descriptor application failed'
+sed \
+    's/^Confidence: High - Counts are direct;$/Confidence: Medium - Original confidence detail: High - Counts are direct;/' \
+    "${wrapped_markup_report}" > "${wrapped_markup_expected}"
+cmp -s -- "${wrapped_markup_expected}" "${wrapped_markup_candidate}" ||
+    fail 'wrapped markup repair changed continuation or non-target bytes'
+validate_review_report_contract "${wrapped_markup_candidate}" 1 ||
+    fail 'wrapped markup confidence candidate failed strict validation'
+
+reverse_compound_value='High for counts and Medium for unobserved paths.'
+reverse_delimiter_base="${FIXTURE_ROOT}/reverse-delimiter-base.txt"
+reverse_delimiter_report="${FIXTURE_ROOT}/reverse-delimiter-report.txt"
+reverse_delimiter_diagnostic="${FIXTURE_ROOT}/reverse-delimiter-diagnostic.txt"
+reverse_delimiter_request="${FIXTURE_ROOT}/reverse-delimiter-request.txt"
+reverse_delimiter_reply="${FIXTURE_ROOT}/reverse-delimiter-reply.txt"
+reverse_delimiter_candidate="${FIXTURE_ROOT}/reverse-delimiter-candidate.txt"
+reverse_delimiter_expected_step="${FIXTURE_ROOT}/reverse-delimiter-expected-step.txt"
+reverse_delimiter_expected="${FIXTURE_ROOT}/reverse-delimiter-expected.txt"
+write_report \
+    "${reverse_delimiter_base}" \
+    1 \
+    manipulation \
+    "${reverse_compound_value}" \
+    ''
+python3 - \
+    "${reverse_delimiter_base}" \
+    "${reverse_delimiter_report}" <<'PY'
+import pathlib
+import sys
+
+source, destination = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+section = lines.index("CLAIMS AND REPUTATION INTEGRITY ASSESSMENT")
+for index in range(section + 1, len(lines)):
+    if lines[index] == "Confidence: Medium.":
+        lines[index] = "Confidence: High counts from bounded metadata."
+        break
+else:
+    raise SystemExit("claims confidence fixture was not found")
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+capture_diagnostic \
+    "${reverse_delimiter_report}" 1 "${reverse_delimiter_diagnostic}"
+prepare_review_report_repair \
+    "${reverse_delimiter_report}" \
+    1 \
+    "${reverse_delimiter_diagnostic}" \
+    "${reverse_delimiter_request}" ||
+    fail 'compound then delimiter request preparation failed'
+extract_descriptor "${reverse_delimiter_request}" \
+    > "${reverse_delimiter_reply}"
+apply_review_report_repair \
+    "${reverse_delimiter_report}" \
+    1 \
+    "$(< "${reverse_delimiter_diagnostic}")" \
+    "${reverse_delimiter_reply}" \
+    "${reverse_delimiter_candidate}" ||
+    fail 'compound then delimiter repair application failed'
+[[ "${REVIEW_REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED}" == '1' &&
+    "${REVIEW_REPORT_REPAIR_LABELS_REJOINED}" == '0' ]] ||
+    fail 'compound then delimiter repair reported unexpected normalization counts'
+[[ "${REVIEW_REPORT_REPAIR_NORMALIZED_DIAGNOSTIC}" == \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level: High counts from bounded metadata.' ]] ||
+    fail 'compound then delimiter repair lost the residual diagnostic'
+write_expected_candidate \
+    "${reverse_delimiter_report}" \
+    "${reverse_delimiter_expected_step}" \
+    '' \
+    "${reverse_compound_value}" \
+    Medium
+sed \
+    's/^Confidence: High counts from bounded metadata\.$/Confidence: High - counts from bounded metadata./' \
+    "${reverse_delimiter_expected_step}" \
+    > "${reverse_delimiter_expected}"
+cmp -s -- "${reverse_delimiter_expected}" "${reverse_delimiter_candidate}" ||
+    fail 'compound then delimiter repair changed bytes outside the bounded edits'
+validate_review_report_contract "${reverse_delimiter_candidate}" 1 ||
+    fail 'compound then delimiter candidate failed strict validation'
+assert_contains \
+    "${reverse_delimiter_candidate}" \
+    "Confidence: Medium - Original confidence detail: ${reverse_compound_value}" \
+    'compound then delimiter conservative level'
+
+reverse_wrapped_base="${FIXTURE_ROOT}/reverse-wrapped-base.txt"
+reverse_wrapped_report="${FIXTURE_ROOT}/reverse-wrapped-report.txt"
+reverse_wrapped_diagnostic="${FIXTURE_ROOT}/reverse-wrapped-diagnostic.txt"
+reverse_wrapped_request="${FIXTURE_ROOT}/reverse-wrapped-request.txt"
+reverse_wrapped_reply="${FIXTURE_ROOT}/reverse-wrapped-reply.txt"
+reverse_wrapped_candidate="${FIXTURE_ROOT}/reverse-wrapped-candidate.txt"
+reverse_wrapped_expected="${FIXTURE_ROOT}/reverse-wrapped-expected.txt"
+write_report \
+    "${reverse_wrapped_base}" \
+    1 \
+    manipulation \
+    "${reverse_compound_value}" \
+    ''
+replace_exact_line \
+    "${reverse_wrapped_base}" \
+    "${reverse_wrapped_report}" \
+    'Roadmap and delivery commitments: No roadmap commitment.' \
+    $'Roadmap and delivery\ncommitments: No roadmap commitment.'
+capture_diagnostic \
+    "${reverse_wrapped_report}" 1 "${reverse_wrapped_diagnostic}"
+prepare_review_report_repair \
+    "${reverse_wrapped_report}" \
+    1 \
+    "${reverse_wrapped_diagnostic}" \
+    "${reverse_wrapped_request}" ||
+    fail 'compound then wrapped-label request preparation failed'
+extract_descriptor "${reverse_wrapped_request}" \
+    > "${reverse_wrapped_reply}"
+apply_review_report_repair \
+    "${reverse_wrapped_report}" \
+    1 \
+    "$(< "${reverse_wrapped_diagnostic}")" \
+    "${reverse_wrapped_reply}" \
+    "${reverse_wrapped_candidate}" ||
+    fail 'compound then wrapped-label repair application failed'
+[[ "${REVIEW_REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED}" == '0' &&
+    "${REVIEW_REPORT_REPAIR_LABELS_REJOINED}" == '1' ]] ||
+    fail 'compound then wrapped-label repair reported unexpected normalization counts'
+[[ "${REVIEW_REPORT_REPAIR_NORMALIZED_DIAGNOSTIC}" == \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT is missing or duplicates required field: Roadmap and delivery commitments:' ]] ||
+    fail 'compound then wrapped-label repair lost the residual diagnostic'
+write_expected_candidate \
+    "${reverse_wrapped_base}" \
+    "${reverse_wrapped_expected}" \
+    '' \
+    "${reverse_compound_value}" \
+    Medium
+cmp -s -- "${reverse_wrapped_expected}" "${reverse_wrapped_candidate}" ||
+    fail 'compound then wrapped-label repair changed bytes outside the bounded edits'
+validate_review_report_contract "${reverse_wrapped_candidate}" 1 ||
+    fail 'compound then wrapped-label candidate failed strict validation'
+
+reverse_irreparable_base="${FIXTURE_ROOT}/reverse-irreparable-base.txt"
+reverse_irreparable_report="${FIXTURE_ROOT}/reverse-irreparable-report.txt"
+reverse_irreparable_diagnostic="${FIXTURE_ROOT}/reverse-irreparable-diagnostic.txt"
+reverse_irreparable_request="${FIXTURE_ROOT}/reverse-irreparable-request.txt"
+write_report \
+    "${reverse_irreparable_base}" \
+    3 \
+    manipulation \
+    "${reverse_compound_value}" \
+    ''
+sed \
+    's/^Generation assessment: Indeterminate$/Generation assessment: Probably generated/' \
+    "${reverse_irreparable_base}" > "${reverse_irreparable_report}"
+capture_diagnostic \
+    "${reverse_irreparable_report}" 3 "${reverse_irreparable_diagnostic}"
+expect_status \
+    42 \
+    'compound followed by irreparable report error' \
+    "${reverse_irreparable_request}" \
+    prepare_review_report_repair \
+    "${reverse_irreparable_report}" \
+    3 \
+    "${reverse_irreparable_diagnostic}" \
+    "${reverse_irreparable_request}"
+[[ "$(< "${FIXTURE_ROOT}/expect-status.stderr")" == \
+    'GENERATED-CODE PROVENANCE ASSESSMENT has an invalid generation verdict' ]] ||
+    fail 'compound then irreparable repair did not preserve the exact residual diagnostic'
+
+sanitized_residual_base="${FIXTURE_ROOT}/sanitized-residual-base.txt"
+sanitized_residual_report="${FIXTURE_ROOT}/sanitized-residual-report.txt"
+sanitized_residual_diagnostic="${FIXTURE_ROOT}/sanitized-residual-diagnostic.txt"
+sanitized_residual_request="${FIXTURE_ROOT}/sanitized-residual-request.txt"
+write_report \
+    "${sanitized_residual_base}" \
+    1 \
+    manipulation \
+    "${reverse_compound_value}" \
+    ''
+python3 - \
+    "${sanitized_residual_base}" \
+    "${sanitized_residual_report}" <<'PY'
+import pathlib
+import sys
+
+source, destination = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+section = lines.index("CLAIMS AND REPUTATION INTEGRITY ASSESSMENT")
+for index in range(section + 1, len(lines)):
+    if lines[index] == "Confidence: Medium.":
+        lines[index] = (
+            "Confidence: Certain api_key=secret-value "
+            "residual@example.org"
+        )
+        break
+else:
+    raise SystemExit("claims confidence fixture was not found")
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+capture_diagnostic \
+    "${sanitized_residual_report}" 1 "${sanitized_residual_diagnostic}"
+expect_status \
+    42 \
+    'sanitized post-candidate residual diagnostic' \
+    "${sanitized_residual_request}" \
+    prepare_review_report_repair \
+    "${sanitized_residual_report}" \
+    1 \
+    "${sanitized_residual_diagnostic}" \
+    "${sanitized_residual_request}"
+[[ "$(< "${FIXTURE_ROOT}/expect-status.stderr")" == \
+    'CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level: Certain api_key=[credential omitted] [email omitted]' ]] ||
+    fail 'post-candidate residual diagnostic bypassed established redaction'
+
+multiple_compound_base="${FIXTURE_ROOT}/multiple-compound-base.txt"
+multiple_compound_report="${FIXTURE_ROOT}/multiple-compound-report.txt"
+multiple_compound_diagnostic="${FIXTURE_ROOT}/multiple-compound-diagnostic.txt"
+multiple_compound_request="${FIXTURE_ROOT}/multiple-compound-request.txt"
+second_compound_value='Medium - for direct claims and Low for uncorroborated claims.'
+write_report \
+    "${multiple_compound_base}" \
+    1 \
+    manipulation \
+    "${reverse_compound_value}" \
+    ''
+python3 - \
+    "${multiple_compound_base}" \
+    "${multiple_compound_report}" \
+    "${second_compound_value}" <<'PY'
+import pathlib
+import sys
+
+source, destination, replacement = sys.argv[1:]
+lines = pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+section = lines.index("CLAIMS AND REPUTATION INTEGRITY ASSESSMENT")
+for index in range(section + 1, len(lines)):
+    if lines[index] == "Confidence: Medium.":
+        lines[index] = f"Confidence: {replacement}"
+        break
+else:
+    raise SystemExit("claims confidence fixture was not found")
+pathlib.Path(destination).write_text("\n".join(lines), encoding="utf-8")
+PY
+capture_diagnostic \
+    "${multiple_compound_report}" 1 "${multiple_compound_diagnostic}"
+expect_status \
+    42 \
+    'multiple compound confidence fields' \
+    "${multiple_compound_request}" \
+    prepare_review_report_repair \
+    "${multiple_compound_report}" \
+    1 \
+    "${multiple_compound_diagnostic}" \
+    "${multiple_compound_request}"
+[[ "$(< "${FIXTURE_ROOT}/expect-status.stderr")" == \
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT has an invalid confidence level: ${second_compound_value}" ]] ||
+    fail 'multiple compound confidence repair lost the second field diagnostic'
 
 scope_gate_root="${FIXTURE_ROOT}/scope-gate"
 mkdir -p -- "${scope_gate_root}"
@@ -1166,6 +1640,23 @@ write_report \
     '  7) '
 validate_review_report_contract "${valid_initial}" 1 ||
     fail 'strict validator rejected the valid control report'
+ordinary_level_case=0
+for ordinary_level_value in \
+    'High - Direct checks passed; residual risk was low.' \
+    'High - Low coverage was the main limitation.' \
+    'High - Medium severity findings were reviewed.' \
+    'High - Low-level parsing paths were inspected.'; do
+    ordinary_level_case=$((ordinary_level_case + 1))
+    ordinary_level_report="${FIXTURE_ROOT}/ordinary-level-${ordinary_level_case}.txt"
+    write_report \
+        "${ordinary_level_report}" \
+        1 \
+        manipulation \
+        "${ordinary_level_value}" \
+        '  7) '
+    validate_review_report_contract "${ordinary_level_report}" 1 ||
+        fail "strict validator mistook ordinary evidence for confidence: ${ordinary_level_value}"
+done
 expect_status \
     42 \
     'valid original confidence field' \
@@ -1193,6 +1684,35 @@ expect_status \
     1 \
     "${unsupported_value_diagnostic}" \
     "${FIXTURE_ROOT}/unsupported-value-request.txt"
+
+ambiguous_token_report="${FIXTURE_ROOT}/ambiguous-token-report.txt"
+ambiguous_token_diagnostic="${FIXTURE_ROOT}/ambiguous-token-diagnostic.txt"
+ambiguous_token_request="${FIXTURE_ROOT}/ambiguous-token-request.txt"
+ambiguous_token_value='High - Counts are direct; Medium findings remain.'
+write_report \
+    "${ambiguous_token_report}" \
+    1 \
+    manipulation \
+    "${ambiguous_token_value}" \
+    '  7) '
+capture_diagnostic \
+    "${ambiguous_token_report}" 1 "${ambiguous_token_diagnostic}"
+[[ "$(< "${ambiguous_token_diagnostic}")" == \
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT has an invalid confidence level: ${ambiguous_token_value}" ]] ||
+    fail 'strict validator accepted or misdiagnosed an ambiguous exact level token'
+expect_status \
+    42 \
+    'ambiguous exact level token' \
+    "${ambiguous_token_request}" \
+    prepare_review_report_repair \
+    "${ambiguous_token_report}" \
+    1 \
+    "${ambiguous_token_diagnostic}" \
+    "${ambiguous_token_request}"
+assert_contains \
+    "${FIXTURE_ROOT}/expect-status.stderr" \
+    'ambiguous or noncanonical level text' \
+    'ambiguous exact level token repair diagnostic'
 
 unknown_diagnostic="${FIXTURE_ROOT}/unknown-diagnostic.txt"
 printf '%s\n' 'FINDINGS has an invalid confidence level: High confidence.' \
@@ -1228,7 +1748,7 @@ write_report \
     "${ambiguous_report}" \
     1 \
     manipulation \
-    "${observed_value}" \
+    "${production_confidence_value}" \
     '  7) ' \
     manipulation
 capture_diagnostic "${ambiguous_report}" 1 "${ambiguous_diagnostic}"
@@ -1294,6 +1814,27 @@ expect_status \
     1 \
     "${lowercase_level_diagnostic}" \
     "${FIXTURE_ROOT}/lowercase-level-request.txt"
+
+lowercase_delimited_report="${FIXTURE_ROOT}/lowercase-delimited-report.txt"
+lowercase_delimited_diagnostic="${FIXTURE_ROOT}/lowercase-delimited-diagnostic.txt"
+lowercase_delimited_value='High - for observed text and medium for absent context.'
+write_report \
+    "${lowercase_delimited_report}" \
+    1 \
+    manipulation \
+    "${lowercase_delimited_value}" \
+    '  7) '
+capture_diagnostic \
+    "${lowercase_delimited_report}" 1 "${lowercase_delimited_diagnostic}"
+expect_status \
+    42 \
+    'delimited lowercase confidence assertion' \
+    "${FIXTURE_ROOT}/lowercase-delimited-request.txt" \
+    prepare_review_report_repair \
+    "${lowercase_delimited_report}" \
+    1 \
+    "${lowercase_delimited_diagnostic}" \
+    "${FIXTURE_ROOT}/lowercase-delimited-request.txt"
 
 lowercase_underscore_report="${FIXTURE_ROOT}/lowercase-underscore-report.txt"
 lowercase_underscore_diagnostic="${FIXTURE_ROOT}/lowercase-underscore-diagnostic.txt"
@@ -1597,7 +2138,7 @@ chain_request="${FIXTURE_ROOT}/chain-request.txt"
 chain_reply="${FIXTURE_ROOT}/chain-reply.txt"
 chain_candidate="${FIXTURE_ROOT}/chain-candidate.txt"
 write_report \
-    "${chain_base}" 1 manipulation "${observed_value}" ''
+    "${chain_base}" 1 manipulation "${production_confidence_value}" ''
 insert_after_exact_line \
     "${chain_base}" "${chain_report}" \
     'No qualifying findings.' "${security_table}"
@@ -1607,7 +2148,7 @@ normalize_review_report_markdown_tables \
 capture_diagnostic "${chain_normalized}" 1 "${chain_diagnostic}"
 assert_contains \
     "${chain_diagnostic}" \
-    "has an invalid confidence level: ${observed_value}" \
+    "has an invalid confidence level: ${production_confidence_value}" \
     'normalized candidate confidence diagnostic'
 prepare_review_report_repair \
     "${chain_normalized}" 1 "${chain_diagnostic}" "${chain_request}" ||
@@ -1625,7 +2166,7 @@ validate_review_report_contract "${chain_candidate}" 1 ||
 assert_no_markdown_table "${chain_candidate}" 'chained repair candidate'
 assert_contains \
     "${chain_candidate}" \
-    "Confidence: Medium - Original confidence detail: ${observed_value}" \
+    "Confidence: Medium - Original confidence detail: ${production_confidence_value}" \
     'chained confidence correction'
 assert_contains \
     "${chain_candidate}" \

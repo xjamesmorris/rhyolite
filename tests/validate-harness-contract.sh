@@ -8,9 +8,11 @@ HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 RUNNER="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
 PROMPT="${PLUGIN_ROOT}/skills/readonly-repository-review/review-prompt.txt"
+REVIEW_SKILL="${PLUGIN_ROOT}/skills/readonly-repository-review/SKILL.md"
 OUTPUT_HELPER="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/review-output.sh"
 LAUNCHER="${PLUGIN_ROOT}/bin/rhyolite"
 AGENT_ROOT="${PLUGIN_ROOT}/agents"
+COPILOT_WORKER_AGENT="${AGENT_ROOT}/repo-review-worker.agent.md"
 SKILL_ROOT="${PLUGIN_ROOT}/skills"
 PLUGIN_MANIFEST="${PLUGIN_ROOT}/plugin.json"
 MARKETPLACE_MANIFEST="${ROOT}/.github/plugin/marketplace.json"
@@ -117,6 +119,8 @@ export PATH
 for path in \
     "${RUNNER}" \
     "${PROMPT}" \
+    "${REVIEW_SKILL}" \
+    "${COPILOT_WORKER_AGENT}" \
     "${OUTPUT_HELPER}" \
     "${LAUNCHER}" \
     "${PREFERENCE_HELPER}" \
@@ -129,6 +133,65 @@ for path in \
 done
 [[ -f "${HARNESS_COMMON}" ]] ||
     fail "Harness common module is missing: ${HARNESS_COMMON}"
+for confidence_contract_file in \
+    "${PROMPT}" \
+    "${REVIEW_SKILL}" \
+    "${COPILOT_WORKER_AGENT}"; do
+    assert_contains \
+        "${confidence_contract_file}" \
+        'exactly one overall level' \
+        'Single-level confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'lowest applicable level' \
+        'Conservative confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'separate `Evidence basis:` field' \
+        'Separate evidence-basis contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'Outside mandatory ASSESSMENT sections' \
+        'Non-assessment confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'may carry their own confidence and evidence basis as appropriate.' \
+        'Non-assessment per-item confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'Inside each mandatory ASSESSMENT section' \
+        'Mandatory-assessment confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'Do not emit confidence per category' \
+        'No per-category assessment confidence contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'exactly one separate non-empty' \
+        'Exactly-one assessment evidence-basis contract'
+    assert_contains \
+        "${confidence_contract_file}" \
+        'assessment section has exactly one valid `Confidence:`' \
+        'Exactly-one assessment self-check'
+    grep -Eq '^[[:space:]]*Confidence: Medium[[:space:]]*$' \
+        "${confidence_contract_file}" &&
+        grep -Eq \
+            '^[[:space:]]*Evidence basis: Counts are directly observed; adoption interpretation remains inferential\.[[:space:]]*$' \
+            "${confidence_contract_file}" ||
+        fail "Canonical mixed-certainty example is missing: ${confidence_contract_file}"
+    assert_not_contains \
+        "${confidence_contract_file}" \
+        'Confidence: High for' \
+        'Compound confidence example'
+    assert_not_contains \
+        "${confidence_contract_file}" \
+        'each substantive finding or assessment point' \
+        'Contradictory per-assessment-point confidence guidance'
+    assert_not_contains \
+        "${confidence_contract_file}" \
+        'at least one valid `Confidence:`' \
+        'Legacy at-least-one assessment self-check'
+done
 [[ ! -e "${PLUGIN_ROOT}/lib/harness/noop.sh" ]] ||
     fail 'The development-only no-op adapter entered the production plugin tree.'
 assert_not_contains \
@@ -1537,12 +1600,27 @@ for expected_request_line in \
     'TRUSTED FIXTURE METADATA' \
     'PUBLIC RESEARCH DISABLED' \
     'PROVENANCE DISABLED' \
-    'RESEARCH TRANSPORT DISABLED'; do
+    'RESEARCH TRANSPORT DISABLED' \
+    'Outside mandatory ASSESSMENT sections' \
+    'may carry their own confidence and evidence basis as appropriate.' \
+    'Inside each mandatory ASSESSMENT section' \
+    'Do not emit confidence per category' \
+    'exactly one separate non-empty' \
+    'assessment section has exactly one valid `Confidence:`' \
+    'exactly one overall level' \
+    'lowest applicable level' \
+    'separate `Evidence basis:` field' \
+    'Confidence: Medium' \
+    'Evidence basis: Counts are directly observed; adoption interpretation remains inferential.'; do
     assert_contains \
         "${rendered_request}" \
         "${expected_request_line}" \
         'Copilot request rendering'
 done
+assert_not_contains \
+    "${rendered_request}" \
+    'Confidence: High for' \
+    'Copilot request rendering'
 assert_not_contains \
     "${rendered_request}" \
     '{{' \

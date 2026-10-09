@@ -120,10 +120,29 @@ Distinguish project-controlled endpoint anomalies from independent or platform
 source anomalies. Transport evidence may affect overall repository fitness
 only when specific evidence ties the endpoint to the project.
 
-Attach `Confidence: High`, `Confidence: Medium`, or `Confidence: Low` and a
-concise evidence basis to each substantive finding or assessment point. Keep
-low-confidence possibilities in limitations or follow-up questions rather than
-presenting them as established defects or provenance conclusions.
+Outside mandatory ASSESSMENT sections, substantive findings, conclusions,
+provenance observations, source-landscape conclusions, and remediation
+priorities may carry their own confidence and evidence basis as appropriate.
+Use `Confidence: High`, `Confidence: Medium`, or `Confidence: Low` with a
+concise evidence basis. Inside each mandatory ASSESSMENT section, synthesize
+exactly one overall `Confidence:` and exactly one separate non-empty
+`Evidence basis:` for the whole section. Do not emit confidence per category
+or assessment point there. Each logical `Confidence:` field must express
+exactly one overall level: `High`, `Medium`, or `Low`. Never qualify a level by
+component or include another level in the same field. When evidence within a
+mandatory assessment section is materially mixed, choose the
+lowest applicable level for the section's single overall confidence. Use the
+separate `Evidence basis:` field to explain the distinctions. Use this
+canonical form:
+
+```text
+Confidence: Medium
+Evidence basis: Counts are directly observed; adoption interpretation remains inferential.
+```
+
+Never recommend or generate a compound confidence field. Keep low-confidence
+possibilities in limitations or follow-up questions rather than presenting
+them as established defects or provenance conclusions.
 
 When claims, reputation, originality, or provenance concerns exist, begin the
 executive summary with one plain-text triage sentence for reviewers such as
@@ -134,10 +153,11 @@ text or a numbered list and never use a Markdown table in any ASSESSMENT
 section or anywhere in the report. Before returning, confirm that every
 required heading for the scope appears exactly once and in order, every
 required label appears exactly once in its section, whole and unwrapped on
-one line, with a non-empty value, every assessment section has a valid
-`Confidence:` and evidence basis, and no line between the delimiters begins
-and ends with `|`. Never wrap or hyphenate a heading or field label to meet a
-line width.
+one line, with a non-empty value; every mandatory
+assessment section has exactly one valid `Confidence:` and exactly one
+separate non-empty
+`Evidence basis:`, and no line between the delimiters begins and ends with
+`|`. Never wrap or hyphenate a heading or field label to meet a line width.
 
 Return one canonical plain-text report matching the prompt contract. The trusted
 parent runner writes all report, transcript, state, handoff, and manifest

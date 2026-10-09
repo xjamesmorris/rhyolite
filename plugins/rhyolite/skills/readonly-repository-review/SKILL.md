@@ -186,10 +186,14 @@ Maximum reasoning effort is the default for every project task. High is the
 hard minimum; never use none, minimal, low, or medium effort, including for
 general-purpose or mechanical work.
 
-For every substantive finding, research assessment, provenance
-observation, source-landscape conclusion, remediation priority, and
-overall assessment, include `Confidence: High`, `Confidence: Medium`,
-or `Confidence: Low` plus a concise evidence basis:
+Outside mandatory ASSESSMENT sections, substantive findings, conclusions,
+provenance observations, source-landscape conclusions, and remediation
+priorities may carry their own confidence and evidence basis as appropriate.
+Use `Confidence: High`, `Confidence: Medium`, or `Confidence: Low` plus a
+concise evidence basis. Inside each mandatory ASSESSMENT section, synthesize
+exactly one overall `Confidence:` and exactly one separate non-empty
+`Evidence basis:` for the whole section. Do not emit confidence per category
+or assessment point there.
 
 - High: direct, specific, independently verifiable evidence.
 - Medium: multiple consistent signals with a material evidence gap.
@@ -888,16 +892,29 @@ recommendations inside the report or executive summary.
   continuation line or lines. Never wrap, break, or hyphenate a heading or
   field label across lines; keep each whole label on one line even when that
   line exceeds the wrap width.
-- `Confidence:` and `Evidence basis:` are repeatable assessment labels. Each
-  mandatory assessment section must contain at least one `Confidence:` whose
-  value starts with the exact level `High`, `Medium`, or `Low`. The level may
-  stand alone, or use a terminal `.` or `;` when a separate non-empty
-  `Evidence basis:` is present. Alternatively, the exact level may be followed
-  by `. `, `; `, `: `, `, `, or ` - ` and non-empty explanatory text; that
-  suffix counts as the inline evidence basis whether or not it begins with
-  `Evidence basis:`. Values may continue on immediately following wrapped
-  lines. Reject unknown levels, bare prefixes such as `High confidence`,
-  delimiters without text, and true confidence or evidence-basis omissions.
+- `Confidence:` and `Evidence basis:` must each appear exactly once in every
+  mandatory assessment section. Each logical `Confidence:` field must express
+  exactly one overall level: `High`, `Medium`, or `Low`. The level may stand
+  alone, or use a terminal `.` or `;` when the separate non-empty
+  `Evidence basis:` field is present. For backward-compatible accepted syntax,
+  the exact level may instead be followed by `. `, `; `, `: `, `, `, or
+  ` - ` and non-empty explanatory text. Regardless of syntax, the field must
+  not qualify confidence by component or include another confidence level.
+- When evidence within a mandatory assessment section is materially mixed,
+  choose the lowest applicable level for the section's single overall
+  confidence. Use the separate `Evidence basis:` field to explain the
+  distinctions. Use this canonical form:
+
+  ```text
+  Confidence: Medium
+  Evidence basis: Counts are directly observed; adoption interpretation remains inferential.
+  ```
+
+  Never recommend or generate a compound confidence field. Single-level
+  explanatory text and the evidence-basis value may continue on immediately
+  following wrapped lines. Reject unknown levels, bare prefixes such as
+  `High confidence`, delimiters without text, and true confidence or
+  evidence-basis omissions.
 - In `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`, include these
   exact field labels and assess every category even when no supporting
   evidence is found:
@@ -1002,10 +1019,10 @@ recommendations inside the report or executive summary.
   required heading for the scope appears exactly once, on its own line, and
   in order, and no heading for another scope appears; every required label
   appears exactly once at the start of a line in its section, whole and
-  unwrapped on that one line, with a non-empty value; every assessment
-  section has a valid `Confidence:` and an
-  evidence basis; and no line between the delimiters begins and ends with
-  `|`.
+  unwrapped on that one line, with a non-empty value; every mandatory
+  assessment section has exactly one valid `Confidence:` and exactly one
+  separate non-empty `Evidence basis:`; and no line between the delimiters
+  begins and ends with `|`.
 - Return the canonical plain-text report to the trusted runner. Do not
   write into either the repository or artifact workspace from the child
   session.

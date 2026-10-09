@@ -3678,14 +3678,7 @@ run_report_table_normalization() {
 # explanatory words; compound levels and bare "<Level> confidence" prefixes
 # remain for the bounded model edit.
 report_confidence_delimiter_diagnostic() {
-    local diagnostic="$1"
-    local value
-
-    [[ "${diagnostic}" =~ ^[A-Z][A-Z\ -]*\ has\ an\ invalid\ confidence\ level:\ (High|Medium|Low)[[:space:]]+([A-Za-z\(].*)$ ]] ||
-        return 1
-    value="${BASH_REMATCH[2]}"
-    [[ "${value,,}" != confidence* ]] || return 1
-    [[ ! "${value}" =~ (^|[^A-Za-z])(High|Medium|Low)([^A-Za-z]|$) ]]
+    review_report_confidence_delimiter_diagnostic "$1"
 }
 
 run_report_confidence_normalization() {
@@ -3817,7 +3810,7 @@ run_report_confidence_normalization() {
 # when an assessment section lacks a required field label; the normalizer
 # decides whether that label was wrapped across one line break at a space.
 report_wrapped_label_diagnostic() {
-    [[ "$1" =~ ^[A-Z][A-Z\ -]*\ ASSESSMENT\ is\ missing\ or\ duplicates\ required\ field:\ [^[:cntrl:]]+:$ ]]
+    review_report_wrapped_label_diagnostic "$1"
 }
 
 run_report_label_normalization() {
@@ -4231,15 +4224,64 @@ run_report_repair() {
             cat -- "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH}"
         )"
     else
-        REPORT_REPAIR_PRESERVATION='Passed'
-        if REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
-            validate_final_review_report "${REPORT_REPAIR_CANDIDATE_PATH}" \
-                "${SCOPE}" 2>&1
-        )"; then
-            REPORT_REPAIR_VALIDATION='Passed'
-            repair_candidate_valid=1
+        local post_confidence_fields_normalized="${REVIEW_REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED:-0}"
+        local post_labels_rejoined="${REVIEW_REPORT_REPAIR_LABELS_REJOINED:-0}"
+        local post_normalized_diagnostic="${REVIEW_REPORT_REPAIR_NORMALIZED_DIAGNOSTIC:-}"
+        local post_normalization_invalid=0
+
+        if ((post_confidence_fields_normalized > 0)); then
+            if [[ "${REPORT_REPAIR_CONFIDENCE_NORMALIZATION:-NotRun}" != 'NotRun' ]]; then
+                post_normalization_invalid=1
+            else
+                REPORT_REPAIR_CONFIDENCE_NORMALIZATION='Applied'
+                REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED="${post_confidence_fields_normalized}"
+                review_progress "${slug}" 'report repair' \
+                    "inserted the accepted delimiter in ${post_confidence_fields_normalized} assessment confidence field(s) after the bounded confidence edit; every word preserved"
+            fi
+        fi
+        if ((post_labels_rejoined > 0)); then
+            if [[ "${REPORT_REPAIR_LABEL_NORMALIZATION:-NotRun}" != 'NotRun' ]]; then
+                post_normalization_invalid=1
+            else
+                REPORT_REPAIR_LABEL_NORMALIZATION='Applied'
+                REPORT_REPAIR_LABELS_REJOINED="${post_labels_rejoined}"
+                review_progress "${slug}" 'report repair' \
+                    "rejoined ${post_labels_rejoined} wrapped assessment field label(s) after the bounded confidence edit; every word preserved"
+            fi
+        fi
+        if ((post_normalization_invalid)); then
+            REPORT_REPAIR_PRESERVATION='Failed'
+            REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair attempted to repeat a bounded deterministic normalization.'
+        elif ((post_confidence_fields_normalized > 0 ||
+            post_labels_rejoined > 0)); then
+            REPORT_REPAIR_NORMALIZED_PATH="${REPORT_REPAIR_CANDIDATE_PATH}"
+            REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH="${REPORT_REPAIR_DIRECTORY}/post-edit-normalized-diagnostic.txt"
+            if [[ -z "${post_normalized_diagnostic}" ]] ||
+                ! {
+                    printf '%s\n' "${post_normalized_diagnostic}" \
+                        > "${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}" &&
+                    chmod 600 -- "${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
+                } 2>> "${error_path}"; then
+                rm -f -- "${REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH}"
+                REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH=""
+                REPORT_REPAIR_PRESERVATION='Failed'
+                REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair could not preserve the post-edit normalization diagnostic.'
+            else
+                REPORT_REPAIR_PRESERVATION='Passed'
+            fi
         else
-            REPORT_REPAIR_VALIDATION='Failed'
+            REPORT_REPAIR_PRESERVATION='Passed'
+        fi
+        if [[ "${REPORT_REPAIR_PRESERVATION}" == 'Passed' ]]; then
+            if REPORT_REPAIR_FINAL_DIAGNOSTIC="$(
+                validate_final_review_report "${REPORT_REPAIR_CANDIDATE_PATH}" \
+                    "${SCOPE}" 2>&1
+            )"; then
+                REPORT_REPAIR_VALIDATION='Passed'
+                repair_candidate_valid=1
+            else
+                REPORT_REPAIR_VALIDATION='Failed'
+            fi
         fi
     fi
     if ! cleanup_report_repair_runtime; then

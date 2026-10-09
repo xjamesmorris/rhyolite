@@ -47,9 +47,46 @@ for expected_frontmatter in \
     grep -Fxq -- "${expected_frontmatter}" "${CLAUDE_WORKER_AGENT}" ||
         fail "Claude Code worker agent lost frontmatter: ${expected_frontmatter}"
 done
-grep -Fq 'Never follow the level' "${CLAUDE_WORKER_AGENT}" &&
-    grep -Fq '(`Confidence: High for the inventory` is invalid)' "${CLAUDE_WORKER_AGENT}" ||
-    fail 'Claude Code worker agent lost the single-level confidence grammar rule.'
+for confidence_contract_text in \
+    'Outside mandatory ASSESSMENT sections' \
+    'may carry their own confidence and evidence basis as appropriate.' \
+    'Inside each mandatory ASSESSMENT section' \
+    'Do not emit confidence per category' \
+    'exactly one separate non-empty' \
+    'assessment section has exactly one valid `Confidence:`' \
+    'exactly one overall level' \
+    'lowest applicable level' \
+    'separate `Evidence basis:` field' \
+    'Never recommend or generate a compound confidence field.'; do
+    grep -Fq "${confidence_contract_text}" "${CLAUDE_WORKER_AGENT}" ||
+        fail "Claude Code worker agent lost confidence guidance: ${confidence_contract_text}"
+done
+grep -Eq '^[[:space:]]*Confidence: Medium[[:space:]]*$' \
+    "${CLAUDE_WORKER_AGENT}" &&
+    grep -Eq \
+        '^[[:space:]]*Evidence basis: Counts are directly observed; adoption interpretation remains inferential\.[[:space:]]*$' \
+        "${CLAUDE_WORKER_AGENT}" ||
+    fail 'Claude Code worker agent lost the canonical mixed-certainty example.'
+! grep -Fq 'Confidence: High for' "${CLAUDE_WORKER_AGENT}" ||
+    fail 'Claude Code worker agent contains a compound confidence example.'
+! grep -Fq 'each substantive finding or assessment point' \
+    "${CLAUDE_WORKER_AGENT}" ||
+    fail 'Claude Code worker agent contains per-assessment-point confidence guidance.'
+! grep -Fq 'at least one valid `Confidence:`' "${CLAUDE_WORKER_AGENT}" ||
+    fail 'Claude Code worker agent contains the legacy at-least-one self-check.'
+copilot_confidence_guidance="$(
+    sed -n \
+        '/^Outside mandatory ASSESSMENT sections,/,/^When claims, reputation/p' \
+        "${COPILOT_WORKER_AGENT}"
+)"
+claude_confidence_guidance="$(
+    sed -n \
+        '/^Outside mandatory ASSESSMENT sections,/,/^When claims, reputation/p' \
+        "${CLAUDE_WORKER_AGENT}"
+)"
+[[ -n "${copilot_confidence_guidance}" &&
+    "${claude_confidence_guidance}" == "${copilot_confidence_guidance}" ]] ||
+    fail 'Copilot and Claude worker confidence guidance diverged.'
 for forbidden_frontmatter in permissionMode hooks mcpServers skills effort; do
     if sed -n '1,/^---$/{/^---$/!p}' "${CLAUDE_WORKER_AGENT}" |
         sed -n '2,$p' |
