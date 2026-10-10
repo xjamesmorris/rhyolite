@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_LAUNCHER="${ROOT}/rhyolite"
+ROOT_SUMMARY="${ROOT}/rhyolite-summary"
 PLUGIN_ROOT="${ROOT}/plugins/rhyolite"
 SKILL_ROOT="${PLUGIN_ROOT}/skills/readonly-repository-review"
 SOURCE_ASSESSMENT_SKILL="${PLUGIN_ROOT}/skills/research-source-assessment/SKILL.md"
@@ -29,6 +30,7 @@ TUI_RUNTIME_VALIDATOR_AGENT="${ROOT}/.github/agents/rhyolite-tui-runtime-validat
 TUI_RUNTIME_VALIDATOR="${ROOT}/tests/validate-tui-runtime.mjs"
 RHYOLITE_EXTENSION="${PLUGIN_ROOT}/extensions/repo-review/extension.mjs"
 RHYOLITE_LAUNCHER="${PLUGIN_ROOT}/bin/rhyolite"
+RHYOLITE_SUMMARY="${PLUGIN_ROOT}/bin/rhyolite-summary"
 COMMAND_ROOT="${PLUGIN_ROOT}/commands"
 COMMAND_START="${COMMAND_ROOT}/start.md"
 COMMAND_REPO_REVIEW="${COMMAND_ROOT}/repo-review.md"
@@ -71,6 +73,7 @@ PUBLIC_RELEASE_EXPORT_BASH="${PUBLIC_RELEASE_ROOT}/public-export.sh"
 PUBLIC_RELEASE_PREFLIGHT_BASH="${PUBLIC_RELEASE_ROOT}/public-preflight.sh"
 PUBLIC_RELEASE_TEST="${PUBLIC_RELEASE_ROOT}/test-public-release.sh"
 INSTALL_TEST="${ROOT}/tests/test-install.sh"
+SUMMARY_TEST="${ROOT}/tests/test-review-summary.sh"
 VALIDATE_ALL="${ROOT}/tests/validate-all.sh"
 HARNESS_CONTRACT_VALIDATOR="${ROOT}/tests/validate-harness-contract.sh"
 
@@ -147,6 +150,7 @@ public_claude_marketplace_add_guidance='claude plugin marketplace add https://gi
 
 required_files=(
     "${ROOT_LAUNCHER}"
+    "${ROOT_SUMMARY}"
     "${BASH_CONSOLIDATION_FIXTURE}"
     "${PLUGIN_MANIFEST}"
     "${HOOKS_CONFIG}"
@@ -163,6 +167,7 @@ required_files=(
     "${TUI_RUNTIME_VALIDATOR_AGENT}"
     "${TUI_RUNTIME_VALIDATOR}"
     "${RHYOLITE_LAUNCHER}"
+    "${RHYOLITE_SUMMARY}"
     "${COMMAND_START}"
     "${COMMAND_REPO_REVIEW}"
     "${COMMAND_STATUS}"
@@ -209,6 +214,7 @@ required_files=(
     "${PUBLIC_RELEASE_PREFLIGHT_BASH}"
     "${PUBLIC_RELEASE_TEST}"
     "${INSTALL_TEST}"
+    "${SUMMARY_TEST}"
     "${VALIDATE_ALL}"
     "${HARNESS_CONTRACT_VALIDATOR}"
 )
@@ -1236,6 +1242,7 @@ grep -Fq "copilot plugin marketplace add \"\${ROOT}\"" "${INSTALL_TEST}" &&
         "${INSTALL_TEST}" &&
     grep -Fq 'RHYOLITE_START_COMMAND_V1' "${INSTALL_TEST}" &&
     grep -Fq 'bin/rhyolite' "${INSTALL_TEST}" &&
+    grep -Fq 'bin/rhyolite-summary' "${INSTALL_TEST}" &&
     grep -Fq 'unsupported alternate-shell artifact' "${INSTALL_TEST}" ||
     fail 'Linux installation test does not cover marketplace install and packaging.'
 ! grep -Fq '/rhyolite:banner' "${COMMAND_HELP}" ||
@@ -2649,7 +2656,9 @@ bash -n "${DISCOVERY}"
 bash -n "${WELCOME_HELPER_BASH}"
 bash -n "${LAUNCHER_PREFERENCES_BASH}"
 bash -n "${ROOT_LAUNCHER}"
+bash -n "${ROOT_SUMMARY}"
 bash -n "${RHYOLITE_LAUNCHER}"
+bash -n "${RHYOLITE_SUMMARY}"
 bash -n "${OUTPUT_HELPER}"
 bash -n "${BASH_CONSOLIDATION_FIXTURE}"
 bash -n "${HARNESS_COMMON}"
@@ -2665,11 +2674,18 @@ for source in sys.argv[1:]:
     compile(pathlib.Path(source).read_bytes(), source, "exec")
 PY
 python3 -B "${RESEARCH_BROKER_TEST}" >/dev/null
+bash "${SUMMARY_TEST}" >/dev/null
 
 [[ -x "${ROOT_LAUNCHER}" ]] ||
     fail 'Repository-root Rhyolite launcher is not executable.'
+[[ -x "${ROOT_SUMMARY}" ]] ||
+    fail 'Repository-root review-summary utility is not executable.'
 [[ -x "${RHYOLITE_LAUNCHER}" ]] ||
     fail 'Unix Rhyolite launcher is not executable.'
+[[ -x "${RHYOLITE_SUMMARY}" ]] ||
+    fail 'Packaged review-summary utility is not executable.'
+[[ -x "${SUMMARY_TEST}" ]] ||
+    fail 'Review-summary utility test is not executable.'
 [[ -x "${RESEARCH_BROKER}" ]] ||
     fail 'Research egress broker is not executable.'
 [[ -x "${RESEARCH_BROKER_LAUNCHER}" ]] ||
@@ -2684,6 +2700,18 @@ grep -Fq 'plugins/rhyolite/bin/rhyolite' "${ROOT_LAUNCHER}" &&
     ! grep -Eq '(^|[^[:alnum:]_])env[[:space:]]+-i|unset[[:space:]]+RHYOLITE_' \
         "${ROOT_LAUNCHER}" ||
     fail 'Repository-root launcher must remain a delegation-only wrapper.'
+grep -Fq 'plugins/rhyolite/bin/rhyolite-summary' "${ROOT_SUMMARY}" &&
+    grep -Fq 'exec "${packaged_utility}" "$@"' "${ROOT_SUMMARY}" &&
+    grep -Fq 'resolve_physical_path' "${ROOT_SUMMARY}" &&
+    ! grep -Fq 'copilot' "${ROOT_SUMMARY}" &&
+    ! grep -Fq -- '--allow-all' "${ROOT_SUMMARY}" ||
+    fail 'Repository-root review-summary wrapper must remain delegation-only.'
+grep -Fq 'MAX_SCAN_DEPTH = 2' "${RHYOLITE_SUMMARY}" &&
+    grep -Fq '"rhyolite_output_root": str(root)' "${RHYOLITE_SUMMARY}" &&
+    grep -Fq '"overall_grading": parse_overall_assessment(report_text)' \
+        "${RHYOLITE_SUMMARY}" &&
+    grep -Fq 'default-src '\''none'\''' "${RHYOLITE_SUMMARY}" ||
+    fail 'Packaged review-summary utility lost its bounded scan, schema, or inert HTML contract.'
 grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
     "${RHYOLITE_LAUNCHER}" &&
     grep -Fq "readonly RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER='RHYOLITE_LAUNCHER_IMMEDIATE_START_V1'" \
@@ -13102,7 +13130,9 @@ done < <(
         \( -name '*.md' -o -name '*.json' \
         -o -name '*.sh' -o -name '*.txt' -o -name '*.yml' \
         -o -name '*.mjs' -o -path "${ROOT_LAUNCHER}" \
-        -o -path "${RHYOLITE_LAUNCHER}" \) \
+        -o -path "${ROOT_SUMMARY}" \
+        -o -path "${RHYOLITE_LAUNCHER}" \
+        -o -path "${RHYOLITE_SUMMARY}" \) \
         -print0
 )
 

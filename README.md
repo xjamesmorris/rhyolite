@@ -83,6 +83,8 @@ The current plugin combines:
 - A private `research-source-assessment` skill that maps fresh,
   subject-specific community, research, and commercial sources.
 - A Bash review runner for the supported Linux workflow.
+- A standalone `rhyolite-summary` utility that scans saved review output into
+  portable JSON, Markdown, text, or inert HTML summary tables.
 - A deterministic local stdio MCP research-egress broker implemented with the
   Python 3 standard library under a fixed immutable transport safety floor.
 - Separate security and dedicated public-source research passes.
@@ -886,6 +888,65 @@ Saved session IDs are evidence for handoff, not an invitation to run
 `copilot --resume` directly. A direct resume may omit the original path,
 tool, network, and environment restrictions; continue through the trusted
 `repository-review` workflow.
+
+### Summarize saved review output
+
+Use the repository-root wrapper to make a quick inventory without executing
+reviewed repository content:
+
+```bash
+./rhyolite-summary \
+  --output-root "$HOME/rhyolite-output/repo-review"
+```
+
+JSON is the default format and stdout is the default destination. Other
+renderers use the same in-memory JSON record:
+
+```bash
+./rhyolite-summary /path/to/rhyolite-output --format md
+./rhyolite-summary /path/to/rhyolite-output --format text
+./rhyolite-summary /path/to/rhyolite-output --format html --write-file
+./rhyolite-summary /path/to/rhyolite-output \
+  --format json \
+  --output summaries/latest.json \
+  --force
+```
+
+With no pathname, an interactive terminal offers existing output directories
+near the current directory, the current Git repository, and
+`~/rhyolite-output`, then accepts a custom pathname. Pressing Enter selects the
+first displayed candidate. The selected directory may be the broad
+`rhyolite-output` directory, its `repo-review` child, one run directory, or one
+repository result directory. Non-interactive callers must pass
+`--output-root`.
+
+The summary contains one review row per repository. A single-repository run is
+recorded as `single-repository`; a batch is `multi-repository`, with the run ID
+and repository slug combined as the fallback review ID. Each row reports the
+source repository, all recorded model IDs, scope, status, and overall grading.
+If the report has an explicit grade, rating, or verdict field, that value is
+used. Existing reports normally do not have one, so the utility otherwise
+uses the first sentence of the canonical overall assessment rather than
+inventing a score. Canonical JSON retains every confidence level and evidence
+basis found in `OVERALL ASSESSMENT`; Markdown, text, and HTML omit confidence
+from their formatted tables.
+
+Only the selected Rhyolite output root is stored as an absolute filesystem
+path. Run, state, and report paths are relative to that root so the summary
+and output tree can be moved, archived, or published together. JSON also
+records the summary ID, UTC generation time, local current date, hostname,
+single-versus-multi run metadata, report paths, model detail, dates, counts,
+and any Rhyolite versions explicitly recorded by artifacts. The utility's
+own Rhyolite version is always recorded; older review artifacts do not contain
+a release version, so their review version is reported as unknown rather than
+guessed.
+
+`--write-file` creates
+`<selected-root>/summaries/<summary-id>.<extension>` with mode `0600`.
+`--output PATH` selects another file; relative paths remain under the selected
+root. HTML output escapes review content, has no scripts or remote assets, and
+uses a restrictive content-security policy. Markdown, text, and HTML place
+horizontal separators above and below the review table.
 
 ## Security and privacy
 

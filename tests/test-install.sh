@@ -123,7 +123,7 @@ const required = [
     "skills/research-source-assessment/SKILL.md",
 ];
 const executables = [
-    "bin/rhyolite", "scripts/show-welcome-panel.sh",
+    "bin/rhyolite", "bin/rhyolite-summary", "scripts/show-welcome-panel.sh",
     "skills/readonly-repository-review/scripts/discover-repositories.sh",
     "skills/readonly-repository-review/scripts/run-parallel-reviews.sh",
     "skills/readonly-repository-review/scripts/review-output.sh",
@@ -236,6 +236,18 @@ assert_install() {
         fail 'Installed launcher help failed.'
     [[ "${launcher_help}" == "Rhyolite v${version} Beta"$'\n'* ]] ||
         fail 'Installed launcher help version is stale.'
+    summary_version="$(
+        offline_launcher \
+            "${installed_plugin_root}/bin/rhyolite-summary" --version
+    )" ||
+        fail 'Installed review-summary utility version failed.'
+    [[ "${summary_version}" == \
+        "Rhyolite review summary utility v${version} (schema 1)" ]] ||
+        fail 'Installed review-summary utility version is stale.'
+    offline_launcher \
+        "${installed_plugin_root}/bin/rhyolite-summary" \
+        --help > "${TEST_ROOT}/${label}-summary-help.txt" ||
+        fail 'Installed review-summary utility help failed.'
     offline_launcher \
         "${installed_plugin_root}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
         --help > "${TEST_ROOT}/${label}-runner-help.txt" ||

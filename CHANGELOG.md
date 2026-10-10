@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added the standalone `rhyolite-summary` utility and repository-root wrapper.
+  It performs a bounded, read-only scan of a broad output root, one run, or
+  one repository result; represents single- and multi-repository runs in a
+  portable JSON schema; and renders JSON, Markdown, text, or inert HTML to
+  stdout or a mode-0600 file under `rhyolite-output`. The summary records a
+  unique ID, dates, hostname, run/review counts, source repositories, model
+  details, scopes, statuses, report paths, explicitly recorded Rhyolite
+  versions, and overall assessment/confidence data. Only the selected output
+  root is absolute; report and state paths remain relative for archiving.
+  Markdown, text, and HTML add horizontal separators around the review table
+  and omit confidence levels, while canonical JSON retains the full confidence
+  detail for future console and orchestration consumers.
+  In interactive directory selection, pressing Enter now accepts the first
+  displayed candidate.
+
 ## 0.8.1 - 2026-10-08
 
 - The launcher and the Copilot setup questions now offer `claude-opus-5.5`

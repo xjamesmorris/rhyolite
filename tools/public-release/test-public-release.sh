@@ -242,6 +242,11 @@ EOF_CHANGELOG
 printf 'public checkout launcher\n'
 EOF_LAUNCHER
     chmod +x "${repo_path}/rhyolite"
+    cat <<'EOF_SUMMARY' > "${repo_path}/rhyolite-summary"
+#!/usr/bin/env bash
+printf 'public checkout review summary\n'
+EOF_SUMMARY
+    chmod +x "${repo_path}/rhyolite-summary"
     cat <<'EOF_PLUGIN' > "${repo_path}/plugins/demo/plugin.json"
 {
   "name": "public-demo",
@@ -660,6 +665,11 @@ require_grep '[bash] status=passed command=bash tests/validate-all.sh exit_code=
 [[ -x "${CLEAN_EXPORT_DEST}/rhyolite" ]] ||
     fail 'Public export did not preserve the root launcher executable.'
 require_grep 'public checkout launcher' "${CLEAN_EXPORT_DEST}/rhyolite"
+[[ -x "${CLEAN_EXPORT_DEST}/rhyolite-summary" ]] ||
+    fail 'Public export did not preserve the root review-summary executable.'
+require_grep \
+    'public checkout review summary' \
+    "${CLEAN_EXPORT_DEST}/rhyolite-summary"
 
 : > "${VALIDATION_LOG}"
 expect_success "${REPORTS_ROOT}/clean-preflight.stdout.txt" \

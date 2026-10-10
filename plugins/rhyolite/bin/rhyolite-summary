@@ -1,0 +1,1646 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+umask 077
+
+SUMMARY_SCHEMA_VERSION=1
+destination='stdout'
+destination_explicit=''
+format='json'
+output_root=''
+output_path=''
+force=0
+non_interactive=0
+
+fail() {
+    local summary="$1"
+    local detail="${2:-No additional detail was returned.}"
+    local exit_code="${3:-2}"
+    local safe_detail
+
+    safe_detail="$(
+        printf '%s' "${detail}" |
+            LC_ALL=C tr -d '\000-\010\013-\037\177' |
+            sed -E \
+                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
+                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' |
+            tr '\r\n' '  '
+    )"
+    [ -n "${safe_detail}" ] ||
+        safe_detail='No additional safe detail was returned.'
+
+    printf '%s\n' \
+        'RHYOLITE ERROR' \
+        "Summary: ${summary}" \
+        'Stage: review output summary' \
+        'Source: NOT APPLICABLE' \
+        "Details: ${safe_detail}" \
+        'Consequence: No review summary was produced.' \
+        'Remediation: Correct the selected output directory or option and retry.' \
+        'Artifacts: NONE' >&2
+    exit "${exit_code}"
+}
+
+usage() {
+    cat <<'EOF'
+Usage: rhyolite-summary [OPTIONS] [RHYOLITE_OUTPUT_DIRECTORY]
+
+Scan Rhyolite review output without executing reviewed repository content.
+JSON is the canonical internal representation and the default output format.
+
+Options:
+  --output-root PATH       Directory containing Rhyolite runs, or one run
+  --format FORMAT          json (default), md, text, or html
+  --stdout                 Write the rendered summary to stdout (default)
+  --write-file, --file     Write under PATH/summaries/ using the summary ID
+  --output PATH            Write to PATH; relative paths resolve under output root
+  --force                  Replace an existing explicit output file
+  --non-interactive        Fail instead of prompting when no directory is supplied
+  --version                Print the utility and Rhyolite version
+  -h, --help               Show this help
+
+Without a directory, the utility offers existing candidates near the current
+directory or Git repository and under ~/rhyolite-output, then allows a custom
+pathname. Press Enter to select the first candidate. A selected directory may
+be the broad rhyolite-output directory, the repo-review directory, one run
+directory, or one repository result directory.
+EOF
+}
+
+resolve_physical_path() {
+    local path="$1"
+    local directory
+    local target
+    local hops=0
+
+    case "${path}" in
+        /*) ;;
+        *) path="${PWD%/}/${path}" ;;
+    esac
+
+    while [ -L "${path}" ]; do
+        hops=$((hops + 1))
+        [ "${hops}" -le 40 ] ||
+            fail \
+                'The summary utility path could not be resolved.' \
+                "Too many symlink levels while resolving ${path}."
+        directory="$(cd -P -- "$(dirname -- "${path}")" && pwd)"
+        target="$(readlink -- "${path}")" ||
+            fail \
+                'The summary utility symlink could not be read.' \
+                "Could not resolve symlink ${path}."
+        case "${target}" in
+            /*) path="${target}" ;;
+            *) path="${directory}/${target}" ;;
+        esac
+    done
+
+    directory="$(cd -P -- "$(dirname -- "${path}")" && pwd)"
+    printf '%s/%s\n' "${directory}" "$(basename -- "${path}")"
+}
+
+canonicalize_existing_directory() {
+    local path="$1"
+    [ -d "${path}" ] || return 1
+    (
+        CDPATH=
+        cd -P -- "${path}" && pwd
+    )
+}
+
+add_candidate() {
+    local candidate="$1"
+    local canonical
+    local existing
+
+    canonical="$(canonicalize_existing_directory "${candidate}")" || return 0
+    for existing in "${candidates[@]-}"; do
+        [ "${existing}" != "${canonical}" ] || return 0
+    done
+    candidates+=("${canonical}")
+}
+
+display_path() {
+    local path="$1"
+    local relative
+
+    if [ -n "${HOME-}" ] && [ "${path}" = "${HOME}" ]; then
+        printf '~\n'
+        return
+    fi
+    if [ -n "${HOME-}" ] && [[ "${path}" == "${HOME}/"* ]]; then
+        printf '~/%s\n' "${path#"${HOME}/"}"
+        return
+    fi
+    if command -v realpath >/dev/null 2>&1; then
+        relative="$(realpath --relative-to="${PWD}" -- "${path}" 2>/dev/null || true)"
+        if [ -n "${relative}" ]; then
+            case "${relative}" in
+                .|..|../*) printf '%s\n' "${relative}" ;;
+                *) printf './%s\n' "${relative}" ;;
+            esac
+            return
+        fi
+    fi
+    printf '%s\n' "${path}"
+}
+
+choose_output_root() {
+    local repository_root=''
+    local index
+    local choice
+    local custom_path
+
+    candidates=()
+    if [ -f "${PWD}/state.json" ] || [ -f "${PWD}/manifest.json" ]; then
+        add_candidate "${PWD}"
+    fi
+    add_candidate "${PWD}/rhyolite-output/repo-review"
+    add_candidate "${PWD}/rhyolite-output"
+
+    if command -v git >/dev/null 2>&1; then
+        repository_root="$(
+            git -C "${PWD}" rev-parse --show-toplevel 2>/dev/null || true
+        )"
+    fi
+    if [ -n "${repository_root}" ]; then
+        add_candidate "${repository_root}/rhyolite-output/repo-review"
+        add_candidate "${repository_root}/rhyolite-output"
+        add_candidate "$(dirname -- "${repository_root}")/rhyolite-output/repo-review"
+        add_candidate "$(dirname -- "${repository_root}")/rhyolite-output"
+    fi
+    if [ -n "${HOME-}" ]; then
+        add_candidate "${HOME}/rhyolite-output/repo-review"
+        add_candidate "${HOME}/rhyolite-output"
+    fi
+
+    if ((non_interactive)) || [ ! -t 0 ]; then
+        fail \
+            'A Rhyolite output directory is required.' \
+            'Pass --output-root PATH when standard input is not interactive.'
+    fi
+
+    if ((${#candidates[@]})); then
+        printf '%s\n' 'Select a Rhyolite output directory:' >&2
+        for index in "${!candidates[@]}"; do
+            printf '%s. %s\n' \
+                "$((index + 1))" \
+                "$(display_path "${candidates[index]}")" >&2
+        done
+        printf '%s. Enter another pathname\n' \
+            "$(( ${#candidates[@]} + 1 ))" >&2
+        printf 'Selection [1]: ' >&2
+        IFS= read -r choice ||
+            fail \
+                'The output-directory selection was not completed.' \
+                'No selection was read from the terminal.'
+
+        if [ -z "${choice}" ]; then
+            printf '%s\n' "${candidates[0]}"
+            return
+        fi
+        if [[ "${choice}" =~ ^[0-9]+$ ]] &&
+            ((choice >= 1 && choice <= ${#candidates[@]})); then
+            printf '%s\n' "${candidates[choice - 1]}"
+            return
+        fi
+        if [[ "${choice}" =~ ^[0-9]+$ ]] &&
+            ((choice == ${#candidates[@]} + 1)); then
+            :
+        elif [ -n "${choice}" ]; then
+            custom_path="${choice}"
+            canonicalize_existing_directory "${custom_path}" ||
+                fail \
+                    'The selected Rhyolite output directory does not exist.' \
+                    "Directory: ${custom_path}"
+            return
+        else
+            fail \
+                'The output-directory selection was invalid.' \
+                'Press Enter for the first choice, choose another listed number, or enter a pathname.'
+        fi
+    fi
+
+    printf 'Rhyolite output directory pathname: ' >&2
+    IFS= read -r custom_path ||
+        fail \
+            'The output-directory pathname was not completed.' \
+            'No pathname was read from the terminal.'
+    [ -n "${custom_path}" ] ||
+        fail \
+            'The output-directory pathname was empty.' \
+            'Enter an existing directory.'
+    canonicalize_existing_directory "${custom_path}" ||
+        fail \
+            'The selected Rhyolite output directory does not exist.' \
+            "Directory: ${custom_path}"
+}
+
+set_destination() {
+    local requested="$1"
+    if [ -n "${destination_explicit}" ] &&
+        [ "${destination}" != "${requested}" ]; then
+        fail \
+            'Conflicting output destinations were selected.' \
+            'Choose either --stdout or a file destination, not both.'
+    fi
+    destination="${requested}"
+    destination_explicit=1
+}
+
+script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
+script_dir="$(cd -P -- "$(dirname -- "${script_path}")" && pwd)"
+plugin_root="$(cd -P -- "${script_dir}/.." && pwd)"
+plugin_version="$(
+    sed -n \
+        's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${plugin_root}/plugin.json" | head -n 1
+)"
+[ -n "${plugin_version}" ] ||
+    fail \
+        'The installed Rhyolite version could not be determined.' \
+        "Could not read ${plugin_root}/plugin.json."
+
+positional_root=''
+while (($#)); do
+    case "$1" in
+        --output-root)
+            (($# >= 2)) ||
+                fail 'The --output-root option requires a pathname.'
+            [ -z "${output_root}" ] ||
+                fail 'The Rhyolite output directory was specified more than once.'
+            output_root="$2"
+            shift 2
+            ;;
+        --format)
+            (($# >= 2)) ||
+                fail 'The --format option requires a value.'
+            format="$2"
+            shift 2
+            ;;
+        --stdout)
+            set_destination stdout
+            shift
+            ;;
+        --write-file|--file)
+            set_destination file
+            shift
+            ;;
+        --output)
+            (($# >= 2)) ||
+                fail 'The --output option requires a pathname.'
+            if [ "$2" = '-' ]; then
+                set_destination stdout
+                output_path=''
+            else
+                set_destination file
+                output_path="$2"
+            fi
+            shift 2
+            ;;
+        --force)
+            force=1
+            shift
+            ;;
+        --non-interactive)
+            non_interactive=1
+            shift
+            ;;
+        --version)
+            printf 'Rhyolite review summary utility v%s (schema %s)\n' \
+                "${plugin_version}" "${SUMMARY_SCHEMA_VERSION}"
+            exit 0
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            if (($# > 1)); then
+                fail 'Too many positional pathnames were supplied.'
+            fi
+            if (($# == 1)); then
+                positional_root="$1"
+                shift
+            fi
+            ;;
+        -*)
+            fail 'An unknown review-summary option was supplied.' "Option: $1"
+            ;;
+        *)
+            [ -z "${positional_root}" ] ||
+                fail 'Too many positional pathnames were supplied.'
+            positional_root="$1"
+            shift
+            ;;
+    esac
+done
+
+case "${format}" in
+    json) extension='json' ;;
+    md|markdown)
+        format='md'
+        extension='md'
+        ;;
+    text|txt)
+        format='text'
+        extension='txt'
+        ;;
+    html) extension='html' ;;
+    *)
+        fail \
+            'The requested summary format is unsupported.' \
+            "Format: ${format}; expected json, md, text, or html."
+        ;;
+esac
+
+if [ -n "${output_root}" ] && [ -n "${positional_root}" ]; then
+    fail \
+        'The Rhyolite output directory was specified more than once.' \
+        'Use either --output-root PATH or one positional pathname.'
+fi
+if [ -z "${output_root}" ]; then
+    output_root="${positional_root}"
+fi
+if [ -z "${output_root}" ]; then
+    output_root="$(choose_output_root)"
+fi
+output_root="$(
+    canonicalize_existing_directory "${output_root}"
+)" || fail \
+    'The selected Rhyolite output directory does not exist.' \
+    "Directory: ${output_root}"
+
+command -v python3 >/dev/null 2>&1 ||
+    fail \
+        'Python 3 is required to parse Rhyolite JSON artifacts.' \
+        'Install Python 3 and retry.'
+
+generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+current_date="$(date +%Y-%m-%d)"
+summary_id="$(
+    printf 'summary-%s-' "$(date -u +%Y%m%dT%H%M%SZ)"
+    od -An -N6 -tx1 /dev/urandom | tr -d '[:space:]'
+)"
+hostname_value="$(
+    {
+        hostname 2>/dev/null ||
+            uname -n 2>/dev/null ||
+            printf 'unknown'
+    } | LC_ALL=C tr -d '\000-\037\177'
+)"
+
+summary_file_relative=''
+summary_file=''
+temporary_file=''
+cleanup() {
+    if [ -n "${temporary_file}" ] && [ -e "${temporary_file}" ]; then
+        rm -f -- "${temporary_file}"
+    fi
+}
+trap cleanup EXIT
+
+if [ "${destination}" = file ]; then
+    if [ -z "${output_path}" ]; then
+        output_path="summaries/${summary_id}.${extension}"
+    fi
+    case "${output_path}" in
+        *$'\n'*|*$'\r'*)
+            fail \
+                'The summary output pathname contains control characters.' \
+                'Use a normal single-line pathname.'
+            ;;
+    esac
+    case "${output_path}" in
+        /*)
+            summary_file="${output_path}"
+            ;;
+        *)
+            case "/${output_path}/" in
+                */../*)
+                    fail \
+                        'A relative summary output pathname cannot contain .. components.' \
+                        "Path: ${output_path}"
+                    ;;
+            esac
+            summary_file="${output_root}/${output_path}"
+            ;;
+    esac
+    mkdir -p -- "$(dirname -- "${summary_file}")"
+    output_directory="$(
+        cd -P -- "$(dirname -- "${summary_file}")" && pwd
+    )"
+    summary_file="${output_directory}/$(basename -- "${summary_file}")"
+
+    if [[ "${output_path}" != /* ]]; then
+        case "${summary_file}" in
+            "${output_root}"/*) ;;
+            *)
+                fail \
+                    'The relative summary output escaped the selected output root.' \
+                    "Resolved path: ${summary_file}"
+                ;;
+        esac
+    fi
+    if [ -e "${summary_file}" ] && ((force == 0)); then
+        fail \
+            'The requested summary output file already exists.' \
+            "Use --force to replace ${summary_file}."
+    fi
+    case "${summary_file}" in
+        "${output_root}"/*)
+            summary_file_relative="${summary_file#"${output_root}/"}"
+            ;;
+    esac
+    temporary_file="$(mktemp "${output_directory}/.rhyolite-summary.XXXXXX")"
+fi
+
+render_summary() {
+    python3 - \
+        "${output_root}" \
+        "${format}" \
+        "${summary_id}" \
+        "${generated_at}" \
+        "${current_date}" \
+        "${hostname_value}" \
+        "${plugin_version}" \
+        "${summary_file_relative}" <<'PY'
+import html
+import json
+import re
+import stat
+import sys
+from collections import Counter
+from pathlib import Path
+
+(
+    root_argument,
+    output_format,
+    summary_id,
+    generated_at,
+    current_date,
+    hostname,
+    plugin_version,
+    summary_file_relative,
+) = sys.argv[1:]
+
+root = Path(root_argument).resolve()
+MAX_JSON_BYTES = 16 * 1024 * 1024
+MAX_REPORT_BYTES = 16 * 1024 * 1024
+MAX_SCAN_DEPTH = 2
+warnings = []
+json_cache = {}
+
+
+def clean_scalar(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    return "".join(
+        character
+        for character in text
+        if character in "\t\n" or ord(character) >= 32 and ord(character) != 127
+    )
+
+
+def compact(value):
+    value = clean_scalar(value)
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def relative_path(path):
+    try:
+        return path.resolve(strict=False).relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return path.name
+
+
+def is_regular_file(path):
+    try:
+        return stat.S_ISREG(path.lstat().st_mode) and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def is_real_directory(path):
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode) and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def add_warning(path, message):
+    warnings.append(
+        {
+            "path": relative_path(path),
+            "message": compact(message),
+        }
+    )
+
+
+def portable_error_message(error):
+    message = compact(str(error))
+    if message:
+        message = message.replace(str(root), ".")
+        return message
+    return type(error).__name__
+
+
+def load_json(path, *, warn=True):
+    cache_key = str(path)
+    if cache_key in json_cache:
+        return json_cache[cache_key]
+    if not is_regular_file(path):
+        json_cache[cache_key] = None
+        return None
+    try:
+        size = path.stat().st_size
+        if size > MAX_JSON_BYTES:
+            raise ValueError(f"JSON artifact exceeds {MAX_JSON_BYTES} bytes")
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        if warn:
+            add_warning(
+                path,
+                f"Could not read JSON artifact: {portable_error_message(error)}",
+            )
+        data = None
+    json_cache[cache_key] = data
+    return data
+
+
+def classify_directory(directory):
+    state_path = directory / "state.json"
+    state_data = load_json(state_path, warn=is_regular_file(state_path))
+    if isinstance(state_data, dict):
+        if compact(state_data.get("RunId")):
+            return "run", state_data
+        if (
+            compact(state_data.get("Repository"))
+            or isinstance(state_data.get("Source"), dict)
+            and compact(state_data["Source"].get("RemoteUrl"))
+        ):
+            return "review", state_data
+    manifest_data = load_json(
+        directory / "manifest.json",
+        warn=is_regular_file(directory / "manifest.json"),
+    )
+    if isinstance(manifest_data, list):
+        return "run", state_data if isinstance(state_data, dict) else {}
+    return None, None
+
+
+def discover_run_directories():
+    discovered = []
+    queue = [(root, 0)]
+    visited = set()
+
+    while queue:
+        directory, depth = queue.pop(0)
+        try:
+            real_directory = directory.resolve()
+        except OSError:
+            continue
+        if real_directory in visited or not is_real_directory(directory):
+            continue
+        visited.add(real_directory)
+        kind, state_data = classify_directory(directory)
+        if kind == "run":
+            discovered.append(
+                {
+                    "directory": directory,
+                    "state": state_data or {},
+                    "synthetic_review": None,
+                }
+            )
+            continue
+        if kind == "review" and directory == root:
+            discovered.append(
+                {
+                    "directory": directory,
+                    "state": {},
+                    "synthetic_review": state_data,
+                }
+            )
+            continue
+        if depth >= MAX_SCAN_DEPTH:
+            continue
+        try:
+            children = sorted(directory.iterdir(), key=lambda child: child.name)
+        except OSError as error:
+            add_warning(
+                directory,
+                f"Could not list directory: {portable_error_message(error)}",
+            )
+            continue
+        for child in children:
+            if is_real_directory(child):
+                queue.append((child, depth + 1))
+
+    unique = {}
+    for entry in discovered:
+        unique[str(entry["directory"].resolve())] = entry
+    return sorted(unique.values(), key=lambda entry: entry["directory"].as_posix())
+
+
+def merge_dictionary(primary, fallback):
+    merged = dict(fallback) if isinstance(fallback, dict) else {}
+    if isinstance(primary, dict):
+        for key, value in primary.items():
+            if value not in (None, "", [], {}):
+                merged[key] = value
+    return merged
+
+
+def repository_key(data):
+    source = data.get("Source") if isinstance(data.get("Source"), dict) else {}
+    return compact(data.get("Repository") or source.get("RemoteUrl"))
+
+
+def child_repository_states(run_directory):
+    states = []
+    try:
+        children = sorted(run_directory.iterdir(), key=lambda child: child.name)
+    except OSError:
+        return states
+    for child in children:
+        if not is_real_directory(child):
+            continue
+        state_path = child / "state.json"
+        data = load_json(state_path, warn=is_regular_file(state_path))
+        if isinstance(data, dict) and not compact(data.get("RunId")) and repository_key(data):
+            states.append((data, child, state_path))
+    return states
+
+
+def slug_from_data(data, directory, index):
+    slug = compact(data.get("Slug"))
+    if slug:
+        return slug
+    if directory is not None and directory != root:
+        return compact(directory.name)
+    repository = repository_key(data)
+    if repository:
+        repository = re.sub(r"^https?://", "", repository, flags=re.IGNORECASE)
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", repository).strip("-")
+        if slug:
+            return slug
+    return f"repository-{index}"
+
+
+def repository_records(run_entry):
+    run_directory = run_entry["directory"]
+    if isinstance(run_entry.get("synthetic_review"), dict):
+        return [
+            (
+                run_entry["synthetic_review"],
+                run_directory,
+                run_directory / "state.json",
+            )
+        ]
+
+    actual = child_repository_states(run_directory)
+    actual_by_repository = {
+        repository_key(data): (data, directory, state_path)
+        for data, directory, state_path in actual
+        if repository_key(data)
+    }
+    manifest = load_json(
+        run_directory / "manifest.json",
+        warn=is_regular_file(run_directory / "manifest.json"),
+    )
+    if isinstance(manifest, list):
+        for index, item in enumerate(manifest, start=1):
+            if not isinstance(item, dict):
+                add_warning(
+                    run_directory / "manifest.json",
+                    f"Manifest entry {index} is not an object and was skipped.",
+                )
+                continue
+            key = repository_key(item)
+            if key and key in actual_by_repository:
+                existing, directory, state_path = actual_by_repository[key]
+                merged = merge_dictionary(existing, item)
+                existing.clear()
+                existing.update(merged)
+                continue
+            slug = slug_from_data(item, None, index)
+            directory = run_directory / slug
+            state_path = directory / "state.json"
+            actual.append((item, directory, state_path))
+            if key:
+                actual_by_repository[key] = (item, directory, state_path)
+
+    if actual:
+        return actual
+
+    run_state = run_entry.get("state")
+    repositories = (
+        run_state.get("Repositories")
+        if isinstance(run_state, dict)
+        and isinstance(run_state.get("Repositories"), list)
+        else []
+    )
+    fallback = []
+    for index, item in enumerate(repositories, start=1):
+        if not isinstance(item, dict):
+            continue
+        state_value = compact(item.get("State"))
+        slug = Path(state_value).parent.name if state_value else ""
+        slug = slug or slug_from_data(item, None, index)
+        directory = run_directory / slug
+        state_path = directory / "state.json"
+        state_data = load_json(state_path, warn=is_regular_file(state_path))
+        fallback.append(
+            (
+                merge_dictionary(state_data, item),
+                directory,
+                state_path,
+            )
+        )
+    return fallback
+
+
+def find_plan(run_directory, run_state):
+    candidates = [run_directory / "review-plan.json"]
+    artifacts = (
+        run_state.get("Artifacts")
+        if isinstance(run_state, dict) and isinstance(run_state.get("Artifacts"), dict)
+        else {}
+    )
+    recorded = compact(artifacts.get("ReviewPlanJson"))
+    if recorded:
+        candidates.append(run_directory / Path(recorded).name)
+    for candidate in candidates:
+        data = load_json(candidate, warn=is_regular_file(candidate))
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def provider_descriptor(value):
+    if not isinstance(value, dict):
+        return None
+    descriptor = {
+        "id": compact(value.get("Id") or value.get("id")) or None,
+        "host": compact(value.get("Host") or value.get("host")) or None,
+        "forwarded_environment_variable_names": [
+            compact(item)
+            for item in (
+                value.get("ForwardedEnvVarNames")
+                or value.get("forwarded_environment_variable_names")
+                or []
+            )
+            if compact(item)
+        ],
+    }
+    if not any(
+        [
+            descriptor["id"],
+            descriptor["host"],
+            descriptor["forwarded_environment_variable_names"],
+        ]
+    ):
+        return None
+    return descriptor
+
+
+def model_descriptors(data, source_name):
+    if not isinstance(data, dict):
+        return []
+    raw_models = data.get("Models")
+    if raw_models is None:
+        raw_models = [data.get("Model")]
+    elif not isinstance(raw_models, list):
+        raw_models = [raw_models]
+
+    descriptors = []
+    for raw_model in raw_models:
+        if isinstance(raw_model, dict):
+            model_id = compact(
+                raw_model.get("Id")
+                or raw_model.get("id")
+                or raw_model.get("Model")
+                or raw_model.get("model")
+            )
+            reported_version = compact(
+                raw_model.get("Version")
+                or raw_model.get("version")
+                or raw_model.get("ModelVersion")
+            )
+        else:
+            model_id = compact(raw_model)
+            reported_version = compact(data.get("ModelVersion"))
+        if not model_id:
+            continue
+        descriptors.append(
+            {
+                "id": model_id,
+                "reported_version": reported_version or None,
+                "harness": compact(data.get("Harness")) or None,
+                "provider": provider_descriptor(data.get("Provider")),
+                "reasoning_effort": compact(data.get("ReasoningEffort")) or None,
+                "context_tier": compact(data.get("ContextTier")) or None,
+                "catalog_membership": compact(data.get("ModelCatalogMembership"))
+                or None,
+                "sources": [source_name],
+            }
+        )
+    return descriptors
+
+
+def merge_models(*groups):
+    models = []
+    by_key = {}
+    for group in groups:
+        for model in group:
+            key = (model.get("id"), model.get("harness"))
+            if key not in by_key:
+                copy = dict(model)
+                copy["sources"] = list(model.get("sources") or [])
+                by_key[key] = copy
+                models.append(copy)
+                continue
+            existing = by_key[key]
+            for field in (
+                "reported_version",
+                "provider",
+                "reasoning_effort",
+                "context_tier",
+                "catalog_membership",
+            ):
+                if existing.get(field) in (None, "", [], {}) and model.get(field):
+                    existing[field] = model[field]
+            for source in model.get("sources") or []:
+                if source not in existing["sources"]:
+                    existing["sources"].append(source)
+    return models
+
+
+def scope_descriptor(repository_state, run_state, plan):
+    repository_scope = (
+        repository_state.get("Scope")
+        if isinstance(repository_state.get("Scope"), dict)
+        else {}
+    )
+    run_scope = (
+        run_state.get("Scope")
+        if isinstance(run_state, dict) and isinstance(run_state.get("Scope"), dict)
+        else {}
+    )
+    plan_scope = plan.get("Scope") if isinstance(plan.get("Scope"), dict) else {}
+    name = compact(
+        repository_scope.get("Name")
+        or run_scope.get("Name")
+        or plan_scope.get("Name")
+    )
+    number = (
+        repository_scope.get("Number")
+        or run_scope.get("Number")
+        or plan_scope.get("Number")
+    )
+    if not isinstance(number, int):
+        match = re.match(r"^\s*([123])(?:\s|$|-)", name)
+        number = int(match.group(1)) if match else None
+    return {
+        "number": number,
+        "name": name or None,
+        "public_research": repository_scope.get(
+            "PublicResearch",
+            run_scope.get("PublicResearch", plan_scope.get("PublicResearch")),
+        ),
+        "provenance_research": repository_scope.get(
+            "ProvenanceResearch",
+            run_scope.get(
+                "ProvenanceResearch",
+                plan_scope.get("ProvenanceResearch"),
+            ),
+        ),
+    }
+
+
+def explicit_rhyolite_versions(data, source_name):
+    if not isinstance(data, dict):
+        return []
+    values = []
+    direct = data.get("RhyoliteVersion")
+    if direct:
+        values.append(direct)
+    plural = data.get("RhyoliteVersions")
+    if isinstance(plural, list):
+        values.extend(plural)
+    nested = data.get("Rhyolite")
+    if isinstance(nested, dict) and nested.get("Version"):
+        values.append(nested.get("Version"))
+    result = []
+    for value in values:
+        version = compact(value)
+        if version:
+            result.append({"version": version, "source": source_name})
+    return result
+
+
+def merge_versions(*groups):
+    merged = []
+    seen = set()
+    for group in groups:
+        for item in group:
+            key = (item["version"], item["source"])
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
+    return merged
+
+
+def artifact_entry(repository_directory, repository_state, field, default_name):
+    artifacts = (
+        repository_state.get("Artifacts")
+        if isinstance(repository_state.get("Artifacts"), dict)
+        else {}
+    )
+    recorded = compact(artifacts.get(field))
+    candidates = []
+    if recorded:
+        recorded_path = Path(recorded)
+        if recorded_path.is_absolute():
+            try:
+                recorded_path.resolve(strict=False).relative_to(root)
+                candidates.append(recorded_path)
+            except (OSError, ValueError):
+                pass
+            candidates.append(repository_directory / recorded_path.name)
+        else:
+            candidates.extend(
+                [
+                    repository_directory / recorded_path,
+                    repository_directory / recorded_path.name,
+                ]
+            )
+    candidates.append(repository_directory / default_name)
+
+    selected = None
+    for candidate in candidates:
+        try:
+            candidate.resolve(strict=False).relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if is_regular_file(candidate):
+            selected = candidate
+            break
+        if selected is None:
+            selected = candidate
+    if selected is None:
+        return {"path": None, "exists": False}
+    return {
+        "path": relative_path(selected),
+        "exists": is_regular_file(selected),
+    }
+
+
+def read_report(path_value):
+    if not path_value:
+        return None
+    report_path = root / path_value
+    if not is_regular_file(report_path):
+        return None
+    try:
+        if report_path.stat().st_size > MAX_REPORT_BYTES:
+            raise ValueError(f"report exceeds {MAX_REPORT_BYTES} bytes")
+        return report_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError) as error:
+        add_warning(
+            report_path,
+            f"Could not read canonical report: {portable_error_message(error)}",
+        )
+        return None
+
+
+def report_context(text):
+    if not text:
+        return {}
+    metadata = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "review_date" not in metadata:
+            match = re.match(r"Review date:\s*(\d{4}-\d{2}-\d{2})\s*$", stripped)
+            if match:
+                metadata["review_date"] = match.group(1)
+        if "scope_name" not in metadata:
+            match = re.match(r"Scope:\s*(.+)$", stripped)
+            if match:
+                metadata["scope_name"] = compact(match.group(1))
+        if len(metadata) == 2:
+            break
+    return metadata
+
+
+def first_sentence(value):
+    value = compact(value)
+    if not value:
+        return None
+    match = re.search(r"[.!?](?:\s|$)", value)
+    if match:
+        return value[: match.end()].strip()
+    return value
+
+
+def parse_overall_assessment(text):
+    unavailable = {
+        "value": None,
+        "source": "unavailable",
+        "summary": None,
+        "confidence": [],
+        "confidence_levels": [],
+    }
+    if not text:
+        return unavailable
+
+    lines = text.splitlines()
+    heading_index = None
+    for index, line in enumerate(lines):
+        if line.strip() == "OVERALL ASSESSMENT":
+            heading_index = index
+            break
+    if heading_index is None:
+        return unavailable
+
+    section_lines = []
+    for line in lines[heading_index + 1 :]:
+        stripped = line.strip()
+        if len(stripped) >= 80 and set(stripped) == {"="}:
+            break
+        section_lines.append(stripped)
+
+    blocks = []
+    current_kind = None
+    current_lines = []
+
+    def flush():
+        nonlocal current_kind, current_lines
+        if current_lines:
+            blocks.append((current_kind or "text", compact(" ".join(current_lines))))
+        current_kind = None
+        current_lines = []
+
+    grade_pattern = re.compile(
+        r"^(?:Overall\s+)?(?:Grade|Rating|Verdict):\s*(.+)$",
+        re.IGNORECASE,
+    )
+    confidence_pattern = re.compile(
+        r"^Confidence:\s*(High|Medium|Low)\b(?:\s*[-:]\s*|\s+)?(.*)$",
+        re.IGNORECASE,
+    )
+
+    for line in section_lines:
+        if not line:
+            flush()
+            continue
+        if grade_pattern.match(line):
+            flush()
+            blocks.append(("grade", compact(grade_pattern.match(line).group(1))))
+            continue
+        if confidence_pattern.match(line):
+            flush()
+            current_kind = "confidence"
+            current_lines = [line]
+            continue
+        if current_kind == "confidence":
+            current_lines.append(line)
+            continue
+        current_kind = current_kind or "text"
+        current_lines.append(line)
+    flush()
+
+    explicit_grade = next(
+        (value for kind, value in blocks if kind == "grade" and value),
+        None,
+    )
+    summary_text = next(
+        (value for kind, value in blocks if kind == "text" and value),
+        None,
+    )
+    confidence = []
+    for kind, value in blocks:
+        if kind != "confidence":
+            continue
+        match = confidence_pattern.match(value)
+        if not match:
+            continue
+        confidence.append(
+            {
+                "level": match.group(1).capitalize(),
+                "evidence_basis": compact(match.group(2)) or None,
+            }
+        )
+    confidence_levels = []
+    for item in confidence:
+        if item["level"] not in confidence_levels:
+            confidence_levels.append(item["level"])
+
+    if explicit_grade:
+        grade_value = explicit_grade
+        grade_source = "explicit-grade-or-verdict-field"
+    else:
+        grade_value = first_sentence(summary_text)
+        grade_source = (
+            "overall-assessment-first-sentence" if grade_value else "unavailable"
+        )
+    return {
+        "value": grade_value,
+        "source": grade_source,
+        "summary": summary_text,
+        "confidence": confidence,
+        "confidence_levels": confidence_levels,
+    }
+
+
+run_entries = discover_run_directories()
+if not run_entries:
+    raise SystemExit(
+        "RHYOLITE ERROR\n"
+        "Summary: No Rhyolite run or repository state was found.\n"
+        "Stage: review output summary\n"
+        f"Source: {root}\n"
+        "Details: Expected a bounded state.json or manifest.json scan within "
+        "two directory levels.\n"
+        "Consequence: No review summary was produced.\n"
+        "Remediation: Select rhyolite-output, repo-review, a run directory, "
+        "or a repository result directory.\n"
+        "Artifacts: NONE"
+    )
+
+runs = []
+reviews = []
+recorded_review_versions = []
+unknown_version_count = 0
+
+for run_index, run_entry in enumerate(run_entries, start=1):
+    run_directory = run_entry["directory"]
+    run_state = run_entry.get("state") if isinstance(run_entry.get("state"), dict) else {}
+    plan = find_plan(run_directory, run_state)
+    repository_items = repository_records(run_entry)
+    run_id = compact(run_state.get("RunId") or plan.get("RunId"))
+    if not run_id:
+        if run_entry.get("synthetic_review") is not None:
+            run_id = compact(run_directory.parent.name) or f"run-{run_index}"
+        else:
+            run_id = compact(run_directory.name) or f"run-{run_index}"
+    review_count = len(repository_items)
+    run_kind = (
+        "single-repository"
+        if review_count == 1
+        else "multi-repository"
+        if review_count > 1
+        else "empty"
+    )
+    run_models = merge_models(
+        model_descriptors(run_state, "run-state"),
+        model_descriptors(plan, "review-plan"),
+    )
+    run_versions = merge_versions(
+        explicit_rhyolite_versions(run_state, "run-state"),
+        explicit_rhyolite_versions(plan, "review-plan"),
+    )
+    run_scope = scope_descriptor({}, run_state, plan)
+    review_ids = []
+
+    for repository_index, (
+        repository_state,
+        repository_directory,
+        state_path,
+    ) in enumerate(repository_items, start=1):
+        repository_state = (
+            repository_state if isinstance(repository_state, dict) else {}
+        )
+        slug = slug_from_data(
+            repository_state,
+            repository_directory,
+            repository_index,
+        )
+        review_id = compact(repository_state.get("ReviewId"))
+        if not review_id:
+            review_id = f"{run_id}/{slug}"
+        if review_id in review_ids:
+            review_id = f"{review_id}-{repository_index}"
+        review_ids.append(review_id)
+
+        reports = {
+            "plain_text": artifact_entry(
+                repository_directory,
+                repository_state,
+                "PlainText",
+                "review.txt",
+            ),
+            "markdown": artifact_entry(
+                repository_directory,
+                repository_state,
+                "Markdown",
+                "review.md",
+            ),
+            "html": artifact_entry(
+                repository_directory,
+                repository_state,
+                "Html",
+                "review.html",
+            ),
+        }
+        report_text = read_report(reports["plain_text"]["path"])
+        context = report_context(report_text)
+        scope = scope_descriptor(repository_state, run_state, plan)
+        if not scope["name"] and context.get("scope_name"):
+            scope["name"] = context["scope_name"]
+            match = re.match(r"^\s*([123])(?:\s|$|-)", scope["name"])
+            if match and scope["number"] is None:
+                scope["number"] = int(match.group(1))
+
+        review_models = merge_models(
+            model_descriptors(repository_state, "repository-state"),
+            run_models,
+        )
+        review_versions = merge_versions(
+            explicit_rhyolite_versions(repository_state, "repository-state"),
+            run_versions,
+        )
+        if review_versions:
+            recorded_review_versions.extend(review_versions)
+        else:
+            unknown_version_count += 1
+
+        source = (
+            repository_state.get("Source")
+            if isinstance(repository_state.get("Source"), dict)
+            else {}
+        )
+        repository = compact(
+            repository_state.get("Repository") or source.get("RemoteUrl")
+        )
+        state_relative = (
+            relative_path(state_path) if is_regular_file(state_path) else None
+        )
+        reviews.append(
+            {
+                "review_id": review_id,
+                "run_id": run_id,
+                "run_kind": run_kind,
+                "source_repository": repository or None,
+                "source_kind": compact(source.get("Kind")) or None,
+                "status": compact(repository_state.get("Status")) or "Unknown",
+                "commit": compact(repository_state.get("Commit")) or None,
+                "requested_commit": compact(
+                    repository_state.get("RequestedCommit")
+                )
+                or None,
+                "models": review_models,
+                "scope": scope,
+                "overall_grading": parse_overall_assessment(report_text),
+                "dates": {
+                    "review_date": compact(
+                        plan.get("ReviewDate") or context.get("review_date")
+                    )
+                    or None,
+                    "started_at": compact(repository_state.get("StartedAt")) or None,
+                    "completed_at": compact(repository_state.get("CompletedAt"))
+                    or None,
+                    "run_started_at": compact(run_state.get("StartedAt")) or None,
+                    "run_completed_at": compact(run_state.get("CompletedAt")) or None,
+                },
+                "rhyolite_versions": review_versions,
+                "paths": {
+                    "state": state_relative,
+                    "reports": reports,
+                },
+            }
+        )
+
+    runs.append(
+        {
+            "run_id": run_id,
+            "kind": run_kind,
+            "review_count": review_count,
+            "status": compact(run_state.get("Status")) or "Unknown",
+            "scope": run_scope,
+            "models": run_models,
+            "rhyolite_versions": run_versions,
+            "dates": {
+                "review_date": compact(plan.get("ReviewDate")) or None,
+                "generated_at": compact(plan.get("GeneratedAt")) or None,
+                "started_at": compact(run_state.get("StartedAt")) or None,
+                "completed_at": compact(run_state.get("CompletedAt")) or None,
+            },
+            "path": relative_path(run_directory),
+            "review_ids": review_ids,
+        }
+    )
+
+reviews.sort(key=lambda review: (review["run_id"], review["review_id"]))
+runs.sort(key=lambda run: run["run_id"])
+
+status_counts = Counter(review["status"] for review in reviews)
+run_kind_counts = Counter(run["kind"] for run in runs)
+unique_versions = []
+for item in recorded_review_versions:
+    if item["version"] not in unique_versions:
+        unique_versions.append(item["version"])
+
+summary = {
+    "schema_version": 1,
+    "summary_id": summary_id,
+    "generated_at": generated_at,
+    "current_date": current_date,
+    "host": {
+        "hostname": compact(hostname) or "unknown",
+    },
+    "generator": {
+        "name": "rhyolite-summary",
+        "rhyolite_version": plugin_version,
+        "summary_schema_version": 1,
+    },
+    "source": {
+        "rhyolite_output_root": str(root),
+        "scan_depth": MAX_SCAN_DEPTH,
+    },
+    "output": {
+        "format": output_format,
+        "path": summary_file_relative or None,
+    },
+    "inventory": {
+        "run_count": len(runs),
+        "review_count": len(reviews),
+        "run_kinds": dict(sorted(run_kind_counts.items())),
+        "review_statuses": dict(sorted(status_counts.items())),
+    },
+    "rhyolite_versions": {
+        "summary_generator": plugin_version,
+        "recorded_for_reviews": unique_versions,
+        "reviews_without_recorded_version": unknown_version_count,
+    },
+    "runs": runs,
+    "reviews": reviews,
+    "warnings": warnings,
+}
+
+
+def display_models(review):
+    values = []
+    for model in review.get("models") or []:
+        model_id = compact(model.get("id"))
+        reported_version = compact(model.get("reported_version"))
+        value = model_id
+        if reported_version and reported_version != model_id:
+            value = f"{model_id} ({reported_version})"
+        if value and value not in values:
+            values.append(value)
+    return ", ".join(values) if values else "Unknown"
+
+
+def display_scope(review):
+    scope = review.get("scope") or {}
+    number = scope.get("number")
+    name = compact(scope.get("name"))
+    if number is not None and name:
+        if re.match(rf"^\s*{number}(?:\s|$|-)", name):
+            return name
+        return f"{number} - {name}"
+    if number is not None:
+        return str(number)
+    return name or "Unknown"
+
+
+def display_grade(review):
+    value = (
+        review.get("overall_grading", {}).get("value")
+        if isinstance(review.get("overall_grading"), dict)
+        else None
+    )
+    return compact(value) or "Unavailable"
+
+
+def markdown_escape(value):
+    value = html.escape(compact(value), quote=False)
+    for character in ("\\", "|", "`", "[", "]"):
+        value = value.replace(character, f"\\{character}")
+    return value
+
+
+def render_markdown():
+    lines = [
+        "# Rhyolite review summary",
+        "",
+        f"- Summary ID: `{markdown_escape(summary_id)}`",
+        f"- Generated at (UTC): `{markdown_escape(generated_at)}`",
+        f"- Current date (local): `{markdown_escape(current_date)}`",
+        f"- Hostname: `{markdown_escape(summary['host']['hostname'])}`",
+        f"- Rhyolite output: `{markdown_escape(str(root))}`",
+        f"- Runs: {len(runs)}; reviews: {len(reviews)}",
+        "",
+        "---",
+        "",
+        "| Review ID | Source repository | Model(s) | Scope | Overall grading | Status |",
+        "|---|---|---|---|---|---|",
+    ]
+    for review in reviews:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    markdown_escape(review["review_id"]),
+                    markdown_escape(review["source_repository"] or "Unknown"),
+                    markdown_escape(display_models(review)),
+                    markdown_escape(display_scope(review)),
+                    markdown_escape(display_grade(review)),
+                    markdown_escape(review["status"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "---"])
+    if warnings:
+        lines.extend(["", "## Scan warnings", ""])
+        for warning in warnings:
+            lines.append(
+                f"- `{markdown_escape(warning['path'])}`: "
+                f"{markdown_escape(warning['message'])}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+def truncate(value, limit):
+    value = compact(value)
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    return value[: limit - 3] + "..."
+
+
+def render_text():
+    headers = [
+        "Review ID",
+        "Source repository",
+        "Model(s)",
+        "Scope",
+        "Overall grading",
+        "Status",
+    ]
+    caps = [34, 44, 30, 24, 72, 12]
+    rows = []
+    for review in reviews:
+        rows.append(
+            [
+                truncate(review["review_id"], caps[0]),
+                truncate(review["source_repository"] or "Unknown", caps[1]),
+                truncate(display_models(review), caps[2]),
+                truncate(display_scope(review), caps[3]),
+                truncate(display_grade(review), caps[4]),
+                truncate(review["status"], caps[5]),
+            ]
+        )
+    widths = [
+        min(
+            caps[index],
+            max(
+                len(headers[index]),
+                max((len(row[index]) for row in rows), default=0),
+            ),
+        )
+        for index in range(len(headers))
+    ]
+
+    def line(values):
+        return " | ".join(
+            truncate(values[index], widths[index]).ljust(widths[index])
+            for index in range(len(values))
+        ).rstrip()
+
+    separator = "-+-".join("-" * width for width in widths)
+    horizontal_rule = "=" * len(separator)
+    output = [
+        "RHYOLITE REVIEW SUMMARY",
+        f"Summary ID: {summary_id}",
+        f"Generated at (UTC): {generated_at}",
+        f"Current date (local): {current_date}",
+        f"Hostname: {summary['host']['hostname']}",
+        f"Rhyolite output: {root}",
+        f"Runs: {len(runs)}; reviews: {len(reviews)}",
+        "",
+        horizontal_rule,
+        line(headers),
+        separator,
+    ]
+    output.extend(line(row) for row in rows)
+    output.append(horizontal_rule)
+    if warnings:
+        output.extend(["", "SCAN WARNINGS"])
+        for warning in warnings:
+            output.append(f"- {warning['path']}: {warning['message']}")
+    return "\n".join(output) + "\n"
+
+
+def render_html():
+    rows = []
+    for review in reviews:
+        cells = [
+            review["review_id"],
+            review["source_repository"] or "Unknown",
+            display_models(review),
+            display_scope(review),
+            display_grade(review),
+            review["status"],
+        ]
+        rows.append(
+            "<tr>"
+            + "".join(f"<td>{html.escape(compact(cell))}</td>" for cell in cells)
+            + "</tr>"
+        )
+    warning_html = ""
+    if warnings:
+        warning_html = (
+            "<section><h2>Scan warnings</h2><ul>"
+            + "".join(
+                "<li><code>"
+                + html.escape(warning["path"])
+                + "</code>: "
+                + html.escape(warning["message"])
+                + "</li>"
+                for warning in warnings
+            )
+            + "</ul></section>"
+        )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Rhyolite Review Summary</title>
+<style>
+:root {{ color-scheme: light dark; }}
+body {{ margin: 0; font-family: system-ui, sans-serif; line-height: 1.45; }}
+main {{ max-width: 1400px; margin: 0 auto; padding: 2rem; }}
+table {{ width: 100%; border-collapse: collapse; }}
+th, td {{ padding: .6rem; border: 1px solid currentColor; text-align: left; vertical-align: top; }}
+code {{ overflow-wrap: anywhere; }}
+</style>
+</head>
+<body>
+<main>
+<h1>Rhyolite Review Summary</h1>
+<dl>
+<dt>Summary ID</dt><dd><code>{html.escape(summary_id)}</code></dd>
+<dt>Generated at (UTC)</dt><dd>{html.escape(generated_at)}</dd>
+<dt>Current date (local)</dt><dd>{html.escape(current_date)}</dd>
+<dt>Hostname</dt><dd>{html.escape(summary["host"]["hostname"])}</dd>
+<dt>Rhyolite output</dt><dd><code>{html.escape(str(root))}</code></dd>
+<dt>Inventory</dt><dd>{len(runs)} runs; {len(reviews)} reviews</dd>
+</dl>
+<hr>
+<table>
+<thead><tr><th>Review ID</th><th>Source repository</th><th>Model(s)</th><th>Scope</th><th>Overall grading</th><th>Status</th></tr></thead>
+<tbody>
+{''.join(rows)}
+</tbody>
+</table>
+<hr>
+{warning_html}
+</main>
+</body>
+</html>
+"""
+
+
+if output_format == "json":
+    rendered = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
+elif output_format == "md":
+    rendered = render_markdown()
+elif output_format == "text":
+    rendered = render_text()
+elif output_format == "html":
+    rendered = render_html()
+else:
+    raise SystemExit(f"Unsupported output format: {output_format}")
+
+sys.stdout.write(rendered)
+PY
+}
+
+if [ "${destination}" = stdout ]; then
+    render_summary
+else
+    if ! render_summary > "${temporary_file}"; then
+        fail \
+            'The Rhyolite review summary could not be generated.' \
+            'One or more selected output artifacts could not be parsed.'
+    fi
+    chmod 600 -- "${temporary_file}"
+    mv -f -- "${temporary_file}" "${summary_file}"
+    temporary_file=''
+    printf '%s\n' "${summary_file}"
+fi

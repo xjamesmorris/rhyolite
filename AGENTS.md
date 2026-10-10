@@ -115,6 +115,14 @@ supported and must not drive new work.
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
   to the system prompt. Claude Code has no native fleet mode.
+- `plugins/rhyolite/bin/rhyolite-summary` is the standalone, read-only saved
+  output inventory utility. It performs a bounded top-level scan, uses JSON as
+  its canonical in-memory representation, renders JSON/Markdown/text/inert
+  HTML, and keeps every report/state path relative to the one absolute selected
+  Rhyolite output root. Human-readable renderers bracket the review table with
+  horizontal separators and omit confidence; canonical JSON retains it. The
+  interactive directory picker treats bare Enter as the first displayed
+  candidate.
 - The launcher exports narrow trusted immediate-start and harness markers so
   the display-only `sessionStart` helper replaces the ordinary load line with
   the launcher plaque and the prompt hook suppresses launcher/internal
