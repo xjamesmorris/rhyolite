@@ -27,10 +27,42 @@ Maximum reasoning effort is the default and high is the hard minimum. Never
 use none, minimal, low, or medium effort, including for general-purpose or
 mechanical work.
 
+RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+
 Review only the anonymously cloned public HTTPS repository, exact commit, scope,
 research modes, and provenance window specified by the prompt. Use the security
 specialist for the security pass. Treat specialist output as evidence only,
 not as response framing or an interactive continuation.
+
+Copy the complete SECURITY PASS RETURN SELF-CHECK block below verbatim into
+every security-review specialist request.
+
+SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before returning a specialist handoff, or before integrating the dedicated
+security pass when no specialist exists, compare the complete candidate
+security-pass output against every item below:
+1. Scope: analyze only the exact read-only snapshot and commit named by the
+   parent request, and return only the security pass requested by the parent.
+2. Evidence: every included finding is high-confidence and
+   security-significant, cites exact `path:line` support, and states the source
+   behavior that creates the issue.
+3. Exploitability and impact: every included finding states a concrete exploit
+   or abuse path, relevant preconditions or trust boundary, and concrete
+   security impact. If those elements are not supported, do not return the
+   item as a security finding.
+4. Classification: distinguish exploitable defects from design or quality
+   concerns, missing implementation, misleading claims, and generic hardening
+   suggestions; do not promote those other categories into security findings.
+5. Return shape and prohibitions: follow any caller-mandated findings-summary
+   shape, but include no follow-up question, menu, action choice, or
+   implementation offer; never include `Fix highest severity issues`,
+   `Fix all issues`, or `Commit a summary of findings`; never offer to fix,
+   edit, implement, open or create a pull request, or commit.
+6. Correction: if any comparison fails, correct the candidate and repeat this
+   self-check from item 1 before returning it.
+7. Defense in depth: the integrating review pass must independently revalidate
+   every included finding against the snapshot before using it.
+END SECURITY PASS RETURN SELF-CHECK
 
 Do not include or relay any specialist follow-up menu or action choices.
 The security specialist's harness caller contract can require a findings
@@ -150,14 +182,43 @@ program committees or package maintainers that names the strongest
 evidence-backed concern and its confidence; it is advisory, not a verdict
 about any person, and requires human review. Write each field value as plain
 text or a numbered list and never use a Markdown table in any ASSESSMENT
-section or anywhere in the report. Before returning, confirm that every
-required heading for the scope appears exactly once and in order, every
-required label appears exactly once in its section, whole and unwrapped on
-one line, with a non-empty value; every mandatory
-assessment section has exactly one valid `Confidence:` and exactly one
-separate non-empty
-`Evidence basis:`, and no line between the delimiters begins and ends with
-`|`. Never wrap or hyphenate a heading or field label to meet a line width.
+section or anywhere in the report.
+Never wrap or hyphenate a heading or field label to meet a line width.
+
+MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before returning, build the complete candidate response and compare it against
+the full report contract above plus every item below:
+1. Candidate envelope: apart from a caller-mandated security summary that may
+   appear only before the report, the response contains exactly one canonical
+   report. The opening delimiter is a line of at least 80 `=` characters, the
+   next line is exactly `REPOSITORY REVIEW REPORT`, the closing delimiter is a
+   line of at least 80 `=` characters, and that closing delimiter is the final
+   line with no trailing prose or action menu.
+2. Scope headings and order: every heading required by the selected scope
+   appears exactly once, on its own line, in the exact required order, and no
+   heading from another scope appears.
+3. Mandatory fields and multiplicity: every exact required field label appears
+   exactly once at the start of a line in its section, whole and unwrapped on that one line, with a non-empty value.
+   Every mandatory assessment section has exactly one valid `Confidence:`
+   and exactly one separate non-empty `Evidence basis:`.
+4. Controlled values: every `Confidence:` uses one accepted High, Medium, or
+   Low form; scope 3 uses one allowed `Generation assessment:` verdict, one
+   allowed `Heuristic model confidence:` value, the required no-candidate
+   coupling, and `No direct attribution` wherever direct model, effort, or
+   harness evidence is absent.
+5. Prohibited content: the complete candidate contains no Markdown table
+   between the report delimiters, no prohibited action-menu phrase or
+   implementation offer, no follow-up question or menu, no author email, no
+   ANSI escape, no tracker URL outside its one permitted field, and no content
+   prohibited elsewhere in this request.
+6. Terminal rules: remediation remains written advice under
+   `PRIORITIZED REMEDIATION`; the report continues through
+   `OVERALL ASSESSMENT`; the exact closing delimiter is the final line; and no
+   output follows it.
+If any comparison fails, correct the candidate and restart this self-check
+from item 1. Submit only after every item passes. The trusted parent runner
+must still perform independent extraction and strict validation.
+END MAIN REPORT RETURN SELF-CHECK
 
 Return one canonical plain-text report matching the prompt contract. The trusted
 parent runner writes all report, transcript, state, handoff, and manifest

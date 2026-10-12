@@ -51,6 +51,7 @@ required_contract_functions=(
     harness_research_worker_argv
     harness_research_worker_env
     harness_finalize_research_session
+    harness_extract_research_reply
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -1091,6 +1092,86 @@ cmp -s "${fixture_root}/copilot-research-expected.vector" \
     fail 'Copilot research worker argv changed from the pre-Contract-v5 runner vector.'
 harness_finalize_research_session "${fixture_root}" /dev/null ||
     fail 'Copilot research finalization is not an explicit success.'
+copilot_research_raw_reply="${fixture_root}/copilot-research-raw-reply.txt"
+copilot_research_rendered_transcript="${fixture_root}/copilot-research-rendered.md"
+copilot_research_exact_reply="${fixture_root}/copilot-research-exact-reply.txt"
+printf 'raw research reply\n' > "${copilot_research_raw_reply}"
+printf '### Copilot\n\n    lossy rendered reply\n' \
+    > "${copilot_research_rendered_transcript}"
+harness_extract_research_reply \
+    "${copilot_research_raw_reply}" \
+    "${copilot_research_rendered_transcript}" \
+    "${copilot_research_exact_reply}" ||
+    fail 'Copilot research reply extraction failed.'
+cmp -s "${copilot_research_raw_reply}" "${copilot_research_exact_reply}" ||
+    fail 'Copilot research reply extraction used lossy transcript content.'
+assert_equal 600 "$(stat -c '%a' "${copilot_research_exact_reply}")" \
+    'Copilot exact research reply mode'
+if harness_extract_research_reply \
+    "${copilot_research_raw_reply}" \
+    "${copilot_research_rendered_transcript}" \
+    "${copilot_research_exact_reply}" >/dev/null 2>&1; then
+    fail 'Copilot research reply extraction overwrote an existing destination.'
+fi
+for secure_research_runner_fragment in \
+    'local research_raw_output="${research_runtime_root}/research-output.raw"' \
+    'local research_raw_error="${research_runtime_root}/research-errors.raw"' \
+    'local research_raw_transcript="${research_runtime_root}/research-session.raw"' \
+    'persist_sanitized_research_runtime_artifacts' \
+    'lines = dossier[:-1].split("\n")' \
+    '("\x85", "U+0085")' \
+    '("\u2028", "U+2028")' \
+    '("\u2029", "U+2029")' \
+    'if claim_entry_count > 100:' \
+    'LatestNetworkSummaryObservationSequence' \
+    'SubmissionCandidateIncluded") is False' \
+    'research network summary Requests.SuccessfulPublicResponses' \
+    'research HTTP response event WireBytes' \
+    'research retrieval event Status' \
+    'maximum=event_count' \
+    'sequence != previous_sequence + 1' \
+    'must use exactly one justified None identified:'; do
+    assert_contains \
+        "${RUNNER}" \
+        "${secure_research_runner_fragment}" \
+        'Secure research-output runner contract'
+done
+assert_not_contains \
+    "${RUNNER}" \
+    'local research_raw_output="${RESEARCH_DIRECTORY}/research-output.raw"' \
+    'Persistent research raw-output path'
+assert_not_contains \
+    "${RUNNER}" \
+    'lines = dossier.splitlines()' \
+    'Permissive research dossier line parsing'
+assert_not_contains \
+    "${RUNNER}" \
+    'int(requests.get(' \
+    'Coercive downstream research-summary integer parsing'
+assert_not_contains \
+    "${RUNNER}" \
+    'print(int(value.get("ToolCalls", {}).get("Capabilities", 0)))' \
+    'Coercive research-capability summary parsing'
+python3 - "${RUNNER}" <<'PY' ||
+import pathlib
+import sys
+
+runner = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+declaration = runner.index(
+    'local research_raw_output="${research_runtime_root}/research-output.raw"'
+)
+cleanup_binding = runner.index(
+    'RESEARCH_BROKER_RUNTIME_TO_CLEAN="${research_runtime_root}"',
+    declaration,
+)
+exit_trap = runner.index("        trap '", cleanup_binding)
+raw_creation = runner.index(': > "${research_raw_output}"', exit_trap)
+if not declaration < cleanup_binding < exit_trap < raw_creation:
+    raise SystemExit(
+        "research raw-output cleanup trap is not armed before file creation"
+    )
+PY
+    fail 'Research raw-output cleanup is not crash-safe from file creation onward.'
 
 for path_isolation_fragment in \
     'canonicalize_directory_path "${report_repair_workdir}"' \

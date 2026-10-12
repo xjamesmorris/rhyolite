@@ -120,6 +120,7 @@ const required = [
     "skills/readonly-repository-review/review-prompt.txt",
     "skills/readonly-repository-review/research-prompt.txt",
     "skills/readonly-repository-review/research-policy.json",
+    "skills/readonly-repository-review/research-event-integers.json",
     "skills/research-source-assessment/SKILL.md",
 ];
 const executables = [
@@ -137,6 +138,81 @@ for (const file of [...required, ...executables]) {
 for (const file of executables) {
     fs.accessSync(path.join(root, file), fs.constants.X_OK);
 }
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const invariant =
+    "RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated " +
+    "return, compare the complete candidate against the exact return contract " +
+    "for that surface, correct every mismatch, and submit only a matching " +
+    "candidate; any downstream validation remains defense in depth and never " +
+    "replaces this self-check.";
+for (const file of [
+    "skills/readonly-repository-review/SKILL.md",
+    "skills/readonly-repository-review/review-prompt.txt",
+    "skills/readonly-repository-review/research-prompt.txt",
+    "skills/research-source-assessment/SKILL.md",
+    "agents/repo-review.agent.md",
+    "agents/repo-review-worker.agent.md",
+    "agents/repo-research-worker.agent.md",
+    "claude/agents/repo-review.md",
+    "claude/agents/repo-review-worker.md",
+    "claude/agents/repo-research-worker.md",
+    "skills/readonly-repository-review/scripts/review-output.sh",
+]) {
+    expect(read(file).includes(invariant),
+        `Packaged agent self-check invariant is missing: ${file}`);
+}
+const extractBlock = (file, start, end) => {
+    const text = read(file);
+    const first = text.indexOf(start);
+    const last = text.indexOf(end, first);
+    expect(first >= 0 && last >= first &&
+        text.indexOf(start, first + start.length) < 0 &&
+        text.indexOf(end, last + end.length) < 0,
+        `Packaged self-check block is not unique: ${file} ${start}`);
+    return text.slice(first, last + end.length);
+};
+for (const [start, end, files] of [
+    [
+        "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "END MAIN REPORT RETURN SELF-CHECK",
+        [
+            "skills/readonly-repository-review/SKILL.md",
+            "skills/readonly-repository-review/review-prompt.txt",
+            "agents/repo-review-worker.agent.md",
+            "claude/agents/repo-review-worker.md",
+        ],
+    ],
+    [
+        "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "END SECURITY PASS RETURN SELF-CHECK",
+        [
+            "skills/readonly-repository-review/SKILL.md",
+            "skills/readonly-repository-review/review-prompt.txt",
+            "agents/repo-review-worker.agent.md",
+            "claude/agents/repo-review-worker.md",
+        ],
+    ],
+    [
+        "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "END GUIDED COMPLETION RETURN SELF-CHECK",
+        [
+            "skills/readonly-repository-review/SKILL.md",
+            "agents/repo-review.agent.md",
+            "claude/agents/repo-review.md",
+        ],
+    ],
+]) {
+    const blocks = files.map((file) => extractBlock(file, start, end));
+    expect(blocks.every((block) => block === blocks[0]),
+        `Packaged self-check surfaces diverged: ${start}`);
+}
+for (const file of ["lib/harness/copilot.sh", "lib/harness/claude.sh"]) {
+    expect(read(file).includes("harness_extract_research_reply()"),
+        `Packaged harness cannot preserve raw research replies: ${file}`);
+}
+expect(read("skills/readonly-repository-review/research-prompt.txt")
+    .includes("Dossier validation: protocol=1; tool=research_network_summary; attemptLimit=3; canonicalization=utf8-lf-single-terminal-newline-v1; digestAlgorithm=sha256"),
+    "Packaged research prompt lost the candidate-proof contract");
 expect(!fs.existsSync(path.join(root, "rhyolite")),
     "Installed plugin unexpectedly contains a root-level launcher");
 expect(fs.readFileSync(path.join(root, "commands/version.md"), "utf8")
@@ -285,14 +361,37 @@ install_output="$(
 assert_install "${ROOT}" "${version}" "${ROOT}/plugins/rhyolite" checkout
 
 fixture="${TEST_ROOT}/exported marketplace with spaces"
-# A Git-free package copy exercises exported payloads without the networked release workflow.
-mkdir -p -- "${fixture}/.github/plugin" "${fixture}/plugins" \
-    "${fixture}/previous/plugins"
-cp -a -- "${ROOT}/plugins/rhyolite" "${fixture}/plugins/"
-cp -a -- "${ROOT}/plugins/rhyolite" "${fixture}/previous/plugins/"
-cp -- "${ROOT}/.github/plugin/marketplace.json" \
-    "${fixture}/.github/plugin/marketplace.json"
-cp -- "${ROOT}/VERSION" "${fixture}/VERSION"
+contract_path='plugins/rhyolite/skills/readonly-repository-review/research-event-integers.json'
+synthetic_index="${TEST_ROOT}/intended-release.index"
+git -C "${ROOT}" ls-files --error-unmatch -- "${contract_path}" >/dev/null 2>&1 ||
+    fail 'Research event integer contract is not tracked for release.'
+git -C "${ROOT}" diff --quiet -- "${contract_path}" ||
+    fail 'Research event integer contract differs from its indexed release content.'
+indexed_tree="$(git -C "${ROOT}" write-tree)" ||
+    fail 'Could not materialize the indexed release tree.'
+GIT_INDEX_FILE="${synthetic_index}" \
+    git -C "${ROOT}" read-tree "${indexed_tree}" ||
+    fail 'Could not initialize the synthetic release index.'
+GIT_INDEX_FILE="${synthetic_index}" \
+    git -C "${ROOT}" add -u -- . ||
+    fail 'Could not add tracked worktree changes to the synthetic release index.'
+synthetic_tree="$(
+    GIT_INDEX_FILE="${synthetic_index}" git -C "${ROOT}" write-tree
+)" || fail 'Could not materialize the intended release tree.'
+[[ "$(git -C "${ROOT}" ls-tree -r --name-only "${synthetic_tree}" -- \
+    "${contract_path}")" == "${contract_path}" ]] ||
+    fail 'Intended release tree omits the research event integer contract.'
+
+# Archive the intended tracked tree so untracked working-tree files cannot
+# satisfy package coverage.
+mkdir -- "${fixture}"
+git -C "${ROOT}" archive --format=tar "${synthetic_tree}" |
+    tar -xf - -C "${fixture}" ||
+    fail 'Could not extract the synthetic release archive.'
+[[ -f "${fixture}/${contract_path}" && ! -L "${fixture}/${contract_path}" ]] ||
+    fail 'Synthetic release archive omits the research event integer contract.'
+mkdir -p -- "${fixture}/previous/plugins"
+cp -a -- "${fixture}/plugins/rhyolite" "${fixture}/previous/plugins/"
 
 # Local marketplaces can be live; retain both versioned payloads and switch the catalog source.
 previous_version="$(node - "${fixture}" "${version}" <<'JS'

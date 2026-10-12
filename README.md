@@ -492,11 +492,22 @@ subject areas. It extends mailing-list archives, blogs, conferences,
 standards, academic sources, forums, ecosystem sources, and commercial
 venues. Each source records its check date, latest observed activity,
 coverage, freshness, and ownership. Scope `3` performs a thorough second
-provenance-focused pass. The runner validates the dossier, broker
-capability record, event ledger, cleanup, and at least one successful
-public response before the main worker starts. The main worker receives
-only a read-only sanitized dossier and network summary and has no direct
-network tool.
+provenance-focused pass. Before returning, the worker submits its complete
+dossier through the existing `research_network_summary` tool. The broker
+permits at most three same-session corrections and stores only an acceptance
+digest and byte count, never the candidate body. The runner binds that proof
+to the raw final assistant reply before transcript rendering or privacy
+sanitization, then persists only the sanitized dossier. Missing or mismatched
+proof, an invalid capability section, an incomplete event ledger, cleanup
+failure, or no successful public response prevents the main worker from
+starting. The main worker receives only a read-only sanitized dossier and
+network summary and has no direct network tool.
+
+The packaged broker/runner integer contract validates every integer-bearing
+event field, including nested transport details. Accepted validation events
+remain capped at 100 claims. A rejected event may retain its bounded observed
+pre-enforcement count, so a 101-claim rejection followed by a corrected
+candidate remains valid history.
 
 The dossier also requires `COMMUNITY HEALTH EVIDENCE`, which reports
 contributor and engagement data only as counts and date distributions;
@@ -653,7 +664,8 @@ dedicated-worker mode, broker and policy schema versions, provider IDs,
 effective policy digest and resource profile, exact tools, anonymous
 GitHub/no-auth behavior, selected general-web-search provider and
 availability, cookie replay choice, private raw Set-Cookie retention,
-private unsupported-body retention, and network-log policy.
+private unsupported-body retention, network-log policy, and dossier-validation
+protocol, attempt limit, canonicalization, and digest algorithm.
 
 If the runner reports a plan-hash mismatch, the agent
 preserves the answers, explains that the approved effective plan

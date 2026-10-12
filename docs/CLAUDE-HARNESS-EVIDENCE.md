@@ -127,7 +127,7 @@ Code notice.
 
 ## Contract v5 research seam
 
-The dedicated research worker now runs through four adapter functions plus
+The dedicated research worker now runs through five adapter functions plus
 the `research` runtime-home phase:
 
 | Function | Copilot | Claude Code |
@@ -136,11 +136,12 @@ the `research` runtime-home phase:
 | `harness_research_worker_argv DEST ROOT PLUGIN NAME ID MODEL EFFORT CONTEXT AUTH_CSV MCP_CONFIG BROKER_TOOLS_CSV TRANSCRIPT` | the pre-v5 runner vector, byte for byte | `--mcp-config <path> --strict-mcp-config --tools Read,Glob,Grep --allowedTools mcp__rhyolite-research__<tool>,... --agent rhyolite:repo-research-worker --append-system-prompt-file .../research-source-assessment/SKILL.md` plus the review restrictions |
 | `harness_research_worker_env DEST` | review clearing vector with the research home | review clearing vector with the research home plus `MCP_TOOL_TIMEOUT=120000` |
 | `harness_finalize_research_session HOME RAW_OUTPUT` | explicit success (`--share` already wrote the transcript) | renders the research JSONL into `research-session.md`, fails on substitution, effort change, or subagent turns, or on a dossier without a session record |
+| `harness_extract_research_reply RAW_OUTPUT TRANSCRIPT DEST` | copies raw print-mode stdout to a new mode-0600 destination | copies raw `-p --output-format text` stdout to a new mode-0600 destination |
 
 The runner keeps request rendering, broker lifecycle, timeouts, dossier
 extraction, validation, cleanup, and artifacts, and now gates scope 2/3 on
 `web_research == yes` instead of the harness ID. The no-op fixture implements
-the four functions as fail-closed stubs.
+the five functions as fail-closed stubs.
 
 Claude Code reports `web_research=yes` and `builtin_research_specialist=yes`
 after the real staged scope-2 run R5 (operator-approved flip on 2026-10-07).

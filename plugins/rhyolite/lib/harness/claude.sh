@@ -1247,6 +1247,34 @@ harness_finalize_research_session() {
     return 1
 }
 
+# Claude Code print mode writes the final assistant reply directly to stdout.
+# Preserve those bytes for submission-proof verification instead of binding to
+# the rendered session transcript, whose framing and resume notices are lossy.
+harness_extract_research_reply() {
+    local raw_output="$1"
+    local transcript="$2"
+    local reply_output="$3"
+
+    : "${transcript}"
+    [[ "${raw_output}" == /* && -f "${raw_output}" &&
+        ! -L "${raw_output}" && "${reply_output}" == /* &&
+        ! -e "${reply_output}" && ! -L "${reply_output}" ]] || {
+        rhyolite_harness_set_error \
+            'The Claude Code research reply extraction paths are invalid.'
+        return 1
+    }
+    if ! (
+        umask 077
+        cat -- "${raw_output}" > "${reply_output}"
+        chmod 600 -- "${reply_output}"
+    ); then
+        rm -f -- "${reply_output}"
+        rhyolite_harness_set_error \
+            'Could not preserve the exact Claude Code research reply.'
+        return 1
+    fi
+}
+
 harness_render_request() {
     local template_path="$1"
     local request_path="$2"

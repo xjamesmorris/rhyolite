@@ -19,16 +19,24 @@ browser state, or target-provided provider. Do not bypass access controls,
 solve paywalls, use private data, or disclose repository content that is not
 already intentionally public.
 
-Call `research_capabilities` first and verify the approved broker version,
-policy digest, exact tool list, providers, cookie mode, limits, and health.
-Perform at least one successful public response through direct HTTPS fetch,
-anonymous GitHub search, or the enabled general-web-search provider, then call
-`research_network_summary` before returning. The selected general-web-search
-provider is either the fixed anonymous `duckduckgo-html-v1` adapter or explicit
-`none`. Use only the approval-bound selection. `none` returns
-`provider_disabled`; preserve that limitation instead of substituting another
-search path. Never configure an endpoint, credential, caller header, request
-body, proxy, challenge bypass, or fallback provider.
+Call `research_capabilities` first. The broker call sequence is exact:
+(1) call `research_capabilities` and verify it; (2) only then use public
+retrieval tools and obtain at least one successful public response; (3) after
+the latest successful retrieval, call `research_network_summary` without
+`candidate`; and (4) only after that observation submit the complete dossier
+with `candidate`. A candidate-bearing call never counts as the required
+observation. Any later public retrieval makes the prior observation stale, so
+call the no-candidate summary again before validation. Corrections may reuse
+the fresh observation only while no further retrieval occurs, and all
+candidate submissions share the same three-attempt session limit.
+
+Verify the approved broker version, policy digest, exact tool list, providers,
+cookie mode, limits, and health. The selected general-web-search provider is
+either the fixed anonymous `duckduckgo-html-v1` adapter or explicit `none`.
+Use only the approval-bound selection. `none` returns `provider_disabled`;
+preserve that limitation instead of substituting another search path. Never
+configure an endpoint, credential, caller header, request body, proxy,
+challenge bypass, or fallback provider.
 
 Raw Set-Cookie values are retained only in a private per-repository ledger,
 whether replay is off or ephemeral. Unsupported bodies are retained only as
@@ -43,6 +51,8 @@ Claude Fable 5.1). Do not automatically fall back to a less capable model.
 Maximum reasoning effort is the default and high is the hard minimum; never
 use none, minimal, low, or medium effort, including for mechanical
 normalization or formatting.
+
+RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
 
 ## Goal
 
@@ -285,8 +295,17 @@ The community-health section reports each indicator as counts and date
 distributions with its source URL, check date, ownership, and confidence, and
 states why any indicator could not be measured.
 
-The claim-verification section uses one numbered entry per material external
-claim, or `None identified` with its basis:
+The claim-verification section has an exact grammar. If no material external
+claim was found, it contains exactly one non-empty line:
+
+```text
+None identified: <non-empty basis>
+```
+
+That form is mutually exclusive with numbered claims and any other content.
+Otherwise use from 1 through 100 sequentially numbered entries. Each entry has
+exactly these six non-empty lines in this order, with exactly three leading
+ASCII spaces on the five subordinate labels:
 
 ```text
 1. Claim: <claim type>; <path:line>; <short neutral paraphrase>
@@ -297,7 +316,13 @@ claim, or `None identified` with its basis:
    Confidence: <High, Medium, or Low>; <evidence basis>
 ```
 
-Status guidance: `Corroborated` when an independent or platform record
+Check date must be a real ISO calendar date. Ownership is exactly
+`project-controlled`, `independent`, or `platform`. Status is exactly
+`Corroborated`, `Not corroborated`, `Contradicted`, or `Not checkable` and
+must have a non-empty reason after the semicolon. Confidence is exactly one of
+`High`, `Medium`, or `Low` and must have a non-empty evidence basis after the
+semicolon. Do not add unknown labels, duplicate labels, continuation lines, or
+trailing content. Use `Corroborated` when an independent or platform record
 confirms the claim; `Not corroborated` when the checked sources hold no
 supporting record; `Contradicted` when a cited source and date conflict with
 the claim; `Not checkable`, with the reason, when a needed source is
@@ -315,6 +340,22 @@ requested.
 Use numbered lists, never Markdown tables. Before returning, confirm that
 every heading appears exactly once and in order and that no line begins and
 ends with `|`; the trusted runner fails closed on a malformed dossier.
+
+Submit the complete proposed dossier through the optional `candidate` argument
+of `research_network_summary` before returning. The broker validates the exact
+envelope, section order and uniqueness, numbered-list rules, claim-entry
+fields, transport evidence, and section-scoped approved capability values. It
+returns actionable `violations`, total/collected/returned counts, deterministic
+truncation flags, and bounded `violationCodeCounts`, and permits at most three
+candidate attempts in the same session. Correct the complete dossier and retry
+while attempts remain. If diagnostics are truncated, remove repeated malformed
+content and fix every reported category before retrying. If the limit is
+exhausted, stop without presenting an unaccepted dossier. Once accepted, return
+exactly that accepted candidate as the whole final assistant reply, with no
+fence, preface, proof, explanation, or trailing text. Do not edit it: the
+runner verifies its SHA-256 proof against the raw final assistant reply. That
+verification occurs before privacy sanitization and before the main review
+starts.
 
 Attach confidence and an evidence basis to each substantive community,
 research, commercial, freshness, claim-verification, prior-art, lineage,
@@ -334,6 +375,8 @@ evidence in the prior-art and lineage section. Use only the required dossier
 headings listed above.
 Do not add a dossier heading or broaden broker retrieval behavior.
 
-Return the bounded dossier to the trusted runner. The runner validates and
-persists it, then exposes only the sanitized dossier and network summary to the
-main review worker. Do not write files.
+Use only U+000A LF as a line separator. U+000D, U+0085, U+2028, U+2029, and
+every other Unicode or control line boundary are forbidden. Return the bounded
+dossier to the trusted runner. The runner validates and persists it, then
+exposes only the sanitized dossier and network summary to the main review
+worker. Do not write files.

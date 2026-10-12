@@ -232,6 +232,22 @@
   `research_capabilities`, `fetch_public_url`, `search_public_github`,
   `search_public_web`, and `research_network_summary`. The main reviewer
   receives only a validated read-only dossier and sanitized network summary.
+- The optional `candidate` input on `research_network_summary` does not add a
+  sixth capability or network path. It validates the complete dossier with a
+  three-attempt same-session bound and persists only a SHA-256 proof and byte
+  count. The runner verifies that proof against the raw final assistant reply
+  before any lossy transcript rendering or privacy sanitization, deletes the
+  raw copy, and persists only the sanitized dossier. Missing or mismatched
+  proof fails before the main reviewer can start; downstream dossier and event
+  validation remains an independent defense-in-depth gate.
+- Broker event integers are governed by one packaged producer/consumer
+  inventory. The broker refuses undeclared integer leaves, while the runner
+  requires exact JSON integers rather than booleans, strings, or floats and
+  enforces field bounds and sequence/transport relationships. Accepted
+  validation events are limited to 100 claims. Rejected validation events may
+  preserve the pre-enforcement observed count through 209715, the bounded
+  maximum under the 2 MiB candidate and shortest recognized entry line, so a
+  rejected 101-claim attempt cannot invalidate a later corrected acceptance.
 - Direct `web_fetch`, broad URL approval, built-in MCPs, shell, and writes are
   unavailable to both research and main review children.
 - One bundled Python standard-library stdio broker is started per repository

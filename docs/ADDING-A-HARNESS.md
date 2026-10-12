@@ -80,7 +80,7 @@ Harness work crosses a strict set of surfaces:
 Each contract version lands as one coordinated behavior change. Contract v5
 retains plan schema 5, state schema 6, provider identity, preferences, and the
 Contract-v4 bounded-repair lifecycle, and moves the dedicated scope 2/3
-research worker behind four adapter functions. Do not register an adapter
+research worker behind five adapter functions. Do not register an adapter
 before validation understands its complete lifecycle.
 
 ## Fixed registry procedure
@@ -287,6 +287,7 @@ release artifacts.
 | `harness_research_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, protected variable names, MCP config path, comma-separated broker tool names, and transcript path. Status only. | Populate the research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the named broker tools from that MCP configuration. |
 | `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
+| `harness_extract_research_reply` | Raw research stdout path, rendered research transcript path, and a new destination path. Status only. | Preserve the exact final assistant reply from raw print-mode stdout in the destination with mode 0600. The transcript argument is context only; never derive the proof-bound reply from rendered transcript framing. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -385,7 +386,7 @@ Report-repair environment must:
 
 The runner owns scope 2/3 research: policy resolution, the broker launcher
 and its arguments, timeouts, dossier extraction and validation, the network
-summary, cleanup, and artifacts. It calls the four research functions only
+summary, cleanup, and artifacts. It calls the five research functions only
 when the adapter reports `web_research=yes`; otherwise scope 2/3 fails at
 stage `harness <id> harness_capability` before any broker or worker activity.
 The adapter must:
@@ -397,6 +398,9 @@ The adapter must:
 - keep the review worker's write, shell, agent, hook, and instruction-file
   restrictions;
 - prepare the runtime home with phase `research`;
+- preserve raw print-mode final output without transcript parsing so the
+  runner can verify the broker's accepted candidate digest before any privacy
+  sanitization;
 - when the harness records per-turn model and effort, verify the research
   session record with the same model, effort, and subagent rules as the
   review worker before the runtime home is removed.

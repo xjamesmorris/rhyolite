@@ -224,6 +224,23 @@ sanitize_review_text < "${sanitization_input}" > "${sanitization_actual}"
 cmp -s -- "${expected}" "${sanitization_actual}" ||
     fail 'shared stream sanitization changed control handling or redaction'
 checks=$((checks + 1))
+unicode_boundary_input="${fixture_dir}/unicode-boundary-input.txt"
+unicode_boundary_actual="${fixture_dir}/unicode-boundary-actual.txt"
+python3 - "${unicode_boundary_input}" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    "NEL\u0085LINE\u2028PARAGRAPH\u2029END\n",
+    encoding="utf-8",
+)
+PY
+sanitize_review_text \
+    < "${unicode_boundary_input}" \
+    > "${unicode_boundary_actual}"
+cmp -s -- "${unicode_boundary_input}" "${unicode_boundary_actual}" ||
+    fail 'shared sanitization normalized non-LF Unicode line boundaries'
+checks=$((checks + 1))
 if [[ -n "${baseline_output_helper}" ]]; then
     (
         source "${baseline_output_helper}"

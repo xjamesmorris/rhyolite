@@ -1390,7 +1390,9 @@ if (plan.SchemaVersion !== 5 ||
     plan.Provider?.Id !== "anthropic-claude-code" ||
     plan.Provider?.Host !== "managed-provider" ||
     JSON.stringify(plan.Provider?.ForwardedEnvVarNames) !== JSON.stringify(names) ||
-    plan.ResearchTransport?.Enabled !== false) {
+    plan.ResearchTransport?.Enabled !== false ||
+    plan.ResearchTransport?.DirectHttps?.Enabled !== false ||
+    plan.ResearchTransport?.DossierValidation?.AttemptLimit !== 0) {
   throw new Error("Claude Code plan lost its approval-bound harness identity");
 }
 if (!/^[0-9a-f]{64}$/.test(plan.ApprovalHash) ||
@@ -1463,7 +1465,17 @@ if (plan.Harness !== "claude" || plan.Scope.Number !== 2 ||
     plan.PriorArtWindow?.Enabled !== true || plan.ProvenanceWindow !== null ||
     plan.ResearchTransport?.Enabled !== true ||
     plan.ResearchTransport.Mode !== "dedicated-worker-local-stdio-mcp" ||
-    plan.ResearchTransport.Cookies?.ReplayMode !== "ephemeral") {
+    plan.ResearchTransport.Cookies?.ReplayMode !== "ephemeral" ||
+    plan.ResearchTransport.DirectHttps?.ProviderId !==
+      "direct-public-https-v1" ||
+    plan.ResearchTransport.DirectHttps?.Enabled !== true ||
+    plan.ResearchTransport.DossierValidation?.ProtocolVersion !== 1 ||
+    plan.ResearchTransport.DossierValidation?.Tool !==
+      "research_network_summary" ||
+    plan.ResearchTransport.DossierValidation?.AttemptLimit !== 3 ||
+    plan.ResearchTransport.DossierValidation?.Canonicalization !==
+      "utf8-lf-single-terminal-newline-v1" ||
+    plan.ResearchTransport.DossierValidation?.DigestAlgorithm !== "sha256") {
   throw new Error("Claude Code scope-2 plan is invalid");
 }
 ' "${CLAUDE_SCOPE_PLAN}"
@@ -2855,6 +2867,22 @@ JS
         'Claude Code research transcript mode'
     assert_contains "${research_transcript}" '### Tool call: Read' \
         'Claude Code research transcript rendering'
+    research_exact_reply="${research_root}/exact-reply.txt"
+    harness_extract_research_reply \
+        "${research_root}/raw-dossier" \
+        "${research_transcript}" \
+        "${research_exact_reply}" ||
+        fail 'Claude Code research reply extraction failed.'
+    cmp -s "${research_root}/raw-dossier" "${research_exact_reply}" ||
+        fail 'Claude Code research reply extraction used rendered transcript content.'
+    assert_equal 600 "$(stat -c '%a' "${research_exact_reply}")" \
+        'Claude Code exact research reply mode'
+    if harness_extract_research_reply \
+        "${research_root}/raw-dossier" \
+        "${research_transcript}" \
+        "${research_exact_reply}" >/dev/null 2>&1; then
+        fail 'Claude Code research reply extraction overwrote an existing destination.'
+    fi
     [[ ! -e "${research_home}/rhyolite-research-filtered.jsonl" ]] ||
         fail 'Claude Code kept a research continuation copy.'
     claude_write_session_fixture substituted \
@@ -2941,6 +2969,16 @@ assert_contains "${claude_research_capture}/environment" 'MCP_TOOL_TIMEOUT' \
     'Claude Code research environment'
 [[ -z "$(find "${claude_research_case}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
     fail 'Claude Code research left a temporary runtime home.'
+if find "${claude_research_case}/workspace" \
+    \( -name 'research-runtime' -o -name '*.raw' \) \
+    -print -quit | grep -q .; then
+    fail 'Claude Code research left raw output in its workspace.'
+fi
+if find "${claude_research_case}/output" -type f \
+    \( -name '*.raw' -o -name '*.plain' \) \
+    -print -quit | grep -q .; then
+    fail 'Claude Code research persisted a raw or staging artifact.'
+fi
 claude_research_repository="$(
     find "${claude_research_case}/output" -mindepth 2 -maxdepth 2 \
         -name github--octocat--hello-world -type d

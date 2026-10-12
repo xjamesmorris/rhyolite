@@ -6,6 +6,16 @@ export LC_ALL=C.utf8
 
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_HELPER="${ROOT}/plugins/rhyolite/skills/readonly-repository-review/scripts/review-output.sh"
+REVIEW_SKILL="${ROOT}/plugins/rhyolite/skills/readonly-repository-review/SKILL.md"
+REVIEW_PROMPT="${ROOT}/plugins/rhyolite/skills/readonly-repository-review/review-prompt.txt"
+RESEARCH_PROMPT="${ROOT}/plugins/rhyolite/skills/readonly-repository-review/research-prompt.txt"
+SOURCE_ASSESSMENT_SKILL="${ROOT}/plugins/rhyolite/skills/research-source-assessment/SKILL.md"
+COPILOT_WORKER="${ROOT}/plugins/rhyolite/agents/repo-review-worker.agent.md"
+CLAUDE_WORKER="${ROOT}/plugins/rhyolite/claude/agents/repo-review-worker.md"
+COPILOT_RESEARCH_WORKER="${ROOT}/plugins/rhyolite/agents/repo-research-worker.agent.md"
+CLAUDE_RESEARCH_WORKER="${ROOT}/plugins/rhyolite/claude/agents/repo-research-worker.md"
+COPILOT_ORCHESTRATOR="${ROOT}/plugins/rhyolite/agents/repo-review.agent.md"
+CLAUDE_ORCHESTRATOR="${ROOT}/plugins/rhyolite/claude/agents/repo-review.md"
 FIXTURE_ROOT="$(mktemp -d)"
 
 cleanup() {
@@ -358,6 +368,202 @@ assert_no_markdown_table() {
 
 source "${OUTPUT_HELPER}"
 
+python3 - \
+    "${REVIEW_SKILL}" \
+    "${REVIEW_PROMPT}" \
+    "${RESEARCH_PROMPT}" \
+    "${SOURCE_ASSESSMENT_SKILL}" \
+    "${COPILOT_WORKER}" \
+    "${CLAUDE_WORKER}" \
+    "${COPILOT_RESEARCH_WORKER}" \
+    "${CLAUDE_RESEARCH_WORKER}" \
+    "${COPILOT_ORCHESTRATOR}" \
+    "${CLAUDE_ORCHESTRATOR}" \
+    "${OUTPUT_HELPER}" <<'PY' ||
+import pathlib
+import sys
+
+(
+    review_skill_name,
+    review_prompt_name,
+    research_prompt_name,
+    source_assessment_skill_name,
+    copilot_worker_name,
+    claude_worker_name,
+    copilot_research_worker_name,
+    claude_research_worker_name,
+    copilot_orchestrator_name,
+    claude_orchestrator_name,
+    output_helper_name,
+) = sys.argv[1:]
+paths = {
+    "review skill": pathlib.Path(review_skill_name),
+    "review prompt": pathlib.Path(review_prompt_name),
+    "research prompt": pathlib.Path(research_prompt_name),
+    "source assessment skill": pathlib.Path(source_assessment_skill_name),
+    "Copilot worker": pathlib.Path(copilot_worker_name),
+    "Claude worker": pathlib.Path(claude_worker_name),
+    "Copilot research worker": pathlib.Path(copilot_research_worker_name),
+    "Claude research worker": pathlib.Path(claude_research_worker_name),
+    "Copilot orchestrator": pathlib.Path(copilot_orchestrator_name),
+    "Claude orchestrator": pathlib.Path(claude_orchestrator_name),
+    "repair helper": pathlib.Path(output_helper_name),
+}
+texts = {
+    name: path.read_text(encoding="utf-8")
+    for name, path in paths.items()
+}
+invariant = (
+    "RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated "
+    "return, compare the complete candidate against the exact return contract "
+    "for that surface, correct every mismatch, and submit only a matching "
+    "candidate; any downstream validation remains defense in depth and never "
+    "replaces this self-check."
+)
+for name, text in texts.items():
+    if invariant not in text:
+        raise SystemExit(f"{name} lost the versioned agent self-check invariant")
+
+
+def extract_block(name, start, end):
+    lines = texts[name].splitlines()
+    if lines.count(start) != 1 or lines.count(end) != 1:
+        raise SystemExit(f"{name} lost a unique {start} block")
+    first = lines.index(start)
+    last = lines.index(end, first)
+    return "\n".join(lines[first:last + 1])
+
+
+main_start = "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+main_end = "END MAIN REPORT RETURN SELF-CHECK"
+main_blocks = {
+    name: extract_block(name, main_start, main_end)
+    for name in (
+        "review skill",
+        "review prompt",
+        "Copilot worker",
+        "Claude worker",
+    )
+}
+if len(set(main_blocks.values())) != 1:
+    raise SystemExit("Copilot and Claude main-report self-check contracts diverged")
+main_block = next(iter(main_blocks.values()))
+for required in (
+    "Candidate envelope:",
+    "Scope headings and order:",
+    "Mandatory fields and multiplicity:",
+    "Controlled values:",
+    "Prohibited content:",
+    "Terminal rules:",
+    "restart this self-check",
+    "independent extraction and strict validation",
+):
+    if required not in main_block:
+        raise SystemExit(f"main-report self-check lost required coverage: {required}")
+
+security_start = (
+    "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+)
+security_end = "END SECURITY PASS RETURN SELF-CHECK"
+security_blocks = {
+    name: extract_block(name, security_start, security_end)
+    for name in (
+        "review skill",
+        "review prompt",
+        "Copilot worker",
+        "Claude worker",
+    )
+}
+if len(set(security_blocks.values())) != 1:
+    raise SystemExit("Copilot and Claude security-pass self-check contracts diverged")
+security_block = next(iter(security_blocks.values()))
+for required in (
+    "Scope:",
+    "exact `path:line` support",
+    "Exploitability and impact:",
+    "Classification:",
+    "follow-up question, menu, action choice",
+    "`Fix highest severity issues`",
+    "Defense in depth:",
+):
+    if required not in security_block:
+        raise SystemExit(f"security-pass self-check lost required coverage: {required}")
+for name in ("review prompt", "Copilot worker"):
+    if (
+        "complete SECURITY PASS RETURN SELF-CHECK block below verbatim"
+        not in texts[name]
+    ):
+        raise SystemExit(f"{name} no longer carries the exact specialist request")
+if "Apply the complete SECURITY PASS RETURN SELF-CHECK block" not in texts[
+    "Claude worker"
+]:
+    raise SystemExit("Claude worker lost the dedicated security-pass self-check")
+
+completion_start = (
+    "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+)
+completion_end = "END GUIDED COMPLETION RETURN SELF-CHECK"
+completion_blocks = {
+    name: extract_block(name, completion_start, completion_end)
+    for name in (
+        "review skill",
+        "Copilot orchestrator",
+        "Claude orchestrator",
+    )
+}
+if len(set(completion_blocks.values())) != 1:
+    raise SystemExit("Copilot and Claude guided-completion self-checks diverged")
+completion_block = next(iter(completion_blocks.values()))
+for required in (
+    "first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`",
+    "exactly three to five concise `- ` bullets",
+    "exactly one",
+    "`Run output: <absolute path>` line",
+    "final non-empty line",
+    "No prose, question,",
+    "does not offer to",
+    "restart this self-check",
+):
+    if required not in completion_block:
+        raise SystemExit(
+            f"guided-completion self-check lost required coverage: {required}"
+        )
+
+for name in (
+    "research prompt",
+    "source assessment skill",
+    "Copilot research worker",
+    "Claude research worker",
+):
+    text = texts[name]
+    for required in (
+        "research_network_summary",
+        "candidate",
+        "three",
+        "accepted candidate",
+        "raw final assistant reply",
+        "before privacy sanitization",
+    ):
+        if required not in text:
+            raise SystemExit(
+                f"{name} lost research return self-check coverage: {required}"
+            )
+
+repair_text = texts["repair helper"]
+for required in (
+    '"REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)\\n"',
+    "Its key set is exactly ProtocolVersion, Section, Field, Occurrence, "
+    "OriginalValueSha256, and ConservativeLevel",
+    "Every JSON type and value exactly matches the object under EXPECTED "
+    "CONFIDENCE EDIT",
+    "trusted caller will still parse, compare, preserve, and strictly "
+    "revalidate the result",
+):
+    if required not in repair_text:
+        raise SystemExit(f"repair self-check lost required coverage: {required}")
+PY
+    fail 'agent return self-check contracts are incomplete or out of parity'
+
 python3 - "${OUTPUT_HELPER}" <<'PY' ||
 import ast
 import pathlib
@@ -492,6 +698,26 @@ for scope_specification in \
         "${request}" \
         "${initial}" \
         "scope ${scope} prompt path isolation"
+    assert_contains \
+        "${request}" \
+        'RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return' \
+        "scope ${scope} versioned repair self-check"
+    assert_contains \
+        "${request}" \
+        'REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)' \
+        "scope ${scope} repair self-check block"
+    assert_contains \
+        "${request}" \
+        'Its key set is exactly ProtocolVersion, Section, Field, Occurrence, OriginalValueSha256, and ConservativeLevel' \
+        "scope ${scope} repair schema comparison"
+    assert_contains \
+        "${request}" \
+        'Every JSON type and value exactly matches the object under EXPECTED CONFIDENCE EDIT' \
+        "scope ${scope} repair value comparison"
+    assert_contains \
+        "${request}" \
+        'If any comparison fails, correct the candidate and repeat this self-check from item 1.' \
+        "scope ${scope} repair correction loop"
 
     if [[ "${scope}" -eq 2 ]]; then
         apply_review_report_repair \

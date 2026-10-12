@@ -233,6 +233,10 @@ supported and must not drive new work.
   and requires persisted source-landscape, inaccessible-resource, and
   retrieval-priority report sections.
 - `research-policy.json` is the versioned default broker policy.
+  `research-event-integers.json` is the shared broker/runner inventory for
+  every exact integer leaf in every event type, including nested and optional
+  fields. Accepted validation events cap claim counts at 100; rejected events
+  may retain the bounded pre-enforcement observed count.
   `scripts/research-egress-broker.py` is the approved Python standard-library
   exception. It implements deterministic local stdio MCP, the immutable
   public-HTTPS/DNS/TLS/no-auth/no-proxy floor, direct fetch, anonymous GitHub,
@@ -462,8 +466,9 @@ supported and must not drive new work.
   effective policy digest/resource profile, exact tools, anonymous
   GitHub/no-auth mode, selected general-web-search provider and availability,
   cookie replay, private raw Set-Cookie retention, private unsupported-body
-  retention, and network-log policy. Scope 1 fixes the object to disabled and
-  clears stale cookie consent.
+  retention, network-log policy, and dossier-validation protocol, attempt
+  limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
+  disabled and clears stale cookie consent.
 - Harness Contract v5 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
@@ -471,10 +476,19 @@ supported and must not drive new work.
   `ForwardedEnvVarNames`. Contract v5 adds the adapter-owned research
   functions `harness_write_research_mcp_config`,
   `harness_research_worker_argv`, `harness_research_worker_env`, and
-  `harness_finalize_research_session` plus the `research` runtime-home phase,
+  `harness_finalize_research_session`, plus
+  `harness_extract_research_reply` and the `research` runtime-home phase,
   and gates scope 2/3 on the adapter's `web_research` capability. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
+- The research-reply extraction function lets the trusted runner bind the
+  broker's accepted dossier proof to the raw final
+  assistant reply before transcript rendering or privacy sanitization.
+  The shared review skill defines `RHYOLITE_AGENT_SELF_CHECK_V1` and the
+  exact main-report, security-pass, and guided-completion return contracts;
+  the shared output helper defines the repair-return contract.
+  Harness-specific copies must remain byte-for-byte equivalent where the
+  same surface exists.
 - `ReportRepairPolicy`, including `DeterministicNormalizations`, is part of
   plan approval. The additive `ReportRepair`
   object is synchronized across repository state, manifest entries, run-state

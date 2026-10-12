@@ -48,6 +48,103 @@ TOOL_NAMES = (
     "search_public_web",
     "research_network_summary",
 )
+RESEARCH_DOSSIER_DELIMITER = "=" * 80
+RESEARCH_DOSSIER_MAX_BYTES = 2 * 1024 * 1024
+RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION = 1
+RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT = 3
+RESEARCH_DOSSIER_CANONICALIZATION = "utf8-lf-single-terminal-newline-v1"
+RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES = 100
+RESEARCH_DOSSIER_MAX_OBSERVED_CLAIM_ENTRIES = (
+    RESEARCH_DOSSIER_MAX_BYTES // len("1. Claim:\n".encode("utf-8"))
+)
+RESEARCH_DOSSIER_MAX_COLLECTED_VIOLATIONS = 128
+RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS = 32
+RESEARCH_DOSSIER_MAX_STORED_VIOLATIONS_PER_CODE = 8
+RESEARCH_DOSSIER_MAX_VIOLATION_CODE_COUNTS = 64
+EVENT_INTEGER_CONTRACT_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "research-event-integers.json"
+)
+EVENT_INTEGER_BOUND_REFS = frozenset(
+    {
+        "eventCount",
+        "priorSequence",
+        "expectedPolicySchema",
+        "requestBudget",
+        "maxWireBytes",
+        "headerBytesExceeded",
+        "maxObservedHeaderBytes",
+        "maxBodyPosition",
+        "requestTimingMsMax",
+        "successfulResponses",
+        "maxWebSearchCandidates",
+        "validationAttemptLimit",
+        "maxDossierBytes",
+        "maxAcceptedClaimEntries",
+        "maxObservedClaimEntries",
+        "maxCollectedViolations",
+        "maxReturnedViolations",
+        "violationCount",
+    }
+)
+RESEARCH_DOSSIER_FORBIDDEN_LINE_SEPARATORS = frozenset(
+    {
+        "\r",
+        "\v",
+        "\f",
+        "\x1c",
+        "\x1d",
+        "\x1e",
+        "\x85",
+        "\u2028",
+        "\u2029",
+    }
+)
+CLAIM_REQUIRED_LABELS = (
+    "Claim",
+    "Sources checked",
+    "Check date",
+    "Ownership",
+    "Status",
+    "Confidence",
+)
+CLAIM_OWNERSHIP_VALUES = frozenset(
+    {"project-controlled", "independent", "platform"}
+)
+CLAIM_STATUS_VALUES = (
+    "Corroborated",
+    "Not corroborated",
+    "Contradicted",
+    "Not checkable",
+)
+CLAIM_ENTRY_START = re.compile(r"^([1-9][0-9]*)\. Claim:(?: (.*))?$")
+CLAIM_FIELD_LINE = re.compile(
+    r"^   (Sources checked|Check date|Ownership|Status|Confidence):(?: (.*))?$"
+)
+CLAIM_LABEL_LIKE = re.compile(r"^[ \t]*[A-Za-z][A-Za-z ]*:")
+RESEARCH_SUBMISSION_PROOF_KEYS = frozenset(
+    {
+        "ProtocolVersion",
+        "Status",
+        "AttemptLimit",
+        "AttemptsUsed",
+        "Canonicalization",
+        "DigestAlgorithm",
+        "CandidateSha256",
+        "CandidateBytes",
+    }
+)
+RESEARCH_DOSSIER_SECTIONS = (
+    "RESEARCH CAPABILITY RECORD",
+    "RESEARCH SOURCE LANDSCAPE",
+    "COMMUNITY HEALTH EVIDENCE",
+    "CLAIM VERIFICATION EVIDENCE",
+    "PRIOR ART AND LINEAGE EVIDENCE",
+    "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES",
+    "RESEARCH LIMITATIONS",
+    "RESEARCH TRANSPORT OBSERVATIONS",
+)
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 BLOCKED_HOST_SUFFIXES = (
     ".localhost",
@@ -270,6 +367,961 @@ def utc_now() -> str:
     )
 
 
+_EVENT_INTEGER_CONTRACT: dict[str, Any] | None = None
+
+
+def event_integer_contract() -> dict[str, Any]:
+    global _EVENT_INTEGER_CONTRACT
+    if _EVENT_INTEGER_CONTRACT is not None:
+        return _EVENT_INTEGER_CONTRACT
+    try:
+        value = json.loads(EVENT_INTEGER_CONTRACT_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Research event integer contract is unavailable") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "common", "events"}
+        or type(value.get("schemaVersion")) is not int
+        or value["schemaVersion"] != 1
+        or not isinstance(value.get("common"), list)
+        or not isinstance(value.get("events"), dict)
+        or not value["events"]
+    ):
+        raise RuntimeError("Research event integer contract is invalid")
+    allowed_spec_keys = {
+        "path",
+        "required",
+        "nullable",
+        "minimum",
+        "maximum",
+        "minimumRef",
+        "maximumRef",
+        "requiredForCodes",
+        "allowedForCodes",
+    }
+    spec_groups = [value["common"]]
+    for event_type, definition in value["events"].items():
+        if (
+            not isinstance(event_type, str)
+            or not event_type
+            or not isinstance(definition, dict)
+            or set(definition) != {"label", "fields"}
+            or not isinstance(definition.get("label"), str)
+            or not definition["label"]
+            or not isinstance(definition.get("fields"), list)
+        ):
+            raise RuntimeError("Research event integer contract is invalid")
+        spec_groups.append(definition["fields"])
+    for specs in spec_groups:
+        seen_paths: set[tuple[Any, ...]] = set()
+        for spec in specs:
+            if (
+                not isinstance(spec, dict)
+                or not set(spec).issubset(allowed_spec_keys)
+                or "path" not in spec
+                or not isinstance(spec["path"], list)
+                or not spec["path"]
+            ):
+                raise RuntimeError("Research event integer contract is invalid")
+            normalized_path: list[Any] = []
+            for component in spec["path"]:
+                if isinstance(component, str) and component:
+                    normalized_path.append(component)
+                elif type(component) is int and component >= 0:
+                    normalized_path.append(component)
+                else:
+                    raise RuntimeError(
+                        "Research event integer contract is invalid"
+                    )
+            path_key = tuple(normalized_path)
+            if path_key in seen_paths:
+                raise RuntimeError("Research event integer contract is invalid")
+            seen_paths.add(path_key)
+            for flag in ("required", "nullable"):
+                if flag in spec and type(spec[flag]) is not bool:
+                    raise RuntimeError(
+                        "Research event integer contract is invalid"
+                    )
+            for bound in ("minimum", "maximum"):
+                if bound in spec and type(spec[bound]) is not int:
+                    raise RuntimeError(
+                        "Research event integer contract is invalid"
+                    )
+            for bound_ref in ("minimumRef", "maximumRef"):
+                if (
+                    bound_ref in spec
+                    and spec[bound_ref] not in EVENT_INTEGER_BOUND_REFS
+                ):
+                    raise RuntimeError(
+                        "Research event integer contract is invalid"
+                    )
+            if ("minimum" in spec) == ("minimumRef" in spec):
+                raise RuntimeError("Research event integer contract is invalid")
+            if ("maximum" in spec) == ("maximumRef" in spec):
+                raise RuntimeError("Research event integer contract is invalid")
+            for code_key in ("requiredForCodes", "allowedForCodes"):
+                if code_key not in spec:
+                    continue
+                codes = spec[code_key]
+                if (
+                    not isinstance(codes, list)
+                    or not codes
+                    or any(
+                        not isinstance(code, str) or not code
+                        for code in codes
+                    )
+                    or len(codes) != len(set(codes))
+                ):
+                    raise RuntimeError(
+                        "Research event integer contract is invalid"
+                    )
+    _EVENT_INTEGER_CONTRACT = value
+    return value
+
+
+def _event_integer_paths(
+    value: Any,
+    path: tuple[Any, ...] = (),
+) -> Iterable[tuple[Any, ...]]:
+    if type(value) is int:
+        yield path
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _event_integer_paths(item, path + (key,))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _event_integer_paths(item, path + (index,))
+
+
+def _event_contract_path_matches(
+    contract_path: Sequence[Any],
+    actual_path: Sequence[Any],
+) -> bool:
+    return len(contract_path) == len(actual_path) and all(
+        expected == "*" or expected == actual
+        for expected, actual in zip(contract_path, actual_path)
+    )
+
+
+def _event_contract_values(
+    value: Any,
+    contract_path: Sequence[Any],
+) -> list[Any]:
+    current = [value]
+    for component in contract_path:
+        following: list[Any] = []
+        for item in current:
+            if component == "*":
+                if isinstance(item, dict):
+                    following.extend(item.values())
+                elif isinstance(item, list):
+                    following.extend(item)
+            elif isinstance(component, str) and isinstance(item, dict):
+                if component in item:
+                    following.append(item[component])
+            elif type(component) is int and isinstance(item, list):
+                if component < len(item):
+                    following.append(item[component])
+        current = following
+    return current
+
+
+def validate_broker_event_integer_contract(
+    event_type: str,
+    event: Mapping[str, Any],
+) -> None:
+    contract = event_integer_contract()
+    definition = contract["events"].get(event_type)
+    if not isinstance(definition, dict):
+        raise RuntimeError("Research event type is missing from the integer contract")
+    specs = [*contract["common"], *definition["fields"]]
+    for actual_path in _event_integer_paths(event):
+        if not any(
+            _event_contract_path_matches(spec["path"], actual_path)
+            for spec in specs
+        ):
+            raise RuntimeError("Research event integer contract is incomplete")
+    event_code = event.get("Code")
+    for spec in specs:
+        values = _event_contract_values(event, spec["path"])
+        required_codes = spec.get("requiredForCodes", [])
+        allowed_codes = spec.get("allowedForCodes", required_codes)
+        if spec.get("required") and not values:
+            raise RuntimeError("Research event integer contract is incomplete")
+        if event_code in required_codes and not values:
+            raise RuntimeError("Research event integer contract is incomplete")
+        if values and allowed_codes and event_code not in allowed_codes:
+            raise RuntimeError("Research event integer contract is invalid")
+        for item in values:
+            if item is None and spec.get("nullable"):
+                continue
+            if type(item) is not int:
+                raise RuntimeError("Research event integer contract is invalid")
+            if "minimum" in spec and item < spec["minimum"]:
+                raise RuntimeError("Research event integer contract is invalid")
+            if "maximum" in spec and item > spec["maximum"]:
+                raise RuntimeError("Research event integer contract is invalid")
+
+
+def dossier_violation(code: str, path: str, message: str) -> dict[str, str]:
+    return {
+        "code": code,
+        "path": path,
+        "message": message,
+    }
+
+
+class DossierViolationCollector:
+    def __init__(self) -> None:
+        self.items: list[dict[str, str]] = []
+        self.total_count = 0
+        self.code_counts: dict[str, int] = {}
+        self.stored_code_counts: dict[str, int] = {}
+        self.claim_entry_count: int | None = None
+
+    def add(self, code: str, path: str, message: str) -> None:
+        self.total_count += 1
+        if code in self.code_counts:
+            self.code_counts[code] += 1
+        elif len(self.code_counts) < RESEARCH_DOSSIER_MAX_VIOLATION_CODE_COUNTS - 1:
+            self.code_counts[code] = 1
+        else:
+            self.code_counts["other"] = self.code_counts.get("other", 0) + 1
+        stored_for_code = self.stored_code_counts.get(code, 0)
+        if (
+            len(self.items) < RESEARCH_DOSSIER_MAX_COLLECTED_VIOLATIONS
+            and stored_for_code
+            < RESEARCH_DOSSIER_MAX_STORED_VIOLATIONS_PER_CODE
+        ):
+            self.items.append(dossier_violation(code, path, message))
+            self.stored_code_counts[code] = stored_for_code + 1
+
+    def extend(self, violations: Iterable[Mapping[str, str]]) -> None:
+        for violation in violations:
+            self.add(
+                violation["code"],
+                violation["path"],
+                violation["message"],
+            )
+
+    def response_fields(self) -> dict[str, Any]:
+        returned = self.items[:RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS]
+        return {
+            "claimEntryCount": self.claim_entry_count,
+            "claimEntryLimit": RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+            "violationCount": self.total_count,
+            "violationCollectedCount": len(self.items),
+            "violationReturnedCount": len(returned),
+            "violationsTruncated": self.total_count > len(returned),
+            "violationCollectionTruncated": self.total_count > len(self.items),
+            "violationCodeCounts": dict(sorted(self.code_counts.items())),
+            "violations": returned,
+        }
+
+
+def canonicalize_research_dossier_candidate(
+    candidate: Any,
+) -> tuple[bytes | None, list[dict[str, str]]]:
+    violations: list[dict[str, str]] = []
+    if not isinstance(candidate, str):
+        return None, [
+            dossier_violation(
+                "candidate_type",
+                "dossier",
+                "Submit the complete proposed dossier as a string.",
+            )
+        ]
+    if any(
+        character in RESEARCH_DOSSIER_FORBIDDEN_LINE_SEPARATORS
+        for character in candidate
+    ):
+        violations.append(
+            dossier_violation(
+                "line_endings",
+                "dossier",
+                "Use only U+000A LF line separators; remove CR, NEL, VT, FF, "
+                "record separators, U+2028, and U+2029.",
+            )
+        )
+    if re.search(r"[\x00-\x08\x0e-\x1b\x1f\x7f]", candidate):
+        violations.append(
+            dossier_violation(
+                "control_character",
+                "dossier",
+                "Remove terminal and other control characters from the dossier.",
+            )
+        )
+    if candidate.startswith("\n"):
+        violations.append(
+            dossier_violation(
+                "leading_content",
+                "dossier",
+                "The opening delimiter must be the first line with no leading blank line.",
+            )
+        )
+    if candidate.endswith("\n\n"):
+        violations.append(
+            dossier_violation(
+                "trailing_content",
+                "dossier",
+                "The closing delimiter must be the final logical line.",
+            )
+        )
+    body = candidate[:-1] if candidate.endswith("\n") else candidate
+    if not body:
+        violations.append(
+            dossier_violation(
+                "empty_candidate",
+                "dossier",
+                "Submit the complete non-empty dossier.",
+            )
+        )
+    try:
+        canonical = (body + "\n").encode("utf-8")
+    except UnicodeEncodeError:
+        violations.append(
+            dossier_violation(
+                "candidate_encoding",
+                "dossier",
+                "Use valid UTF-8 text without unpaired Unicode surrogates.",
+            )
+        )
+        return None, violations
+    if len(canonical) > RESEARCH_DOSSIER_MAX_BYTES:
+        violations.append(
+            dossier_violation(
+                "candidate_too_large",
+                "dossier",
+                "Keep the complete dossier at or below 2097152 UTF-8 bytes.",
+            )
+        )
+    return (None if violations else canonical), violations
+
+
+def is_iso_calendar_date(value: str) -> bool:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        dt.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def finalize_claim_entry(
+    entry: Mapping[str, Any],
+    violations: DossierViolationCollector,
+) -> None:
+    entry_index = entry["index"]
+    path = f"CLAIM VERIFICATION EVIDENCE/Claim {entry_index}"
+    values: Mapping[str, str] = entry["values"]
+    order: Sequence[str] = entry["order"]
+    expected_present_order = [
+        label for label in CLAIM_REQUIRED_LABELS if label in values
+    ]
+    if list(order) != expected_present_order:
+        violations.add(
+            "claim_label_order",
+            path,
+            "Use the six exact claim labels once each and in the required order.",
+        )
+    for label in CLAIM_REQUIRED_LABELS:
+        if label not in values:
+            violations.add(
+                "claim_missing_label",
+                f"{path}/{label}",
+                f"Add the exact {label}: label to this claim entry.",
+            )
+            continue
+        if not values[label]:
+            violations.add(
+                "claim_empty_field",
+                f"{path}/{label}",
+                f"Give {label}: a non-empty value.",
+            )
+
+    claim_value = values.get("Claim", "")
+    if claim_value:
+        claim_parts = [part.strip() for part in claim_value.split(";", 2)]
+        if (
+            len(claim_parts) != 3
+            or any(not part for part in claim_parts)
+            or re.fullmatch(r".+:[0-9]+(?:-[0-9]+)?", claim_parts[1])
+            is None
+        ):
+            violations.add(
+                "claim_value_format",
+                f"{path}/Claim",
+                "Use Claim: <claim type>; <path:line>; <short neutral paraphrase>.",
+            )
+
+    sources = values.get("Sources checked", "")
+    if (
+        sources
+        and re.search(r"https://\S+", sources) is None
+        and re.fullmatch(
+            r"(?i:none)(?:[ \t]*[;:,-][ \t]*|\s+)\S.*",
+            sources,
+        )
+        is None
+    ):
+        violations.add(
+            "claim_sources",
+            f"{path}/Sources checked",
+            "List at least one exact HTTPS URL or none with a non-empty reason.",
+        )
+
+    check_date = values.get("Check date", "")
+    if check_date and not is_iso_calendar_date(check_date):
+        violations.add(
+            "claim_check_date",
+            f"{path}/Check date",
+            "Use one real ISO calendar date in YYYY-MM-DD form.",
+        )
+
+    ownership = values.get("Ownership", "")
+    if ownership and ownership not in CLAIM_OWNERSHIP_VALUES:
+        violations.add(
+            "claim_ownership",
+            f"{path}/Ownership",
+            "Use exactly project-controlled, independent, or platform.",
+        )
+
+    status = values.get("Status", "")
+    if status:
+        status_match = re.fullmatch(
+            r"(Corroborated|Not corroborated|Contradicted|Not checkable); (.+)",
+            status,
+        )
+        if (
+            status_match is None
+            or status_match.group(1) not in CLAIM_STATUS_VALUES
+            or not status_match.group(2).strip()
+        ):
+            violations.add(
+                "claim_status",
+                f"{path}/Status",
+                "Use one controlled status followed by a semicolon and a non-empty reason.",
+            )
+        elif (
+            status_match.group(1) == "Corroborated"
+            and ownership not in {"independent", "platform"}
+        ):
+            violations.add(
+                "claim_status_ownership",
+                f"{path}/Status",
+                "Use Corroborated only with independent or platform ownership.",
+            )
+
+    confidence = values.get("Confidence", "")
+    if confidence and re.fullmatch(r"(High|Medium|Low); (.+)", confidence) is None:
+        violations.add(
+            "claim_confidence",
+            f"{path}/Confidence",
+            "Use one High, Medium, or Low value followed by a semicolon and "
+            "a non-empty evidence basis.",
+        )
+
+
+def validate_claim_verification_evidence(
+    claim_lines: Sequence[str],
+    violations: DossierViolationCollector,
+) -> None:
+    nonempty_count = 0
+    none_candidate_count = 0
+    exact_none_count = 0
+    claim_entry_count = 0
+    for line in claim_lines:
+        if not line.strip():
+            continue
+        nonempty_count += 1
+        if line.startswith("None identified"):
+            none_candidate_count += 1
+            if re.fullmatch(r"None identified: \S.*", line):
+                exact_none_count += 1
+        if CLAIM_ENTRY_START.fullmatch(line):
+            claim_entry_count += 1
+    violations.claim_entry_count = claim_entry_count
+
+    if none_candidate_count:
+        if (
+            none_candidate_count != 1
+            or exact_none_count != 1
+            or nonempty_count != 1
+            or claim_entry_count
+        ):
+            violations.add(
+                "claim_none_exclusive",
+                "CLAIM VERIFICATION EVIDENCE",
+                "Use either the single justified None identified: line or "
+                "numbered claims, never both or additional content.",
+            )
+        if exact_none_count != 1:
+            violations.add(
+                "claim_none_format",
+                "CLAIM VERIFICATION EVIDENCE",
+                "When no claim exists, use exactly None identified: <non-empty basis>.",
+            )
+        return
+
+    if claim_entry_count == 0:
+        violations.add(
+            "claim_numbering",
+            "CLAIM VERIFICATION EVIDENCE",
+            "Use sequential numbered Claim entries or exactly None identified: <non-empty basis>.",
+        )
+        return
+
+    if claim_entry_count > RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES:
+        violations.add(
+            "claim_entry_limit",
+            "CLAIM VERIFICATION EVIDENCE",
+            (
+                "Reduce the claim section to at most "
+                f"{RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES} numbered entries; "
+                f"{claim_entry_count} were supplied."
+            ),
+        )
+
+    current: dict[str, Any] | None = None
+    observed_entry_index = 0
+    for line in claim_lines:
+        if not line.strip():
+            continue
+        start_match = CLAIM_ENTRY_START.fullmatch(line)
+        if start_match:
+            if current is not None:
+                finalize_claim_entry(current, violations)
+            observed_entry_index += 1
+            if observed_entry_index > RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES:
+                current = None
+                continue
+            current = {
+                "index": observed_entry_index,
+                "values": {
+                    "Claim": (start_match.group(2) or "").strip(),
+                },
+                "order": ["Claim"],
+            }
+            if start_match.group(1) != str(observed_entry_index):
+                violations.add(
+                    "claim_numbering",
+                    f"CLAIM VERIFICATION EVIDENCE/Claim {observed_entry_index}",
+                    f"Number this entry {observed_entry_index}.",
+                )
+            continue
+        if observed_entry_index > RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES:
+            continue
+        if current is None:
+            violations.add(
+                "claim_trailing_content",
+                "CLAIM VERIFICATION EVIDENCE",
+                "Remove content before the first exact numbered Claim entry.",
+            )
+            continue
+        field_match = CLAIM_FIELD_LINE.fullmatch(line)
+        if field_match:
+            label = field_match.group(1)
+            value = (field_match.group(2) or "").strip()
+            values = current["values"]
+            if label in values:
+                violations.add(
+                    "claim_duplicate_label",
+                    (
+                        "CLAIM VERIFICATION EVIDENCE/"
+                        f"Claim {current['index']}/{label}"
+                    ),
+                    f"Include the exact {label}: label only once.",
+                )
+                continue
+            values[label] = value
+            current["order"].append(label)
+            continue
+        code = (
+            "claim_unknown_label"
+            if CLAIM_LABEL_LIKE.match(line)
+            else "claim_trailing_content"
+        )
+        message = (
+            "Remove unknown or incorrectly indented claim labels; only the "
+            "six exact labels are allowed."
+            if code == "claim_unknown_label"
+            else "Remove continuation or trailing content; every non-empty "
+            "claim line must use an exact required label."
+        )
+        violations.add(
+            code,
+            f"CLAIM VERIFICATION EVIDENCE/Claim {current['index']}",
+            message,
+        )
+    if current is not None:
+        finalize_claim_entry(current, violations)
+
+
+def expected_capability_record_lines(
+    policy: EffectivePolicy,
+    cookie_mode: str,
+    successful_responses: int,
+) -> tuple[tuple[str, str], ...]:
+    web_available = policy.web_search_provider != WEB_PROVIDER_NONE
+    return (
+        ("Broker health", "Broker health: ready"),
+        ("Broker version", f"Broker version: {BROKER_VERSION}"),
+        (
+            "Policy schema version",
+            f"Policy schema version: {POLICY_SCHEMA_VERSION}",
+        ),
+        ("Policy ID", f"Policy ID: {policy.policy_id}"),
+        ("Policy digest", f"Policy digest: {policy.digest}"),
+        ("Transport provider", "Transport provider: local-broker"),
+        ("Exact tools", f"Exact tools: {', '.join(TOOL_NAMES)}"),
+        (
+            "Direct HTTPS provider",
+            "Direct HTTPS provider: "
+            f"{DIRECT_PROVIDER_ID}; enabled="
+            f"{str(policy.direct_https_enabled).lower()}",
+        ),
+        (
+            "Anonymous GitHub provider",
+            "Anonymous GitHub provider: "
+            f"{GITHUB_PROVIDER_ID}; enabled="
+            f"{str(policy.anonymous_github_enabled).lower()}; "
+            "authentication=none",
+        ),
+        (
+            "General web search provider",
+            "General web search provider: "
+            f"{policy.web_search_provider}; "
+            f"available={str(web_available).lower()}; "
+            f"status={'ready' if web_available else 'provider_disabled'}",
+        ),
+        ("Cookie replay mode", f"Cookie replay mode: {cookie_mode}"),
+        (
+            "Raw Set-Cookie retention",
+            "Raw Set-Cookie retention: private-ledger",
+        ),
+        (
+            "Unsupported body retention",
+            "Unsupported body retention: private-content-addressed",
+        ),
+        (
+            "Dossier validation",
+            "Dossier validation: "
+            f"protocol={RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION}; "
+            "tool=research_network_summary; "
+            f"attemptLimit={RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT}; "
+            f"canonicalization={RESEARCH_DOSSIER_CANONICALIZATION}; "
+            "digestAlgorithm=sha256",
+        ),
+        ("Request budget", f"Request budget: {policy.request_budget}"),
+        (
+            "Successful public responses",
+            f"Successful public responses: {successful_responses}",
+        ),
+    )
+
+
+def validate_research_dossier_candidate(
+    candidate: Any,
+    policy: EffectivePolicy,
+    cookie_mode: str,
+    successful_responses: int,
+) -> tuple[bytes | None, DossierViolationCollector]:
+    canonical, canonical_violations = canonicalize_research_dossier_candidate(
+        candidate
+    )
+    violations = DossierViolationCollector()
+    violations.extend(canonical_violations)
+    if canonical is None:
+        return None, violations
+
+    text = canonical.decode("utf-8")
+    lines = text[:-1].split("\n")
+    if not lines or not re.fullmatch(r"={80,}", lines[0]):
+        violations.add(
+            "opening_delimiter",
+            "dossier",
+            "Begin with a delimiter line containing at least 80 equals signs.",
+        )
+    if len(lines) < 2 or lines[1] != "REPOSITORY RESEARCH DOSSIER":
+        violations.add(
+            "dossier_heading",
+            "dossier",
+            "Place REPOSITORY RESEARCH DOSSIER exactly on the second line.",
+        )
+    if lines.count("REPOSITORY RESEARCH DOSSIER") != 1:
+        violations.add(
+            "dossier_heading_count",
+            "dossier",
+            "Include the dossier heading exactly once.",
+        )
+    if not lines or lines[-1] != RESEARCH_DOSSIER_DELIMITER:
+        violations.add(
+            "closing_delimiter",
+            "dossier",
+            "End with exactly 80 equals signs as the final line.",
+        )
+    if any(
+        line.lstrip().startswith("|") and line.rstrip().endswith("|")
+        for line in lines
+    ):
+        violations.add(
+            "markdown_table",
+            "dossier",
+            "Replace every Markdown table with numbered plain-text entries.",
+        )
+    if any(re.match(r"^[ \t]*[-*+][ \t]+", line) for line in lines):
+        violations.add(
+            "unnumbered_list",
+            "dossier",
+            "Use numbered lists instead of bullet lists.",
+        )
+
+    positions: list[int] = []
+    sections_valid = True
+    for section in RESEARCH_DOSSIER_SECTIONS:
+        count = lines.count(section)
+        if count != 1:
+            sections_valid = False
+            violations.add(
+                "section_count",
+                section,
+                f"Include {section} exactly once.",
+            )
+        else:
+            positions.append(lines.index(section))
+    if sections_valid and positions != sorted(positions):
+        sections_valid = False
+        violations.add(
+            "section_order",
+            "dossier",
+            "Place every required section in the exact contract order.",
+        )
+
+    section_bodies: dict[str, list[str]] = {}
+    if sections_valid:
+        for index, section in enumerate(RESEARCH_DOSSIER_SECTIONS):
+            start = positions[index] + 1
+            finish = (
+                positions[index + 1]
+                if index + 1 < len(positions)
+                else len(lines) - 1
+            )
+            body = lines[start:finish]
+            section_bodies[section] = body
+            if not any(line.strip() for line in body):
+                violations.add(
+                    "empty_section",
+                    section,
+                    f"Add the required content under {section}.",
+                )
+
+        capability_lines = section_bodies["RESEARCH CAPABILITY RECORD"]
+        for label, expected in expected_capability_record_lines(
+            policy,
+            cookie_mode,
+            successful_responses,
+        ):
+            match_count = 0
+            first_match = ""
+            for line in capability_lines:
+                if line.startswith(f"{label}:"):
+                    match_count += 1
+                    if match_count == 1:
+                        first_match = line
+                    else:
+                        break
+            if match_count != 1 or first_match != expected:
+                violations.add(
+                    "capability_field",
+                    f"RESEARCH CAPABILITY RECORD/{label}",
+                    f"Add this exact line in RESEARCH CAPABILITY RECORD: {expected}",
+                )
+        capability_confidence = next(
+            (
+                line
+                for line in capability_lines
+                if re.fullmatch(
+                    r"Confidence: (High|Medium|Low)"
+                    r"(?:[.;:,](?: .+)?)?",
+                    line,
+                )
+            ),
+            None,
+        )
+        capability_evidence = any(
+            re.fullmatch(r"Evidence basis:[ \t]+\S.*", line)
+            for line in capability_lines
+        ) or (
+            capability_confidence is not None
+            and bool(
+                re.fullmatch(
+                    r"Confidence: (High|Medium|Low)"
+                    r"(?:[.;:,][ \t]+\S.*)",
+                    capability_confidence,
+                )
+            )
+        )
+        if capability_confidence is None or not capability_evidence:
+            violations.add(
+                "capability_confidence",
+                "RESEARCH CAPABILITY RECORD",
+                "Add one supported Confidence line with a non-empty evidence basis.",
+            )
+
+        for section in (
+            "RESEARCH SOURCE LANDSCAPE",
+            "COMMUNITY HEALTH EVIDENCE",
+            "PRIOR ART AND LINEAGE EVIDENCE",
+        ):
+            first = next(
+                (line.strip() for line in section_bodies[section] if line.strip()),
+                "",
+            )
+            if first and not re.match(r"^1\.[ \t]+", first):
+                violations.add(
+                    "numbered_section",
+                    section,
+                    f"Start {section} with numbered entry 1.",
+                )
+
+        for section in (
+            "INACCESSIBLE RESOURCE REGISTER",
+            "TOP USER RETRIEVAL PRIORITIES",
+        ):
+            first = next(
+                (line.strip() for line in section_bodies[section] if line.strip()),
+                "",
+            )
+            if (
+                first
+                and not first.startswith("None")
+                and not re.match(r"^1\.[ \t]+", first)
+            ):
+                violations.add(
+                    "numbered_section",
+                    section,
+                    f"Start {section} with numbered entry 1 or an explicit None statement.",
+                )
+
+        prior_art_text = "\n".join(
+            section_bodies["PRIOR ART AND LINEAGE EVIDENCE"]
+        ).lower()
+        if (
+            policy.scope == 2
+            and "code and architecture lineage were not requested"
+            not in prior_art_text
+        ):
+            violations.add(
+                "scope_lineage_statement",
+                "PRIOR ART AND LINEAGE EVIDENCE",
+                "For scope 2, state that code and architecture lineage were not requested.",
+            )
+        if policy.scope == 3:
+            for required_phrase in (
+                "code and architecture lineage",
+                "license and attribution",
+                "chronology",
+            ):
+                if required_phrase not in prior_art_text:
+                    violations.add(
+                        "scope_lineage_coverage",
+                        "PRIOR ART AND LINEAGE EVIDENCE",
+                        f"For scope 3, include {required_phrase} evidence or a specific coverage limitation.",
+                    )
+
+        validate_claim_verification_evidence(
+            section_bodies["CLAIM VERIFICATION EVIDENCE"],
+            violations,
+        )
+    return (None if violations.total_count else canonical), violations
+
+
+def verify_research_submission_binding(
+    reply_path: pathlib.Path,
+    summary_path: pathlib.Path,
+) -> None:
+    for path, label in (
+        (reply_path, "final research reply"),
+        (summary_path, "research network summary"),
+    ):
+        if not path.is_absolute() or not path.is_file() or path.is_symlink():
+            raise BrokerError(
+                "submission_proof_missing",
+                f"The {label} is unavailable for submission verification",
+            )
+    try:
+        reply_bytes = reply_path.read_bytes()
+        if len(reply_bytes) > RESEARCH_DOSSIER_MAX_BYTES + 1:
+            raise BrokerError(
+                "submission_reply_too_large",
+                "The final research reply exceeds the dossier size bound",
+            )
+        reply = reply_bytes.decode("utf-8")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except UnicodeError as error:
+        raise BrokerError(
+            "submission_reply_encoding",
+            "The final research reply is not valid UTF-8",
+        ) from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise BrokerError(
+            "submission_proof_unreadable",
+            "The research submission proof could not be read",
+        ) from error
+    if not isinstance(summary, dict):
+        raise BrokerError(
+            "submission_proof_invalid",
+            "The research network summary is not a JSON object",
+        )
+    canonical, violations = canonicalize_research_dossier_candidate(reply)
+    if canonical is None:
+        raise BrokerError(
+            "submission_reply_invalid",
+            violations[0]["message"],
+        )
+    proof = summary.get("ResearchSubmission")
+    if not isinstance(proof, dict) or proof.get("Status") != "accepted":
+        raise BrokerError(
+            "submission_proof_missing",
+            "The research network summary has no accepted submission proof",
+        )
+    if (
+        set(proof) != RESEARCH_SUBMISSION_PROOF_KEYS
+        or type(proof.get("ProtocolVersion")) is not int
+        or proof["ProtocolVersion"]
+        != RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION
+        or proof.get("Canonicalization") != RESEARCH_DOSSIER_CANONICALIZATION
+        or proof.get("DigestAlgorithm") != "sha256"
+        or type(proof.get("AttemptLimit")) is not int
+        or proof["AttemptLimit"]
+        != RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+        or type(proof.get("AttemptsUsed")) is not int
+        or not 1
+        <= proof["AttemptsUsed"]
+        <= RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+        or type(proof.get("CandidateBytes")) is not int
+        or not 1
+        <= proof["CandidateBytes"]
+        <= RESEARCH_DOSSIER_MAX_BYTES
+        or not isinstance(proof.get("CandidateSha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", proof["CandidateSha256"])
+    ):
+        raise BrokerError(
+            "submission_proof_invalid",
+            "The accepted research submission proof is malformed",
+        )
+    digest = hashlib.sha256(canonical).hexdigest()
+    if (
+        proof["CandidateBytes"] != len(canonical)
+        or proof["CandidateSha256"] != digest
+    ):
+        raise BrokerError(
+            "submission_proof_mismatch",
+            "The final assistant reply does not match the accepted research dossier",
+        )
+
+
 def ensure_exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
     actual = set(value)
     if actual != expected:
@@ -293,7 +1345,7 @@ def require_int(
     minimum: int,
     maximum: int,
 ) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         raise BrokerError("invalid_policy", f"{label} must be an integer")
     if value < minimum or value > maximum:
         raise BrokerError(
@@ -330,13 +1382,16 @@ def load_effective_policy(
         },
         "policy",
     )
-    if raw["schemaVersion"] != POLICY_SCHEMA_VERSION:
+    if (
+        type(raw["schemaVersion"]) is not int
+        or raw["schemaVersion"] != POLICY_SCHEMA_VERSION
+    ):
         raise BrokerError(
             "unsupported_policy_schema",
             "Research policy schema version is unsupported",
             details={
                 "expected": POLICY_SCHEMA_VERSION,
-                "actual": raw["schemaVersion"],
+                "actualType": type(raw["schemaVersion"]).__name__,
             },
         )
     policy_id = raw["policyId"]
@@ -419,7 +1474,7 @@ def load_effective_policy(
         not isinstance(ports, list)
         or not ports
         or len(ports) > 8
-        or any(isinstance(port, bool) or not isinstance(port, int) for port in ports)
+        or any(type(port) is not int for port in ports)
     ):
         raise BrokerError(
             "invalid_policy", "transport.allowedTlsPorts must be a short integer list"
@@ -1371,6 +2426,12 @@ class ResearchBroker:
         self.capabilities_calls = 0
         self.summary_calls = 0
         self.tool_calls = 0
+        self.capability_inspection_sequence: int | None = None
+        self.latest_successful_retrieval_sequence: int | None = None
+        self.latest_network_summary_observation_sequence: int | None = None
+        self.dossier_validation_attempts = 0
+        self.accepted_submission: dict[str, Any] | None = None
+        self.accepted_claim_entry_count: int | None = None
         self.provider_calls: dict[str, int] = {
             DIRECT_PROVIDER_ID: 0,
             GITHUB_PROVIDER_ID: 0,
@@ -1424,20 +2485,23 @@ class ResearchBroker:
         event_type: str,
         values: Mapping[str, Any],
         request_id: str | None = None,
-    ) -> None:
+    ) -> int:
         with self.lock:
             self.sequence += 1
+            sequence = self.sequence
             event: dict[str, Any] = {
                 "SchemaVersion": NETWORK_SCHEMA_VERSION,
-                "Sequence": self.sequence,
+                "Sequence": sequence,
                 "Timestamp": utc_now(),
                 "Type": event_type,
             }
             if request_id:
                 event["RequestId"] = request_id
             event.update(values)
+            validate_broker_event_integer_contract(event_type, event)
             self.append_jsonl(self.events_path, event)
             self.persist_summary()
+            return sequence
 
     def endpoint_ownership(self, host: str) -> str:
         if host == self.repository.host or host.endswith(f".{self.repository.host}"):
@@ -1498,16 +2562,117 @@ class ResearchBroker:
                 "ProviderId": self.policy.web_search_provider,
                 "Available": self.policy.web_search_provider != WEB_PROVIDER_NONE,
             },
+            "DirectHttps": {
+                "ProviderId": DIRECT_PROVIDER_ID,
+                "Enabled": self.policy.direct_https_enabled,
+            },
             "AnonymousGitHub": {
                 "ProviderId": GITHUB_PROVIDER_ID,
                 "Enabled": self.policy.anonymous_github_enabled,
                 "Authentication": "none",
             },
             "ResourceProfile": self.policy.resource_profile(),
+            "ResearchSubmission": (
+                dict(self.accepted_submission)
+                if self.accepted_submission is not None
+                else {
+                    "ProtocolVersion": (
+                        RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION
+                    ),
+                    "Status": (
+                        "rejected"
+                        if self.dossier_validation_attempts
+                        else "not-submitted"
+                    ),
+                    "AttemptLimit": (
+                        RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+                    ),
+                    "AttemptsUsed": self.dossier_validation_attempts,
+                    "Canonicalization": RESEARCH_DOSSIER_CANONICALIZATION,
+                    "DigestAlgorithm": "sha256",
+                }
+            ),
         }
 
     def persist_summary(self) -> None:
         atomic_write_json(self.summary_path, self.summary())
+
+    def workflow_sequence_fields(
+        self,
+        candidate_request_sequence: int | None = None,
+    ) -> dict[str, int | None]:
+        fields: dict[str, int | None] = {
+            "CapabilityInspectionSequence": (
+                self.capability_inspection_sequence
+            ),
+            "LatestSuccessfulRetrievalSequence": (
+                self.latest_successful_retrieval_sequence
+            ),
+            "LatestNetworkSummaryObservationSequence": (
+                self.latest_network_summary_observation_sequence
+            ),
+        }
+        if candidate_request_sequence is not None:
+            fields["CandidateRequestSequence"] = candidate_request_sequence
+        return fields
+
+    def reject_retrieval_workflow(
+        self,
+        operation: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self.lock:
+            if self.capability_inspection_sequence is None:
+                code = "capabilities_required_before_retrieval"
+                message = (
+                    "Call research_capabilities successfully before any public "
+                    "retrieval tool."
+                )
+            elif self.accepted_submission is not None:
+                code = "research_submission_already_accepted"
+                message = (
+                    "The research dossier is already accepted; do not perform "
+                    "additional public retrievals."
+                )
+            else:
+                return None
+            self.record_event(
+                "workflow_order_rejected",
+                {
+                    "Operation": operation,
+                    "Code": code,
+                    **self.workflow_sequence_fields(),
+                },
+                request_id,
+            )
+        return BrokerError(
+            code,
+            message,
+            details={"operation": operation},
+        ).result(request_id)
+
+    def record_successful_public_retrieval(
+        self,
+        request_id: str,
+        provider: str,
+        url: ValidatedUrl,
+        method: str,
+        status: int,
+    ) -> None:
+        with self.lock:
+            self.successful_responses += 1
+            sequence = self.record_event(
+                "public_retrieval_succeeded",
+                {
+                    "ProviderId": provider,
+                    "Url": url.sanitized_url,
+                    "Method": method,
+                    "Status": status,
+                },
+                request_id,
+            )
+            self.latest_successful_retrieval_sequence = sequence
+            self.persist_summary()
 
     def next_request_id(self) -> str:
         with self.lock:
@@ -1843,6 +3008,18 @@ class ResearchBroker:
         request_id = self.next_request_id()
         self.tool_calls += 1
         self.provider_calls[provider] = self.provider_calls.get(provider, 0) + 1
+        workflow_rejection = self.reject_retrieval_workflow(
+            (
+                "fetch_public_url"
+                if provider == DIRECT_PROVIDER_ID
+                else "search_public_github"
+                if provider == GITHUB_PROVIDER_ID
+                else "search_public_web"
+            ),
+            request_id,
+        )
+        if workflow_rejection is not None:
+            return workflow_rejection
         method = method.upper()
         if method not in {"GET", "HEAD"}:
             return self.record_failure(
@@ -1984,9 +3161,7 @@ class ResearchBroker:
                 current = target
                 continue
 
-            if 200 <= response.status < 300:
-                self.successful_responses += 1
-            else:
+            if not 200 <= response.status < 300:
                 if response.status in {401, 403, 451}:
                     error_code = "access_policy_denial"
                 elif response.status == 429:
@@ -2005,7 +3180,13 @@ class ResearchBroker:
                 )
                 return self.record_failure(request_id, current, error)
             if method == "HEAD":
-                self.persist_summary()
+                self.record_successful_public_retrieval(
+                    request_id,
+                    provider,
+                    current,
+                    method,
+                    response.status,
+                )
                 return {
                     "ok": True,
                     "requestId": request_id,
@@ -2132,7 +3313,13 @@ class ResearchBroker:
                         },
                     ),
                 )
-            self.persist_summary()
+            self.record_successful_public_retrieval(
+                request_id,
+                provider,
+                current,
+                method,
+                response.status,
+            )
             return {
                 "ok": True,
                 "requestId": request_id,
@@ -2156,12 +3343,16 @@ class ResearchBroker:
         )
 
     def capabilities(self) -> dict[str, Any]:
-        self.tool_calls += 1
-        self.capabilities_calls += 1
-        self.record_event(
-            "capabilities_checked",
-            {"Tools": list(TOOL_NAMES), "Health": "ready"},
-        )
+        with self.lock:
+            self.tool_calls += 1
+            self.capabilities_calls += 1
+            sequence = self.record_event(
+                "capabilities_checked",
+                {"Tools": list(TOOL_NAMES), "Health": "ready"},
+            )
+            if self.capability_inspection_sequence is None:
+                self.capability_inspection_sequence = sequence
+                self.persist_summary()
         return {
             "ok": True,
             "brokerVersion": BROKER_VERSION,
@@ -2197,6 +3388,13 @@ class ResearchBroker:
             "rawSetCookieRetention": "private-ledger",
             "unsupportedBodyRetention": "private-content-addressed",
             "resourceProfile": self.policy.resource_profile(),
+            "dossierValidation": {
+                "protocolVersion": RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION,
+                "tool": "research_network_summary",
+                "attemptLimit": RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+                "canonicalization": RESEARCH_DOSSIER_CANONICALIZATION,
+                "digestAlgorithm": "sha256",
+            },
         }
 
     def search_github(
@@ -2206,6 +3404,22 @@ class ResearchBroker:
         limit: int,
         page: int,
     ) -> dict[str, Any]:
+        if (
+            self.capability_inspection_sequence is None
+            or self.accepted_submission is not None
+        ):
+            self.tool_calls += 1
+            self.provider_calls[GITHUB_PROVIDER_ID] += 1
+            workflow_rejection = self.reject_retrieval_workflow(
+                "search_public_github"
+            )
+            if workflow_rejection is None:
+                return BrokerError(
+                    "workflow_state_changed",
+                    "Research workflow state changed during tool dispatch; "
+                    "retry the approved sequence.",
+                ).result()
+            return workflow_rejection
         if not self.policy.anonymous_github_enabled:
             return BrokerError(
                 "provider_disabled", "Anonymous GitHub provider is disabled"
@@ -2216,11 +3430,11 @@ class ResearchBroker:
             ).result()
         if kind not in {"repositories", "issues", "pull_requests", "code"}:
             return BrokerError("invalid_query", "GitHub search kind is invalid").result()
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+        if type(limit) is not int or not 1 <= limit <= 20:
             return BrokerError(
                 "invalid_query", "GitHub search limit must be from 1 through 20"
             ).result()
-        if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 10:
+        if type(page) is not int or not 1 <= page <= 10:
             return BrokerError(
                 "invalid_query", "GitHub search page must be from 1 through 10"
             ).result()
@@ -2320,15 +3534,31 @@ class ResearchBroker:
         }
 
     def search_web(self, query: str, limit: int) -> dict[str, Any]:
+        provider = self.policy.web_search_provider
+        if (
+            self.capability_inspection_sequence is None
+            or self.accepted_submission is not None
+        ):
+            self.tool_calls += 1
+            self.provider_calls[provider] = self.provider_calls.get(provider, 0) + 1
+            workflow_rejection = self.reject_retrieval_workflow(
+                "search_public_web"
+            )
+            if workflow_rejection is None:
+                return BrokerError(
+                    "workflow_state_changed",
+                    "Research workflow state changed during tool dispatch; "
+                    "retry the approved sequence.",
+                ).result()
+            return workflow_rejection
         if not isinstance(query, str) or not query.strip() or len(query) > 1024:
             return BrokerError(
                 "invalid_query", "Web search query must contain 1-1024 characters"
             ).result()
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+        if type(limit) is not int or not 1 <= limit <= 20:
             return BrokerError(
                 "invalid_query", "Web search limit must be from 1 through 20"
             ).result()
-        provider = self.policy.web_search_provider
         if provider == WEB_PROVIDER_NONE:
             self.tool_calls += 1
             self.provider_calls[WEB_PROVIDER_NONE] += 1
@@ -2504,11 +3734,310 @@ class ResearchBroker:
             "citation": fetched.get("citation"),
         }
 
-    def network_summary(self) -> dict[str, Any]:
-        self.tool_calls += 1
-        self.summary_calls += 1
-        self.record_event("network_summary_requested", {})
-        return {"ok": True, "summary": self.summary()}
+    def dossier_workflow_diagnostics(
+        self,
+        candidate_request_sequence: int,
+    ) -> DossierViolationCollector:
+        violations = DossierViolationCollector()
+        capability_sequence = self.capability_inspection_sequence
+        retrieval_sequence = self.latest_successful_retrieval_sequence
+        observation_sequence = self.latest_network_summary_observation_sequence
+        if capability_sequence is None:
+            violations.add(
+                "capabilities_not_checked",
+                "research workflow",
+                "Call research_capabilities before any public retrieval.",
+            )
+        if retrieval_sequence is None:
+            violations.add(
+                "no_successful_public_response",
+                "research workflow",
+                "Complete at least one successful public retrieval after capability inspection.",
+            )
+        if observation_sequence is None:
+            violations.add(
+                "network_summary_not_observed",
+                "research workflow",
+                "Call research_network_summary without candidate after the "
+                "latest successful public retrieval.",
+            )
+        elif retrieval_sequence is None or observation_sequence <= retrieval_sequence:
+            violations.add(
+                "network_summary_observation_stale",
+                "research workflow",
+                "Refresh research_network_summary without candidate after "
+                "the latest successful public retrieval.",
+            )
+        if (
+            capability_sequence is not None
+            and retrieval_sequence is not None
+            and capability_sequence >= retrieval_sequence
+        ):
+            violations.add(
+                "workflow_event_order",
+                "research workflow",
+                "Capability inspection must occur before the successful public retrieval.",
+            )
+        if (
+            observation_sequence is not None
+            and observation_sequence >= candidate_request_sequence
+        ):
+            violations.add(
+                "workflow_event_order",
+                "research workflow",
+                "The no-candidate network summary observation must precede candidate validation.",
+            )
+        return violations
+
+    def dossier_validation_result(
+        self,
+        *,
+        accepted: bool,
+        attempt: int,
+        attempts_remaining: int,
+        violations: DossierViolationCollector,
+        proof: Mapping[str, Any] | None = None,
+        replayed: bool | None = None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "protocolVersion": RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION,
+            "accepted": accepted,
+            "attempt": attempt,
+            "attemptLimit": RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+            "attemptsRemaining": attempts_remaining,
+            **violations.response_fields(),
+        }
+        if proof is not None:
+            result["proof"] = dict(proof)
+        if replayed is not None:
+            result["replayed"] = replayed
+        return result
+
+    def record_dossier_validation_rejection(
+        self,
+        attempt: int,
+        candidate_request_sequence: int,
+        violations: DossierViolationCollector,
+    ) -> None:
+        returned_count = min(
+            len(violations.items),
+            RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS,
+        )
+        self.record_event(
+            "research_dossier_validation_rejected",
+            {
+                "Attempt": attempt,
+                "AttemptLimit": RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+                "ClaimEntryCount": violations.claim_entry_count,
+                "ClaimEntryLimit": RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+                "ViolationCount": violations.total_count,
+                "ViolationsCollected": len(violations.items),
+                "ViolationsReturned": returned_count,
+                "ViolationsTruncated": (
+                    violations.total_count > returned_count
+                ),
+                "ViolationCollectionTruncated": (
+                    violations.total_count > len(violations.items)
+                ),
+                "ViolationCodeCounts": dict(
+                    sorted(violations.code_counts.items())
+                ),
+                **self.workflow_sequence_fields(candidate_request_sequence),
+            },
+        )
+
+    def validate_dossier_submission(
+        self,
+        candidate: Any,
+        candidate_request_sequence: int,
+    ) -> dict[str, Any]:
+        if self.accepted_submission is not None:
+            canonical, canonical_violations = canonicalize_research_dossier_candidate(
+                candidate
+            )
+            if (
+                canonical is not None
+                and hashlib.sha256(canonical).hexdigest()
+                == self.accepted_submission["CandidateSha256"]
+                and len(canonical) == self.accepted_submission["CandidateBytes"]
+            ):
+                replay_diagnostics = DossierViolationCollector()
+                replay_diagnostics.claim_entry_count = (
+                    self.accepted_claim_entry_count
+                )
+                self.record_event(
+                    "research_dossier_validation_replayed",
+                    {
+                        "Attempt": self.dossier_validation_attempts,
+                        "CandidateSha256": (
+                            self.accepted_submission["CandidateSha256"]
+                        ),
+                        **self.workflow_sequence_fields(
+                            candidate_request_sequence
+                        ),
+                    },
+                )
+                return self.dossier_validation_result(
+                    accepted=True,
+                    attempt=self.dossier_validation_attempts,
+                    attempts_remaining=(
+                        RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+                        - self.dossier_validation_attempts
+                    ),
+                    violations=replay_diagnostics,
+                    proof=self.accepted_submission,
+                    replayed=True,
+                )
+            rejected = DossierViolationCollector()
+            rejected.add(
+                "candidate_already_accepted",
+                "dossier",
+                "A dossier was already accepted. Return that exact candidate "
+                "without another edit.",
+            )
+            rejected.extend(canonical_violations)
+            self.record_dossier_validation_rejection(
+                self.dossier_validation_attempts,
+                candidate_request_sequence,
+                rejected,
+            )
+            return self.dossier_validation_result(
+                accepted=False,
+                attempt=self.dossier_validation_attempts,
+                attempts_remaining=0,
+                violations=rejected,
+            )
+
+        if (
+            self.dossier_validation_attempts
+            >= RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+        ):
+            exhausted = DossierViolationCollector()
+            exhausted.add(
+                "attempt_limit_exhausted",
+                "dossier",
+                "The three dossier validation attempts are exhausted; do not "
+                "submit an unaccepted dossier.",
+            )
+            self.record_dossier_validation_rejection(
+                self.dossier_validation_attempts,
+                candidate_request_sequence,
+                exhausted,
+            )
+            return self.dossier_validation_result(
+                accepted=False,
+                attempt=self.dossier_validation_attempts,
+                attempts_remaining=0,
+                violations=exhausted,
+            )
+
+        self.dossier_validation_attempts += 1
+        attempt = self.dossier_validation_attempts
+        workflow_violations = self.dossier_workflow_diagnostics(
+            candidate_request_sequence
+        )
+        if workflow_violations.total_count:
+            self.record_dossier_validation_rejection(
+                attempt,
+                candidate_request_sequence,
+                workflow_violations,
+            )
+            return self.dossier_validation_result(
+                accepted=False,
+                attempt=attempt,
+                attempts_remaining=(
+                    RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT - attempt
+                ),
+                violations=workflow_violations,
+            )
+
+        canonical, violations = validate_research_dossier_candidate(
+            candidate,
+            self.policy,
+            self.cookie_mode,
+            self.successful_responses,
+        )
+        if canonical is None:
+            self.record_dossier_validation_rejection(
+                attempt,
+                candidate_request_sequence,
+                violations,
+            )
+            return self.dossier_validation_result(
+                accepted=False,
+                attempt=attempt,
+                attempts_remaining=(
+                    RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT - attempt
+                ),
+                violations=violations,
+            )
+
+        digest = hashlib.sha256(canonical).hexdigest()
+        self.accepted_submission = {
+            "ProtocolVersion": RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION,
+            "Status": "accepted",
+            "AttemptLimit": RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+            "AttemptsUsed": attempt,
+            "Canonicalization": RESEARCH_DOSSIER_CANONICALIZATION,
+            "DigestAlgorithm": "sha256",
+            "CandidateSha256": digest,
+            "CandidateBytes": len(canonical),
+        }
+        self.accepted_claim_entry_count = violations.claim_entry_count
+        self.record_event(
+            "research_dossier_validation_accepted",
+            {
+                "Attempt": attempt,
+                "AttemptLimit": RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+                "CandidateSha256": digest,
+                "CandidateBytes": len(canonical),
+                "ClaimEntryCount": violations.claim_entry_count,
+                **self.workflow_sequence_fields(candidate_request_sequence),
+            },
+        )
+        return self.dossier_validation_result(
+            accepted=True,
+            attempt=attempt,
+            attempts_remaining=(
+                RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT - attempt
+            ),
+            violations=violations,
+            proof=self.accepted_submission,
+            replayed=False,
+        )
+
+    def network_summary(self, candidate: Any | None = None) -> dict[str, Any]:
+        with self.lock:
+            self.tool_calls += 1
+            self.summary_calls += 1
+            request_sequence = self.record_event(
+                "network_summary_requested",
+                {"SubmissionCandidateIncluded": candidate is not None},
+            )
+            if candidate is None:
+                observation_sequence = self.record_event(
+                    "network_summary_observed",
+                    {
+                        "SuccessfulPublicResponses": self.successful_responses,
+                        "LatestSuccessfulRetrievalSequence": (
+                            self.latest_successful_retrieval_sequence
+                        ),
+                    },
+                )
+                self.latest_network_summary_observation_sequence = (
+                    observation_sequence
+                )
+                self.persist_summary()
+                return {"ok": True, "summary": self.summary()}
+            validation = self.validate_dossier_submission(
+                candidate,
+                request_sequence,
+            )
+            return {
+                "ok": validation["accepted"],
+                "summary": self.summary(),
+                "submissionValidation": validation,
+            }
 
     def close(self) -> None:
         self.record_event("broker_stopped", {"CleanExit": True})
@@ -2521,7 +4050,8 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "research_capabilities",
             "description": (
                 "Return the approval-bound research broker, provider, cookie, "
-                "resource, and health contract."
+                "resource, and health contract. Call this before every public "
+                "retrieval phase."
             ),
             "inputSchema": {
                 "type": "object",
@@ -2591,11 +4121,22 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "research_network_summary",
             "description": (
                 "Return the sanitized aggregate request, redirect, cookie, TLS, "
-                "HTTP, rate-limit, and ownership-aware transport observations."
+                "HTTP, rate-limit, and ownership-aware transport observations. "
+                "Without candidate, record the required observation after the "
+                "latest successful retrieval. When candidate is supplied, "
+                "validate the complete proposed dossier against that fresh "
+                "observation and return bounded actionable diagnostics or an "
+                "acceptance proof."
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "candidate": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": RESEARCH_DOSSIER_MAX_BYTES,
+                    },
+                },
                 "additionalProperties": False,
             },
         },
@@ -2632,9 +4173,19 @@ class McpServer:
                 arguments.get("limit", 10),
             )
         if name == "research_network_summary":
-            if arguments:
-                raise BrokerError("invalid_arguments", "Tool takes no arguments")
-            return self.broker.network_summary()
+            if set(arguments) - {"candidate"}:
+                raise BrokerError(
+                    "invalid_arguments",
+                    "Tool accepts only the optional candidate argument",
+                )
+            if "candidate" in arguments and not isinstance(
+                arguments["candidate"], str
+            ):
+                raise BrokerError(
+                    "invalid_arguments",
+                    "Candidate must be the complete dossier string",
+                )
+            return self.broker.network_summary(arguments.get("candidate"))
         raise BrokerError("unknown_tool", "Requested MCP tool is not exposed")
 
     def tool_result(self, value: Mapping[str, Any], is_error: bool = False) -> dict[str, Any]:
@@ -2797,8 +4348,8 @@ def describe_policy(policy: EffectivePolicy, output_format: str) -> None:
 
 def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rhyolite research egress broker")
-    parser.add_argument("--policy", required=True)
-    parser.add_argument("--scope", required=True, type=int, choices=(2, 3))
+    parser.add_argument("--policy")
+    parser.add_argument("--scope", type=int, choices=(2, 3))
     parser.add_argument("--web-search-provider", default=WEB_PROVIDER_ID)
     parser.add_argument("--cookies", choices=("off", "ephemeral"), default="off")
     parser.add_argument("--network-root")
@@ -2807,12 +4358,36 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--expected-policy-digest")
     parser.add_argument("--describe-policy", action="store_true")
     parser.add_argument("--describe-format", choices=("json", "nul"), default="json")
+    parser.add_argument("--verify-submission-reply")
+    parser.add_argument("--submission-summary")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_arguments(argv or sys.argv[1:])
     try:
+        verification_requested = bool(
+            arguments.verify_submission_reply or arguments.submission_summary
+        )
+        if verification_requested:
+            if not (
+                arguments.verify_submission_reply
+                and arguments.submission_summary
+            ):
+                raise BrokerError(
+                    "invalid_configuration",
+                    "Submission verification requires both reply and summary paths",
+                )
+            verify_research_submission_binding(
+                pathlib.Path(arguments.verify_submission_reply),
+                pathlib.Path(arguments.submission_summary),
+            )
+            return 0
+        if arguments.policy is None or arguments.scope is None:
+            raise BrokerError(
+                "invalid_configuration",
+                "Research broker policy and scope are required",
+            )
         policy_path = pathlib.Path(arguments.policy).resolve(strict=True)
         policy = load_effective_policy(
             policy_path,

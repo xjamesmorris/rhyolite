@@ -25,11 +25,24 @@ Claude Fable 5.1). Do not automatically fall back to a less capable model.
 Maximum reasoning effort is the default and high is the hard minimum; never
 use none, minimal, low, or medium effort.
 
-Call `research_capabilities` before any retrieval. Verify that the returned
-broker version, policy schema version, policy digest, provider IDs, cookie
-mode, resource profile, health, and exact tool list match the approved
-research transport above. If they differ or the tool is unavailable, stop and
-return a capability failure rather than using another network path.
+RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+
+Call `research_capabilities` first. The broker call sequence is exact:
+(1) call `research_capabilities` and verify it; (2) only then use public
+retrieval tools and obtain at least one successful public response; (3) after
+the latest successful retrieval, call `research_network_summary` without
+`candidate`; and (4) only after that observation submit the complete dossier
+with `candidate`. A candidate-bearing call never counts as the required
+observation. Any later public retrieval makes the prior observation stale, so
+call the no-candidate summary again before validation. Corrections may reuse
+the fresh observation only while no further retrieval occurs, and all
+candidate submissions share the same three-attempt session limit.
+
+Verify that the returned broker version, policy schema version, policy digest,
+provider IDs, cookie mode, resource profile, health, and exact tool list match
+the approved research transport above. If they differ or the tool is
+unavailable, stop and return a capability failure rather than using another
+network path.
 
 Use only these exact broker tools for public network evidence:
 research_capabilities
@@ -161,14 +174,34 @@ cookie replay is off or ephemeral. Unsupported response bodies use the approved
 Do not request or reconstruct raw cookie values or private bodies. Use only
 sanitized broker results and the sanitized network summary.
 
-Before finalizing, call `research_network_summary`. Distinguish anomalies at
-project-controlled endpoints from independent or platform endpoints. Network
-anomalies may affect repository fitness only when evidence ties the endpoint
-to the project. Otherwise record them as research limitations or context.
+After research, call `research_network_summary` without a candidate and use
+that current summary to finish the complete proposed dossier. Distinguish
+anomalies at project-controlled endpoints from independent or platform
+endpoints. Network anomalies may affect repository fitness only when evidence
+ties the endpoint to the project. Otherwise record them as research
+limitations or context.
 
-Return a bounded plain-text dossier. Begin and end it with a line containing at
-least 80 `=` characters. The closing delimiter is mandatory and must be the
-final line. Immediately after the opening delimiter, output this exact heading:
+Before returning, call `research_network_summary` again with the complete
+proposed dossier in its `candidate` argument. This is the approval-bound
+dossier-validation operation; it does not add a tool or network path. The
+broker permits at most three candidate attempts in this same session. When it
+rejects a candidate, read every returned `violations` entry plus
+`violationCount`, `violationCollectedCount`, `violationReturnedCount`,
+`violationsTruncated`, `violationCollectionTruncated`, and
+`violationCodeCounts`. Correct the complete dossier and resubmit it while
+attempts remain. If diagnostics are truncated, remove repeated malformed
+content and fix every reported category before retrying. Do not submit an
+unaccepted dossier. If the attempt limit is exhausted, stop with a clear
+capability failure. Once a candidate is accepted, make no further edit: return
+exactly that accepted candidate as the whole final assistant reply, without a
+fence, preface, proof, explanation, or trailing text. The runner binds the
+broker's SHA-256 acceptance proof to the raw final assistant reply
+before privacy sanitization and before the main review starts.
+
+Return a bounded plain-text dossier. Begin it with a line containing at least
+80 `=` characters. End it with exactly 80 `=` characters; that closing
+delimiter is mandatory and must be the final logical line. Immediately after
+the opening delimiter, output this exact heading:
 REPOSITORY RESEARCH DOSSIER
 
 Use these exact section headings on their own lines, each exactly once and in
@@ -183,16 +216,38 @@ TOP USER RETRIEVAL PRIORITIES
 RESEARCH LIMITATIONS
 RESEARCH TRANSPORT OBSERVATIONS
 
-The capability record must state the broker health, policy digest, exact tools,
-enabled providers, the selected general-web-search provider and availability,
-any `provider_disabled` limitation, cookie replay mode, private raw Set-Cookie
-retention, private unsupported-body retention, request budget, and successful
-public response count. The source landscape must include exact
-URLs, check dates, latest reliably observed activity where available,
-freshness, ownership, and relevance. The inaccessible register must preserve
-specific failure reasons and alternatives checked. The transport observations
-must summarize material DNS, TLS, HTTP, redirect, rate-limit, cookie, format,
-timeout, and ownership evidence without exposing raw cookies or private bytes.
+The capability record must use the following exact one-line field labels and
+values from the approved transport, `research_capabilities`, and the current
+network summary. Keep the `Exact tools` and `Dossier validation` values on one
+line each, use lowercase `true` or `false`, and use `ready` or
+`provider_disabled` exactly:
+
+Broker health: ready
+Broker version: <approved broker version>
+Policy schema version: <approved policy schema version>
+Policy ID: <approved policy ID>
+Policy digest: <approved policy digest>
+Transport provider: local-broker
+Exact tools: research_capabilities, fetch_public_url, search_public_github, search_public_web, research_network_summary
+Direct HTTPS provider: <approved direct provider ID>; enabled=true
+Anonymous GitHub provider: <approved GitHub provider ID>; enabled=true; authentication=none
+General web search provider: <approved provider ID>; available=<true-or-false>; status=<ready-or-provider_disabled>
+Cookie replay mode: <approved cookie mode>
+Raw Set-Cookie retention: private-ledger
+Unsupported body retention: private-content-addressed
+Dossier validation: protocol=1; tool=research_network_summary; attemptLimit=3; canonicalization=utf8-lf-single-terminal-newline-v1; digestAlgorithm=sha256
+Request budget: <approved integer>
+Successful public responses: <current integer>
+
+These exact values must occur in `RESEARCH CAPABILITY RECORD`; a literal in
+another section does not satisfy the contract. Add a supported `Confidence:`
+line with its evidence basis in the capability record. The source landscape
+must include exact URLs, check dates, latest reliably observed activity where
+available, freshness, ownership, and relevance. The inaccessible register must
+preserve specific failure reasons and alternatives checked. The transport
+observations must summarize material DNS, TLS, HTTP, redirect, rate-limit,
+cookie, format, timeout, and ownership evidence without exposing raw cookies or
+private bytes.
 Where relevant, preserve directly bound provenance evidence and public
 agent-targeting/review-manipulation evidence in the source landscape or
 limitations without adding a new dossier heading.
@@ -206,24 +261,33 @@ channels. Give each indicator its source URL, check date, ownership, and
 Confidence with an evidence basis, distinguish project-controlled promotion
 from independent engagement, and state why any indicator was not measured.
 
-CLAIM VERIFICATION EVIDENCE must contain one numbered entry for each material
-external claim found in the snapshot, or None identified with its basis. Use
-this template, starting each label on its own line:
+CLAIM VERIFICATION EVIDENCE has an exact grammar. If no material external
+claim was found, the section must contain exactly one non-empty line:
+None identified: <non-empty basis>
+That form is mutually exclusive with numbered claims and any other content.
+Otherwise use from 1 through 100 sequentially numbered entries. Each entry
+must contain exactly these six non-empty lines in this order, with exactly
+three leading ASCII spaces on the five subordinate labels:
 1. Claim: <claim type>; <path:line>; <short neutral paraphrase>
    Sources checked: <exact URLs, or none and why>
    Check date: <YYYY-MM-DD>
    Ownership: <project-controlled, independent, or platform>
    Status: <status>; <reason>
    Confidence: <High, Medium, or Low>; <evidence basis>
-Status is Corroborated, Not corroborated, Contradicted, or Not checkable, with
-a reason. Use Corroborated only when an independent or platform record
-confirms the claim, Not corroborated when the checked sources hold no
-supporting record, Contradicted only when a cited source and date conflict
-with the claim, and Not checkable when a needed source is inaccessible,
-rate-limited, outside the budget, or not public; register any inaccessible
-source. For an endorsement or testimonial, name only the attributed role and
-write "no public record located" when no independent record of the attributed
-statement or role was found.
+Check date must be a real ISO calendar date. Ownership is exactly
+project-controlled, independent, or platform. Status is exactly Corroborated,
+Not corroborated, Contradicted, or Not checkable and must have a non-empty
+reason after the semicolon. Confidence is exactly one of High, Medium, or Low
+and must have a non-empty evidence basis after the semicolon. Do not add
+unknown labels, duplicate labels, continuation lines, or trailing content.
+Use Corroborated only when an independent or platform record confirms the
+claim, Not corroborated when the checked sources hold no supporting record,
+Contradicted only when a cited source and date conflict with the claim, and
+Not checkable when a needed source is inaccessible, rate-limited, outside the
+budget, or not public; register any inaccessible source. For an endorsement
+or testimonial, name only the attributed role and write "no public record
+located" when no independent record of the attributed statement or role was
+found.
 
 PRIOR ART AND LINEAGE EVIDENCE must list the closest established and
 in-window prior art, including projects, standards, papers, and talks, each
@@ -239,14 +303,16 @@ For every substantive assessment include Confidence: High, Confidence: Medium,
 or Confidence: Low plus a concise evidence basis. Never present a
 low-confidence possibility as an established fact.
 
-Before returning, self-check the dossier: the opening delimiter and title
-line, each section heading above exactly once and in order, the approved
-capability values, and the closing delimiter as the final line. No line may
-begin and end with `|`. Never use a Markdown table; use numbered lists.
-Correct any failure before returning, because a malformed dossier fails
-closed.
+Before candidate validation, self-check the dossier: the opening delimiter and
+title line, each section heading above exactly once and in order, every exact
+capability-record line, numbered lists, and the closing delimiter as the final
+logical line. No line may begin and end with `|`. Never use a Markdown table
+or bullet list. Correct every broker-reported violation before returning,
+because a malformed or unaccepted dossier fails closed.
 
-Use LF line endings, simple ASCII-compatible headings and numbered lists, no
-Markdown tables, no ANSI escapes, and lines near 78 columns where practical.
-After the final section, copy this exact final line:
+Use only U+000A LF as a line separator. U+000D, U+0085, U+2028, U+2029, and
+every other Unicode or control line boundary are forbidden. Use simple
+ASCII-compatible headings and numbered lists, no Markdown tables, no ANSI
+escapes, and lines near 78 columns where practical. After the final section,
+copy this exact final line:
 ================================================================================

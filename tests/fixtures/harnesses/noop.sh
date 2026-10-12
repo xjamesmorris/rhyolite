@@ -375,6 +375,11 @@ harness_finalize_research_session() {
     noop_fixture_research_unavailable
 }
 
+harness_extract_research_reply() {
+    noop_fixture_require_success harness_extract_research_reply || return 1
+    noop_fixture_research_unavailable
+}
+
 harness_render_request() {
     local request_path="$2"
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added broker-validated research dossier submission with at most three
+  same-session correction attempts. Acceptance stores only a SHA-256 proof and
+  byte count; the runner binds it to raw final assistant output before
+  sanitization, persists only the sanitized dossier, and blocks the main
+  review on missing or mismatched proof. Agent return surfaces now share the
+  versioned `RHYOLITE_AGENT_SELF_CHECK_V1` invariant.
+- Fixed broker/runner event-integer parity. Rejected dossier events may retain
+  the bounded observed claim count above the 100-claim acceptance limit, while
+  accepted events remain capped at 100. A shared packaged inventory now covers
+  every broker event type and exact integer leaf, including nested TLS, HTTP
+  timing, request-failure, workflow-sequence, and optional fields.
 - Added the standalone `rhyolite-summary` utility and repository-root wrapper.
   It performs a bounded, read-only scan of a broad output root, one run, or
   one repository result; represents single- and multi-repository runs in a

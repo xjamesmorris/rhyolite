@@ -186,6 +186,8 @@ Maximum reasoning effort is the default for every project task. High is the
 hard minimum; never use none, minimal, low, or medium effort, including for
 general-purpose or mechanical work.
 
+RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+
 Outside mandatory ASSESSMENT sections, substantive findings, conclusions,
 provenance observations, source-landscape conclusions, and remediation
 priorities may carry their own confidence and evidence basis as appropriate.
@@ -214,7 +216,9 @@ or assessment point there.
 4. Invoke the built-in `security-review` specialist for the security
    pass. Ask it to report only high-confidence, security-significant
    findings with concrete impact or exploit paths and to omit every follow-up
-   menu, action choice, or implementation offer. Validate every included
+   menu, action choice, or implementation offer. Copy the complete
+   `SECURITY PASS RETURN SELF-CHECK` block below verbatim into every
+   specialist request. Validate every included
    finding against the source and use it only as evidence. Its harness
    caller contract can require a findings summary table with severity emoji
    and numeric confidence scores; that table is never part of the canonical
@@ -222,6 +226,34 @@ or assessment point there.
    the opening report delimiter, and restate each validated result as a
    plain-text numbered finding. Never place a Markdown table, or any line
    that begins and ends with `|`, between the report delimiters.
+
+SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before returning a specialist handoff, or before integrating the dedicated
+security pass when no specialist exists, compare the complete candidate
+security-pass output against every item below:
+1. Scope: analyze only the exact read-only snapshot and commit named by the
+   parent request, and return only the security pass requested by the parent.
+2. Evidence: every included finding is high-confidence and
+   security-significant, cites exact `path:line` support, and states the source
+   behavior that creates the issue.
+3. Exploitability and impact: every included finding states a concrete exploit
+   or abuse path, relevant preconditions or trust boundary, and concrete
+   security impact. If those elements are not supported, do not return the
+   item as a security finding.
+4. Classification: distinguish exploitable defects from design or quality
+   concerns, missing implementation, misleading claims, and generic hardening
+   suggestions; do not promote those other categories into security findings.
+5. Return shape and prohibitions: follow any caller-mandated findings-summary
+   shape, but include no follow-up question, menu, action choice, or
+   implementation offer; never include `Fix highest severity issues`,
+   `Fix all issues`, or `Commit a summary of findings`; never offer to fix,
+   edit, implement, open or create a pull request, or commit.
+6. Correction: if any comparison fails, correct the candidate and repeat this
+   self-check from item 1 before returning it.
+7. Defense in depth: the integrating review pass must independently revalidate
+   every included finding against the snapshot before using it.
+END SECURITY PASS RETURN SELF-CHECK
+
 5. Inspect relevant history when it can confirm whether code is missing,
    recently removed, or contradicted by earlier design decisions.
 6. Do not report style nits, generic hardening advice, or speculative
@@ -639,9 +671,10 @@ Before invoking the runner:
     profile, exact tools, anonymous GitHub/no-auth mode, selected
     general-web-search provider and availability, cookie replay mode, private
     raw Set-Cookie retention, private
-    unsupported-body retention, and network-log policy. Include planning
-    ranges, resource/network expectations, and any returned review-plan
-    artifact paths.
+    unsupported-body retention, network-log policy, and dossier-validation
+    protocol, attempt limit, canonicalization, and digest algorithm. Include
+    planning ranges, resource/network expectations, and any returned
+    review-plan artifact paths.
 21. Use `ask_user` for exactly one focused confirmation with the exact
     explicit choices `Run review`, `Edit setup`, or `Explain scope`, in
     that order. Copilot CLI appends the final freeform option.
@@ -818,6 +851,28 @@ end the successful run as complete. Completion
 is terminal and review-only: do not use `ask_user`, ask any post-run question,
 offer to open a report, invoke a browser, re-fetch an inaccessible source,
 or request a user-provided copy.
+
+GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before sending a successful completion, build the complete candidate response
+and compare it against every item below:
+1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.
+2. The summary contains exactly three to five concise `- ` bullets grounded
+   only in the canonical report or reports, preserving confidence and material
+   limitations. For multiple repositories, it includes one short outcome per
+   repository plus one cross-run priority.
+3. After the bullets, the response contains exactly one
+   `Run output: <absolute path>` line. Its value is exactly the run output
+   folder returned by the runner, and no other artifact or report path appears.
+4. The `Run output:` line is the final non-empty line. No prose, question,
+   menu, or action choice follows it.
+5. The response contains none of `Fix highest severity issues`,
+   `Fix all issues`, or `Commit a summary of findings`; it does not offer to
+   open a report or browser, re-fetch a source, request a user-provided copy,
+   fix, edit, implement, open or create a pull request, or commit.
+If any comparison fails, correct the candidate and restart this self-check
+from item 1. Submit only after every item passes.
+END GUIDED COMPLETION RETURN SELF-CHECK
+
 Never include or relay the phrases `Fix highest severity issues`,
 `Fix all issues`, or `Commit a summary of findings`.
 Never offer to fix, edit, implement, open or create a pull request, or commit.
@@ -1015,14 +1070,42 @@ recommendations inside the report or executive summary.
   field label.
 - Write each field value as plain text or a numbered list. Never use a
   Markdown table in any ASSESSMENT section, or anywhere in the report.
-- Before returning the report, self-check it and correct any failure: every
-  required heading for the scope appears exactly once, on its own line, and
-  in order, and no heading for another scope appears; every required label
-  appears exactly once at the start of a line in its section, whole and
-  unwrapped on that one line, with a non-empty value; every mandatory
-  assessment section has exactly one valid `Confidence:` and exactly one
-  separate non-empty `Evidence basis:`; and no line between the delimiters
-  begins and ends with `|`.
+
+MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before returning, build the complete candidate response and compare it against
+the full report contract above plus every item below:
+1. Candidate envelope: apart from a caller-mandated security summary that may
+   appear only before the report, the response contains exactly one canonical
+   report. The opening delimiter is a line of at least 80 `=` characters, the
+   next line is exactly `REPOSITORY REVIEW REPORT`, the closing delimiter is a
+   line of at least 80 `=` characters, and that closing delimiter is the final
+   line with no trailing prose or action menu.
+2. Scope headings and order: every heading required by the selected scope
+   appears exactly once, on its own line, in the exact required order, and no
+   heading from another scope appears.
+3. Mandatory fields and multiplicity: every exact required field label appears
+   exactly once at the start of a line in its section, whole and unwrapped on that one line, with a non-empty value.
+   Every mandatory assessment section has exactly one valid `Confidence:`
+   and exactly one separate non-empty `Evidence basis:`.
+4. Controlled values: every `Confidence:` uses one accepted High, Medium, or
+   Low form; scope 3 uses one allowed `Generation assessment:` verdict, one
+   allowed `Heuristic model confidence:` value, the required no-candidate
+   coupling, and `No direct attribution` wherever direct model, effort, or
+   harness evidence is absent.
+5. Prohibited content: the complete candidate contains no Markdown table
+   between the report delimiters, no prohibited action-menu phrase or
+   implementation offer, no follow-up question or menu, no author email, no
+   ANSI escape, no tracker URL outside its one permitted field, and no content
+   prohibited elsewhere in this request.
+6. Terminal rules: remediation remains written advice under
+   `PRIORITIZED REMEDIATION`; the report continues through
+   `OVERALL ASSESSMENT`; the exact closing delimiter is the final line; and no
+   output follows it.
+If any comparison fails, correct the candidate and restart this self-check
+from item 1. Submit only after every item passes. The trusted parent runner
+must still perform independent extraction and strict validation.
+END MAIN REPORT RETURN SELF-CHECK
+
 - Return the canonical plain-text report to the trusted runner. Do not
   write into either the repository or artifact workspace from the child
   session.

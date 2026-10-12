@@ -22,6 +22,8 @@ Maximum reasoning effort is the default for all project work. High is
 the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
+RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+
 The prompt-native panel below intentionally duplicates the current
 banner text, immediate subordinate right-aligned version line `v0.8.1 Beta`,
 tagline, and metadata-aware documentation/support lines from the
@@ -534,9 +536,10 @@ start the review yet. Instead:
    schema versions, provider IDs, policy digest, resource profile, exact
    tools, anonymous GitHub/no-auth mode, selected general-web-search provider
    and availability, cookie replay mode, private raw Set-Cookie retention,
-   private unsupported-body retention, and network-log policy. Also
-   include planning range/resource/network expectations and any returned
-   review-plan artifact paths.
+   private unsupported-body retention, network-log policy, and
+   dossier-validation protocol, attempt limit, canonicalization, and digest
+   algorithm. Also include planning range/resource/network expectations and
+   any returned review-plan artifact paths.
 5. Use `ask_user` for exactly one focused choice with the exact explicit
    choices `Run review`, `Edit setup`, or `Explain scope`, in that
    order. Copilot CLI adds the final freeform option automatically.
@@ -657,6 +660,28 @@ Then show exactly one path, the run output folder, as
 `Run output: <absolute path>`. That folder contains the HTML index, every
 report, and the other run artifacts, so do not list them separately, and
 end the successful command as complete.
+
+GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+Before sending a successful completion, build the complete candidate response
+and compare it against every item below:
+1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.
+2. The summary contains exactly three to five concise `- ` bullets grounded
+   only in the canonical report or reports, preserving confidence and material
+   limitations. For multiple repositories, it includes one short outcome per
+   repository plus one cross-run priority.
+3. After the bullets, the response contains exactly one
+   `Run output: <absolute path>` line. Its value is exactly the run output
+   folder returned by the runner, and no other artifact or report path appears.
+4. The `Run output:` line is the final non-empty line. No prose, question,
+   menu, or action choice follows it.
+5. The response contains none of `Fix highest severity issues`,
+   `Fix all issues`, or `Commit a summary of findings`; it does not offer to
+   open a report or browser, re-fetch a source, request a user-provided copy,
+   fix, edit, implement, open or create a pull request, or commit.
+If any comparison fails, correct the candidate and restart this self-check
+from item 1. Submit only after every item passes.
+END GUIDED COMPLETION RETURN SELF-CHECK
+
 Completion is terminal and review-only: do not ask a post-run question.
 Do not offer to open a report, invoke a browser, re-fetch an inaccessible
 source, or request a user-provided copy.

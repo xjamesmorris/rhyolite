@@ -38,6 +38,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_research_worker_argv
     harness_research_worker_env
     harness_finalize_research_session
+    harness_extract_research_reply
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair

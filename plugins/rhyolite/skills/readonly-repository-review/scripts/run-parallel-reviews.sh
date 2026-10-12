@@ -8,6 +8,7 @@ PLUGIN_ROOT="$(cd -- "${SKILL_ROOT}/../.." && pwd)"
 PROMPT_PATH="${SKILL_ROOT}/review-prompt.txt"
 RESEARCH_PROMPT_PATH="${SKILL_ROOT}/research-prompt.txt"
 RESEARCH_POLICY_DEFAULT="${SKILL_ROOT}/research-policy.json"
+RESEARCH_EVENT_INTEGER_CONTRACT="${SKILL_ROOT}/research-event-integers.json"
 OUTPUT_HELPER="${SCRIPT_DIR}/review-output.sh"
 RESEARCH_BROKER="${SCRIPT_DIR}/research-egress-broker.py"
 RESEARCH_BROKER_LAUNCHER="${SCRIPT_DIR}/launch-research-egress-broker.sh"
@@ -210,7 +211,7 @@ interrupt_repository_process() {
     local signal_name="$1"
     local interrupt_exit_code
 
-    trap - INT TERM HUP
+    trap '' INT TERM HUP
     interrupt_exit_code="$(repository_interrupt_exit_code "${signal_name}")"
     if [[ -n "${RHYOLITE_REPOSITORY_ERROR_PATH-}" ]]; then
         printf 'Repository review interrupted by %s; terminating tracked child processes.\n' \
@@ -374,7 +375,7 @@ repository_failure_stage() {
             elif errors_report_unavailable_model "${errors_path}"; then
                 printf 'model availability'
             elif grep -Eq \
-                'dossier|REPOSITORY RESEARCH DOSSIER|successful public response' \
+                'dossier|REPOSITORY RESEARCH DOSSIER|claim verification evidence|successful public response' \
                 "${errors_path}" 2>/dev/null; then
                 printf 'research validation'
             else
@@ -1097,6 +1098,10 @@ ${indent}  "PolicyId": "$(json_escape "${RESEARCH_POLICY_ID}")",
 ${indent}  "PolicyDigest": "$(json_escape "${RESEARCH_POLICY_DIGEST}")",
 ${indent}  "ResourceProfile": ${RESEARCH_RESOURCE_PROFILE_JSON},
 ${indent}  "Tools": ${RESEARCH_TOOLS_JSON},
+${indent}  "DirectHttps": {
+${indent}    "ProviderId": "$(json_escape "${RESEARCH_DIRECT_PROVIDER_ID}")",
+${indent}    "Enabled": true
+${indent}  },
 ${indent}  "GeneralWebSearch": {
 ${indent}    "ProviderId": "$(json_escape "${RESEARCH_WEB_PROVIDER_ID}")",
 ${indent}    "Available": ${RESEARCH_WEB_AVAILABLE}
@@ -1112,7 +1117,14 @@ ${indent}    "StartsEmpty": true,
 ${indent}    "RawSetCookieRetention": "private-ledger"
 ${indent}  },
 ${indent}  "UnsupportedBodyRetention": "private-content-addressed",
-${indent}  "NetworkLogPolicy": "per-repository-sanitized-with-private-evidence"
+${indent}  "NetworkLogPolicy": "per-repository-sanitized-with-private-evidence",
+${indent}  "DossierValidation": {
+${indent}    "ProtocolVersion": 1,
+${indent}    "Tool": "research_network_summary",
+${indent}    "AttemptLimit": 3,
+${indent}    "Canonicalization": "utf8-lf-single-terminal-newline-v1",
+${indent}    "DigestAlgorithm": "sha256"
+${indent}  }
 ${indent}}
 EOF
     else
@@ -1127,6 +1139,10 @@ ${indent}  "PolicyId": null,
 ${indent}  "PolicyDigest": null,
 ${indent}  "ResourceProfile": null,
 ${indent}  "Tools": [],
+${indent}  "DirectHttps": {
+${indent}    "ProviderId": null,
+${indent}    "Enabled": false
+${indent}  },
 ${indent}  "GeneralWebSearch": {
 ${indent}    "ProviderId": "none",
 ${indent}    "Available": false
@@ -1142,7 +1158,14 @@ ${indent}    "StartsEmpty": true,
 ${indent}    "RawSetCookieRetention": "disabled"
 ${indent}  },
 ${indent}  "UnsupportedBodyRetention": "disabled",
-${indent}  "NetworkLogPolicy": "disabled"
+${indent}  "NetworkLogPolicy": "disabled",
+${indent}  "DossierValidation": {
+${indent}    "ProtocolVersion": null,
+${indent}    "Tool": null,
+${indent}    "AttemptLimit": 0,
+${indent}    "Canonicalization": null,
+${indent}    "DigestAlgorithm": null
+${indent}  }
 ${indent}}
 EOF
     fi
@@ -1164,7 +1187,8 @@ research_transport_text() {
             "Cookie replay: ${RESEARCH_COOKIES}" \
             'Raw Set-Cookie retention: private per-repository ledger' \
             'Unsupported bodies: private content-addressed retention' \
-            'Network logs: sanitized summary/events plus private evidence'
+            'Network logs: sanitized summary/events plus private evidence' \
+            'Dossier validation: broker pre-submission SHA-256 binding, 3 attempts'
     else
         printf '%s\n' \
             'Enabled: no' \
@@ -1172,7 +1196,8 @@ research_transport_text() {
             'Cookie replay: off' \
             'Raw Set-Cookie retention: disabled' \
             'Unsupported bodies: disabled' \
-            'Network logs: disabled'
+            'Network logs: disabled' \
+            'Dossier validation: disabled'
     fi
 }
 
@@ -1315,9 +1340,12 @@ write_review_plan_text() {
             "${RESEARCH_GITHUB_PROVIDER_ID} (no authentication)"
         printf '%-20s %s\n' 'Resource profile:' \
             "${RESEARCH_RESOURCE_PROFILE_JSON}"
+        printf '%-20s %s\n' 'Dossier validation:' \
+            'broker pre-submission SHA-256 binding, 3 attempts'
     else
         printf '%-20s %s\n' 'Research cookies:' 'off'
         printf '%-20s %s\n' 'Research artifacts:' 'disabled'
+        printf '%-20s %s\n' 'Dossier validation:' 'disabled'
     fi
     printf '%-20s %s minutes\n' 'Session timeout:' "${SESSION_TIMEOUT_MINUTES}"
     printf '%-20s %s\n' 'Report repair:' \
@@ -2293,6 +2321,7 @@ if ((ENABLE_PUBLIC_RESEARCH)); then
     for research_file in \
         "${RESEARCH_PROMPT_PATH}" \
         "${RESEARCH_POLICY_DEFAULT}" \
+        "${RESEARCH_EVENT_INTEGER_CONTRACT}" \
         "${RESEARCH_BROKER}" \
         "${RESEARCH_BROKER_LAUNCHER}"; do
         [[ -f "${research_file}" ]] || {
@@ -2908,9 +2937,12 @@ if ((VALIDATE_ONLY)); then
         printf 'Research cookies:     %s\n' "${RESEARCH_COOKIES}"
         printf 'General web search:   %s (%s)\n' \
             "${RESEARCH_WEB_PROVIDER_ID}" "$(research_web_search_status)"
+        printf '%s\n' \
+            'Dossier validation:  broker pre-submission SHA-256 binding, 3 attempts'
     else
         printf 'Research transport:   disabled\n'
         printf 'Research cookies:     off\n'
+        printf 'Dossier validation:  disabled\n'
     fi
     printf 'Harness:              %s (%s)\n' \
         "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
@@ -4925,15 +4957,35 @@ EOF
 
 research_summary_capabilities_count() {
     local summary_path="$1"
-    python3 - "${summary_path}" <<'PY'
+    local events_path="$2"
+    python3 - "${summary_path}" "${events_path}" <<'PY'
 import json
 import pathlib
 import sys
 
 try:
     value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-    print(int(value.get("ToolCalls", {}).get("Capabilities", 0)))
-except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+    event_count = sum(
+        1
+        for line in pathlib.Path(sys.argv[2]).read_text(
+            encoding="utf-8"
+        ).split("\n")
+        if line.strip()
+    )
+    tool_calls = value.get("ToolCalls", {}) if isinstance(value, dict) else {}
+    capabilities = tool_calls.get("Capabilities")
+    total = tool_calls.get("Total")
+    print(
+        1
+        if (
+            isinstance(tool_calls, dict)
+            and type(capabilities) is int
+            and type(total) is int
+            and 1 <= capabilities <= total <= event_count
+        )
+        else 0
+    )
+except (OSError, UnicodeError, TypeError, json.JSONDecodeError):
     print(0)
 PY
 }
@@ -4953,11 +5005,19 @@ validate_research_bundle() {
         "${RESEARCH_COOKIES}" \
         "${RESEARCH_BROKER_VERSION}" \
         "${RESEARCH_WEB_PROVIDER_ID}" \
-        "${RESEARCH_WEB_AVAILABLE}" <<'PY'
+        "${RESEARCH_WEB_AVAILABLE}" \
+        "${RESEARCH_POLICY_SCHEMA_VERSION}" \
+        "${RESEARCH_POLICY_ID}" \
+        "${RESEARCH_DIRECT_PROVIDER_ID}" \
+        "${RESEARCH_GITHUB_PROVIDER_ID}" \
+        "${RESEARCH_RESOURCE_PROFILE_JSON}" \
+        "${RESEARCH_EVENT_INTEGER_CONTRACT}" <<'PY'
 import http.cookies
+import datetime as dt
 import hashlib
 import json
 import pathlib
+import re
 import stat
 import sys
 
@@ -4970,6 +5030,360 @@ expected_cookie_mode = sys.argv[6]
 expected_broker_version = sys.argv[7]
 expected_web_provider = sys.argv[8]
 expected_web_available = sys.argv[9] == "true"
+expected_policy_schema = json.loads(sys.argv[10])
+expected_policy_id = sys.argv[11]
+expected_direct_provider = sys.argv[12]
+expected_github_provider = sys.argv[13]
+expected_resource_profile = json.loads(sys.argv[14])
+event_integer_contract_path = pathlib.Path(sys.argv[15])
+
+RESEARCH_DOSSIER_MAX_BYTES = 2 * 1024 * 1024
+RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT = 3
+RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES = 100
+RESEARCH_DOSSIER_MAX_COLLECTED_VIOLATIONS = 128
+RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS = 32
+RESEARCH_REQUEST_BUDGET_MAX = 1000
+RESEARCH_MAX_HEADER_BYTES = 64 * 1024
+RESEARCH_MAX_COOKIES = 100
+RESEARCH_MAX_WEB_SEARCH_CANDIDATES = 60
+RESEARCH_MAX_OBSERVED_HEADER_BYTES = 10 * 1024 * 1024
+RESEARCH_REQUEST_TIMING_GRACE_MS = 1000
+RESEARCH_DOSSIER_MAX_OBSERVED_CLAIM_ENTRIES = (
+    RESEARCH_DOSSIER_MAX_BYTES // len("1. Claim:\n".encode("utf-8"))
+)
+
+
+def require_object(value, label):
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} must be a JSON object")
+    return value
+
+
+def require_exact_int(value, label, *, minimum=None, maximum=None):
+    if type(value) is not int:
+        raise SystemExit(f"{label} must use an exact JSON integer")
+    if minimum is not None and value < minimum:
+        raise SystemExit(f"{label} is outside its allowed integer range")
+    if maximum is not None and value > maximum:
+        raise SystemExit(f"{label} is outside its allowed integer range")
+    return value
+
+
+def require_count_mapping(value, label, *, maximum=None):
+    mapping = require_object(value, label)
+    for count in mapping.values():
+        require_exact_int(
+            count,
+            f"{label} count",
+            minimum=1,
+            maximum=maximum,
+        )
+    return mapping
+
+
+def require_optional_exact_int(
+    value,
+    label,
+    *,
+    minimum=None,
+    maximum=None,
+):
+    if value is None:
+        return None
+    return require_exact_int(
+        value,
+        label,
+        minimum=minimum,
+        maximum=maximum,
+    )
+
+
+EVENT_INTEGER_BOUND_REFS = {
+    "eventCount",
+    "priorSequence",
+    "expectedPolicySchema",
+    "requestBudget",
+    "maxWireBytes",
+    "headerBytesExceeded",
+    "maxObservedHeaderBytes",
+    "maxBodyPosition",
+    "requestTimingMsMax",
+    "successfulResponses",
+    "maxWebSearchCandidates",
+    "validationAttemptLimit",
+    "maxDossierBytes",
+    "maxAcceptedClaimEntries",
+    "maxObservedClaimEntries",
+    "maxCollectedViolations",
+    "maxReturnedViolations",
+    "violationCount",
+}
+
+
+def load_event_integer_contract(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SystemExit(
+            "research event integer contract is unavailable"
+        ) from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "common", "events"}
+        or type(value.get("schemaVersion")) is not int
+        or value["schemaVersion"] != 1
+        or not isinstance(value.get("common"), list)
+        or not isinstance(value.get("events"), dict)
+        or not value["events"]
+    ):
+        raise SystemExit("research event integer contract is invalid")
+    allowed_spec_keys = {
+        "path",
+        "required",
+        "nullable",
+        "minimum",
+        "maximum",
+        "minimumRef",
+        "maximumRef",
+        "requiredForCodes",
+        "allowedForCodes",
+    }
+    for definition in value["events"].values():
+        if (
+            not isinstance(definition, dict)
+            or set(definition) != {"label", "fields"}
+            or not isinstance(definition.get("label"), str)
+            or not definition["label"]
+            or not isinstance(definition.get("fields"), list)
+        ):
+            raise SystemExit("research event integer contract is invalid")
+    spec_groups = [
+        value["common"],
+        *(
+            definition["fields"]
+            for definition in value["events"].values()
+        ),
+    ]
+    for specs in spec_groups:
+        seen_paths = set()
+        for spec in specs:
+            if (
+                not isinstance(spec, dict)
+                or not set(spec).issubset(allowed_spec_keys)
+                or "path" not in spec
+                or not isinstance(spec["path"], list)
+                or not spec["path"]
+            ):
+                raise SystemExit("research event integer contract is invalid")
+            normalized_path = []
+            for component in spec["path"]:
+                if isinstance(component, str) and component:
+                    normalized_path.append(component)
+                elif type(component) is int and component >= 0:
+                    normalized_path.append(component)
+                else:
+                    raise SystemExit(
+                        "research event integer contract is invalid"
+                    )
+            path_key = tuple(normalized_path)
+            if path_key in seen_paths:
+                raise SystemExit("research event integer contract is invalid")
+            seen_paths.add(path_key)
+            for flag in ("required", "nullable"):
+                if flag in spec and type(spec[flag]) is not bool:
+                    raise SystemExit(
+                        "research event integer contract is invalid"
+                    )
+            for bound in ("minimum", "maximum"):
+                if bound in spec and type(spec[bound]) is not int:
+                    raise SystemExit(
+                        "research event integer contract is invalid"
+                    )
+            for bound_ref in ("minimumRef", "maximumRef"):
+                if (
+                    bound_ref in spec
+                    and spec[bound_ref] not in EVENT_INTEGER_BOUND_REFS
+                ):
+                    raise SystemExit(
+                        "research event integer contract is invalid"
+                    )
+            if ("minimum" in spec) == ("minimumRef" in spec):
+                raise SystemExit("research event integer contract is invalid")
+            if ("maximum" in spec) == ("maximumRef" in spec):
+                raise SystemExit("research event integer contract is invalid")
+            for code_key in ("requiredForCodes", "allowedForCodes"):
+                if code_key not in spec:
+                    continue
+                codes = spec[code_key]
+                if (
+                    not isinstance(codes, list)
+                    or not codes
+                    or any(
+                        not isinstance(code, str) or not code
+                        for code in codes
+                    )
+                    or len(codes) != len(set(codes))
+                ):
+                    raise SystemExit(
+                        "research event integer contract is invalid"
+                    )
+    return value
+
+
+def iter_event_integer_paths(value, path=()):
+    if type(value) is int:
+        yield path
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from iter_event_integer_paths(item, path + (key,))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from iter_event_integer_paths(item, path + (index,))
+
+
+def event_contract_path_matches(contract_path, actual_path):
+    return len(contract_path) == len(actual_path) and all(
+        expected == "*" or expected == actual
+        for expected, actual in zip(contract_path, actual_path)
+    )
+
+
+def event_contract_values(value, contract_path):
+    current = [value]
+    for component in contract_path:
+        following = []
+        for item in current:
+            if component == "*":
+                if isinstance(item, dict):
+                    following.extend(item.values())
+                elif isinstance(item, list):
+                    following.extend(item)
+            elif isinstance(component, str) and isinstance(item, dict):
+                if component in item:
+                    following.append(item[component])
+            elif type(component) is int and isinstance(item, list):
+                if component < len(item):
+                    following.append(item[component])
+        current = following
+    return current
+
+
+def event_contract_path_label(contract_path):
+    rendered = ""
+    for component in contract_path:
+        if component == "*":
+            rendered += " entry"
+        elif type(component) is int:
+            rendered += f"[{component}]"
+        elif rendered:
+            rendered += f".{component}"
+        else:
+            rendered = component
+    return rendered
+
+
+event_integer_contract = load_event_integer_contract(
+    event_integer_contract_path
+)
+
+
+def validate_event_integer_fields(event, event_count):
+    event_type = event.get("Type")
+    definition = event_integer_contract["events"].get(event_type)
+    if not isinstance(definition, dict):
+        raise SystemExit(
+            "research event type is outside the integer contract"
+        )
+    event_label = definition["label"]
+    specs = [
+        *event_integer_contract["common"],
+        *definition["fields"],
+    ]
+    for actual_path in iter_event_integer_paths(event):
+        if not any(
+            event_contract_path_matches(spec["path"], actual_path)
+            for spec in specs
+        ):
+            raise SystemExit(
+                f"{event_label} contains an undeclared JSON integer"
+            )
+
+    event_code = event.get("Code")
+    resolved = []
+    for spec in specs:
+        values = event_contract_values(event, spec["path"])
+        required_codes = spec.get("requiredForCodes", [])
+        allowed_codes = spec.get("allowedForCodes", required_codes)
+        field_label = (
+            f"{event_label} "
+            f"{event_contract_path_label(spec['path'])}"
+        )
+        if spec.get("required") and not values:
+            raise SystemExit(f"{field_label} is missing")
+        if event_code in required_codes and not values:
+            raise SystemExit(f"{field_label} is missing")
+        if values and allowed_codes and event_code not in allowed_codes:
+            raise SystemExit(
+                f"{field_label} is invalid for the request failure code"
+            )
+        for item in values:
+            if item is None and spec.get("nullable"):
+                continue
+            require_exact_int(item, field_label)
+            resolved.append((spec, item, field_label))
+
+    sequence = event.get("Sequence")
+    bound_values = {
+        "eventCount": event_count,
+        "priorSequence": (
+            sequence - 1 if type(sequence) is int else 0
+        ),
+        "expectedPolicySchema": expected_policy_schema,
+        "requestBudget": request_budget,
+        "maxWireBytes": resource_profile["MaxWireBytes"],
+        "headerBytesExceeded": RESEARCH_MAX_HEADER_BYTES + 1,
+        "maxObservedHeaderBytes": RESEARCH_MAX_OBSERVED_HEADER_BYTES,
+        "maxBodyPosition": resource_profile["MaxWireBytes"] + 1,
+        "requestTimingMsMax": (
+            resource_profile["TotalTimeoutSeconds"] * 1000
+            + RESEARCH_REQUEST_TIMING_GRACE_MS
+        ),
+        "successfulResponses": successful_responses,
+        "maxWebSearchCandidates": RESEARCH_MAX_WEB_SEARCH_CANDIDATES,
+        "validationAttemptLimit": (
+            RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+        ),
+        "maxDossierBytes": RESEARCH_DOSSIER_MAX_BYTES,
+        "maxAcceptedClaimEntries": RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+        "maxObservedClaimEntries": (
+            RESEARCH_DOSSIER_MAX_OBSERVED_CLAIM_ENTRIES
+        ),
+        "maxCollectedViolations": (
+            RESEARCH_DOSSIER_MAX_COLLECTED_VIOLATIONS
+        ),
+        "maxReturnedViolations": (
+            RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS
+        ),
+        "violationCount": event.get("ViolationCount"),
+    }
+    for spec, item, field_label in resolved:
+        minimum = spec.get("minimum")
+        if "minimumRef" in spec:
+            minimum = bound_values[spec["minimumRef"]]
+        maximum = spec.get("maximum")
+        if "maximumRef" in spec:
+            maximum = bound_values[spec["maximumRef"]]
+        require_exact_int(
+            item,
+            field_label,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    return event_label, sequence
+
+
+if type(expected_policy_schema) is not int or expected_policy_schema != 1:
+    raise SystemExit("approved research policy schema is invalid")
 
 required_sections = [
     "RESEARCH CAPABILITY RECORD",
@@ -4987,14 +5401,33 @@ dossier_bytes = dossier_path.read_bytes()
 if len(dossier_bytes) > 2 * 1024 * 1024:
     raise SystemExit("research dossier exceeds the bounded size")
 dossier = dossier_bytes.decode("utf-8")
-lines = dossier.splitlines()
+for boundary, codepoint in (
+    ("\r", "U+000D"),
+    ("\v", "U+000B"),
+    ("\f", "U+000C"),
+    ("\x1c", "U+001C"),
+    ("\x1d", "U+001D"),
+    ("\x1e", "U+001E"),
+    ("\x85", "U+0085"),
+    ("\u2028", "U+2028"),
+    ("\u2029", "U+2029"),
+):
+    if boundary in dossier:
+        raise SystemExit(
+            f"research dossier contains non-LF line boundary {codepoint}"
+        )
+if re.search(r"[\x00-\x08\x0e-\x1b\x1f\x7f]", dossier):
+    raise SystemExit("research dossier contains a forbidden control character")
+if not dossier.endswith("\n") or dossier.endswith("\n\n"):
+    raise SystemExit(
+        "research dossier must end with one LF and no other line boundary"
+    )
+lines = dossier[:-1].split("\n")
 if (
     len(lines) < 3
-    or len(lines[0].strip()) < 80
-    or set(lines[0].strip()) != {"="}
-    or lines[1].strip() != "REPOSITORY RESEARCH DOSSIER"
-    or len(lines[-1].strip()) < 80
-    or set(lines[-1].strip()) != {"="}
+    or not re.fullmatch(r"={80,}", lines[0])
+    or lines[1] != "REPOSITORY RESEARCH DOSSIER"
+    or lines[-1] != "=" * 80
 ):
     raise SystemExit("research dossier delimiters or heading are invalid")
 positions = []
@@ -5006,62 +5439,1409 @@ if positions != sorted(positions):
     raise SystemExit("research dossier sections are out of order")
 if any(line.lstrip().startswith("|") and line.rstrip().endswith("|") for line in lines):
     raise SystemExit("research dossier contains a Markdown table")
-for required_value in [
-    expected_digest,
-    expected_cookie_mode,
-    expected_broker_version,
-    expected_web_provider,
-    "research_capabilities",
-    "fetch_public_url",
-    "search_public_github",
-    "search_public_web",
-    "research_network_summary",
-]:
-    if required_value not in dossier:
-        raise SystemExit(
-            f"research capability record is missing approved value: {required_value}"
-        )
-if not expected_web_available and "provider_disabled" not in dossier:
-    raise SystemExit(
-        "research capability record is missing the disabled-provider limitation"
-    )
 
-summary = json.loads(summary_path.read_text(encoding="utf-8"))
-general_web_search = summary.get("GeneralWebSearch", {})
+section_bodies = {}
+for index, section in enumerate(required_sections):
+    start = positions[index] + 1
+    finish = (
+        positions[index + 1]
+        if index + 1 < len(positions)
+        else len(lines) - 1
+    )
+    section_bodies[section] = lines[start:finish]
+
+
+def fail_claim(message):
+    raise SystemExit(f"claim verification evidence {message}")
+
+
+claim_lines = section_bodies["CLAIM VERIFICATION EVIDENCE"]
+claim_nonempty = [line for line in claim_lines if line.strip()]
+if not claim_nonempty:
+    fail_claim("is empty")
+claim_required_labels = (
+    "Claim",
+    "Sources checked",
+    "Check date",
+    "Ownership",
+    "Status",
+    "Confidence",
+)
+claim_entry_start = re.compile(r"^([1-9][0-9]*)\. Claim:(?: (.*))?$")
+claim_field_line = re.compile(
+    r"^   (Sources checked|Check date|Ownership|Status|Confidence):"
+    r"(?: (.*))?$"
+)
+claim_label_like = re.compile(r"^[ \t]*[A-Za-z][A-Za-z ]*:")
+none_candidates = [
+    line for line in claim_nonempty if line.startswith("None identified")
+]
+exact_none = [
+    line
+    for line in none_candidates
+    if re.fullmatch(r"None identified: \S.*", line)
+]
+claim_entry_count = sum(
+    1 for line in claim_nonempty if claim_entry_start.fullmatch(line)
+)
+
+if none_candidates:
+    if (
+        len(none_candidates) != 1
+        or len(exact_none) != 1
+        or len(claim_nonempty) != 1
+        or claim_entry_count
+    ):
+        fail_claim(
+            "must use exactly one justified None identified: "
+            "<non-empty basis> line with no additional content"
+        )
+    claim_entry_count = 0
+else:
+    if claim_entry_count == 0:
+        fail_claim(
+            "must use sequential numbered Claim entries or exactly "
+            "None identified: <non-empty basis>"
+        )
+    if claim_entry_count > 100:
+        fail_claim(
+            f"contains {claim_entry_count} numbered entries; at most 100 "
+            "are allowed"
+        )
+
+    def validate_claim_entry(entry):
+        entry_index = entry["index"]
+        values = entry["values"]
+        expected_order = [
+            label for label in claim_required_labels if label in values
+        ]
+        if entry["order"] != expected_order:
+            fail_claim(
+                f"entry {entry_index} has out-of-order required labels"
+            )
+        for label in claim_required_labels:
+            if label not in values:
+                fail_claim(
+                    f"entry {entry_index} has missing or duplicated "
+                    f"{label} label"
+                )
+            if not values[label]:
+                fail_claim(
+                    f"entry {entry_index} has an empty {label} value"
+                )
+
+        claim_parts = [
+            part.strip() for part in values["Claim"].split(";", 2)
+        ]
+        if (
+            len(claim_parts) != 3
+            or any(not part for part in claim_parts)
+            or re.fullmatch(
+                r".+:[0-9]+(?:-[0-9]+)?",
+                claim_parts[1],
+            )
+            is None
+        ):
+            fail_claim(
+                f"entry {entry_index} has an invalid Claim value"
+            )
+
+        sources = values["Sources checked"]
+        if (
+            re.search(r"https://\S+", sources) is None
+            and re.fullmatch(
+                r"(?i:none)(?:[ \t]*[;:,-][ \t]*|\s+)\S.*",
+                sources,
+            )
+            is None
+        ):
+            fail_claim(
+                f"entry {entry_index} must list exact HTTPS sources or "
+                "none with a reason"
+            )
+
+        check_date = values["Check date"]
+        try:
+            parsed_date = dt.date.fromisoformat(check_date)
+        except ValueError:
+            parsed_date = None
+        if (
+            parsed_date is None
+            or check_date != parsed_date.isoformat()
+            or re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}",
+                check_date,
+            )
+            is None
+        ):
+            fail_claim(
+                f"entry {entry_index} has an invalid ISO check date"
+            )
+
+        ownership = values["Ownership"]
+        if ownership not in {
+            "project-controlled",
+            "independent",
+            "platform",
+        }:
+            fail_claim(
+                f"entry {entry_index} has an invalid Ownership value"
+            )
+
+        status_match = re.fullmatch(
+            r"(Corroborated|Not corroborated|Contradicted|Not checkable)"
+            r"; (.+)",
+            values["Status"],
+        )
+        if status_match is None or not status_match.group(2).strip():
+            fail_claim(
+                f"entry {entry_index} has an invalid Status value or reason"
+            )
+        if (
+            status_match.group(1) == "Corroborated"
+            and ownership not in {"independent", "platform"}
+        ):
+            fail_claim(
+                f"entry {entry_index} uses Corroborated without "
+                "independent or platform ownership"
+            )
+
+        if re.fullmatch(
+            r"(High|Medium|Low); (.+)",
+            values["Confidence"],
+        ) is None:
+            fail_claim(
+                f"entry {entry_index} has an invalid Confidence value "
+                "or evidence basis"
+            )
+
+    current_claim = None
+    observed_claim_index = 0
+    for line in claim_lines:
+        if not line.strip():
+            continue
+        start_match = claim_entry_start.fullmatch(line)
+        if start_match:
+            if current_claim is not None:
+                validate_claim_entry(current_claim)
+            observed_claim_index += 1
+            if start_match.group(1) != str(observed_claim_index):
+                fail_claim(
+                    f"entry {observed_claim_index} has invalid or "
+                    "non-sequential numbering"
+                )
+            current_claim = {
+                "index": observed_claim_index,
+                "values": {
+                    "Claim": (start_match.group(2) or "").strip(),
+                },
+                "order": ["Claim"],
+            }
+            continue
+        if current_claim is None:
+            fail_claim(
+                "contains content before the first exact numbered "
+                "Claim entry"
+            )
+        field_match = claim_field_line.fullmatch(line)
+        if field_match:
+            label = field_match.group(1)
+            if label in current_claim["values"]:
+                fail_claim(
+                    f"entry {current_claim['index']} has missing or "
+                    f"duplicated {label} label"
+                )
+            current_claim["values"][label] = (
+                field_match.group(2) or ""
+            ).strip()
+            current_claim["order"].append(label)
+            continue
+        if claim_label_like.match(line):
+            fail_claim(
+                f"entry {current_claim['index']} contains an unknown or "
+                "incorrectly indented claim label"
+            )
+        fail_claim(
+            f"entry {current_claim['index']} contains continuation or "
+            "trailing content"
+        )
+    if current_claim is not None:
+        validate_claim_entry(current_claim)
+
+events_text = events_path.read_text(encoding="utf-8")
+for boundary, codepoint in (
+    ("\r", "U+000D"),
+    ("\v", "U+000B"),
+    ("\f", "U+000C"),
+    ("\x1c", "U+001C"),
+    ("\x1d", "U+001D"),
+    ("\x1e", "U+001E"),
+    ("\x85", "U+0085"),
+    ("\u2028", "U+2028"),
+    ("\u2029", "U+2029"),
+):
+    if boundary in events_text:
+        raise SystemExit(
+            f"research event ledger contains non-LF line boundary {codepoint}"
+        )
+event_lines = [line for line in events_text.split("\n") if line.strip()]
+event_count = len(event_lines)
+
+summary = require_object(
+    json.loads(summary_path.read_text(encoding="utf-8")),
+    "research network summary",
+)
+requests = require_object(
+    summary.get("Requests"),
+    "research network summary Requests",
+)
+tool_calls = require_object(
+    summary.get("ToolCalls"),
+    "research network summary ToolCalls",
+)
+provider_calls = require_object(
+    tool_calls.get("Providers"),
+    "research network summary ToolCalls.Providers",
+)
+cookies = require_object(
+    summary.get("Cookies"),
+    "research network summary Cookies",
+)
+tls_anomalies = require_object(
+    summary.get("TlsAnomalies"),
+    "research network summary TlsAnomalies",
+)
+http_anomalies = require_object(
+    summary.get("HttpAnomalies"),
+    "research network summary HttpAnomalies",
+)
+resource_profile = require_object(
+    summary.get("ResourceProfile"),
+    "research network summary ResourceProfile",
+)
+general_web_search = require_object(
+    summary.get("GeneralWebSearch"),
+    "research network summary GeneralWebSearch",
+)
+direct_https = require_object(
+    summary.get("DirectHttps"),
+    "research network summary DirectHttps",
+)
+anonymous_github = require_object(
+    summary.get("AnonymousGitHub"),
+    "research network summary AnonymousGitHub",
+)
+
+require_exact_int(
+    summary.get("SchemaVersion"),
+    "research network summary SchemaVersion",
+    minimum=1,
+    maximum=1,
+)
+require_exact_int(
+    summary.get("PolicySchemaVersion"),
+    "research network summary PolicySchemaVersion",
+    minimum=expected_policy_schema,
+    maximum=expected_policy_schema,
+)
+
+resource_integer_bounds = {
+    "RequestBudget": (1, RESEARCH_REQUEST_BUDGET_MAX),
+    "MaxConcurrentRequests": (1, 4),
+    "MaxConcurrentRequestsPerHost": (1, 2),
+    "MinHostIntervalMs": (500, 60_000),
+    "ConnectTimeoutSeconds": (1, 15),
+    "TotalTimeoutSeconds": (1, 60),
+    "MaxWireBytes": (1024, 10 * 1024 * 1024),
+    "MaxNormalizedBytes": (1024, 1024 * 1024),
+    "MaxRedirects": (0, 8),
+}
+for field, (minimum, maximum) in resource_integer_bounds.items():
+    require_exact_int(
+        resource_profile.get(field),
+        f"research network summary ResourceProfile.{field}",
+        minimum=minimum,
+        maximum=maximum,
+    )
+allowed_tls_ports = resource_profile.get("AllowedTlsPorts")
 if (
-    summary.get("SchemaVersion") != 1
-    or summary.get("BrokerVersion") != expected_broker_version
+    not isinstance(allowed_tls_ports, list)
+    or not 1 <= len(allowed_tls_ports) <= 8
+):
+    raise SystemExit(
+        "research network summary ResourceProfile.AllowedTlsPorts is invalid"
+    )
+for port in allowed_tls_ports:
+    require_exact_int(
+        port,
+        "research network summary ResourceProfile.AllowedTlsPorts entry",
+        minimum=1,
+        maximum=65535,
+    )
+if (
+    443 not in allowed_tls_ports
+    or allowed_tls_ports != sorted(set(allowed_tls_ports))
+    or resource_profile["MaxConcurrentRequestsPerHost"]
+    > resource_profile["MaxConcurrentRequests"]
+    or resource_profile["ConnectTimeoutSeconds"]
+    > resource_profile["TotalTimeoutSeconds"]
+    or resource_profile["MaxNormalizedBytes"]
+    > resource_profile["MaxWireBytes"]
+):
+    raise SystemExit("research network summary ResourceProfile is invalid")
+
+request_budget = require_exact_int(
+    requests.get("Budget"),
+    "research network summary Requests.Budget",
+    minimum=1,
+    maximum=RESEARCH_REQUEST_BUDGET_MAX,
+)
+attempted_requests = require_exact_int(
+    requests.get("Attempted"),
+    "research network summary Requests.Attempted",
+    minimum=1,
+    maximum=request_budget,
+)
+successful_responses = require_exact_int(
+    requests.get("SuccessfulPublicResponses"),
+    "research network summary Requests.SuccessfulPublicResponses",
+    minimum=1,
+    maximum=attempted_requests,
+)
+failed_responses_value = requests.get("FailedResponses")
+redirects = require_exact_int(
+requests.get("Redirects"),
+"research network summary Requests.Redirects",
+minimum=0,
+maximum=attempted_requests,
+)
+
+tool_total = require_exact_int(
+tool_calls.get("Total"),
+"research network summary ToolCalls.Total",
+minimum=1,
+maximum=event_count,
+)
+capability_calls = require_exact_int(
+    tool_calls.get("Capabilities"),
+    "research network summary ToolCalls.Capabilities",
+    minimum=1,
+    maximum=tool_total,
+)
+network_summary_calls = require_exact_int(
+    tool_calls.get("NetworkSummary"),
+    "research network summary ToolCalls.NetworkSummary",
+    minimum=2,
+    maximum=tool_total,
+)
+expected_provider_keys = {
+    expected_direct_provider,
+    expected_github_provider,
+    "duckduckgo-html-v1",
+    "none",
+}
+if set(provider_calls) != expected_provider_keys:
+    raise SystemExit(
+        "research network summary ToolCalls.Providers contract is invalid"
+    )
+provider_call_total = 0
+for count in provider_calls.values():
+    provider_call_total += require_exact_int(
+        count,
+        "research network summary ToolCalls.Providers count",
+        minimum=0,
+        maximum=tool_total,
+    )
+failed_responses = require_exact_int(
+    failed_responses_value,
+    "research network summary Requests.FailedResponses",
+    minimum=0,
+    maximum=provider_call_total,
+)
+if (
+    tool_total
+    != capability_calls + network_summary_calls + provider_call_total
+    or successful_responses + failed_responses > provider_call_total
+):
+    raise SystemExit("research network summary ToolCalls contract is invalid")
+
+expected_cookie_keys = {"Observed", "Accepted", "Rejected", "Sent"}
+if set(cookies) != expected_cookie_keys:
+    raise SystemExit("research network summary Cookies contract is invalid")
+cookie_count_bounds = {
+    "Observed": request_budget * RESEARCH_MAX_HEADER_BYTES,
+    "Accepted": request_budget
+    * (RESEARCH_MAX_HEADER_BYTES + RESEARCH_MAX_COOKIES),
+    "Rejected": request_budget
+    * (RESEARCH_MAX_HEADER_BYTES + RESEARCH_MAX_COOKIES),
+    "Sent": request_budget * RESEARCH_MAX_COOKIES,
+}
+cookie_counts = {
+    field: require_exact_int(
+        cookies.get(field),
+        f"research network summary Cookies.{field}",
+        minimum=0,
+        maximum=maximum,
+    )
+    for field, maximum in cookie_count_bounds.items()
+}
+if cookie_counts["Accepted"] + cookie_counts["Rejected"] < cookie_counts["Observed"]:
+    raise SystemExit("research network summary Cookies contract is invalid")
+
+tls_anomalies = require_count_mapping(
+    tls_anomalies,
+    "research network summary TlsAnomalies",
+    maximum=failed_responses,
+)
+http_anomalies = require_count_mapping(
+    http_anomalies,
+    "research network summary HttpAnomalies",
+    maximum=failed_responses,
+)
+if sum(tls_anomalies.values()) + sum(http_anomalies.values()) != failed_responses:
+    raise SystemExit("research network summary anomaly counts are invalid")
+
+if (
+    summary.get("BrokerVersion") != expected_broker_version
+    or summary.get("PolicyId") != expected_policy_id
     or summary.get("PolicyDigest") != expected_digest
     or summary.get("Health") != "ready"
     or summary.get("CookieMode") != expected_cookie_mode
     or summary.get("RawSetCookieRetention") != "private-ledger"
     or summary.get("UnsupportedBodyRetention") != "private-content-addressed"
+    or resource_profile != expected_resource_profile
+    or request_budget != expected_resource_profile.get("RequestBudget")
+    or direct_https.get("ProviderId") != expected_direct_provider
+    or direct_https.get("Enabled") is not True
+    or anonymous_github.get("ProviderId") != expected_github_provider
+    or anonymous_github.get("Enabled") is not True
+    or anonymous_github.get("Authentication") != "none"
     or general_web_search.get("ProviderId") != expected_web_provider
     or general_web_search.get("Available") is not expected_web_available
 ):
     raise SystemExit("research network summary contract is invalid")
-requests = summary.get("Requests", {})
-tool_calls = summary.get("ToolCalls", {})
-if (
-    int(requests.get("Attempted", 0)) < 1
-    or int(requests.get("SuccessfulPublicResponses", 0)) < 1
-    or int(tool_calls.get("Capabilities", 0)) < 1
-    or int(tool_calls.get("NetworkSummary", 0)) < 1
-):
+
+capability_lines = lines[positions[0] + 1 : positions[1]]
+web_status = "ready" if expected_web_available else "provider_disabled"
+expected_capability_lines = [
+    "Broker health: ready",
+    f"Broker version: {expected_broker_version}",
+    f"Policy schema version: {expected_policy_schema}",
+    f"Policy ID: {expected_policy_id}",
+    f"Policy digest: {expected_digest}",
+    "Transport provider: local-broker",
+    (
+        "Exact tools: research_capabilities, fetch_public_url, "
+        "search_public_github, search_public_web, research_network_summary"
+    ),
+    f"Direct HTTPS provider: {expected_direct_provider}; enabled=true",
+    (
+        f"Anonymous GitHub provider: {expected_github_provider}; "
+        "enabled=true; authentication=none"
+    ),
+    (
+        f"General web search provider: {expected_web_provider}; "
+        f"available={str(expected_web_available).lower()}; status={web_status}"
+    ),
+    f"Cookie replay mode: {expected_cookie_mode}",
+    "Raw Set-Cookie retention: private-ledger",
+    "Unsupported body retention: private-content-addressed",
+    (
+        "Dossier validation: protocol=1; tool=research_network_summary; "
+        "attemptLimit=3; "
+        "canonicalization=utf8-lf-single-terminal-newline-v1; "
+        "digestAlgorithm=sha256"
+    ),
+    f"Request budget: {expected_resource_profile['RequestBudget']}",
+    f"Successful public responses: {successful_responses}",
+]
+for expected_line in expected_capability_lines:
+    label = expected_line.split(":", 1)[0] + ":"
+    matches = [
+        line for line in capability_lines if line.startswith(label)
+    ]
+    if matches != [expected_line]:
+        raise SystemExit(
+            "research capability record is missing or contradicts approved line: "
+            + expected_line
+        )
+capability_confidence = next(
+    (
+        line
+        for line in capability_lines
+        if re.fullmatch(
+            r"Confidence: (High|Medium|Low)"
+            r"(?:[.;:,](?: .+)?)?",
+            line,
+        )
+    ),
+    None,
+)
+capability_evidence = any(
+    re.fullmatch(r"Evidence basis:[ \t]+\S.*", line)
+    for line in capability_lines
+) or (
+    capability_confidence is not None
+    and bool(
+        re.fullmatch(
+            r"Confidence: (High|Medium|Low)"
+            r"(?:[.;:,][ \t]+\S.*)",
+            capability_confidence,
+        )
+    )
+)
+if capability_confidence is None or not capability_evidence:
     raise SystemExit(
-        "research phase lacks capability, summary, request, or successful public response evidence"
+        "research capability record lacks a supported confidence line "
+        "with a non-empty evidence basis"
     )
 
+submission = require_object(
+    summary.get("ResearchSubmission"),
+    "research submission acceptance proof",
+)
+submission_keys = {
+    "ProtocolVersion",
+    "Status",
+    "AttemptLimit",
+    "AttemptsUsed",
+    "Canonicalization",
+    "DigestAlgorithm",
+    "CandidateSha256",
+    "CandidateBytes",
+}
+if set(submission) != submission_keys:
+    raise SystemExit("research submission acceptance proof is invalid")
+submission_protocol = require_exact_int(
+    submission.get("ProtocolVersion"),
+    "research submission proof ProtocolVersion",
+    minimum=1,
+    maximum=1,
+)
+submission_attempt_limit = require_exact_int(
+    submission.get("AttemptLimit"),
+    "research submission proof AttemptLimit",
+    minimum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+    maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+)
+submission_attempts_used = require_exact_int(
+    submission.get("AttemptsUsed"),
+    "research submission proof AttemptsUsed",
+    minimum=1,
+    maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+)
+submission_candidate_bytes = require_exact_int(
+    submission.get("CandidateBytes"),
+    "research submission proof CandidateBytes",
+    minimum=1,
+    maximum=RESEARCH_DOSSIER_MAX_BYTES,
+)
+if (
+    submission_protocol != 1
+    or submission_attempt_limit != RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+    or submission.get("Status") != "accepted"
+    or submission.get("Canonicalization")
+    != "utf8-lf-single-terminal-newline-v1"
+    or submission.get("DigestAlgorithm") != "sha256"
+    or not isinstance(submission.get("CandidateSha256"), str)
+    or not re.fullmatch(r"[0-9a-f]{64}", submission["CandidateSha256"])
+):
+    raise SystemExit("research submission acceptance proof is invalid")
+
 events = []
-for line in events_path.read_text(encoding="utf-8").splitlines():
-    if line.strip():
-        event = json.loads(line)
-        if event.get("SchemaVersion") != 1:
-            raise SystemExit("research event schema is invalid")
-        events.append(event)
+events_by_sequence = {}
+previous_sequence = 0
+for line in event_lines:
+    event = json.loads(line)
+    if not isinstance(event, dict):
+        raise SystemExit("research event schema is invalid")
+    _, sequence = validate_event_integer_fields(event, event_count)
+    if sequence != previous_sequence + 1 or sequence in events_by_sequence:
+        raise SystemExit("research event sequence is invalid")
+    previous_sequence = sequence
+    events.append(event)
+    events_by_sequence[sequence] = event
 event_types = {event.get("Type") for event in events}
-if "capabilities_checked" not in event_types or "http_response" not in event_types:
+if (
+    "capabilities_checked" not in event_types
+    or "public_retrieval_succeeded" not in event_types
+    or "network_summary_observed" not in event_types
+    or "research_dossier_validation_accepted" not in event_types
+):
     raise SystemExit("research event ledger is incomplete")
+accepted_events = [
+    event
+    for event in events
+    if event.get("Type") == "research_dossier_validation_accepted"
+]
+rejected_events = [
+    event
+    for event in events
+    if event.get("Type") == "research_dossier_validation_rejected"
+]
+replayed_events = [
+    event
+    for event in events
+    if event.get("Type") == "research_dossier_validation_replayed"
+]
+capability_events = [
+    event for event in events if event.get("Type") == "capabilities_checked"
+]
+retrieval_events = [
+    event
+    for event in events
+    if event.get("Type") == "public_retrieval_succeeded"
+]
+observation_events = [
+    event
+    for event in events
+    if event.get("Type") == "network_summary_observed"
+]
+expected_tools = [
+    "research_capabilities",
+    "fetch_public_url",
+    "search_public_github",
+    "search_public_web",
+    "research_network_summary",
+]
+if not capability_events or any(
+    event.get("Tools") != expected_tools or event.get("Health") != "ready"
+    for event in capability_events
+):
+    raise SystemExit("research capability event contract is invalid")
+
+for event in events:
+    event_type = event.get("Type")
+    if event_type == "broker_started":
+        require_exact_int(
+            event.get("PolicySchemaVersion"),
+            "research broker-start event PolicySchemaVersion",
+            minimum=expected_policy_schema,
+            maximum=expected_policy_schema,
+        )
+    elif event_type == "dns_resolution":
+        port = require_exact_int(
+            event.get("Port"),
+            "research DNS event Port",
+            minimum=1,
+            maximum=65535,
+        )
+        if port not in allowed_tls_ports:
+            raise SystemExit("research DNS event Port is outside policy")
+    elif event_type == "tls_handshake":
+        require_object(
+            event.get("Tls"),
+            "research TLS event Tls",
+        )
+    elif event_type == "http_response":
+        require_exact_int(
+            event.get("Status"),
+            "research HTTP response event Status",
+            minimum=100,
+            maximum=599,
+        )
+        require_exact_int(
+            event.get("WireBytes"),
+            "research HTTP response event WireBytes",
+            minimum=0,
+            maximum=resource_profile["MaxWireBytes"],
+        )
+        timings = require_object(
+            event.get("TimingsMs"),
+            "research HTTP response event TimingsMs",
+        )
+        if timings["ConnectAndHeaders"] > timings["Total"]:
+            raise SystemExit(
+                "research HTTP response event timings are invalid"
+            )
+    elif event_type == "redirect_followed":
+        redirect_status = require_exact_int(
+            event.get("Status"),
+            "research redirect event Status",
+            minimum=300,
+            maximum=399,
+        )
+        if redirect_status not in {301, 302, 303, 307, 308}:
+            raise SystemExit("research redirect event Status is invalid")
+    elif event_type == "unsupported_body_stored":
+        require_exact_int(
+            event.get("Bytes"),
+            "research unsupported-body event Bytes",
+            minimum=0,
+            maximum=resource_profile["MaxWireBytes"],
+        )
+    elif event_type == "provider_failed":
+        candidate_entries = require_exact_int(
+            event.get("CandidateEntries"),
+            "research provider event CandidateEntries",
+            minimum=0,
+            maximum=RESEARCH_MAX_WEB_SEARCH_CANDIDATES,
+        )
+        rejected_entries = require_exact_int(
+            event.get("RejectedEntries"),
+            "research provider event RejectedEntries",
+            minimum=0,
+            maximum=RESEARCH_MAX_WEB_SEARCH_CANDIDATES,
+        )
+        if rejected_entries > candidate_entries:
+            raise SystemExit("research provider event counters are invalid")
+    elif event_type == "request_failed":
+        require_object(
+            event.get("Details"),
+            "research request failure event Details",
+        )
+
+for event in retrieval_events:
+    require_exact_int(
+        event.get("Status"),
+        "research retrieval event Status",
+        minimum=200,
+        maximum=299,
+    )
+
+for event in observation_events:
+    observed_successes = require_exact_int(
+        event.get("SuccessfulPublicResponses"),
+        "research observation event SuccessfulPublicResponses",
+        minimum=0,
+        maximum=successful_responses,
+    )
+    observed_retrieval_sequence = require_optional_exact_int(
+        event.get("LatestSuccessfulRetrievalSequence"),
+        "research observation event LatestSuccessfulRetrievalSequence",
+        minimum=1,
+        maximum=event["Sequence"] - 1,
+    )
+    if (
+        (observed_successes == 0 and observed_retrieval_sequence is not None)
+        or (
+            observed_successes > 0
+            and observed_retrieval_sequence is None
+        )
+    ):
+        raise SystemExit("research observation event contract is invalid")
+
+request_failure_events = [
+    event for event in events if event.get("Type") == "request_failed"
+]
+if len(request_failure_events) != failed_responses:
+    raise SystemExit("research request failure event count is invalid")
+ledger_tls_anomalies = {}
+ledger_http_anomalies = {}
+for event in request_failure_events:
+    code = event.get("Code")
+    if not isinstance(code, str) or not code:
+        raise SystemExit("research request failure event code is invalid")
+    counts = (
+        ledger_tls_anomalies
+        if code.startswith("tls_")
+        else ledger_http_anomalies
+    )
+    counts[code] = counts.get(code, 0) + 1
+if (
+    ledger_tls_anomalies != tls_anomalies
+    or ledger_http_anomalies != http_anomalies
+):
+    raise SystemExit("research request failure event counts are invalid")
+
+
+def latest_prior_request_event(event, event_type):
+    request_id = event.get("RequestId")
+    candidates = [
+        candidate
+        for candidate in events
+        if (
+            candidate.get("Type") == event_type
+            and candidate.get("RequestId") == request_id
+            and candidate["Sequence"] < event["Sequence"]
+        )
+    ]
+    return max(candidates, key=lambda candidate: candidate["Sequence"]) if candidates else None
+
+
+def first_prior_event_sequence(event, event_type):
+    sequences = [
+        candidate["Sequence"]
+        for candidate in events
+        if (
+            candidate.get("Type") == event_type
+            and candidate["Sequence"] < event["Sequence"]
+        )
+    ]
+    return min(sequences) if sequences else None
+
+
+def latest_prior_event_sequence(event, event_type):
+    sequences = [
+        candidate["Sequence"]
+        for candidate in events
+        if (
+            candidate.get("Type") == event_type
+            and candidate["Sequence"] < event["Sequence"]
+        )
+    ]
+    return max(sequences) if sequences else None
+
+
+def require_workflow_sequence_snapshot(
+    event,
+    label,
+    *,
+    require_candidate_request=False,
+):
+    expected = {
+        "CapabilityInspectionSequence": first_prior_event_sequence(
+            event,
+            "capabilities_checked",
+        ),
+        "LatestSuccessfulRetrievalSequence": latest_prior_event_sequence(
+            event,
+            "public_retrieval_succeeded",
+        ),
+        "LatestNetworkSummaryObservationSequence": (
+            latest_prior_event_sequence(
+                event,
+                "network_summary_observed",
+            )
+        ),
+    }
+    if any(event.get(field) != sequence for field, sequence in expected.items()):
+        raise SystemExit(f"{label} sequence binding is invalid")
+    if require_candidate_request:
+        candidate_sequence = event.get("CandidateRequestSequence")
+        candidate_event = events_by_sequence.get(candidate_sequence)
+        if (
+            candidate_sequence != event["Sequence"] - 1
+            or candidate_event is None
+            or candidate_event.get("Type") != "network_summary_requested"
+            or candidate_event.get("SubmissionCandidateIncluded") is not True
+        ):
+            raise SystemExit(f"{label} sequence binding is invalid")
+
+
+for event in request_failure_events:
+    code = event["Code"]
+    details = event["Details"]
+    response_event = latest_prior_request_event(event, "http_response")
+    if "status" in details:
+        if (
+            response_event is None
+            or details["status"] != response_event["Status"]
+        ):
+            raise SystemExit(
+                "research request failure HTTP status binding is invalid"
+            )
+        if (
+            (code == "access_policy_denial"
+             and details["status"] not in {401, 403, 451})
+            or (code == "rate_limited" and details["status"] != 429)
+            or (
+                code == "http_status"
+                and (
+                    200 <= details["status"] < 300
+                    or details["status"] in {401, 403, 429, 451}
+                )
+            )
+        ):
+            raise SystemExit(
+                "research request failure HTTP status is invalid"
+            )
+    if "port" in details and details["port"] in allowed_tls_ports:
+        raise SystemExit(
+            "research request failure TLS port is not rejected by policy"
+        )
+    if code == "tls_verification_failed":
+        require_object(
+            details.get("diagnosticHandshake"),
+            "research request failure event Details.diagnosticHandshake",
+        )
+    if code == "malformed_json":
+        if (
+            response_event is None
+            or details["line"] > response_event["WireBytes"] + 1
+            or details["column"] > response_event["WireBytes"] + 1
+        ):
+            raise SystemExit(
+                "research request failure JSON position is invalid"
+            )
+    if code == "malformed_xml":
+        position = details.get("position")
+        if (
+            not isinstance(position, list)
+            or len(position) != 2
+            or response_event is None
+            or position[0] > response_event["WireBytes"] + 1
+            or position[1] > response_event["WireBytes"] + 1
+        ):
+            raise SystemExit(
+                "research request failure XML position is invalid"
+            )
+    if code == "unsupported_format":
+        stored_event = latest_prior_request_event(
+            event,
+            "unsupported_body_stored",
+        )
+        if (
+            response_event is None
+            or stored_event is None
+            or details["bytes"] != response_event["WireBytes"]
+            or details["bytes"] != stored_event["Bytes"]
+        ):
+            raise SystemExit(
+                "research request failure body-size binding is invalid"
+            )
+
+workflow_rejection_events = [
+    event
+    for event in events
+    if event.get("Type") == "workflow_order_rejected"
+]
+for event in workflow_rejection_events:
+    operation = event.get("Operation")
+    code = event.get("Code")
+    sequences = (
+        event.get("CapabilityInspectionSequence"),
+        event.get("LatestSuccessfulRetrievalSequence"),
+        event.get("LatestNetworkSummaryObservationSequence"),
+    )
+    if operation not in {
+        "fetch_public_url",
+        "search_public_github",
+        "search_public_web",
+    }:
+        raise SystemExit("research workflow rejection operation is invalid")
+    if code == "capabilities_required_before_retrieval":
+        if any(sequence is not None for sequence in sequences):
+            raise SystemExit(
+                "research workflow rejection sequence state is invalid"
+            )
+    elif code == "research_submission_already_accepted":
+        if any(sequence is None for sequence in sequences):
+            raise SystemExit(
+                "research workflow rejection sequence state is invalid"
+            )
+        capability_sequence, retrieval_sequence, observation_sequence = sequences
+        if (
+            not (
+                capability_sequence
+                < retrieval_sequence
+                < observation_sequence
+                < event["Sequence"]
+            )
+            or events_by_sequence[capability_sequence].get("Type")
+            != "capabilities_checked"
+            or events_by_sequence[retrieval_sequence].get("Type")
+            != "public_retrieval_succeeded"
+            or events_by_sequence[observation_sequence].get("Type")
+            != "network_summary_observed"
+            or not any(
+                accepted["Sequence"] < event["Sequence"]
+                for accepted in accepted_events
+            )
+        ):
+            raise SystemExit(
+                "research workflow rejection sequence binding is invalid"
+            )
+    else:
+        raise SystemExit("research workflow rejection code is invalid")
+    require_workflow_sequence_snapshot(
+        event,
+        "research workflow rejection",
+    )
+
+rejected_event_keys = {
+    "SchemaVersion",
+    "Sequence",
+    "Timestamp",
+    "Type",
+    "Attempt",
+    "AttemptLimit",
+    "ClaimEntryCount",
+    "ClaimEntryLimit",
+    "ViolationCount",
+    "ViolationsCollected",
+    "ViolationsReturned",
+    "ViolationsTruncated",
+    "ViolationCollectionTruncated",
+    "ViolationCodeCounts",
+    "CapabilityInspectionSequence",
+    "LatestSuccessfulRetrievalSequence",
+    "LatestNetworkSummaryObservationSequence",
+    "CandidateRequestSequence",
+}
+for event in rejected_events:
+    if set(event) != rejected_event_keys:
+        raise SystemExit("research validation rejection event is invalid")
+    require_exact_int(
+        event.get("Attempt"),
+        "research validation event Attempt",
+        minimum=1,
+        maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+    )
+    require_exact_int(
+        event.get("AttemptLimit"),
+        "research validation event AttemptLimit",
+        minimum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+        maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+    )
+    rejected_claim_entry_count = require_optional_exact_int(
+        event.get("ClaimEntryCount"),
+        "research validation event ClaimEntryCount",
+        minimum=0,
+        maximum=RESEARCH_DOSSIER_MAX_OBSERVED_CLAIM_ENTRIES,
+    )
+    require_exact_int(
+        event.get("ClaimEntryLimit"),
+        "research validation event ClaimEntryLimit",
+        minimum=RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+        maximum=RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+    )
+    violation_count = require_exact_int(
+        event.get("ViolationCount"),
+        "research validation event ViolationCount",
+        minimum=1,
+        maximum=RESEARCH_DOSSIER_MAX_BYTES,
+    )
+    violations_collected = require_exact_int(
+        event.get("ViolationsCollected"),
+        "research validation event ViolationsCollected",
+        minimum=1,
+        maximum=RESEARCH_DOSSIER_MAX_COLLECTED_VIOLATIONS,
+    )
+    violations_returned = require_exact_int(
+        event.get("ViolationsReturned"),
+        "research validation event ViolationsReturned",
+        minimum=1,
+        maximum=RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS,
+    )
+    if (
+        violations_returned > violations_collected
+        or violations_collected > violation_count
+        or type(event.get("ViolationsTruncated")) is not bool
+        or type(event.get("ViolationCollectionTruncated")) is not bool
+    ):
+        raise SystemExit("research validation rejection event is invalid")
+    violation_code_counts = require_count_mapping(
+        event.get("ViolationCodeCounts"),
+        "research validation event ViolationCodeCounts",
+        maximum=violation_count,
+    )
+    has_claim_entry_limit = "claim_entry_limit" in violation_code_counts
+    if (
+        sum(violation_code_counts.values()) != violation_count
+        or has_claim_entry_limit
+        != (
+            rejected_claim_entry_count is not None
+            and rejected_claim_entry_count
+            > RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES
+        )
+        or violations_returned
+        != min(
+            violations_collected,
+            RESEARCH_DOSSIER_MAX_RETURNED_VIOLATIONS,
+        )
+        or event["ViolationsTruncated"]
+        is not (violation_count > violations_returned)
+        or event["ViolationCollectionTruncated"]
+        is not (violation_count > violations_collected)
+    ):
+        raise SystemExit("research validation rejection event is invalid")
+    for field in (
+        "CapabilityInspectionSequence",
+        "LatestSuccessfulRetrievalSequence",
+        "LatestNetworkSummaryObservationSequence",
+    ):
+        require_optional_exact_int(
+            event.get(field),
+            f"research validation event {field}",
+            minimum=1,
+            maximum=event["Sequence"] - 1,
+        )
+        require_workflow_sequence_snapshot(
+            event,
+            "research validation rejection event",
+            require_candidate_request=True,
+        )
+    require_exact_int(
+        event.get("CandidateRequestSequence"),
+        "research validation event CandidateRequestSequence",
+        minimum=1,
+        maximum=event["Sequence"] - 1,
+    )
+
+replayed_event_keys = {
+    "SchemaVersion",
+    "Sequence",
+    "Timestamp",
+    "Type",
+    "Attempt",
+    "CandidateSha256",
+    "CapabilityInspectionSequence",
+    "LatestSuccessfulRetrievalSequence",
+    "LatestNetworkSummaryObservationSequence",
+    "CandidateRequestSequence",
+}
+for event in replayed_events:
+    if set(event) != replayed_event_keys:
+        raise SystemExit("research validation replay event is invalid")
+    require_exact_int(
+        event.get("Attempt"),
+        "research validation event Attempt",
+        minimum=1,
+        maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+    )
+    for field in (
+        "CapabilityInspectionSequence",
+        "LatestSuccessfulRetrievalSequence",
+        "LatestNetworkSummaryObservationSequence",
+        "CandidateRequestSequence",
+    ):
+        require_exact_int(
+            event.get(field),
+            f"research validation event {field}",
+            minimum=1,
+            maximum=event["Sequence"] - 1,
+        )
+    if not isinstance(event.get("CandidateSha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}",
+        event["CandidateSha256"],
+    ):
+        raise SystemExit("research validation replay event is invalid")
+    require_workflow_sequence_snapshot(
+        event,
+        "research validation replay event",
+        require_candidate_request=True,
+    )
+
+accepted_event_keys = {
+    "SchemaVersion",
+    "Sequence",
+    "Timestamp",
+    "Type",
+    "Attempt",
+    "AttemptLimit",
+    "CandidateSha256",
+    "CandidateBytes",
+    "ClaimEntryCount",
+    "CapabilityInspectionSequence",
+    "LatestSuccessfulRetrievalSequence",
+    "LatestNetworkSummaryObservationSequence",
+    "CandidateRequestSequence",
+}
+if len(accepted_events) != 1 or set(accepted_events[0]) != accepted_event_keys:
+    raise SystemExit("research submission proof does not match the event ledger")
+accepted_event = accepted_events[0]
+accepted_attempt = require_exact_int(
+    accepted_event.get("Attempt"),
+    "research validation event Attempt",
+    minimum=1,
+    maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+)
+accepted_attempt_limit = require_exact_int(
+    accepted_event.get("AttemptLimit"),
+    "research validation event AttemptLimit",
+    minimum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+    maximum=RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT,
+)
+accepted_candidate_bytes = require_exact_int(
+    accepted_event.get("CandidateBytes"),
+    "research validation event CandidateBytes",
+    minimum=1,
+    maximum=RESEARCH_DOSSIER_MAX_BYTES,
+)
+accepted_claim_entry_count = require_exact_int(
+    accepted_event.get("ClaimEntryCount"),
+    "research validation event ClaimEntryCount",
+    minimum=0,
+    maximum=RESEARCH_DOSSIER_MAX_CLAIM_ENTRIES,
+)
+sequence_fields = (
+    "CapabilityInspectionSequence",
+    "LatestSuccessfulRetrievalSequence",
+    "LatestNetworkSummaryObservationSequence",
+    "CandidateRequestSequence",
+)
+for field in sequence_fields:
+    require_exact_int(
+        accepted_event.get(field),
+        f"research validation event {field}",
+        minimum=1,
+        maximum=accepted_event["Sequence"] - 1,
+    )
+if (
+    accepted_attempt_limit != RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT
+    or accepted_event.get("CandidateSha256")
+    != submission["CandidateSha256"]
+    or accepted_candidate_bytes != submission_candidate_bytes
+    or accepted_attempt != submission_attempts_used
+    or accepted_claim_entry_count != claim_entry_count
+):
+    raise SystemExit("research submission proof does not match the event ledger")
+capability_sequence = accepted_event["CapabilityInspectionSequence"]
+retrieval_sequence = accepted_event["LatestSuccessfulRetrievalSequence"]
+observation_sequence = accepted_event[
+    "LatestNetworkSummaryObservationSequence"
+]
+candidate_sequence = accepted_event["CandidateRequestSequence"]
+accepted_sequence = accepted_event["Sequence"]
+latest_retrieval_sequence = max(
+    event["Sequence"]
+    for event in events
+    if event.get("Type") == "public_retrieval_succeeded"
+)
+if (
+    retrieval_sequence != latest_retrieval_sequence
+    or not (
+        capability_sequence
+        < retrieval_sequence
+        < observation_sequence
+        < candidate_sequence
+        < accepted_sequence
+    )
+):
+    raise SystemExit("research workflow event order is invalid")
+capability_event = events_by_sequence.get(capability_sequence)
+retrieval_event = events_by_sequence.get(retrieval_sequence)
+observation_event = events_by_sequence.get(observation_sequence)
+candidate_event = events_by_sequence.get(candidate_sequence)
+if (
+    capability_event is None
+    or capability_event.get("Type") != "capabilities_checked"
+    or capability_event.get("Tools") != expected_tools
+    or capability_event.get("Health") != "ready"
+    or retrieval_event is None
+    or retrieval_event.get("Type") != "public_retrieval_succeeded"
+    or observation_event is None
+    or observation_event.get("Type") != "network_summary_observed"
+    or observation_event.get("LatestSuccessfulRetrievalSequence")
+    != retrieval_sequence
+    or observation_event.get("SuccessfulPublicResponses")
+    != successful_responses
+    or candidate_event is None
+    or candidate_event.get("Type") != "network_summary_requested"
+    or candidate_event.get("SubmissionCandidateIncluded") is not True
+):
+    raise SystemExit("research workflow event binding is invalid")
+require_workflow_sequence_snapshot(
+    accepted_event,
+    "research validation acceptance event",
+    require_candidate_request=True,
+)
+pre_accept_rejections = sorted(
+    (
+        event
+        for event in rejected_events
+        if event["Sequence"] < accepted_sequence
+    ),
+    key=lambda event: event["Sequence"],
+)
+post_accept_rejections = [
+    event
+    for event in rejected_events
+    if event["Sequence"] > accepted_sequence
+]
+if (
+    [event["Attempt"] for event in pre_accept_rejections]
+    != list(range(1, accepted_attempt))
+    or any(
+        event["Attempt"] != accepted_attempt
+        for event in post_accept_rejections
+    )
+    or any(
+        event["Sequence"] < accepted_sequence
+        or event["Attempt"] != accepted_attempt
+        or event["CandidateSha256"]
+        != accepted_event["CandidateSha256"]
+        for event in replayed_events
+    )
+):
+    raise SystemExit("research validation attempt sequence is invalid")
+ordinary_summary_requests = [
+    event
+    for event in events
+    if (
+        event.get("Type") == "network_summary_requested"
+        and event.get("SubmissionCandidateIncluded") is False
+        and retrieval_sequence
+        < event["Sequence"]
+        < observation_sequence
+    )
+]
+if not ordinary_summary_requests:
+    raise SystemExit(
+        "research workflow lacks a no-candidate network summary observation "
+        "after the latest successful retrieval"
+    )
+if any(
+    event.get("Type") == "network_summary_observed"
+    and event["Sequence"] == candidate_sequence
+    for event in events
+):
+    raise SystemExit(
+        "research candidate submission cannot count as a network summary "
+        "observation"
+    )
+
+for event in retrieval_events:
+    response_event = latest_prior_request_event(event, "http_response")
+    if (
+        response_event is None
+        or event["Status"] != response_event["Status"]
+    ):
+        raise SystemExit("research retrieval event binding is invalid")
+
+for event in (
+    candidate
+    for candidate in events
+    if candidate.get("Type") == "redirect_followed"
+):
+    response_event = latest_prior_request_event(event, "http_response")
+    if (
+        response_event is None
+        or event["Status"] != response_event["Status"]
+    ):
+        raise SystemExit("research redirect event binding is invalid")
+
+for event in (
+    candidate
+    for candidate in events
+    if candidate.get("Type") == "unsupported_body_stored"
+):
+    response_event = latest_prior_request_event(event, "http_response")
+    if (
+        response_event is None
+        or event["Bytes"] != response_event["WireBytes"]
+    ):
+        raise SystemExit("research unsupported-body event binding is invalid")
+
+for event in observation_events:
+    prior_retrievals = [
+        candidate
+        for candidate in events
+        if (
+            candidate.get("Type") == "public_retrieval_succeeded"
+            and candidate["Sequence"] < event["Sequence"]
+        )
+    ]
+    latest_retrieval = (
+        max(
+            candidate["Sequence"]
+            for candidate in prior_retrievals
+        )
+        if prior_retrievals
+        else None
+    )
+    request_event = events_by_sequence.get(event["Sequence"] - 1)
+    if (
+        event["SuccessfulPublicResponses"] != len(prior_retrievals)
+        or event["LatestSuccessfulRetrievalSequence"]
+        != latest_retrieval
+        or request_event is None
+        or request_event.get("Type") != "network_summary_requested"
+        or request_event.get("SubmissionCandidateIncluded") is not False
+    ):
+        raise SystemExit("research observation event contract is invalid")
+
 if any("RawSetCookie" in event for event in events):
     raise SystemExit("sanitized event ledger contains raw cookie evidence")
 
@@ -5118,6 +6898,97 @@ for line in manifest_path.read_text(encoding="utf-8").splitlines():
     if len(body) >= 8 and body in public_bytes:
         raise SystemExit("private unsupported body escaped into public research artifacts")
 PY
+}
+
+persist_sanitized_research_runtime_artifacts() {
+    local runtime_root="$1"
+    local raw_output="$2"
+    local raw_error="$3"
+    local raw_transcript="$4"
+    local timeline_path="$5"
+    local error_path="$6"
+    local transcript_path="$7"
+    local transcript_title="$8"
+    local timeline_staging="${runtime_root}/timeline.sanitized"
+    local error_staging="${runtime_root}/errors.sanitized"
+    local transcript_staging="${runtime_root}/transcript.sanitized"
+    local transcript_rendered="${runtime_root}/transcript.rendered"
+    local persist_failed=0
+
+    if [[ -f "${raw_error}" && ! -L "${raw_error}" ]] &&
+        (
+            umask 077
+            tr -d '\r' < "${raw_error}" |
+                sanitize_review_text > "${error_staging}" &&
+                chmod 600 -- "${error_staging}"
+        ) &&
+        cp -- "${error_staging}" "${error_path}" &&
+        chmod 600 -- "${error_path}"; then
+        :
+    else
+        printf '%s\n' \
+            'Research stderr could not be sanitized for persistence.' \
+            > "${error_path}"
+        chmod 600 -- "${error_path}"
+        persist_failed=1
+    fi
+
+    if [[ -f "${raw_output}" && ! -L "${raw_output}" ]] &&
+        (
+            umask 077
+            tr -d '\r' < "${raw_output}" |
+                sanitize_review_text > "${timeline_staging}" &&
+                chmod 600 -- "${timeline_staging}"
+        ) &&
+        cp -- "${timeline_staging}" "${timeline_path}" &&
+        chmod 600 -- "${timeline_path}"; then
+        :
+    else
+        printf '%s\n' \
+            'Research standard output could not be sanitized for persistence.' \
+            > "${timeline_path}"
+        chmod 600 -- "${timeline_path}"
+        printf '%s\n' \
+            'Research standard output sanitization failed.' \
+            >> "${error_path}"
+        persist_failed=1
+    fi
+
+    if [[ -f "${raw_transcript}" && ! -L "${raw_transcript}" ]] &&
+        (
+            umask 077
+            tr -d '\r' < "${raw_transcript}" |
+                sanitize_review_text > "${transcript_staging}" &&
+                chmod 600 -- "${transcript_staging}" &&
+                write_safe_markdown_document \
+                    "${transcript_title}" \
+                    "${transcript_staging}" \
+                    "${transcript_rendered}" &&
+                chmod 600 -- "${transcript_rendered}"
+        ) &&
+        cp -- "${transcript_rendered}" "${transcript_path}" &&
+        chmod 600 -- "${transcript_path}"; then
+        :
+    else
+        printf '# %s\n\n%s\n' \
+            "${transcript_title}" \
+            'No completed research session transcript is available.' \
+            > "${transcript_path}"
+        chmod 600 -- "${transcript_path}"
+        if [[ -e "${raw_transcript}" ]]; then
+            printf '%s\n' \
+                'Research transcript sanitization failed.' \
+                >> "${error_path}"
+            persist_failed=1
+        fi
+    fi
+
+    rm -f -- \
+        "${timeline_staging}" \
+        "${error_staging}" \
+        "${transcript_staging}" \
+        "${transcript_rendered}"
+    ((persist_failed == 0))
 }
 
 cleanup_research_runtime() {
@@ -5211,9 +7082,18 @@ PY
         )
     fi
 
-    rm -f -- "${mcp_config}" 2>/dev/null || cleanup_failed=1
+    for attempt in 1 2 3; do
+        rm -f -- "${mcp_config}" 2>/dev/null || true
+        [[ ! -e "${mcp_config}" ]] && break
+        ((attempt == 3)) || sleep 1
+    done
     [[ ! -e "${mcp_config}" ]] || cleanup_failed=1
-    rm -rf -- "${runtime_root}" 2>/dev/null || cleanup_failed=1
+    for attempt in 1 2 3; do
+        chmod -R u+rwX -- "${runtime_root}" 2>/dev/null || true
+        rm -rf -- "${runtime_root}" 2>/dev/null || true
+        [[ ! -e "${runtime_root}" ]] && break
+        ((attempt == 3)) || sleep 1
+    done
     [[ ! -e "${runtime_root}" ]] || cleanup_failed=1
     if ((cleanup_failed)); then
         printf '%s\n' \
@@ -5641,12 +7521,15 @@ EOF
         RESEARCH_STATE_PATH="${RESEARCH_DIRECTORY}/research-state.json"
         local research_timeline_path="${RESEARCH_DIRECTORY}/research-timeline.txt"
         local research_transcript_path="${RESEARCH_DIRECTORY}/research-session.md"
-        local research_transcript_plain="${research_transcript_path}.plain"
         local research_request_path="${RESEARCH_DIRECTORY}/research-request.txt"
         local research_error_path="${RESEARCH_DIRECTORY}/research-errors.txt"
-        local research_raw_output="${RESEARCH_DIRECTORY}/research-output.raw"
         local research_network_root="${RESEARCH_DIRECTORY}/network"
         local research_runtime_root="${session_root}/research-runtime"
+        local research_raw_output="${research_runtime_root}/research-output.raw"
+        local research_raw_error="${research_runtime_root}/research-errors.raw"
+        local research_raw_transcript="${research_runtime_root}/research-session.raw"
+        local research_final_reply_raw="${research_runtime_root}/final-reply.raw"
+        local research_final_reply_sanitized="${session_root}/research-final-reply.sanitized"
         local research_mcp_config="${session_root}/research-mcp-config.json"
         local research_runtime_home=""
         local research_ready=1
@@ -5663,11 +7546,66 @@ EOF
         local research_capability_count=0
         local research_timeout_minutes
         local research_report_extracted=0
+        local RESEARCH_RUNTIME_OUTPUTS_SANITIZED=0
+        local RESEARCH_RUNTIME_HOME_TO_CLEAN=""
+        local RESEARCH_BROKER_RUNTIME_TO_CLEAN=""
+        local RESEARCH_MCP_CONFIG_TO_CLEAN=""
+        local RESEARCH_NETWORK_ROOT_TO_CLEAN=""
+        local RESEARCH_SANITIZED_REPLY_TO_CLEAN=""
 
+        RESEARCH_BROKER_RUNTIME_TO_CLEAN="${research_runtime_root}"
+        RESEARCH_MCP_CONFIG_TO_CLEAN="${research_mcp_config}"
+        RESEARCH_NETWORK_ROOT_TO_CLEAN="${research_network_root}"
+        RESEARCH_SANITIZED_REPLY_TO_CLEAN="${research_final_reply_sanitized}"
+        trap '
+            if [[ "${RESEARCH_RUNTIME_OUTPUTS_SANITIZED-0}" != 1 ]] &&
+                [[ -n "${RESEARCH_BROKER_RUNTIME_TO_CLEAN-}" ]]; then
+                persist_sanitized_research_runtime_artifacts \
+                    "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" \
+                    "${research_raw_output-}" \
+                    "${research_raw_error-}" \
+                    "${research_raw_transcript-}" \
+                    "${research_timeline_path-}" \
+                    "${research_error_path-}" \
+                    "${research_transcript_path-}" \
+                    "${HARNESS_DISPLAY_NAME-Research} Research Session Transcript" \
+                    >/dev/null 2>&1 || true
+            fi
+            rm -f -- "${RESEARCH_SANITIZED_REPLY_TO_CLEAN-}" \
+                >/dev/null 2>&1 || true
+            if [[ -n "${RESEARCH_RUNTIME_HOME_TO_CLEAN-}" ]]; then
+                rhyolite_harness_invoke harness_sanitize_runtime_home \
+                    "${RESEARCH_RUNTIME_HOME_TO_CLEAN}" \
+                    >/dev/null 2>&1 || true
+            fi
+            if [[ -n "${RESEARCH_BROKER_RUNTIME_TO_CLEAN-}" ]]; then
+                cleanup_research_runtime \
+                    "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" \
+                    "${RESEARCH_MCP_CONFIG_TO_CLEAN-}" \
+                    "${research_error_path:-/dev/null}" \
+                    "${RESEARCH_NETWORK_ROOT_TO_CLEAN-}" \
+                    >/dev/null 2>&1 || true
+            fi
+        ' EXIT
         research_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         mkdir -m 700 -- "${RESEARCH_DIRECTORY}" "${research_runtime_root}"
-        : > "${research_error_path}"
-        chmod 600 -- "${research_error_path}"
+        chmod 700 -- "${RESEARCH_DIRECTORY}" "${research_runtime_root}"
+        (
+            umask 077
+            : > "${research_timeline_path}"
+            : > "${research_transcript_path}"
+            : > "${research_error_path}"
+            : > "${research_raw_output}"
+            : > "${research_raw_error}"
+            : > "${research_raw_transcript}"
+            chmod 600 -- \
+                "${research_timeline_path}" \
+                "${research_transcript_path}" \
+                "${research_error_path}" \
+                "${research_raw_output}" \
+                "${research_raw_error}" \
+                "${research_raw_transcript}"
+        )
         research_broker_arguments=(
             --runtime-root "${research_runtime_root}"
             --policy "${RESEARCH_POLICY_PATH}"
@@ -5683,11 +7621,11 @@ EOF
             "${RESEARCH_BROKER_LAUNCHER}" \
             research_broker_arguments \
             "${RESEARCH_TOOLS_JSON}" \
-            >/dev/null 2>> "${research_error_path}"; then
+            >/dev/null 2>> "${research_raw_error}"; then
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_write_research_mcp_config" \
                 "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research MCP configuration failed.}" \
-                >> "${research_error_path}"
+                >> "${research_raw_error}"
             research_ready=0
         fi
 
@@ -5769,12 +7707,12 @@ EOF
                 "${research_authentication_names}" \
                 "${research_mcp_config}" \
                 "${RESEARCH_TOOL_NAMES}" \
-                "${research_transcript_path}" \
-                >/dev/null 2>> "${research_error_path}"; then
+                "${research_raw_transcript}" \
+                >/dev/null 2>> "${research_raw_error}"; then
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_research_worker_argv" \
                 "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research argument construction failed.}" \
-                >> "${research_error_path}"
+                >> "${research_raw_error}"
             research_ready=0
         fi
 
@@ -5784,45 +7722,27 @@ EOF
             )"
             RESEARCH_RUNTIME_HOME_TO_CLEAN="${research_runtime_home}"
         fi
-        RESEARCH_BROKER_RUNTIME_TO_CLEAN="${research_runtime_root}"
-        RESEARCH_MCP_CONFIG_TO_CLEAN="${research_mcp_config}"
-        RESEARCH_NETWORK_ROOT_TO_CLEAN="${research_network_root}"
-        trap '
-            if [[ -n "${RESEARCH_RUNTIME_HOME_TO_CLEAN-}" ]]; then
-                rhyolite_harness_invoke harness_sanitize_runtime_home \
-                    "${RESEARCH_RUNTIME_HOME_TO_CLEAN}" \
-                    >/dev/null 2>&1 || true
-            fi
-            if [[ -n "${RESEARCH_BROKER_RUNTIME_TO_CLEAN-}" ]]; then
-                cleanup_research_runtime \
-                    "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" \
-                    "${RESEARCH_MCP_CONFIG_TO_CLEAN-}" \
-                    "${research_error_path:-/dev/null}" \
-                    "${RESEARCH_NETWORK_ROOT_TO_CLEAN-}" \
-                    >/dev/null 2>&1 || true
-            fi
-        ' EXIT
         if ((research_ready)) &&
             ! rhyolite_harness_invoke harness_prepare_worker_home \
                 "${research_runtime_home}" \
                 "${REASONING_EFFORT}" \
                 "${CONTEXT_TIER}" \
                 research \
-                >/dev/null 2>> "${research_error_path}"; then
+                >/dev/null 2>> "${research_raw_error}"; then
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_prepare_worker_home" \
                 "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research-home preparation failed.}" \
-                >> "${research_error_path}"
+                >> "${research_raw_error}"
             research_ready=0
         fi
         if ((research_ready)) &&
             ! rhyolite_harness_invoke harness_research_worker_env \
                 research_environment \
-                >/dev/null 2>> "${research_error_path}"; then
+                >/dev/null 2>> "${research_raw_error}"; then
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_research_worker_env" \
                 "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research environment construction failed.}" \
-                >> "${research_error_path}"
+                >> "${research_raw_error}"
             research_ready=0
         fi
 
@@ -5839,16 +7759,18 @@ EOF
                 'research' \
                 "${MODEL} dedicated research started; cookies ${RESEARCH_COOKIES}"
             set +e
-            timeout \
-                --signal=TERM \
-                --kill-after=30s \
-                "${research_timeout_minutes}m" \
-                env \
-                "${research_environment[@]}" \
-                "${HARNESS_CLI_NAME}" "${research_arguments[@]}" \
-                < "${research_request_path}" \
+            (
+                umask 077
+                exec timeout \
+                    --signal=TERM \
+                    --kill-after=30s \
+                    "${research_timeout_minutes}m" \
+                    env \
+                    "${research_environment[@]}" \
+                    "${HARNESS_CLI_NAME}" "${research_arguments[@]}"
+            ) < "${research_request_path}" \
                 > "${research_raw_output}" \
-                2> "${research_error_path}" &
+                2>> "${research_raw_error}" &
             local research_process_id=$!
             RHYOLITE_ACTIVE_CHILD_PID="${research_process_id}"
             local research_started_epoch
@@ -5879,30 +7801,61 @@ EOF
             if ! rhyolite_harness_invoke harness_finalize_research_session \
                 "${research_runtime_home}" \
                 "${research_raw_output}" \
-                >/dev/null 2>> "${research_error_path}"; then
+                >/dev/null 2>> "${research_raw_error}"; then
                 printf '%s\n' \
                     "Harness failure stage: harness ${HARNESS} harness_finalize_research_session" \
                     "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research session finalization failed.}" \
-                    >> "${research_error_path}"
+                    >> "${research_raw_error}"
                 research_exit_code=1
             fi
         else
-            : > "${research_raw_output}"
             research_exit_code=1
         fi
 
-        tr -d '\r' < "${research_raw_output}" |
-            sanitize_review_text > "${research_timeline_path}"
-        rm -f -- "${research_raw_output}"
-        if [[ -s "${research_error_path}" ]]; then
-            tr -d '\r' < "${research_error_path}" |
-                sanitize_review_text > "${research_error_path}.tmp"
-            mv -- "${research_error_path}.tmp" "${research_error_path}"
+        if ((research_exit_code == 0)); then
+            if ! rhyolite_harness_invoke harness_extract_research_reply \
+                "${research_raw_output}" \
+                "${research_raw_transcript}" \
+                "${research_final_reply_raw}" \
+                >/dev/null 2>> "${research_raw_error}"; then
+                printf '%s\n' \
+                    "Harness failure stage: harness ${HARNESS} harness_extract_research_reply" \
+                    "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research reply extraction failed.}" \
+                    >> "${research_raw_error}"
+                research_exit_code=1
+            elif ! python3 "${RESEARCH_BROKER}" \
+                --verify-submission-reply "${research_final_reply_raw}" \
+                --submission-summary "${RESEARCH_NETWORK_SUMMARY_PATH}" \
+                2>> "${research_raw_error}"; then
+                printf '%s\n' \
+                    'The final research assistant reply did not match an accepted broker-validated dossier candidate.' \
+                    >> "${research_raw_error}"
+                research_exit_code=1
+            elif ! (
+                umask 077
+                sanitize_review_text \
+                    < "${research_final_reply_raw}" \
+                    > "${research_final_reply_sanitized}" &&
+                    chmod 600 -- "${research_final_reply_sanitized}"
+            ); then
+                printf '%s\n' \
+                    'Could not sanitize the accepted final research reply.' \
+                    >> "${research_raw_error}"
+                research_exit_code=1
+            fi
         fi
-        if [[ -f "${research_transcript_path}" ]]; then
-            tr -d '\r' < "${research_transcript_path}" |
-                sanitize_review_text > "${research_transcript_plain}"
+        if ! persist_sanitized_research_runtime_artifacts \
+            "${research_runtime_root}" \
+            "${research_raw_output}" \
+            "${research_raw_error}" \
+            "${research_raw_transcript}" \
+            "${research_timeline_path}" \
+            "${research_error_path}" \
+            "${research_transcript_path}" \
+            "${HARNESS_DISPLAY_NAME} Research Session Transcript"; then
+            research_exit_code=1
         fi
+        RESEARCH_RUNTIME_OUTPUTS_SANITIZED=1
 
         if [[ -z "${research_runtime_home}" ]] ||
             rhyolite_harness_invoke harness_sanitize_runtime_home \
@@ -5927,7 +7880,10 @@ EOF
         else
             research_cleanup_failed=1
         fi
-        trap - EXIT
+        if [[ -z "${RESEARCH_RUNTIME_HOME_TO_CLEAN}" &&
+            -z "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" ]]; then
+            trap - EXIT
+        fi
 
         ensure_research_failure_artifacts \
             "${research_network_root}" \
@@ -5935,32 +7891,24 @@ EOF
             'Research phase did not complete validation.'
         research_capability_count="$(
             research_summary_capabilities_count \
-                "${RESEARCH_NETWORK_SUMMARY_PATH}"
+                "${RESEARCH_NETWORK_SUMMARY_PATH}" \
+                "${RESEARCH_NETWORK_EVENTS_PATH}"
         )"
 
         if ((research_exit_code == 0)); then
-            if extract_research_dossier \
-                "${research_timeline_path}" \
-                "${RESEARCH_DOSSIER_PATH}"; then
+            if cp -- \
+                "${research_final_reply_sanitized}" \
+                "${RESEARCH_DOSSIER_PATH}" &&
+                chmod 600 -- "${RESEARCH_DOSSIER_PATH}"; then
                 research_report_extracted=1
-            elif [[ -s "${research_transcript_plain}" ]] &&
-                extract_research_dossier \
-                    "${research_transcript_plain}" \
-                    "${RESEARCH_DOSSIER_PATH}"; then
-                research_report_extracted=1
-                review_progress \
-                    "${slug}" \
-                    'research' \
-                    'complete dossier recovered from sanitized research transcript'
             fi
             if ((research_report_extracted == 0)); then
                 printf '%s\n' \
-                    'Research dossier extraction failed; canonical dossier heading or delimiter was not found.' \
+                    'Accepted research reply could not be staged after privacy sanitization.' \
                     >> "${research_error_path}"
                 research_exit_code=1
-            elif ! report_has_closing_delimiter "${RESEARCH_DOSSIER_PATH}" &&
-                ! canonicalize_research_dossier_closing_delimiter \
-                    "${RESEARCH_DOSSIER_PATH}"; then
+            elif ! report_has_closing_delimiter \
+                "${RESEARCH_DOSSIER_PATH}"; then
                 printf '%s\n' \
                     'Research dossier is incomplete because its final delimiter is missing.' \
                     >> "${research_error_path}"
@@ -5977,25 +7925,12 @@ EOF
                 research_exit_code=1
             fi
         fi
+        rm -f -- "${research_final_reply_sanitized}"
+        RESEARCH_SANITIZED_REPLY_TO_CLEAN=""
         if ((research_cleanup_failed)); then
             research_exit_code=1
         fi
 
-        if [[ -f "${research_transcript_path}" ]]; then
-            write_safe_markdown_document \
-                "${HARNESS_DISPLAY_NAME} Research Session Transcript" \
-                "${research_transcript_plain}" \
-                "${research_transcript_path}.tmp"
-            mv -- \
-                "${research_transcript_path}.tmp" \
-                "${research_transcript_path}"
-            rm -f -- "${research_transcript_plain}"
-        else
-            printf '# %s research session transcript\n\n%s\n' \
-                "${HARNESS_DISPLAY_NAME}" \
-                'No completed research session transcript is available.' \
-                > "${research_transcript_path}"
-        fi
         research_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
         if ((research_exit_code != 0)); then

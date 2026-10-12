@@ -582,8 +582,9 @@ Deviations from the plan above, each backed by probe evidence:
 
 - Phase 3: Contract v5 (`RHYOLITE_HARNESS_CONTRACT_VERSION=5`) adds
   `harness_write_research_mcp_config`, `harness_research_worker_argv`,
-  `harness_research_worker_env`, and `harness_finalize_research_session`
-  plus the `research` home phase. The runner's Copilot-only research helpers
+  `harness_research_worker_env`, `harness_finalize_research_session`, and
+  `harness_extract_research_reply` plus the `research` home phase. The
+  runner's Copilot-only research helpers
   moved into `copilot.sh` with the argv pinned by a golden vector; the scope
   2/3 gate is now capability-based. Claude Code implements research with a
   stdio MCP config, `--allowedTools mcp__rhyolite-research__*`, and

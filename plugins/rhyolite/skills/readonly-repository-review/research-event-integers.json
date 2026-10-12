@@ -1,0 +1,609 @@
+{
+  "schemaVersion": 1,
+  "common": [
+    {
+      "path": [
+        "SchemaVersion"
+      ],
+      "required": true,
+      "minimum": 1,
+      "maximum": 1
+    },
+    {
+      "path": [
+        "Sequence"
+      ],
+      "required": true,
+      "minimum": 1,
+      "maximumRef": "eventCount"
+    }
+  ],
+  "events": {
+    "broker_started": {
+      "label": "research broker-start event",
+      "fields": [
+        {
+          "path": [
+            "PolicySchemaVersion"
+          ],
+          "required": true,
+          "minimumRef": "expectedPolicySchema",
+          "maximumRef": "expectedPolicySchema"
+        }
+      ]
+    },
+    "workflow_order_rejected": {
+      "label": "research workflow rejection event",
+      "fields": [
+        {
+          "path": [
+            "CapabilityInspectionSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestSuccessfulRetrievalSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestNetworkSummaryObservationSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        }
+      ]
+    },
+    "public_retrieval_succeeded": {
+      "label": "research retrieval event",
+      "fields": [
+        {
+          "path": [
+            "Status"
+          ],
+          "required": true,
+          "minimum": 200,
+          "maximum": 299
+        }
+      ]
+    },
+    "cookie_send_rejected": {
+      "label": "research cookie-send rejection event",
+      "fields": []
+    },
+    "cookie_sent": {
+      "label": "research cookie-send event",
+      "fields": []
+    },
+    "cookie_observed": {
+      "label": "research cookie observation event",
+      "fields": []
+    },
+    "unsupported_body_stored": {
+      "label": "research unsupported-body event",
+      "fields": [
+        {
+          "path": [
+            "Bytes"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "maxWireBytes"
+        }
+      ]
+    },
+    "request_failed": {
+      "label": "research request failure event",
+      "fields": [
+        {
+          "path": [
+            "Details",
+            "budget"
+          ],
+          "minimumRef": "requestBudget",
+          "maximumRef": "requestBudget",
+          "requiredForCodes": [
+            "request_budget_exhausted"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "port"
+          ],
+          "minimum": 1,
+          "maximum": 65535,
+          "requiredForCodes": [
+            "tls_port_forbidden"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "status"
+          ],
+          "minimum": 100,
+          "maximum": 599,
+          "requiredForCodes": [
+            "access_policy_denial",
+            "rate_limited",
+            "http_status"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "headerBytes"
+          ],
+          "minimumRef": "headerBytesExceeded",
+          "maximumRef": "maxObservedHeaderBytes",
+          "requiredForCodes": [
+            "headers_too_large"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "limitBytes"
+          ],
+          "minimumRef": "maxWireBytes",
+          "maximumRef": "maxWireBytes",
+          "requiredForCodes": [
+            "body_too_large"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "verifyCode"
+          ],
+          "nullable": true,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "requiredForCodes": [
+            "tls_verification_failed"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "diagnosticHandshake",
+            "Certificate",
+            "CipherBits"
+          ],
+          "nullable": true,
+          "minimum": 1,
+          "maximum": 65535,
+          "allowedForCodes": [
+            "tls_verification_failed"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "line"
+          ],
+          "minimum": 1,
+          "maximumRef": "maxBodyPosition",
+          "requiredForCodes": [
+            "malformed_json"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "column"
+          ],
+          "minimum": 1,
+          "maximumRef": "maxBodyPosition",
+          "requiredForCodes": [
+            "malformed_json"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "position",
+            0
+          ],
+          "minimum": 1,
+          "maximumRef": "maxBodyPosition",
+          "requiredForCodes": [
+            "malformed_xml"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "position",
+            1
+          ],
+          "minimum": 0,
+          "maximumRef": "maxBodyPosition",
+          "requiredForCodes": [
+            "malformed_xml"
+          ]
+        },
+        {
+          "path": [
+            "Details",
+            "bytes"
+          ],
+          "minimum": 0,
+          "maximumRef": "maxWireBytes",
+          "requiredForCodes": [
+            "unsupported_format"
+          ]
+        }
+      ]
+    },
+    "dns_resolution": {
+      "label": "research DNS event",
+      "fields": [
+        {
+          "path": [
+            "Port"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximum": 65535
+        }
+      ]
+    },
+    "tls_handshake": {
+      "label": "research TLS event",
+      "fields": [
+        {
+          "path": [
+            "Tls",
+            "CipherBits"
+          ],
+          "nullable": true,
+          "minimum": 1,
+          "maximum": 65535
+        }
+      ]
+    },
+    "http_response": {
+      "label": "research HTTP response event",
+      "fields": [
+        {
+          "path": [
+            "Status"
+          ],
+          "required": true,
+          "minimum": 100,
+          "maximum": 599
+        },
+        {
+          "path": [
+            "WireBytes"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "maxWireBytes"
+        },
+        {
+          "path": [
+            "TimingsMs",
+            "ConnectAndHeaders"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "requestTimingMsMax"
+        },
+        {
+          "path": [
+            "TimingsMs",
+            "Total"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "requestTimingMsMax"
+        }
+      ]
+    },
+    "redirect_followed": {
+      "label": "research redirect event",
+      "fields": [
+        {
+          "path": [
+            "Status"
+          ],
+          "required": true,
+          "minimum": 300,
+          "maximum": 399
+        }
+      ]
+    },
+    "capabilities_checked": {
+      "label": "research capability event",
+      "fields": []
+    },
+    "provider_disabled": {
+      "label": "research provider-disabled event",
+      "fields": []
+    },
+    "provider_failed": {
+      "label": "research provider event",
+      "fields": [
+        {
+          "path": [
+            "CandidateEntries"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "maxWebSearchCandidates"
+        },
+        {
+          "path": [
+            "RejectedEntries"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "maxWebSearchCandidates"
+        }
+      ]
+    },
+    "research_dossier_validation_rejected": {
+      "label": "research validation event",
+      "fields": [
+        {
+          "path": [
+            "Attempt"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "validationAttemptLimit"
+        },
+        {
+          "path": [
+            "AttemptLimit"
+          ],
+          "required": true,
+          "minimumRef": "validationAttemptLimit",
+          "maximumRef": "validationAttemptLimit"
+        },
+        {
+          "path": [
+            "ClaimEntryCount"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 0,
+          "maximumRef": "maxObservedClaimEntries"
+        },
+        {
+          "path": [
+            "ClaimEntryLimit"
+          ],
+          "required": true,
+          "minimumRef": "maxAcceptedClaimEntries",
+          "maximumRef": "maxAcceptedClaimEntries"
+        },
+        {
+          "path": [
+            "ViolationCount"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "maxDossierBytes"
+        },
+        {
+          "path": [
+            "ViolationsCollected"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "maxCollectedViolations"
+        },
+        {
+          "path": [
+            "ViolationsReturned"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "maxReturnedViolations"
+        },
+        {
+          "path": [
+            "ViolationCodeCounts",
+            "*"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "violationCount"
+        },
+        {
+          "path": [
+            "CapabilityInspectionSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestSuccessfulRetrievalSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestNetworkSummaryObservationSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "CandidateRequestSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        }
+      ]
+    },
+    "research_dossier_validation_replayed": {
+      "label": "research validation event",
+      "fields": [
+        {
+          "path": [
+            "Attempt"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "validationAttemptLimit"
+        },
+        {
+          "path": [
+            "CapabilityInspectionSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestSuccessfulRetrievalSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestNetworkSummaryObservationSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "CandidateRequestSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        }
+      ]
+    },
+    "research_dossier_validation_accepted": {
+      "label": "research validation event",
+      "fields": [
+        {
+          "path": [
+            "Attempt"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "validationAttemptLimit"
+        },
+        {
+          "path": [
+            "AttemptLimit"
+          ],
+          "required": true,
+          "minimumRef": "validationAttemptLimit",
+          "maximumRef": "validationAttemptLimit"
+        },
+        {
+          "path": [
+            "CandidateBytes"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "maxDossierBytes"
+        },
+        {
+          "path": [
+            "ClaimEntryCount"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "maxAcceptedClaimEntries"
+        },
+        {
+          "path": [
+            "CapabilityInspectionSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestSuccessfulRetrievalSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "LatestNetworkSummaryObservationSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        },
+        {
+          "path": [
+            "CandidateRequestSequence"
+          ],
+          "required": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        }
+      ]
+    },
+    "network_summary_requested": {
+      "label": "research summary-request event",
+      "fields": []
+    },
+    "network_summary_observed": {
+      "label": "research observation event",
+      "fields": [
+        {
+          "path": [
+            "SuccessfulPublicResponses"
+          ],
+          "required": true,
+          "minimum": 0,
+          "maximumRef": "successfulResponses"
+        },
+        {
+          "path": [
+            "LatestSuccessfulRetrievalSequence"
+          ],
+          "required": true,
+          "nullable": true,
+          "minimum": 1,
+          "maximumRef": "priorSequence"
+        }
+      ]
+    },
+    "broker_stopped": {
+      "label": "research broker-stop event",
+      "fields": []
+    }
+  }
+}

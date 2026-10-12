@@ -177,10 +177,15 @@ Changes to these surfaces normally move together:
   instructions, and launcher smoke tests for startup preferences.
 - `skills/readonly-repository-review/review-prompt.txt`,
   `research-prompt.txt`, `research-policy.json`,
+  `research-event-integers.json`,
   `scripts/research-egress-broker.py`,
   `scripts/launch-research-egress-broker.sh`,
   `scripts/run-parallel-reviews.sh`, the Copilot and Claude Code worker
   agents, and validation for research/prompt/runner behavior.
+- `skills/readonly-repository-review/SKILL.md`, both harness agent copies, and
+  return-contract validation whenever `RHYOLITE_AGENT_SELF_CHECK_V1` or a
+  main-report, security-pass, research-dossier, repair-JSON, or guided-summary
+  self-check changes. Shared and harness-specific copies must not diverge.
 - `scripts/review-output.sh` and validation for artifact rendering and
   sanitization.
 - `tests/test-research-egress-broker.py` for offline URL, DNS, TLS,
@@ -212,10 +217,23 @@ cleanup, and synchronized repair artifacts/state.
 
 Scope 1 must remain transport-free: no research worker, MCP config,
 broker process, cookie jar, or research/network artifact. Scope 2/3 must
-complete dedicated research first and pass only the validated sanitized
-dossier and summary to the main worker. Keep the exact five-tool MCP
+complete dedicated research first, bind the broker acceptance proof to the raw
+final assistant reply before sanitization, and pass only the validated
+sanitized dossier and summary to the main worker. Keep the exact five-tool MCP
 contract stable unless the prompt, broker, runner, agents, tests, and
 documentation are intentionally versioned together.
+
+`research-event-integers.json` is the shared producer/consumer inventory for
+every exact JSON integer emitted in the broker event ledger, including nested
+and optional fields. The broker rejects an undeclared integer before writing
+an event, and the runner applies the same inventory plus event-specific
+relationships and bounds. Accepted dossier-validation events record only
+`ClaimEntryCount` values from `0` through `100`. Rejected events record the
+observed count before acceptance enforcement; it may be `null` when no claim
+section was processed or an exact integer through `209715`, the maximum
+possible under the 2 MiB candidate bound and the shortest recognized claim
+entry line. The observed rejected count is diagnostic history, not an accepted
+claim allowance.
 
 ## Release checks
 

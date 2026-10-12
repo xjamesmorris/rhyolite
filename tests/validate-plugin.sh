@@ -17,6 +17,7 @@ COPILOT_HARNESS="${PLUGIN_ROOT}/lib/harness/copilot.sh"
 PROMPT="${SKILL_ROOT}/review-prompt.txt"
 RESEARCH_PROMPT="${SKILL_ROOT}/research-prompt.txt"
 RESEARCH_POLICY="${SKILL_ROOT}/research-policy.json"
+RESEARCH_EVENT_INTEGER_CONTRACT="${SKILL_ROOT}/research-event-integers.json"
 RESEARCH_BROKER="${SKILL_ROOT}/scripts/research-egress-broker.py"
 RESEARCH_BROKER_LAUNCHER="${SKILL_ROOT}/scripts/launch-research-egress-broker.sh"
 SKILL="${SKILL_ROOT}/SKILL.md"
@@ -178,6 +179,7 @@ required_files=(
     "${PROMPT}"
     "${RESEARCH_PROMPT}"
     "${RESEARCH_POLICY}"
+    "${RESEARCH_EVENT_INTEGER_CONTRACT}"
     "${RESEARCH_BROKER}"
     "${RESEARCH_BROKER_LAUNCHER}"
     "${RESEARCH_BROKER_TEST}"
@@ -1240,6 +1242,10 @@ done
 grep -Fq "copilot plugin marketplace add \"\${ROOT}\"" "${INSTALL_TEST}" &&
     grep -Fq "copilot plugin install 'rhyolite@rhyolite-tools'" \
         "${INSTALL_TEST}" &&
+    grep -Fq 'research-event-integers.json' "${INSTALL_TEST}" &&
+    grep -Fq 'ls-files --error-unmatch' "${INSTALL_TEST}" &&
+    grep -Fq 'write-tree' "${INSTALL_TEST}" &&
+    grep -Fq 'archive --format=tar "${synthetic_tree}"' "${INSTALL_TEST}" &&
     grep -Fq 'RHYOLITE_START_COMMAND_V1' "${INSTALL_TEST}" &&
     grep -Fq 'bin/rhyolite' "${INSTALL_TEST}" &&
     grep -Fq 'bin/rhyolite-summary' "${INSTALL_TEST}" &&
@@ -1498,6 +1504,24 @@ grep -Fq '`PriorArtWindow`' "${SKILL}" ||
     fail 'Skill does not summarize PriorArtWindow.'
 grep -Fq '`ResearchTransport`' "${SKILL}" ||
     fail 'Skill does not summarize ResearchTransport.'
+for research_transport_surface in \
+    "${SKILL}" \
+    "${AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" \
+    "${README}" \
+    "${AGENTS_GUIDANCE}"; do
+    normalized_research_transport_surface="$(
+        tr '\r\n\t' '   ' < "${research_transport_surface}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    grep -Fq 'dossier-validation' \
+        <<< "${normalized_research_transport_surface}" &&
+        grep -Fq 'canonicalization' \
+            <<< "${normalized_research_transport_surface}" &&
+        grep -Fq 'digest algorithm' \
+            <<< "${normalized_research_transport_surface}" ||
+        fail "Research transport surface omits dossier validation: ${research_transport_surface}"
+done
 grep -Fq 'Label `ReviewDate`, `PriorArtWindow`, and' "${SKILL}" ||
     fail 'Skill does not describe local-calendar plan labels.'
 grep -Fq '`ProvenanceWindow` as local-session calendar dates. Label' \
@@ -2379,7 +2403,8 @@ for research_function in \
     harness_write_research_mcp_config \
     harness_research_worker_argv \
     harness_research_worker_env \
-    harness_finalize_research_session; do
+    harness_finalize_research_session \
+    harness_extract_research_reply; do
     grep -Fxq "    ${research_function}" "${HARNESS_COMMON}" &&
         grep -Fq "${research_function}() {" "${COPILOT_HARNESS}" &&
         grep -Fq "rhyolite_harness_invoke ${research_function}" "${RUNNER}" ||
@@ -5978,6 +6003,8 @@ function assertResearchTransport(
     "AnonymousGitHub",
     "BrokerVersion",
     "Cookies",
+    "DirectHttps",
+    "DossierValidation",
     "Enabled",
     "GeneralWebSearch",
     "Mode",
@@ -6006,6 +6033,13 @@ function assertResearchTransport(
         transport.PolicyDigest !== null ||
         transport.ResourceProfile !== null ||
         transport.Tools.length !== 0 ||
+        transport.DirectHttps?.ProviderId !== null ||
+        transport.DirectHttps?.Enabled !== false ||
+        transport.DossierValidation?.ProtocolVersion !== null ||
+        transport.DossierValidation?.Tool !== null ||
+        transport.DossierValidation?.AttemptLimit !== 0 ||
+        transport.DossierValidation?.Canonicalization !== null ||
+        transport.DossierValidation?.DigestAlgorithm !== null ||
         transport.Cookies.RawSetCookieRetention !== "disabled" ||
         transport.UnsupportedBodyRetention !== "disabled" ||
         transport.NetworkLogPolicy !== "disabled" ||
@@ -6029,8 +6063,16 @@ function assertResearchTransport(
       transport.PolicyId.length === 0 ||
       !/^[0-9a-f]{64}$/.test(transport.PolicyDigest) ||
       JSON.stringify(transport.Tools) !== JSON.stringify(expectedTools) ||
+      transport.DirectHttps?.ProviderId !== "direct-public-https-v1" ||
+      transport.DirectHttps?.Enabled !== true ||
       transport.AnonymousGitHub.ProviderId !== "anonymous-github-rest-v1" ||
       transport.AnonymousGitHub.Enabled !== true ||
+      transport.DossierValidation?.ProtocolVersion !== 1 ||
+      transport.DossierValidation?.Tool !== "research_network_summary" ||
+      transport.DossierValidation?.AttemptLimit !== 3 ||
+      transport.DossierValidation?.Canonicalization !==
+        "utf8-lf-single-terminal-newline-v1" ||
+      transport.DossierValidation?.DigestAlgorithm !== "sha256" ||
       transport.Cookies.RawSetCookieRetention !== "private-ledger" ||
       transport.UnsupportedBodyRetention !== "private-content-addressed" ||
       transport.NetworkLogPolicy !==
@@ -7494,6 +7536,22 @@ PY
         "${repository_url}" == https://* &&
         "${policy_digest}" =~ ^[0-9a-f]{64}$ &&
         "${web_provider}" == 'duckduckgo-html-v1' ]] || exit 100
+    research_stdout_path="$(readlink -- "/proc/$$/fd/1")"
+    research_stderr_path="$(readlink -- "/proc/$$/fd/2")"
+    [[ "${research_stdout_path}" == \
+            "${broker_runtime}/research-output.raw" &&
+        "${research_stderr_path}" == \
+            "${broker_runtime}/research-errors.raw" &&
+        "${share_path}" == "${broker_runtime}/research-session.raw" &&
+        "$(stat -c '%a' "${research_stdout_path}")" == "600" &&
+        "$(stat -c '%a' "${research_stderr_path}")" == "600" &&
+        "$(stat -c '%a' "${share_path}")" == "600" ]] ||
+        exit 119
+    printf '%s\n' \
+        "${research_stdout_path}" \
+        "${research_stderr_path}" \
+        "${share_path}" \
+        > "${MOCK_LOG}.research-raw-paths"
     mkdir -p -- "${network_root}/private/bodies"
     chmod 700 -- \
         "${network_root}" \
@@ -7502,8 +7560,10 @@ PY
     private_cookie="research-private-cookie-sentinel-${repository_url##*/}"
     cat > "${network_root}/events.jsonl" <<EOF
 {"SchemaVersion":1,"Sequence":1,"Timestamp":"2026-10-01T00:00:00Z","Type":"capabilities_checked","Tools":["research_capabilities","fetch_public_url","search_public_github","search_public_web","research_network_summary"],"Health":"ready"}
-{"SchemaVersion":1,"Sequence":2,"Timestamp":"2026-10-01T00:00:01Z","Type":"http_response","RequestId":"request-000001","Url":"https://github.com/octocat/Hello-World","Method":"GET","Status":200,"ContentType":"text/html","WireBytes":128}
-{"SchemaVersion":1,"Sequence":3,"Timestamp":"2026-10-01T00:00:02Z","Type":"network_summary_requested"}
+{"SchemaVersion":1,"Sequence":2,"Timestamp":"2026-10-01T00:00:01Z","Type":"http_response","RequestId":"request-000001","Url":"https://github.com/octocat/Hello-World","Method":"GET","Status":200,"ContentType":"text/html","WireBytes":128,"TimingsMs":{"ConnectAndHeaders":1,"Total":2}}
+{"SchemaVersion":1,"Sequence":3,"Timestamp":"2026-10-01T00:00:02Z","Type":"public_retrieval_succeeded","RequestId":"request-000001","ProviderId":"direct-public-https-v1","Url":"https://github.com/octocat/Hello-World","Method":"GET","Status":200}
+{"SchemaVersion":1,"Sequence":4,"Timestamp":"2026-10-01T00:00:03Z","Type":"network_summary_requested","SubmissionCandidateIncluded":false}
+{"SchemaVersion":1,"Sequence":5,"Timestamp":"2026-10-01T00:00:04Z","Type":"network_summary_observed","SuccessfulPublicResponses":1,"LatestSuccessfulRetrievalSequence":3}
 EOF
     successful_responses=1
     failed_responses=0
@@ -7513,7 +7573,7 @@ EOF
     if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
         failed_responses=1
         cat >> "${network_root}/events.jsonl" <<'EOF'
-{"SchemaVersion":1,"Sequence":4,"Timestamp":"2026-10-01T00:00:03Z","Type":"request_failed","RequestId":"request-000002","Url":"https://independent.example.org/unavailable","Code":"dns_failed","Message":"Public DNS resolution failed","Retryable":true}
+{"SchemaVersion":1,"Sequence":6,"Timestamp":"2026-10-01T00:00:05Z","Type":"request_failed","RequestId":"request-000002","Url":"https://independent.example.org/unavailable","Code":"dns_failed","Message":"Public DNS resolution failed","Retryable":true,"Details":{}}
 EOF
     fi
     capability_calls=1
@@ -7526,6 +7586,11 @@ EOF
     request_budget=500
     [[ "${research_scope}" == "2" ]] || request_budget=1000
     attempted_responses=$((1 + failed_responses))
+    direct_provider_calls=$((1 + failed_responses))
+    http_anomalies='{}'
+    if ((failed_responses)); then
+        http_anomalies='{"dns_failed":1}'
+    fi
     cat > "${network_root}/summary.json" <<EOF
 {
   "SchemaVersion": 1,
@@ -7545,11 +7610,11 @@ EOF
     "Redirects": 0
   },
   "ToolCalls": {
-    "Total": 3,
+    "Total": $((3 + failed_responses)),
     "Capabilities": ${capability_calls},
     "NetworkSummary": 1,
     "Providers": {
-      "direct-public-https-v1": 1,
+      "direct-public-https-v1": ${direct_provider_calls},
       "anonymous-github-rest-v1": 0,
       "duckduckgo-html-v1": 0,
       "none": 0
@@ -7562,9 +7627,13 @@ EOF
     "Sent": 0
   },
   "TlsAnomalies": {},
-  "HttpAnomalies": {},
+  "HttpAnomalies": ${http_anomalies},
   "RateLimits": {},
   "ProjectControlledEndpointObservations": [],
+  "DirectHttps": {
+    "ProviderId": "direct-public-https-v1",
+    "Enabled": true
+  },
   "GeneralWebSearch": {
     "ProviderId": "duckduckgo-html-v1",
     "Available": true
@@ -7585,6 +7654,14 @@ EOF
     "MaxNormalizedBytes": 524288,
     "MaxRedirects": 8,
     "AllowedTlsPorts": [443]
+  },
+  "ResearchSubmission": {
+    "ProtocolVersion": 1,
+    "Status": "not-submitted",
+    "AttemptLimit": 3,
+    "AttemptsUsed": 0,
+    "Canonicalization": "utf8-lf-single-terminal-newline-v1",
+    "DigestAlgorithm": "sha256"
   }
 }
 EOF
@@ -7621,16 +7698,28 @@ COMMUNITY HEALTH EVIDENCE
    Confidence: Medium. Evidence basis: deterministic broker fixture.
 
 CLAIM VERIFICATION EVIDENCE
-1. Claim: No material external claim was found in the snapshot.
+1. Claim: repository identity; README.md:1; project identifies itself as Hello World.
    Sources checked: https://github.com/octocat/Hello-World
    Check date: 2026-10-01
-   Ownership: project-controlled
-   Status: Not checkable - the snapshot makes no external claim.
-   Confidence: High. Evidence basis: deterministic broker fixture.
+   Ownership: platform
+   Status: Corroborated; the public platform repository confirms the identity.
+   Confidence: High; deterministic broker fixture and platform record.
 
 PRIOR ART AND LINEAGE EVIDENCE
 1. No closer established or in-window prior art was identified for the
    deterministic fixture.
+DOSSIER
+        if [[ "${research_scope}" == "2" ]]; then
+            cat <<'DOSSIER'
+   Code and architecture lineage were not requested.
+DOSSIER
+        else
+            cat <<'DOSSIER'
+   Code and architecture lineage, license and attribution, and chronology
+   were covered by the deterministic scope-3 fixture.
+DOSSIER
+        fi
+        cat <<'DOSSIER'
    Confidence: Medium. Evidence basis: deterministic broker fixture.
 DOSSIER
     }
@@ -7669,6 +7758,124 @@ DOSSIER
                     { print }
                 '
                 ;;
+            missing-capability-tool-wrong-section)
+                awk '
+                    $0 == "Exact tools: research_capabilities, fetch_public_url, search_public_github, search_public_web, research_network_summary" {
+                        print "Exact tools: fetch_public_url, search_public_github, search_public_web, research_network_summary"
+                        next
+                    }
+                    /^1\. https:\/\/github\.com\/octocat\/Hello-World checked / {
+                        print
+                        print "   The research_capabilities call succeeded before retrieval."
+                        next
+                    }
+                    { print }
+                '
+                ;;
+            valid-none-identified|\
+            claim-none-unjustified|\
+            claim-none-mixed|\
+            claim-invalid-value|\
+            claim-missing-sources|\
+            claim-invalid-date|\
+            claim-invalid-ownership|\
+            claim-invalid-status|\
+            claim-missing-status-reason|\
+            claim-missing-confidence-evidence|\
+            unicode-nel|\
+            unicode-line-separator|\
+            unicode-paragraph-separator)
+                /usr/bin/python3 - \
+                    "${MOCK_RESEARCH_DOSSIER_DEFECT}" 3<&0 <<'PY'
+import os
+import sys
+
+mode = sys.argv[1]
+with os.fdopen(3, encoding="utf-8") as stream:
+    text = stream.read()
+claim_heading = "CLAIM VERIFICATION EVIDENCE\n"
+next_heading = "\nPRIOR ART AND LINEAGE EVIDENCE"
+start = text.index(claim_heading) + len(claim_heading)
+finish = text.index(next_heading, start)
+claim = text[start:finish]
+
+if mode == "valid-none-identified":
+    claim = (
+        "None identified: the read-only snapshot contains no material "
+        "external claims.\n"
+    )
+elif mode == "claim-none-unjustified":
+    claim = "None identified:\n"
+elif mode == "claim-none-mixed":
+    claim = (
+        "None identified: no material external claim was found.\n"
+        + claim
+    )
+elif mode == "claim-invalid-value":
+    claim = claim.replace(
+        "repository identity; README.md:1; project identifies itself as "
+        "Hello World.",
+        "repository identity without the required path and paraphrase fields.",
+        1,
+    )
+elif mode == "claim-missing-sources":
+    claim = claim.replace(
+        "   Sources checked: https://github.com/octocat/Hello-World\n",
+        "",
+        1,
+    )
+elif mode == "claim-invalid-date":
+    claim = claim.replace(
+        "   Check date: 2026-10-01",
+        "   Check date: 2026-02-30",
+        1,
+    )
+elif mode == "claim-invalid-ownership":
+    claim = claim.replace(
+        "   Ownership: platform",
+        "   Ownership: affiliated",
+        1,
+    )
+elif mode == "claim-invalid-status":
+    claim = claim.replace(
+        "   Status: Corroborated;",
+        "   Status: Verified;",
+        1,
+    )
+elif mode == "claim-missing-status-reason":
+    claim = claim.replace(
+        "   Status: Corroborated; the public platform repository confirms "
+        "the identity.",
+        "   Status: Corroborated",
+        1,
+    )
+elif mode == "claim-missing-confidence-evidence":
+    claim = claim.replace(
+        "   Confidence: High; deterministic broker fixture and platform record.",
+        "   Confidence: High",
+        1,
+    )
+elif mode in {
+    "unicode-nel",
+    "unicode-line-separator",
+    "unicode-paragraph-separator",
+}:
+    separator = {
+        "unicode-nel": "\u0085",
+        "unicode-line-separator": "\u2028",
+        "unicode-paragraph-separator": "\u2029",
+    }[mode]
+    claim = claim.replace(
+        "\n   Check date: 2026-10-01",
+        separator + "   Check date: 2026-10-01",
+        1,
+    )
+else:
+    raise SystemExit(f"unsupported research dossier defect: {mode}")
+
+sys.stdout.write(text[:start] + claim + text[finish:])
+PY
+                ;;
             *)
                 printf 'Unknown mock research dossier defect: %s\n' \
                     "${MOCK_RESEARCH_DOSSIER_DEFECT}" >&2
@@ -7676,20 +7883,27 @@ DOSSIER
                 ;;
         esac
     }
-    if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
+    emit_research_dossier() {
         cat <<DOSSIER
 ================================================================================
 REPOSITORY RESEARCH DOSSIER
 RESEARCH CAPABILITY RECORD
-Broker health ready; approved exact tools were available. One successful public
-response was observed. General web search provider duckduckgo-html-v1 was
-available.
+Broker health: ready
 Broker version: 1.1
+Policy schema version: 1
+Policy ID: rhyolite-public-research-v2
 Policy digest: ${policy_digest}
-Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
-Unsupported bodies use private-content-addressed retention.
-Exact tools: research_capabilities, fetch_public_url, search_public_github,
-search_public_web, research_network_summary.
+Transport provider: local-broker
+Exact tools: research_capabilities, fetch_public_url, search_public_github, search_public_web, research_network_summary
+Direct HTTPS provider: direct-public-https-v1; enabled=true
+Anonymous GitHub provider: anonymous-github-rest-v1; enabled=true; authentication=none
+General web search provider: duckduckgo-html-v1; available=true; status=ready
+Cookie replay mode: ${cookie_mode}
+Raw Set-Cookie retention: private-ledger
+Unsupported body retention: private-content-addressed
+Dossier validation: protocol=1; tool=research_network_summary; attemptLimit=3; canonicalization=utf8-lf-single-terminal-newline-v1; digestAlgorithm=sha256
+Request budget: ${request_budget}
+Successful public responses: ${successful_responses}
 Confidence: High. Evidence basis: sanitized capability and summary records.
 
 RESEARCH SOURCE LANDSCAPE
@@ -7697,8 +7911,15 @@ RESEARCH SOURCE LANDSCAPE
    repository surface, current status observed.
    Confidence: High. Evidence basis: successful broker response.
 DOSSIER
+        if [[ "${MOCK_RESEARCH_PRIVATE_TEXT-}" == "1" ]]; then
+            cat <<'DOSSIER'
+   Contact: researcher@example.org
+   TOKEN: fixture-secret-value
+DOSSIER
+        fi
         emit_research_evidence_sections
-        cat <<'DOSSIER'
+        if [[ "${MOCK_RESEARCH_SOURCE_FAILURE-}" == "1" ]]; then
+            cat <<'DOSSIER'
 
 INACCESSIBLE RESOURCE REGISTER
 1. https://independent.example.org/unavailable - independent source; DNS
@@ -7720,31 +7941,8 @@ attributed to project fitness. No project-controlled anomaly was observed.
 Confidence: High. Evidence basis: ownership-aware network summary.
 ================================================================================
 DOSSIER
-        exit 0
-    fi
-    {
-        cat <<DOSSIER
-================================================================================
-REPOSITORY RESEARCH DOSSIER
-RESEARCH CAPABILITY RECORD
-Broker health ready; approved exact tools were available. One successful public
-response was observed. General web search provider duckduckgo-html-v1 was
-available.
-Broker version: 1.1
-Policy digest: ${policy_digest}
-Cookie mode: ${cookie_mode}; raw values use private-ledger retention.
-Unsupported bodies use private-content-addressed retention.
-Exact tools: research_capabilities, fetch_public_url, search_public_github,
-search_public_web, research_network_summary.
-Confidence: High. Evidence basis: sanitized capability and summary records.
-
-RESEARCH SOURCE LANDSCAPE
-1. https://github.com/octocat/Hello-World checked 2026-10-01; project-controlled
-   repository surface, current status observed.
-   Confidence: High. Evidence basis: successful broker response.
-DOSSIER
-        emit_research_evidence_sections
-        cat <<'DOSSIER'
+        else
+            cat <<'DOSSIER'
 
 INACCESSIBLE RESOURCE REGISTER
 None identified.
@@ -7763,7 +7961,182 @@ and not replayed or exposed.
 Confidence: High. Evidence basis: sanitized transport summary.
 ================================================================================
 DOSSIER
-    } | apply_research_dossier_defect
+        fi
+    }
+    accepted_candidate="${broker_runtime}/accepted-candidate.raw"
+    emit_research_dossier |
+        apply_research_dossier_defect > "${accepted_candidate}"
+    chmod 600 -- "${accepted_candidate}"
+    candidate_sha256="$(
+        /usr/bin/sha256sum "${accepted_candidate}" | /usr/bin/awk '{print $1}'
+    )"
+    candidate_bytes="$(
+        /usr/bin/wc -c < "${accepted_candidate}" |
+            /usr/bin/tr -d '[:space:]'
+    )"
+    candidate_claim_count="$(
+        /usr/bin/python3 - "${accepted_candidate}" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+print(
+    sum(
+        1
+        for line in text.split("\n")
+        if re.fullmatch(r"[1-9][0-9]*\. Claim:(?: .*)?", line)
+    )
+)
+PY
+    )"
+    candidate_summary_sequence=$((6 + failed_responses))
+    candidate_accept_sequence=$((7 + failed_responses))
+    printf '%s\n' \
+        "{\"SchemaVersion\":1,\"Sequence\":${candidate_summary_sequence},\"Timestamp\":\"2026-10-01T00:00:04Z\",\"Type\":\"network_summary_requested\",\"SubmissionCandidateIncluded\":true}" \
+        "{\"SchemaVersion\":1,\"Sequence\":${candidate_accept_sequence},\"Timestamp\":\"2026-10-01T00:00:05Z\",\"Type\":\"research_dossier_validation_accepted\",\"Attempt\":1,\"AttemptLimit\":3,\"CandidateSha256\":\"${candidate_sha256}\",\"CandidateBytes\":${candidate_bytes},\"ClaimEntryCount\":${candidate_claim_count},\"CapabilityInspectionSequence\":1,\"LatestSuccessfulRetrievalSequence\":3,\"LatestNetworkSummaryObservationSequence\":5,\"CandidateRequestSequence\":${candidate_summary_sequence}}" \
+        >> "${network_root}/events.jsonl"
+    /usr/bin/python3 - \
+        "${network_root}/summary.json" \
+        "${candidate_sha256}" \
+        "${candidate_bytes}" \
+        "${MOCK_RESEARCH_PROOF_MODE-accepted}" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+digest = sys.argv[2]
+size = int(sys.argv[3])
+mode = sys.argv[4]
+value = json.loads(path.read_text(encoding="utf-8"))
+value["ToolCalls"]["Total"] += 1
+value["ToolCalls"]["NetworkSummary"] += 1
+value["ResearchSubmission"] = {
+    "ProtocolVersion": 1,
+    "Status": "accepted",
+    "AttemptLimit": 3,
+    "AttemptsUsed": 1,
+    "Canonicalization": "utf8-lf-single-terminal-newline-v1",
+    "DigestAlgorithm": "sha256",
+    "CandidateSha256": digest,
+    "CandidateBytes": size,
+}
+if mode == "missing":
+    value.pop("ResearchSubmission")
+elif mode == "mismatch":
+    value["ResearchSubmission"]["CandidateSha256"] = "0" * 64
+elif mode != "accepted":
+    raise SystemExit(f"unsupported proof mode: {mode}")
+path.write_text(
+    json.dumps(value, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+    if [[ -n "${MOCK_RESEARCH_INTEGER_MUTATION-}" ]]; then
+        /usr/bin/python3 - \
+            "${network_root}/summary.json" \
+            "${network_root}/events.jsonl" \
+            "${MOCK_RESEARCH_INTEGER_MUTATION}" <<'PY'
+import json
+import pathlib
+import sys
+
+summary_path = pathlib.Path(sys.argv[1])
+events_path = pathlib.Path(sys.argv[2])
+mode = sys.argv[3]
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+events = [
+    json.loads(line)
+    for line in events_path.read_text(encoding="utf-8").splitlines()
+    if line
+]
+
+
+def event(event_type):
+    return next(value for value in events if value.get("Type") == event_type)
+
+
+if mode == "summary-true":
+    summary["Requests"]["SuccessfulPublicResponses"] = True
+elif mode == "proof-numeric-string":
+    summary["ResearchSubmission"]["ProtocolVersion"] = "1"
+elif mode == "validation-integral-float":
+    event("research_dossier_validation_accepted")["Attempt"] = 1.0
+elif mode == "capability-false":
+    event("capabilities_checked")["SchemaVersion"] = False
+elif mode == "retrieval-negative":
+    event("public_retrieval_succeeded")["Status"] = -1
+elif mode == "observation-oversized":
+    event("network_summary_observed")["SuccessfulPublicResponses"] = 10**30
+elif mode == "response-wire-bytes-oversized":
+    event("http_response")["WireBytes"] = 10**30
+elif mode == "validation-sequence-string":
+    accepted = event("research_dossier_validation_accepted")
+    accepted["CandidateRequestSequence"] = str(
+        accepted["CandidateRequestSequence"]
+    )
+else:
+    raise SystemExit(f"unsupported integer mutation: {mode}")
+
+summary_path.write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+events_path.write_text(
+    "".join(
+        json.dumps(value, separators=(",", ":")) + "\n"
+        for value in events
+    ),
+    encoding="utf-8",
+    newline="",
+)
+PY
+    fi
+    chmod 600 -- \
+        "${network_root}/events.jsonl" \
+        "${network_root}/summary.json"
+    if [[ "${MOCK_RESEARCH_BLOCK_AFTER_RAW-}" == "1" ]]; then
+        mock_research_block_child_pid=""
+        mock_research_block_exit() {
+            local exit_code="$1"
+
+            trap - INT TERM HUP
+            if [[ -n "${mock_research_block_child_pid}" ]]; then
+                kill "${mock_research_block_child_pid}" 2>/dev/null || true
+                wait "${mock_research_block_child_pid}" 2>/dev/null || true
+            fi
+            exit "${exit_code}"
+        }
+        trap 'mock_research_block_exit 130' INT
+        trap 'mock_research_block_exit 143' TERM
+        trap 'mock_research_block_exit 129' HUP
+        cat -- "${accepted_candidate}" > "${share_path}"
+        cat -- "${accepted_candidate}"
+        printf '%s\n' \
+            'Authorization: Bearer raw-research-error-secret' \
+            'Contact: raw-research-error@example.org' >&2
+        printf '%s\n' 'TOKEN: raw-research-error-secret' >&2
+        [[ -n "${MOCK_RESEARCH_PID_FILE-}" ]] &&
+            printf '%s\n' "$$" > "${MOCK_RESEARCH_PID_FILE}"
+        sleep 300 &
+        mock_research_block_child_pid=$!
+        [[ -n "${MOCK_RESEARCH_CHILD_PID_FILE-}" ]] &&
+            printf '%s\n' "${mock_research_block_child_pid}" \
+                > "${MOCK_RESEARCH_CHILD_PID_FILE}"
+        [[ -n "${MOCK_RESEARCH_RAW_READY_FILE-}" ]] &&
+            : > "${MOCK_RESEARCH_RAW_READY_FILE}"
+        wait "${mock_research_block_child_pid}"
+        exit 96
+    fi
+    if [[ "${MOCK_RESEARCH_REPLY_MISMATCH-}" == "1" ]]; then
+        sed \
+            's/No material TLS or HTTP anomaly/One material TLS or HTTP anomaly/' \
+            "${accepted_candidate}"
+    else
+        cat -- "${accepted_candidate}"
+    fi
+    rm -f -- "${accepted_candidate}"
     exit 0
 fi
 
@@ -9294,6 +9667,19 @@ if find "${mock_workspace}" \
     -print -quit | grep -q .; then
     fail 'Ephemeral research MCP config or runtime survived cleanup.'
 fi
+mapfile -t research_raw_paths < "${mock_log}.research-raw-paths"
+((${#research_raw_paths[@]} == 3)) ||
+    fail 'Mock research worker did not record all raw runtime paths.'
+for research_raw_path in "${research_raw_paths[@]}"; do
+    [[ "${research_raw_path}" == "${mock_workspace}/"*"/research-runtime/"* &&
+        ! -e "${research_raw_path}" ]] ||
+        fail "Raw research path escaped or survived its runtime: ${research_raw_path}"
+done
+if find "${mock_output}" -type f \
+    \( -name '*.raw' -o -name '*.plain' \) \
+    -print -quit | grep -q .; then
+    fail 'Persistent research output contains a raw or staging file.'
+fi
 
 mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
     head -n 1)"
@@ -9464,6 +9850,14 @@ if (state.SchemaVersion !== 6 ||
     state.Research?.State !== researchStatePath ||
     state.ResearchTransport?.Enabled !== true ||
     state.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+    state.ResearchTransport?.DirectHttps?.ProviderId !==
+      "direct-public-https-v1" ||
+    state.ResearchTransport?.DirectHttps?.Enabled !== true ||
+    state.ResearchTransport?.DossierValidation?.ProtocolVersion !== 1 ||
+    state.ResearchTransport?.DossierValidation?.AttemptLimit !== 3 ||
+    state.ResearchTransport?.DossierValidation?.Canonicalization !==
+      "utf8-lf-single-terminal-newline-v1" ||
+    state.ResearchTransport?.DossierValidation?.DigestAlgorithm !== "sha256" ||
     state.ReportRepair?.Status !== "NotNeeded" ||
     state.ReportRepair?.AttemptLimit !== 1 ||
     state.ReportRepair?.AttemptCount !== 0 ||
@@ -9588,6 +9982,17 @@ if (reviewPlan.SchemaVersion !== 5 ||
       "duckduckgo-html-v1" ||
     reviewPlan.ResearchTransport?.GeneralWebSearch?.Available !== true ||
     reviewPlan.ResearchTransport?.AnonymousGitHub?.Authentication !== "none" ||
+    reviewPlan.ResearchTransport?.DirectHttps?.ProviderId !==
+      "direct-public-https-v1" ||
+    reviewPlan.ResearchTransport?.DirectHttps?.Enabled !== true ||
+    reviewPlan.ResearchTransport?.DossierValidation?.ProtocolVersion !== 1 ||
+    reviewPlan.ResearchTransport?.DossierValidation?.Tool !==
+      "research_network_summary" ||
+    reviewPlan.ResearchTransport?.DossierValidation?.AttemptLimit !== 3 ||
+    reviewPlan.ResearchTransport?.DossierValidation?.Canonicalization !==
+      "utf8-lf-single-terminal-newline-v1" ||
+    reviewPlan.ResearchTransport?.DossierValidation?.DigestAlgorithm !==
+      "sha256" ||
     reviewPlan.ResearchTransport?.ResourceProfile?.RequestBudget !== 1000 ||
     !/^[0-9a-f]{64}$/.test(
       reviewPlan.ResearchTransport?.PolicyDigest ?? "",
@@ -9650,6 +10055,9 @@ if (!reviewPlanText.startsWith(
     !reviewPlanText.includes("dedicated-worker-local-stdio-mcp") ||
     !reviewPlanText.includes("Research cookies:") ||
     !reviewPlanText.includes("ephemeral") ||
+    !reviewPlanText.includes(
+      "broker pre-submission SHA-256 binding, 3 attempts",
+    ) ||
     !reviewPlanText.includes("Report repair:") ||
     !reviewPlanText.includes(
       "model-free Markdown table conversion; 1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
@@ -9676,6 +10084,9 @@ if (!stdout.includes("Generated at (UTC):") ||
     !stdout.includes("Provenance window (local calendar):") ||
     !stdout.includes("Research transport:") ||
     !stdout.includes("Research cookies:") ||
+    !stdout.includes(
+      "broker pre-submission SHA-256 binding, 3 attempts",
+    ) ||
     !stdout.includes("Report repair:") ||
     !stdout.includes(
       "model-free Markdown table conversion; 1 isolated, tool-less confidence edit; 300s maximum; no research rerun",
@@ -9725,6 +10136,8 @@ if (manifest[0].SchemaVersion !== 6 ||
     manifest[0].ContextTier !== state.ContextTier ||
     manifest[0].Provider?.Id !== state.Provider?.Id ||
     manifest[0].Research?.Status !== "Completed" ||
+    JSON.stringify(manifest[0].ResearchTransport) !==
+      JSON.stringify(state.ResearchTransport) ||
     JSON.stringify(manifest[0].ReportRepair) !==
       JSON.stringify(state.ReportRepair)) {
   throw new Error("manifest entry lost schema version 6 research state");
@@ -9758,6 +10171,8 @@ if (runState.SchemaVersion !== 6 ||
     runState.Scope?.ProvenanceResearch !== true ||
     runState.ResearchTransport?.Enabled !== true ||
     runState.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+    JSON.stringify(runState.ResearchTransport) !==
+      JSON.stringify(reviewPlan.ResearchTransport) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy) ||
     runState.Repositories[0].Source?.Kind !== "RemoteUrl" ||
@@ -9819,6 +10234,8 @@ for (const name of [
   if (researchState.SchemaVersion !== 1 ||
       researchState.Status !== "Completed" ||
       researchState.ResearchTransport?.Cookies?.ReplayMode !== "ephemeral" ||
+      JSON.stringify(researchState.ResearchTransport) !==
+        JSON.stringify(reviewPlan.ResearchTransport) ||
       researchState.Artifacts?.Dossier !== researchDossierPath ||
       researchState.Artifacts?.NetworkSummary !== networkSummaryPath ||
       researchState.Artifacts?.PrivateEvidence !== privateDirectory ||
@@ -9827,7 +10244,22 @@ for (const name of [
         reviewPlan.ResearchTransport.PolicyDigest ||
       networkSummary.CookieMode !== "ephemeral" ||
       networkSummary.Requests?.SuccessfulPublicResponses !== 1 ||
-      networkSummary.ToolCalls?.Capabilities !== 1) {
+      networkSummary.ToolCalls?.Capabilities !== 1 ||
+      networkSummary.ResearchSubmission?.Status !== "accepted" ||
+      Object.keys(networkSummary.ResearchSubmission).sort().join(",") !==
+        [
+          "AttemptLimit",
+          "AttemptsUsed",
+          "CandidateBytes",
+          "CandidateSha256",
+          "Canonicalization",
+          "DigestAlgorithm",
+          "ProtocolVersion",
+          "Status",
+        ].sort().join(",") ||
+      !/^[0-9a-f]{64}$/.test(
+        networkSummary.ResearchSubmission?.CandidateSha256 ?? "",
+      )) {
     throw new Error("research state or network summary contract is invalid");
   }
 }
@@ -10144,11 +10576,800 @@ if (publicArtifacts.includes(Buffer.from(privateCookie))) {
 }
 JS
 
+downstream_validator="${fixture_dir}/validate-research-bundle.py"
+awk '
+    $0 == "validate_research_bundle() {" {
+        in_function = 1
+        next
+    }
+    in_function && $0 ~ /<<.*PY/ {
+        in_python = 1
+        next
+    }
+    in_python && $0 == "PY" {
+        exit
+    }
+    in_python {
+        print
+    }
+' "${RUNNER}" > "${downstream_validator}"
+grep -Fq 'lines = dossier[:-1].split("\n")' "${downstream_validator}" ||
+    fail 'Could not extract the runner downstream research validator.'
+
+downstream_research_root="${mock_run}/github--octocat--hello-world/research"
+downstream_summary="${downstream_research_root}/network/summary.json"
+mapfile -t downstream_fields < <(
+    python3 - "${downstream_summary}" <<'PY'
+import json
+import pathlib
+import sys
+
+value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(value["PolicyDigest"])
+print(value["CookieMode"])
+print(value["BrokerVersion"])
+print(value["GeneralWebSearch"]["ProviderId"])
+print(str(value["GeneralWebSearch"]["Available"]).lower())
+print(value["PolicySchemaVersion"])
+print(value["PolicyId"])
+print(value["DirectHttps"]["ProviderId"])
+print(value["AnonymousGitHub"]["ProviderId"])
+print(json.dumps(value["ResourceProfile"], separators=(",", ":")))
+PY
+)
+((${#downstream_fields[@]} == 10)) ||
+    fail 'Could not derive downstream research validator inputs.'
+
+run_downstream_validator() {
+    local dossier_path="$1"
+    local summary_path="${2:-${downstream_summary}}"
+    local events_path="${3:-${downstream_research_root}/network/events.jsonl}"
+    local private_path="${4:-${downstream_research_root}/network/private}"
+
+    python3 "${downstream_validator}" \
+        "${dossier_path}" \
+        "${summary_path}" \
+        "${events_path}" \
+        "${private_path}" \
+        "${downstream_fields[0]}" \
+        "${downstream_fields[1]}" \
+        "${downstream_fields[2]}" \
+        "${downstream_fields[3]}" \
+        "${downstream_fields[4]}" \
+        "${downstream_fields[5]}" \
+        "${downstream_fields[6]}" \
+        "${downstream_fields[7]}" \
+        "${downstream_fields[8]}" \
+        "${downstream_fields[9]}" \
+        "${RESEARCH_EVENT_INTEGER_CONTRACT}"
+}
+
+expect_downstream_validator_failure() {
+    local label="$1"
+    local expected="$2"
+    local dossier_path="$3"
+    local summary_path="${4:-${downstream_summary}}"
+    local events_path="${5:-${downstream_research_root}/network/events.jsonl}"
+    local private_path="${6:-${downstream_research_root}/network/private}"
+    local stdout_path="${fixture_dir}/downstream-${label}.stdout"
+    local stderr_path="${fixture_dir}/downstream-${label}.stderr"
+
+    if run_downstream_validator \
+        "${dossier_path}" \
+        "${summary_path}" \
+        "${events_path}" \
+        "${private_path}" \
+        >"${stdout_path}" 2>"${stderr_path}"; then
+        fail "Runner downstream validator accepted ${label}."
+    fi
+    grep -Fq "${expected}" "${stderr_path}" ||
+        fail "Runner downstream validator lost ${label} diagnostic."
+}
+
+run_downstream_validator "${downstream_research_root}/research.txt" ||
+    fail 'Runner downstream research validator rejected the valid bundle.'
+for punctuation_case in \
+    'period:.' \
+    'semicolon:;' \
+    'colon::' \
+    'comma:,'; do
+    punctuation_name="${punctuation_case%%:*}"
+    punctuation="${punctuation_case#*:}"
+    punctuation_dossier="${fixture_dir}/downstream-confidence-${punctuation_name}.txt"
+    python3 - \
+        "${downstream_research_root}/research.txt" \
+        "${punctuation_dossier}" \
+        "${punctuation}" <<'PY'
+import pathlib
+import sys
+
+source, destination, punctuation = sys.argv[1:4]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+text = text.replace(
+    "Confidence: High. Evidence basis: sanitized capability and summary records.",
+    f"Confidence: High{punctuation} sanitized capability and summary records.",
+    1,
+)
+pathlib.Path(destination).write_text(text, encoding="utf-8", newline="")
+PY
+    run_downstream_validator "${punctuation_dossier}" ||
+        fail "Runner downstream validator rejected broker-accepted ${punctuation_name} confidence punctuation."
+done
+unsupported_confidence_dossier="${fixture_dir}/downstream-confidence-no-evidence.txt"
+python3 - \
+    "${downstream_research_root}/research.txt" \
+    "${unsupported_confidence_dossier}" <<'PY'
+import pathlib
+import sys
+
+source, destination = sys.argv[1:3]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+text = text.replace(
+    "Confidence: High. Evidence basis: sanitized capability and summary records.",
+    "Confidence: High",
+    1,
+)
+pathlib.Path(destination).write_text(text, encoding="utf-8", newline="")
+PY
+expect_downstream_validator_failure \
+    'confidence-no-evidence' \
+    'research capability record lacks a supported confidence line with a non-empty evidence basis' \
+    "${unsupported_confidence_dossier}"
+
+python3 - \
+    "${downstream_validator}" \
+    "${downstream_research_root}/research.txt" \
+    "${downstream_summary}" \
+    "${downstream_research_root}/network/events.jsonl" \
+    "${downstream_research_root}/network/private" \
+    "${fixture_dir}/downstream-integer-mutations" \
+    "${downstream_fields[0]}" \
+    "${downstream_fields[1]}" \
+    "${downstream_fields[2]}" \
+    "${downstream_fields[3]}" \
+    "${downstream_fields[4]}" \
+    "${downstream_fields[5]}" \
+    "${downstream_fields[6]}" \
+    "${downstream_fields[7]}" \
+    "${downstream_fields[8]}" \
+    "${downstream_fields[9]}" \
+    "${RESEARCH_EVENT_INTEGER_CONTRACT}" <<'PY'
+import copy
+import json
+import pathlib
+import subprocess
+import sys
+
+(
+    validator_path,
+    dossier_path,
+    summary_source,
+    events_source,
+    private_path,
+    mutation_root,
+    *validator_arguments,
+) = sys.argv[1:]
+mutation_root = pathlib.Path(mutation_root)
+mutation_root.mkdir()
+summary_path = mutation_root / "summary.json"
+events_path = mutation_root / "events.jsonl"
+base_summary = json.loads(
+    pathlib.Path(summary_source).read_text(encoding="utf-8")
+)
+base_events = [
+    json.loads(line)
+    for line in pathlib.Path(events_source).read_text(encoding="utf-8").splitlines()
+    if line
+]
+mutations = (
+    ("true", True),
+    ("false", False),
+    ("numeric-string", "1"),
+    ("integral-float", 1.0),
+    ("non-integral-float", 1.5),
+    ("negative", -1),
+    ("oversized", 10**30),
+)
+
+
+def write_inputs(summary, events):
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    events_path.write_text(
+        "".join(
+            json.dumps(event, separators=(",", ":")) + "\n"
+            for event in events
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+
+
+def run_validator(summary, events):
+    write_inputs(summary, events)
+    return subprocess.run(
+        [
+            sys.executable,
+            validator_path,
+            dossier_path,
+            str(summary_path),
+            str(events_path),
+            private_path,
+            *validator_arguments,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def require_success(label, summary, events):
+    completed = run_validator(summary, events)
+    if completed.returncode != 0:
+        raise SystemExit(
+            f"valid integer fixture failed for {label}: {completed.stderr}"
+        )
+
+
+def require_rejection(label, mutation_label, mutation, summary, events):
+    completed = run_validator(summary, events)
+    if completed.returncode == 0:
+        raise SystemExit(
+            f"integer mutation passed: {label}/{mutation_label}"
+        )
+    if not completed.stderr.strip():
+        raise SystemExit(
+            f"integer mutation lost its diagnostic: {label}/{mutation_label}"
+        )
+    expected = (
+        "must use an exact JSON integer"
+        if mutation_label
+        in {
+            "true",
+            "false",
+            "numeric-string",
+            "integral-float",
+            "non-integral-float",
+        }
+        else "is outside its allowed integer range"
+    )
+    if expected not in completed.stderr:
+        raise SystemExit(
+            f"integer mutation used a late or imprecise diagnostic: "
+            f"{label}/{mutation_label}: {completed.stderr.strip()}"
+        )
+    serialized = json.dumps(mutation)
+    if serialized in completed.stderr:
+        raise SystemExit(
+            f"integer mutation diagnostic echoed its value: "
+            f"{label}/{mutation_label}"
+        )
+
+
+def set_path(value, path, mutation):
+    target = value
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = mutation
+
+
+summary_integer_paths = (
+    ("SchemaVersion",),
+    ("PolicySchemaVersion",),
+    ("ResourceProfile", "RequestBudget"),
+    ("ResourceProfile", "MaxConcurrentRequests"),
+    ("ResourceProfile", "MaxConcurrentRequestsPerHost"),
+    ("ResourceProfile", "MinHostIntervalMs"),
+    ("ResourceProfile", "ConnectTimeoutSeconds"),
+    ("ResourceProfile", "TotalTimeoutSeconds"),
+    ("ResourceProfile", "MaxWireBytes"),
+    ("ResourceProfile", "MaxNormalizedBytes"),
+    ("ResourceProfile", "MaxRedirects"),
+    ("ResourceProfile", "AllowedTlsPorts", 0),
+    ("Requests", "Budget"),
+    ("Requests", "Attempted"),
+    ("Requests", "SuccessfulPublicResponses"),
+    ("Requests", "FailedResponses"),
+    ("Requests", "Redirects"),
+    ("ToolCalls", "Total"),
+    ("ToolCalls", "Capabilities"),
+    ("ToolCalls", "NetworkSummary"),
+    ("ToolCalls", "Providers", "direct-public-https-v1"),
+    ("ToolCalls", "Providers", "anonymous-github-rest-v1"),
+    ("ToolCalls", "Providers", "duckduckgo-html-v1"),
+    ("ToolCalls", "Providers", "none"),
+    ("Cookies", "Observed"),
+    ("Cookies", "Accepted"),
+    ("Cookies", "Rejected"),
+    ("Cookies", "Sent"),
+)
+proof_integer_paths = (
+    ("ResearchSubmission", "ProtocolVersion"),
+    ("ResearchSubmission", "AttemptLimit"),
+    ("ResearchSubmission", "AttemptsUsed"),
+    ("ResearchSubmission", "CandidateBytes"),
+)
+event_integer_fields = {
+    "capability": (
+        "capabilities_checked",
+        ("SchemaVersion", "Sequence"),
+    ),
+    "http-response": (
+        "http_response",
+        ("SchemaVersion", "Sequence", "Status", "WireBytes"),
+    ),
+    "retrieval": (
+        "public_retrieval_succeeded",
+        ("SchemaVersion", "Sequence", "Status"),
+    ),
+    "observation": (
+        "network_summary_observed",
+        (
+            "SchemaVersion",
+            "Sequence",
+            "SuccessfulPublicResponses",
+            "LatestSuccessfulRetrievalSequence",
+        ),
+    ),
+    "validation": (
+        "research_dossier_validation_accepted",
+        (
+            "SchemaVersion",
+            "Sequence",
+            "Attempt",
+            "AttemptLimit",
+            "CandidateBytes",
+            "ClaimEntryCount",
+            "CapabilityInspectionSequence",
+            "LatestSuccessfulRetrievalSequence",
+            "LatestNetworkSummaryObservationSequence",
+            "CandidateRequestSequence",
+        ),
+    ),
+}
+
+for path in summary_integer_paths:
+    for mutation_label, mutation in mutations:
+        summary = copy.deepcopy(base_summary)
+        set_path(summary, path, mutation)
+        require_rejection(
+            "summary." + ".".join(str(component) for component in path),
+            mutation_label,
+            mutation,
+            summary,
+            base_events,
+        )
+
+for path in proof_integer_paths:
+    for mutation_label, mutation in mutations:
+        summary = copy.deepcopy(base_summary)
+        set_path(summary, path, mutation)
+        require_rejection(
+            "proof." + ".".join(path[1:]),
+            mutation_label,
+            mutation,
+            summary,
+            base_events,
+        )
+
+for event_class, (event_type, fields) in event_integer_fields.items():
+    for field in fields:
+        for mutation_label, mutation in mutations:
+            events = copy.deepcopy(base_events)
+            selected = next(
+                event for event in events if event.get("Type") == event_type
+            )
+            selected[field] = mutation
+            require_rejection(
+                f"{event_class}.{field}",
+                mutation_label,
+                mutation,
+                base_summary,
+                events,
+            )
+
+for anomaly_name in ("TlsAnomalies", "HttpAnomalies"):
+    valid_summary = copy.deepcopy(base_summary)
+    valid_summary["Requests"]["Attempted"] = 2
+    valid_summary["Requests"]["FailedResponses"] = 1
+    valid_summary["ToolCalls"]["Total"] = 5
+    valid_summary["ToolCalls"]["Providers"]["direct-public-https-v1"] = 2
+    anomaly_code = "tls_fixture" if anomaly_name == "TlsAnomalies" else "fixture"
+    valid_summary[anomaly_name] = {anomaly_code: 1}
+    valid_events = copy.deepcopy(base_events)
+    valid_events.append(
+        {
+            "SchemaVersion": 1,
+            "Sequence": len(valid_events) + 1,
+            "Timestamp": "2026-10-01T00:00:06Z",
+            "Type": "request_failed",
+            "RequestId": "request-000099",
+            "Url": "https://example.org/failure",
+            "Code": anomaly_code,
+            "Message": "Fixture request failure",
+            "Retryable": False,
+            "Details": {},
+        }
+    )
+    require_success(f"summary.{anomaly_name}", valid_summary, valid_events)
+    for mutation_label, mutation in mutations:
+        summary = copy.deepcopy(valid_summary)
+        summary[anomaly_name][anomaly_code] = mutation
+        require_rejection(
+            f"summary.{anomaly_name}.count",
+            mutation_label,
+            mutation,
+            summary,
+            valid_events,
+        )
+PY
+
+for unicode_case in \
+    'nel:0085' \
+    'line-separator:2028' \
+    'paragraph-separator:2029'; do
+    unicode_name="${unicode_case%%:*}"
+    unicode_codepoint="${unicode_case#*:}"
+    unicode_dossier="${fixture_dir}/downstream-${unicode_name}.txt"
+    unicode_stdout="${unicode_dossier}.stdout"
+    unicode_stderr="${unicode_dossier}.stderr"
+    python3 - \
+        "${downstream_research_root}/research.txt" \
+        "${unicode_dossier}" \
+        "${unicode_codepoint}" <<'PY'
+import pathlib
+import sys
+
+source, destination, codepoint = sys.argv[1:4]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+text = text.replace(
+    "\n   Check date: 2026-10-01",
+    chr(int(codepoint, 16)) + "   Check date: 2026-10-01",
+    1,
+)
+pathlib.Path(destination).write_text(text, encoding="utf-8", newline="")
+PY
+    expect_downstream_validator_failure \
+        "${unicode_name}" \
+        "research dossier contains non-LF line boundary U+${unicode_codepoint}" \
+        "${unicode_dossier}"
+done
+
+downstream_claim_source="${downstream_research_root}/research.txt"
+downstream_events_source="${downstream_research_root}/network/events.jsonl"
+for claim_case in \
+    hundred \
+    over-limit \
+    continuation \
+    unknown-label \
+    bad-indentation \
+    none-extra-content; do
+    claim_dossier="${fixture_dir}/downstream-claim-${claim_case}.txt"
+    claim_events="${fixture_dir}/downstream-claim-${claim_case}.events.jsonl"
+    python3 - \
+        "${downstream_claim_source}" \
+        "${downstream_events_source}" \
+        "${claim_dossier}" \
+        "${claim_events}" \
+        "${claim_case}" <<'PY'
+import json
+import pathlib
+import sys
+
+source_path, events_path, dossier_path, output_events_path, mode = sys.argv[1:]
+text = pathlib.Path(source_path).read_text(encoding="utf-8")
+heading = "CLAIM VERIFICATION EVIDENCE\n"
+next_heading = "\nPRIOR ART AND LINEAGE EVIDENCE"
+start = text.index(heading) + len(heading)
+finish = text.index(next_heading, start)
+claim = text[start:finish]
+
+
+def claim_entry(index):
+    return "\n".join(
+        (
+            f"{index}. Claim: maturity; README.md:{index}; fixture claim {index}",
+            f"   Sources checked: https://example.org/source/{index}",
+            "   Check date: 2026-10-01",
+            "   Ownership: independent",
+            "   Status: Not corroborated; no supporting record was located",
+            "   Confidence: Medium; bounded downstream fixture",
+        )
+    )
+
+
+claim_count = 1
+if mode in {"hundred", "over-limit"}:
+    claim_count = 100 if mode == "hundred" else 101
+    claim = "\n".join(claim_entry(index) for index in range(1, claim_count + 1))
+    claim += "\n"
+elif mode == "continuation":
+    claim = claim.replace(
+        "1. Claim: repository identity; README.md:1; "
+        "project identifies itself as Hello World.",
+        "1. Claim: repository identity; README.md:1; project identifies\n"
+        "   itself as Hello World.",
+        1,
+    )
+elif mode == "unknown-label":
+    claim = claim.replace(
+        "   Sources checked: https://github.com/octocat/Hello-World\n",
+        "   Sources checked: https://github.com/octocat/Hello-World\n"
+        "   Source owner: platform\n",
+        1,
+    )
+elif mode == "bad-indentation":
+    claim = claim.replace(
+        "   Ownership: platform",
+        "  Ownership: platform",
+        1,
+    )
+elif mode == "none-extra-content":
+    claim_count = 0
+    claim = (
+        "None identified: no material external claim was found.\n"
+        "Additional unlabelled content.\n"
+    )
+else:
+    raise SystemExit(f"unsupported claim fixture mode: {mode}")
+
+pathlib.Path(dossier_path).write_text(
+    text[:start] + claim + text[finish:],
+    encoding="utf-8",
+    newline="",
+)
+events = [
+    json.loads(line)
+    for line in pathlib.Path(events_path).read_text(encoding="utf-8").split("\n")
+    if line
+]
+for event in events:
+    if event.get("Type") == "research_dossier_validation_accepted":
+        event["ClaimEntryCount"] = claim_count
+pathlib.Path(output_events_path).write_text(
+    "".join(
+        json.dumps(event, separators=(",", ":")) + "\n"
+        for event in events
+    ),
+    encoding="utf-8",
+    newline="",
+)
+PY
+    case "${claim_case}" in
+        hundred)
+            run_downstream_validator \
+                "${claim_dossier}" \
+                "${downstream_summary}" \
+                "${claim_events}" ||
+                fail 'Runner downstream validator rejected exactly 100 claims.'
+            ;;
+        over-limit)
+            claim_expected='claim verification evidence contains 101 numbered entries; at most 100 are allowed'
+            ;;
+        continuation)
+            claim_expected='claim verification evidence entry 1 contains continuation or trailing content'
+            ;;
+        unknown-label|bad-indentation)
+            claim_expected='claim verification evidence entry 1 contains an unknown or incorrectly indented claim label'
+            ;;
+        none-extra-content)
+            claim_expected='claim verification evidence must use exactly one justified None identified: <non-empty basis> line with no additional content'
+            ;;
+    esac
+    if [[ "${claim_case}" != hundred ]]; then
+        expect_downstream_validator_failure \
+            "claim-${claim_case}" \
+            "${claim_expected}" \
+            "${claim_dossier}" \
+            "${downstream_summary}" \
+            "${claim_events}"
+    fi
+done
+
+reject_then_accept_summary="${fixture_dir}/downstream-reject-101-summary.json"
+reject_then_accept_events="${fixture_dir}/downstream-reject-101-events.jsonl"
+python3 - \
+    "${downstream_summary}" \
+    "${downstream_events_source}" \
+    "${reject_then_accept_summary}" \
+    "${reject_then_accept_events}" <<'PY'
+import json
+import pathlib
+import sys
+
+summary_source, events_source, summary_output, events_output = sys.argv[1:]
+summary = json.loads(pathlib.Path(summary_source).read_text(encoding="utf-8"))
+events = [
+    json.loads(line)
+    for line in pathlib.Path(events_source).read_text(encoding="utf-8").splitlines()
+    if line
+]
+accepted = next(
+    event
+    for event in events
+    if event.get("Type") == "research_dossier_validation_accepted"
+)
+candidate_request = accepted["CandidateRequestSequence"]
+for event in events:
+    if event["Sequence"] >= candidate_request:
+        event["Sequence"] += 2
+accepted["Attempt"] = 2
+accepted["CandidateRequestSequence"] += 2
+events.extend(
+    [
+        {
+            "SchemaVersion": 1,
+            "Sequence": candidate_request,
+            "Timestamp": "2026-10-01T00:00:04Z",
+            "Type": "network_summary_requested",
+            "SubmissionCandidateIncluded": True,
+        },
+        {
+            "SchemaVersion": 1,
+            "Sequence": candidate_request + 1,
+            "Timestamp": "2026-10-01T00:00:05Z",
+            "Type": "research_dossier_validation_rejected",
+            "Attempt": 1,
+            "AttemptLimit": 3,
+            "ClaimEntryCount": 101,
+            "ClaimEntryLimit": 100,
+            "ViolationCount": 1,
+            "ViolationsCollected": 1,
+            "ViolationsReturned": 1,
+            "ViolationsTruncated": False,
+            "ViolationCollectionTruncated": False,
+            "ViolationCodeCounts": {"claim_entry_limit": 1},
+            "CapabilityInspectionSequence": 1,
+            "LatestSuccessfulRetrievalSequence": 3,
+            "LatestNetworkSummaryObservationSequence": 5,
+            "CandidateRequestSequence": candidate_request,
+        },
+    ]
+)
+events.sort(key=lambda event: event["Sequence"])
+summary["ToolCalls"]["Total"] += 1
+summary["ToolCalls"]["NetworkSummary"] += 1
+summary["ResearchSubmission"]["AttemptsUsed"] = 2
+pathlib.Path(summary_output).write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+pathlib.Path(events_output).write_text(
+    "".join(
+        json.dumps(event, separators=(",", ":")) + "\n"
+        for event in events
+    ),
+    encoding="utf-8",
+    newline="",
+)
+PY
+run_downstream_validator \
+    "${downstream_claim_source}" \
+    "${reject_then_accept_summary}" \
+    "${reject_then_accept_events}" ||
+    fail 'Runner downstream validator rejected a historical 101-claim rejection followed by an accepted correction.'
+
+for event_case in \
+    capability-after-retrieval \
+    stale-observation \
+    candidate-before-observation \
+    candidate-only-summary \
+    boolean-accepted-attempt; do
+    event_path="${fixture_dir}/downstream-event-${event_case}.jsonl"
+    python3 - \
+        "${downstream_events_source}" \
+        "${event_path}" \
+        "${event_case}" <<'PY'
+import json
+import pathlib
+import sys
+
+source, destination, mode = sys.argv[1:]
+events = [
+    json.loads(line)
+    for line in pathlib.Path(source).read_text(encoding="utf-8").split("\n")
+    if line
+]
+accepted = next(
+    event
+    for event in events
+    if event.get("Type") == "research_dossier_validation_accepted"
+)
+if mode == "capability-after-retrieval":
+    accepted["CapabilityInspectionSequence"] = 3
+    accepted["LatestSuccessfulRetrievalSequence"] = 1
+elif mode == "stale-observation":
+    for event in events:
+        if event["Sequence"] >= 6:
+            event["Sequence"] += 1
+    accepted["CandidateRequestSequence"] += 1
+    accepted["LatestSuccessfulRetrievalSequence"] = 6
+    events.append(
+        {
+            "SchemaVersion": 1,
+            "Sequence": 6,
+            "Timestamp": "2026-10-01T00:00:05Z",
+            "Type": "public_retrieval_succeeded",
+            "RequestId": "request-000002",
+            "ProviderId": "direct-public-https-v1",
+            "Url": "https://example.org/later",
+            "Method": "GET",
+            "Status": 200,
+        }
+    )
+    events.sort(key=lambda event: event["Sequence"])
+elif mode == "candidate-before-observation":
+    accepted["LatestNetworkSummaryObservationSequence"] = 6
+    accepted["CandidateRequestSequence"] = 5
+elif mode == "candidate-only-summary":
+    ordinary = next(
+        event
+        for event in events
+        if event.get("Type") == "network_summary_requested"
+        and event.get("SubmissionCandidateIncluded") is False
+    )
+    ordinary["SubmissionCandidateIncluded"] = True
+elif mode == "boolean-accepted-attempt":
+    accepted["Attempt"] = True
+else:
+    raise SystemExit(f"unsupported event fixture mode: {mode}")
+pathlib.Path(destination).write_text(
+    "".join(
+        json.dumps(event, separators=(",", ":")) + "\n"
+        for event in events
+    ),
+    encoding="utf-8",
+    newline="",
+)
+PY
+    case "${event_case}" in
+        capability-after-retrieval|stale-observation|candidate-before-observation)
+            event_expected='research workflow event order is invalid'
+            ;;
+        candidate-only-summary)
+            event_expected='research workflow lacks a no-candidate network summary observation after the latest successful retrieval'
+            ;;
+        boolean-accepted-attempt)
+            event_expected='research validation event Attempt must use an exact JSON integer'
+            ;;
+    esac
+    expect_downstream_validator_failure \
+        "event-${event_case}" \
+        "${event_expected}" \
+        "${downstream_claim_source}" \
+        "${downstream_summary}" \
+        "${event_path}"
+done
+
 for research_failure_case in \
     capability \
     zero-success \
+    proof-missing \
+    proof-mismatch \
+    proof-integer-string \
+    reply-mismatch \
+    integer-summary \
+    integer-validation \
+    integer-capability \
+    integer-retrieval \
+    integer-observation \
+    integer-byte-count \
+    integer-sequence \
+    capability-value-wrong-section \
     dossier-missing-section \
-    dossier-out-of-order; do
+    dossier-out-of-order \
+    claim-none-unjustified \
+    claim-none-mixed \
+    claim-invalid-value \
+    claim-missing-sources \
+    claim-invalid-date \
+    claim-invalid-ownership \
+    claim-invalid-status \
+    claim-missing-status-reason \
+    claim-missing-confidence-evidence; do
     research_failure_value=1
     expected_research_error=''
     case "${research_failure_case}" in
@@ -10161,6 +11382,89 @@ for research_failure_case in \
             research_failure_env='MOCK_RESEARCH_ZERO_SUCCESS'
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
+            ;;
+        proof-missing)
+            research_failure_env='MOCK_RESEARCH_PROOF_MODE'
+            research_failure_value='missing'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='submission_proof_missing'
+            ;;
+        proof-mismatch)
+            research_failure_env='MOCK_RESEARCH_PROOF_MODE'
+            research_failure_value='mismatch'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='submission_proof_mismatch'
+            ;;
+        proof-integer-string)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='proof-numeric-string'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='submission_proof_invalid'
+            ;;
+        reply-mismatch)
+            research_failure_env='MOCK_RESEARCH_REPLY_MISMATCH'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='submission_proof_mismatch'
+            ;;
+        integer-summary)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='summary-true'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research network summary Requests.SuccessfulPublicResponses must use an exact JSON integer'
+            ;;
+        integer-validation)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='validation-integral-float'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research validation event Attempt must use an exact JSON integer'
+            ;;
+        integer-capability)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='capability-false'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research capability event SchemaVersion must use an exact JSON integer'
+            ;;
+        integer-retrieval)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='retrieval-negative'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research retrieval event Status is outside its allowed integer range'
+            ;;
+        integer-observation)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='observation-oversized'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research observation event SuccessfulPublicResponses is outside its allowed integer range'
+            ;;
+        integer-byte-count)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='response-wire-bytes-oversized'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research HTTP response event WireBytes is outside its allowed integer range'
+            ;;
+        integer-sequence)
+            research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
+            research_failure_value='validation-sequence-string'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research validation event CandidateRequestSequence must use an exact JSON integer'
+            ;;
+        capability-value-wrong-section)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='missing-capability-tool-wrong-section'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research capability record is missing or contradicts approved line: Exact tools: research_capabilities, fetch_public_url, search_public_github, search_public_web, research_network_summary'
             ;;
         dossier-missing-section)
             research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
@@ -10175,6 +11479,69 @@ for research_failure_case in \
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
             expected_research_error='research dossier sections are out of order'
+            ;;
+        claim-none-unjustified)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-none-unjustified'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence must use exactly one justified None identified: <non-empty basis> line with no additional content'
+            ;;
+        claim-none-mixed)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-none-mixed'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence must use exactly one justified None identified: <non-empty basis> line with no additional content'
+            ;;
+        claim-invalid-value)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-invalid-value'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid Claim value'
+            ;;
+        claim-missing-sources)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-missing-sources'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has missing or duplicated Sources checked label'
+            ;;
+        claim-invalid-date)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-invalid-date'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid ISO check date'
+            ;;
+        claim-invalid-ownership)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-invalid-ownership'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid Ownership value'
+            ;;
+        claim-invalid-status)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-invalid-status'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid Status value or reason'
+            ;;
+        claim-missing-status-reason)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-missing-status-reason'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid Status value or reason'
+            ;;
+        claim-missing-confidence-evidence)
+            research_failure_env='MOCK_RESEARCH_DOSSIER_DEFECT'
+            research_failure_value='claim-missing-confidence-evidence'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='claim verification evidence entry 1 has an invalid Confidence value or evidence basis'
             ;;
     esac
     research_failure_output="${fixture_dir}/${research_failure_case}-research-output"
@@ -10200,6 +11567,7 @@ for research_failure_case in \
     research_failure_stderr="${fixture_dir}/${research_failure_case}-research.stderr"
     if env \
         "${research_failure_env}=${research_failure_value}" \
+        MOCK_RESEARCH_PRIVATE_TEXT=1 \
         MOCK_LOG="${mock_log}" \
         MOCK_GIT_LOG="${mock_git_log}" \
         MOCK_RUNTIME_LOG="${runtime_log}" \
@@ -10221,9 +11589,11 @@ for research_failure_case in \
             2>"${research_failure_stderr}"; then
         fail "Mock ${research_failure_case} research failure unexpectedly succeeded."
     fi
-    grep -Fq "Stage: ${expected_research_stage}" \
-        "${research_failure_stdout}" ||
+    if ! grep -Fq "Stage: ${expected_research_stage}" \
+        "${research_failure_stdout}"; then
+        cat -- "${research_failure_stdout}" "${research_failure_stderr}" >&2
         fail "Mock ${research_failure_case} research failure lost its stage."
+    fi
     grep -Fq "AGENT=rhyolite:repo-research-worker" "${mock_log}" &&
         ! grep -Fq "AGENT=rhyolite:repo-review-worker" "${mock_log}" ||
         fail "Main review worker started after ${research_failure_case} research failure."
@@ -10253,6 +11623,26 @@ const summary = JSON.parse(fs.readFileSync(
   path.join(research, "network", "summary.json"),
   "utf8",
 ));
+const rawNames = new Set([
+  "research-output.raw",
+  "research-errors.raw",
+  "research-session.raw",
+  "final-reply.raw",
+  "accepted-candidate.raw",
+]);
+const rawSentinels = [
+  "researcher@example.org",
+  "fixture-secret-value",
+];
+const walk = (root) => {
+  const files = [];
+  for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...walk(candidate));
+    else if (entry.isFile()) files.push(candidate);
+  }
+  return files;
+};
 if (state.Status !== expectedStatus ||
     state.SchemaVersion !== 6 ||
     state.Research?.Status !== expectedStatus ||
@@ -10265,6 +11655,17 @@ if (state.Status !== expectedStatus ||
     !fs.existsSync(path.join(research, "research.txt")) ||
     !fs.existsSync(path.join(research, "network", "private"))) {
   throw new Error("research failure artifacts or status are invalid");
+}
+for (const file of walk(repository)) {
+  if (rawNames.has(path.basename(file)) || file.endsWith(".plain")) {
+    throw new Error(`${failureCase} persisted raw research file ${file}`);
+  }
+  const content = fs.readFileSync(file);
+  for (const sentinel of rawSentinels) {
+    if (content.includes(Buffer.from(sentinel))) {
+      throw new Error(`${failureCase} persisted raw research sentinel`);
+    }
+  }
 }
 if (expectedStatus === "ResearchCapabilityFailed" &&
     (summary.ToolCalls?.Capabilities !== 0 ||
@@ -10281,12 +11682,20 @@ if (expectedError !== "") {
     path.join(research, "research-errors.txt"),
     "utf8",
   );
-  if (summary.Requests?.SuccessfulPublicResponses !== 1 ||
-      !researchErrors.split("\n").includes(expectedError) ||
-      !researchErrors.includes(
+  const proofFailure = failureCase.startsWith("proof-") ||
+    failureCase === "reply-mismatch";
+  const malformedSummary = failureCase === "integer-summary";
+  if ((!malformedSummary &&
+       summary.Requests?.SuccessfulPublicResponses !== 1) ||
+      !researchErrors.includes(expectedError) ||
+      (proofFailure && !researchErrors.includes(
+        "The final research assistant reply did not match an accepted " +
+        "broker-validated dossier candidate.",
+      )) ||
+      (!proofFailure && !researchErrors.includes(
         "Research dossier or transport artifact validation failed.",
-      )) {
-    throw new Error(`${failureCase} dossier failure was not explicit`);
+      ))) {
+    throw new Error(`${failureCase} research failure was not explicit`);
   }
 }
 JS
@@ -10312,6 +11721,8 @@ source_failure_hash="$(
 : > "${mock_log}"
 : > "${mock_git_log}"
 if ! MOCK_RESEARCH_SOURCE_FAILURE=1 \
+    MOCK_RESEARCH_PRIVATE_TEXT=1 \
+    MOCK_RESEARCH_DOSSIER_DEFECT=valid-none-identified \
     MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
     MOCK_RUNTIME_LOG="${runtime_log}" \
@@ -10352,16 +11763,221 @@ const dossier = fs.readFileSync(
   "utf8",
 );
 const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const persistedResearch = Buffer.concat([
+  fs.readFileSync(path.join(repository, "research", "research.txt")),
+  fs.readFileSync(path.join(repository, "research", "research-timeline.txt")),
+  fs.readFileSync(path.join(repository, "research", "research-session.md")),
+  fs.readFileSync(path.join(repository, "research", "network", "summary.json")),
+  fs.readFileSync(path.join(repository, "research", "network", "events.jsonl")),
+]);
 if (state.Status !== "Completed" ||
     state.Research?.Status !== "Completed" ||
     summary.Requests?.SuccessfulPublicResponses !== 1 ||
     summary.Requests?.FailedResponses !== 1 ||
+    summary.ResearchSubmission?.Status !== "accepted" ||
+    typeof summary.ResearchSubmission?.CandidateSha256 !== "string" ||
+    "Candidate" in summary.ResearchSubmission ||
     !dossier.includes("https://independent.example.org/unavailable") ||
     !dossier.includes("research limitation") ||
+    !dossier.includes(
+      "None identified: the read-only snapshot contains no material " +
+      "external claims.",
+    ) ||
+    !dossier.includes("[email omitted]") ||
+    !dossier.includes("TOKEN: [credential omitted]") ||
+    persistedResearch.includes(Buffer.from("researcher@example.org")) ||
+    persistedResearch.includes(Buffer.from("fixture-secret-value")) ||
     !report.includes("RESEARCH TRANSPORT OBSERVATIONS")) {
   throw new Error("individual inaccessible source was not preserved as evidence");
 }
 JS
+
+research_signal_launcher="${fixture_dir}/research-signal-launcher.py"
+cat > "${research_signal_launcher}" <<'PY'
+import os
+import signal
+import sys
+
+for signal_number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signal_number, signal.SIG_DFL)
+os.setsid()
+os.execv(sys.argv[1], sys.argv[1:])
+PY
+
+run_research_raw_interrupt_case() {
+    local signal_name="$1"
+    local expected_exit="$2"
+    local case_name="${signal_name,,}"
+    local case_root="${fixture_dir}/research-raw-${case_name}"
+    local case_output="${case_root}/output"
+    local case_workspace="${case_root}/workspace"
+    local case_plan="${case_root}/plan.json"
+    local case_stdout="${case_root}/stdout.txt"
+    local case_stderr="${case_root}/stderr.txt"
+    local case_ready="${case_root}/raw-ready"
+    local case_pid_file="${case_root}/research.pid"
+    local case_child_pid_file="${case_root}/research-child.pid"
+    local case_hash
+    local runner_pid
+    local runner_exit
+    local ready=0
+    local process_id
+    local run_path
+
+    mkdir -p -- "${case_root}"
+    PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${case_workspace}" \
+            --output-root "${case_output}" \
+            --non-interactive \
+            --no-open-html \
+            --plan-only > "${case_plan}"
+    case_hash="$(
+        node -e \
+            'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+            "${case_plan}"
+    )"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    MOCK_RESEARCH_PRIVATE_TEXT=1 \
+        MOCK_RESEARCH_BLOCK_AFTER_RAW=1 \
+        MOCK_RESEARCH_RAW_READY_FILE="${case_ready}" \
+        MOCK_RESEARCH_PID_FILE="${case_pid_file}" \
+        MOCK_RESEARCH_CHILD_PID_FILE="${case_child_pid_file}" \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_RUNTIME_LOG="${runtime_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        /usr/bin/python3 "${research_signal_launcher}" "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${case_workspace}" \
+            --output-root "${case_output}" \
+            --expected-plan-hash "${case_hash}" \
+            --non-interactive \
+            --no-open-html >"${case_stdout}" 2>"${case_stderr}" &
+    runner_pid=$!
+    for attempt in $(seq 1 30); do
+        if [[ -f "${case_ready}" &&
+            -s "${case_pid_file}" &&
+            -s "${case_child_pid_file}" ]]; then
+            ready=1
+            break
+        fi
+        if ! kill -0 "${runner_pid}" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    if ((ready == 0)); then
+        kill "${runner_pid}" 2>/dev/null || true
+        wait "${runner_pid}" 2>/dev/null || true
+        cat "${case_stdout}" >&2
+        cat "${case_stderr}" >&2
+        fail "Research raw-output ${signal_name} fixture did not become ready."
+    fi
+    set +e
+    kill "-${signal_name}" -- "-${runner_pid}"
+    wait "${runner_pid}"
+    runner_exit=$?
+    set -e
+    if [[ "${runner_exit}" -ne "${expected_exit}" ]]; then
+        cat -- "${case_stdout}" "${case_stderr}" >&2
+        fail "Research raw-output ${signal_name} returned ${runner_exit}, expected ${expected_exit}."
+    fi
+    for pid_file in "${case_pid_file}" "${case_child_pid_file}"; do
+        read -r process_id < "${pid_file}"
+        if kill -0 "${process_id}" 2>/dev/null; then
+            fail "Research raw-output ${signal_name} left process ${process_id} alive."
+        fi
+    done
+    run_path="$(
+        find "${case_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    [[ -n "${run_path}" ]] ||
+        fail "Research raw-output ${signal_name} produced no run output."
+    node - "${run_path}" "${signal_name}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, signalName] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const research = path.join(repository, "research");
+const sentinels = [
+  "researcher@example.org",
+  "fixture-secret-value",
+  "raw-research-error-secret",
+  "raw-research-error@example.org",
+];
+const rawNames = new Set([
+  "research-output.raw",
+  "research-errors.raw",
+  "research-session.raw",
+  "final-reply.raw",
+  "accepted-candidate.raw",
+]);
+
+function walk(root) {
+  const paths = [];
+  if (!fs.existsSync(root)) {
+    return paths;
+  }
+  for (const entry of fs.readdirSync(root, {withFileTypes: true})) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      paths.push(...walk(candidate));
+    } else if (entry.isFile()) {
+      paths.push(candidate);
+    }
+  }
+  return paths;
+}
+
+const files = walk(run);
+for (const file of files) {
+  if (rawNames.has(path.basename(file)) || file.endsWith(".plain")) {
+    throw new Error(`${signalName} left raw research file ${file}`);
+  }
+  const content = fs.readFileSync(file);
+  for (const sentinel of sentinels) {
+    if (content.includes(Buffer.from(sentinel))) {
+      throw new Error(`${signalName} persisted raw sentinel ${sentinel}`);
+    }
+  }
+}
+for (const name of [
+  "research-timeline.txt",
+  "research-session.md",
+  "research-errors.txt",
+]) {
+  if (!fs.existsSync(path.join(research, name))) {
+    throw new Error(`${signalName} lost sanitized research artifact ${name}`);
+  }
+}
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+if (state.Status !== "Interrupted" || state.Research?.Status !== "Interrupted") {
+  throw new Error(`${signalName} interruption state is not truthful`);
+}
+JS
+    if find "${case_workspace}" \
+        \( -name 'research-runtime' -o -name '*.raw' \) \
+        -print -quit | grep -q .; then
+        fail "Research raw-output ${signal_name} left an ephemeral raw artifact."
+    fi
+}
+
+run_research_raw_interrupt_case TERM 143
+run_research_raw_interrupt_case INT 130
+run_research_raw_interrupt_case HUP 129
 
 multi_research_output="${fixture_dir}/multi-research-output"
 multi_research_workspace="${fixture_dir}/multi-research-workspace"

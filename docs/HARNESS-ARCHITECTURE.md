@@ -20,7 +20,7 @@ Contract v5 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moves the dedicated scope 2/3 research worker behind
-four adapter functions, so each production adapter builds its own research
+five adapter functions, so each production adapter builds its own research
 worker while the runner keeps broker lifecycle, validation, cleanup, and
 artifacts. The contract never resumes the review worker, permits a model to
 rewrite the report, or falls back to another harness.
@@ -182,6 +182,7 @@ Every mapped adapter must define all functions below.
 | `harness_research_worker_argv` | Build the ordered research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the runner-supplied broker tools from the written MCP configuration. |
 | `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
+| `harness_extract_research_reply` | Preserve the exact final research assistant reply from raw print-mode stdout in a new mode-0600 file. Do not reconstruct it from a rendered transcript. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
@@ -195,7 +196,7 @@ accept success-shaped fallbacks, or continue after malformed values.
 `harness_prepare_worker_home` receives the new runtime-home path plus the
 approved reasoning effort and context tier. Its optional fourth phase is
 `research` or `report-repair`; an omitted phase preserves normal review-worker
-behavior. The runner calls the four research functions only for scope 2/3,
+behavior. The runner calls the five research functions only for scope 2/3,
 and only when the adapter reports `web_research=yes`; otherwise scope 2/3
 fails at stage `harness <id> harness_capability` before any broker or worker
 activity.
@@ -290,6 +291,11 @@ temporary-directory access and remote export, and no direct public URL access.
 When public research is enabled, only the dedicated research worker reaches
 the network, and only through the constrained local stdio broker; the main
 review worker receives a validated sanitized dossier and network summary.
+The broker's fifth tool accepts an optional complete dossier candidate,
+permits at most three corrections in that broker session, and records only an
+acceptance digest and byte count. The adapter preserves raw print-mode stdout;
+the runner verifies the proof against that raw final reply before privacy
+sanitization, deletes the raw copy, and promotes only the sanitized dossier.
 
 The child environment removes inherited Copilot allow-all state and inherited
 skill/custom-instruction discovery variables. The isolated runtime home keeps
@@ -619,7 +625,7 @@ amendment adds the optional unlisted-model status for
 return that status keep exact-catalog behavior.
 
 Contract v5 keeps plan schema `5`, state schema `6`, and preference schema
-`3`. It adds the four research functions, the optional `research` home phase,
+`3`. It adds the five research functions, the optional `research` home phase,
 and capability-based scope 2/3 gating. The Copilot research argv is the pre-v5
 runner vector byte for byte. The fixed registry now maps `copilot` and
 `claude`.
