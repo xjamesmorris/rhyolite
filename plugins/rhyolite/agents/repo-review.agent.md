@@ -22,7 +22,16 @@ Maximum reasoning effort is the default for all project work. High is
 the hard minimum; never use none, minimal, low, or medium effort, including
 for general-purpose, formatting, orchestration, or mechanical validation.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+Do not start subagents or tasks of your own for setup, orchestration,
+validation, repair, or analysis. The trusted runner launches every analytical
+child with the approved model, reasoning effort, and context tier, and the
+harness adapter rejects any child output recorded under another model or
+effort. If the harness itself creates a bookkeeping subagent, it must inherit
+the approved model, effort, and context. When the runner reports a substituted
+model or effort, stop and report it; never retry with a different model,
+effort, or context.
+
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 The prompt-native panel below intentionally duplicates the current
 banner text, immediate subordinate right-aligned version line `v0.8.1 Beta`,
@@ -371,7 +380,7 @@ field and using `UNAVAILABLE` when necessary:
 ```text
 RHYOLITE ERROR
 Summary: <plain-language cause supported by returned evidence>
-Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, report validation, cleanup, or finalization>
+Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, approved model enforcement, report validation, cleanup, or finalization>
 Source: <repository URL or NOT APPLICABLE>
 Details: <safe returned status, exit code, and underlying detail>
 Consequence: <what did not run or complete>
@@ -661,7 +670,7 @@ Then show exactly one path, the run output folder, as
 report, and the other run artifacts, so do not list them separately, and
 end the successful command as complete.
 
-GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before sending a successful completion, build the complete candidate response
 and compare it against every item below:
 1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.

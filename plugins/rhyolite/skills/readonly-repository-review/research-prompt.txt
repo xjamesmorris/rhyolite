@@ -25,7 +25,7 @@ Claude Fable 5.1). Do not automatically fall back to a less capable model.
 Maximum reasoning effort is the default and high is the hard minimum; never
 use none, minimal, low, or medium effort.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 Call `research_capabilities` first. The broker call sequence is exact:
 (1) call `research_capabilities` and verify it; (2) only then use public
@@ -194,8 +194,12 @@ content and fix every reported category before retrying. Do not submit an
 unaccepted dossier. If the attempt limit is exhausted, stop with a clear
 capability failure. Once a candidate is accepted, make no further edit: return
 exactly that accepted candidate as the whole final assistant reply, without a
-fence, preface, proof, explanation, or trailing text. The runner binds the
-broker's SHA-256 acceptance proof to the raw final assistant reply
+fence, preface, proof, explanation, or trailing text. The runner reads the
+exact final assistant message from the harness's structured output, never from
+terminal-rendered text, binds the broker's SHA-256 acceptance proof to that
+raw final assistant reply and to the accepted candidate the broker persisted
+at acceptance, uses the persisted accepted candidate as the canonical dossier,
+and records any difference. That verification occurs
 before privacy sanitization and before the main review starts.
 
 Return a bounded plain-text dossier. Begin it with a line containing at least

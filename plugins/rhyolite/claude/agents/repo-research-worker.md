@@ -56,7 +56,7 @@ phase. Do not ask for a different model and do not shorten the research to
 save effort. If a required capability is unavailable, stop and report the
 capability limitation instead.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 Stay within the research remit. Build a fresh source landscape, measured
 community-health evidence, claim-verification evidence, prior-art and lineage
@@ -148,7 +148,11 @@ acceptance, make no edit and return exactly the accepted candidate as the whole
 final reply, with no fence, preface, proof, explanation, or trailing text. A
 literal outside its required section does not satisfy a section-scoped
 contract value.
-The runner verifies the acceptance proof against the raw final assistant reply
+The runner reads the exact final assistant message from the harness's
+structured output, never from terminal-rendered text, verifies the acceptance
+proof against that raw final assistant reply and against the accepted candidate
+the broker persisted at acceptance, uses the persisted accepted candidate as the
+canonical dossier, and records any difference. That verification occurs
 before privacy sanitization and before the main review starts.
 The trusted parent runner writes all dossier, transcript, state, and network
 artifacts. Use only U+000A LF as a line separator; U+000D, U+0085, U+2028,

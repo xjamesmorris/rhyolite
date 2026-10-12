@@ -494,10 +494,14 @@ venues. Each source records its check date, latest observed activity,
 coverage, freshness, and ownership. Scope `3` performs a thorough second
 provenance-focused pass. Before returning, the worker submits its complete
 dossier through the existing `research_network_summary` tool. The broker
-permits at most three same-session corrections and stores only an acceptance
-digest and byte count, never the candidate body. The runner binds that proof
-to the raw final assistant reply before transcript rendering or privacy
-sanitization, then persists only the sanitized dossier. Missing or mismatched
+permits at most three same-session corrections, records an acceptance digest
+and byte count in the sanitized summary, and keeps the exact accepted bytes
+only in its transient runtime root. The runner binds that proof to the
+persisted accepted candidate and to the exact final assistant message taken
+from the harness's structured output, never from terminal-rendered text,
+before privacy sanitization, then persists only the sanitized dossier. A
+final reply that differs from the accepted candidate is recorded while the
+accepted candidate remains canonical. Missing, corrupted, or mismatched
 proof, an invalid capability section, an incomplete event ledger, cleanup
 failure, or no successful public response prevents the main worker from
 starting. The main worker receives only a read-only sanitized dossier and
@@ -1028,7 +1032,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v5 implementation playbook is in
+Contract-v6 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in

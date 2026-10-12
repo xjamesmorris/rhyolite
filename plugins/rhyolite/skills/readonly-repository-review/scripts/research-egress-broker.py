@@ -1237,34 +1237,24 @@ def validate_research_dossier_candidate(
     return (None if violations.total_count else canonical), violations
 
 
-def verify_research_submission_binding(
-    reply_path: pathlib.Path,
-    summary_path: pathlib.Path,
-) -> None:
-    for path, label in (
-        (reply_path, "final research reply"),
-        (summary_path, "research network summary"),
+RESEARCH_SUBMISSION_REPLY_VERIFIED = "reply-verified"
+RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE = "accepted-candidate"
+RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE_STATUS = 3
+
+
+def load_accepted_submission_proof(summary_path: pathlib.Path) -> dict[str, Any]:
+    if (
+        not summary_path.is_absolute()
+        or not summary_path.is_file()
+        or summary_path.is_symlink()
     ):
-        if not path.is_absolute() or not path.is_file() or path.is_symlink():
-            raise BrokerError(
-                "submission_proof_missing",
-                f"The {label} is unavailable for submission verification",
-            )
-    try:
-        reply_bytes = reply_path.read_bytes()
-        if len(reply_bytes) > RESEARCH_DOSSIER_MAX_BYTES + 1:
-            raise BrokerError(
-                "submission_reply_too_large",
-                "The final research reply exceeds the dossier size bound",
-            )
-        reply = reply_bytes.decode("utf-8")
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except UnicodeError as error:
         raise BrokerError(
-            "submission_reply_encoding",
-            "The final research reply is not valid UTF-8",
-        ) from error
-    except (OSError, json.JSONDecodeError) as error:
+            "submission_proof_missing",
+            "The research network summary is unavailable for submission verification",
+        )
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise BrokerError(
             "submission_proof_unreadable",
             "The research submission proof could not be read",
@@ -1273,12 +1263,6 @@ def verify_research_submission_binding(
         raise BrokerError(
             "submission_proof_invalid",
             "The research network summary is not a JSON object",
-        )
-    canonical, violations = canonicalize_research_dossier_candidate(reply)
-    if canonical is None:
-        raise BrokerError(
-            "submission_reply_invalid",
-            violations[0]["message"],
         )
     proof = summary.get("ResearchSubmission")
     if not isinstance(proof, dict) or proof.get("Status") != "accepted":
@@ -1311,15 +1295,91 @@ def verify_research_submission_binding(
             "submission_proof_invalid",
             "The accepted research submission proof is malformed",
         )
-    digest = hashlib.sha256(canonical).hexdigest()
-    if (
-        proof["CandidateBytes"] != len(canonical)
-        or proof["CandidateSha256"] != digest
-    ):
+    return proof
+
+
+def canonical_submission_text(
+    path: pathlib.Path,
+    label: str,
+) -> tuple[bytes | None, str]:
+    """Return the canonical bytes of a submission file, or the first violation."""
+    if not path.is_absolute() or not path.is_file() or path.is_symlink():
         raise BrokerError(
-            "submission_proof_mismatch",
-            "The final assistant reply does not match the accepted research dossier",
+            "submission_proof_missing",
+            f"The {label} is unavailable for submission verification",
         )
+    try:
+        raw_bytes = path.read_bytes()
+    except OSError as error:
+        raise BrokerError(
+            "submission_proof_unreadable",
+            f"The {label} could not be read",
+        ) from error
+    if len(raw_bytes) > RESEARCH_DOSSIER_MAX_BYTES + 1:
+        return None, f"The {label} exceeds the dossier size bound"
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeError:
+        return None, f"The {label} is not valid UTF-8"
+    canonical, violations = canonicalize_research_dossier_candidate(text)
+    if canonical is None:
+        return None, violations[0]["message"]
+    return canonical, ""
+
+
+def proof_matches(proof: Mapping[str, Any], canonical: bytes) -> bool:
+    return proof["CandidateBytes"] == len(canonical) and proof[
+        "CandidateSha256"
+    ] == hashlib.sha256(canonical).hexdigest()
+
+
+def verify_research_submission_binding(
+    reply_path: pathlib.Path,
+    summary_path: pathlib.Path,
+    accepted_candidate_path: pathlib.Path | None = None,
+) -> str:
+    """Bind the broker's acceptance proof to the trusted dossier bytes.
+
+    The persisted accepted candidate, when present, must match the proof
+    exactly; a mismatch is corruption and fails closed. The final assistant
+    reply is then checked against the same proof. Returns
+    RESEARCH_SUBMISSION_REPLY_VERIFIED when the reply matches, or
+    RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE when only the persisted accepted
+    candidate matches and the reply did not reproduce it.
+    """
+    proof = load_accepted_submission_proof(summary_path)
+    candidate_verified = False
+    if accepted_candidate_path is not None and accepted_candidate_path.exists():
+        candidate_canonical, candidate_problem = canonical_submission_text(
+            accepted_candidate_path, "persisted accepted dossier"
+        )
+        if candidate_canonical is None or not proof_matches(
+            proof, candidate_canonical
+        ):
+            raise BrokerError(
+                "submission_candidate_mismatch",
+                candidate_problem
+                or "The persisted accepted dossier does not match the acceptance proof",
+            )
+        candidate_verified = True
+    reply_canonical, reply_problem = canonical_submission_text(
+        reply_path, "final research reply"
+    )
+    if reply_canonical is not None and proof_matches(proof, reply_canonical):
+        return RESEARCH_SUBMISSION_REPLY_VERIFIED
+    if not reply_problem:
+        reply_problem = (
+            "The final assistant reply does not match the accepted research dossier"
+        )
+    if candidate_verified:
+        sys.stderr.write(
+            "Research submission notice [submission_reply_differs]: "
+            f"{reply_problem}; the persisted accepted dossier was used.\n"
+        )
+        return RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE
+    if reply_canonical is None:
+        raise BrokerError("submission_reply_invalid", reply_problem)
+    raise BrokerError("submission_proof_mismatch", reply_problem)
 
 
 def ensure_exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -2366,11 +2426,8 @@ def normalize_search_text(value: Any, maximum_bytes: int) -> str:
     return truncate_utf8(normalized, maximum_bytes)[0]
 
 
-def atomic_write_json(path: pathlib.Path, value: Any) -> None:
+def atomic_write_bytes(path: pathlib.Path, data: bytes) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    data = (json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
     descriptor = os.open(
         temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
     )
@@ -2388,6 +2445,13 @@ def atomic_write_json(path: pathlib.Path, value: Any) -> None:
             pass
 
 
+def atomic_write_json(path: pathlib.Path, value: Any) -> None:
+    data = (json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    atomic_write_bytes(path, data)
+
+
 class ResearchBroker:
     def __init__(
         self,
@@ -2400,11 +2464,16 @@ class ResearchBroker:
         transport: PinnedHttpsTransport | Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        accepted_candidate_path: pathlib.Path | None = None,
     ) -> None:
         if cookie_mode not in {"off", "ephemeral"}:
             raise BrokerError("invalid_cookie_mode", "Cookie mode is invalid")
         self.policy = policy
         self.network_root = network_root
+        # The trusted runner reads the exact accepted dossier bytes from this
+        # runtime-root path, so the canonical dossier never depends on the
+        # worker reproducing the candidate in its final reply.
+        self.accepted_candidate_path = accepted_candidate_path
         self.private_root = network_root / "private"
         self.body_root = self.private_root / "bodies"
         self.events_path = network_root / "events.jsonl"
@@ -3973,6 +4042,29 @@ class ResearchBroker:
             )
 
         digest = hashlib.sha256(canonical).hexdigest()
+        if self.accepted_candidate_path is not None:
+            try:
+                atomic_write_bytes(self.accepted_candidate_path, canonical)
+            except OSError:
+                persistence_failure = DossierViolationCollector()
+                persistence_failure.add(
+                    "candidate_persistence",
+                    "dossier",
+                    "The broker could not persist the accepted dossier; resubmit the same complete dossier.",
+                )
+                self.record_dossier_validation_rejection(
+                    attempt,
+                    candidate_request_sequence,
+                    persistence_failure,
+                )
+                return self.dossier_validation_result(
+                    accepted=False,
+                    attempt=attempt,
+                    attempts_remaining=(
+                        RESEARCH_DOSSIER_VALIDATION_ATTEMPT_LIMIT - attempt
+                    ),
+                    violations=persistence_failure,
+                )
         self.accepted_submission = {
             "ProtocolVersion": RESEARCH_DOSSIER_VALIDATION_PROTOCOL_VERSION,
             "Status": "accepted",
@@ -4360,6 +4452,7 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--describe-format", choices=("json", "nul"), default="json")
     parser.add_argument("--verify-submission-reply")
     parser.add_argument("--submission-summary")
+    parser.add_argument("--accepted-candidate")
     return parser.parse_args(argv)
 
 
@@ -4367,7 +4460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_arguments(argv or sys.argv[1:])
     try:
         verification_requested = bool(
-            arguments.verify_submission_reply or arguments.submission_summary
+            arguments.verify_submission_reply
+            or arguments.submission_summary
+            or arguments.accepted_candidate
         )
         if verification_requested:
             if not (
@@ -4378,10 +4473,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "invalid_configuration",
                     "Submission verification requires both reply and summary paths",
                 )
-            verify_research_submission_binding(
+            binding = verify_research_submission_binding(
                 pathlib.Path(arguments.verify_submission_reply),
                 pathlib.Path(arguments.submission_summary),
+                (
+                    pathlib.Path(arguments.accepted_candidate)
+                    if arguments.accepted_candidate
+                    else None
+                ),
             )
+            sys.stdout.write(f"{binding}\n")
+            if binding == RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE:
+                return RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE_STATUS
             return 0
         if arguments.policy is None or arguments.scope is None:
             raise BrokerError(
@@ -4434,6 +4537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             network_root,
             arguments.repository_url,
             arguments.cookies,
+            accepted_candidate_path=runtime_root / "accepted-dossier.txt",
         )
         server = McpServer(broker)
 

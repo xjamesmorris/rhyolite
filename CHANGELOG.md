@@ -2,12 +2,43 @@
 
 ## Unreleased
 
+- Fixed the first live scope-3 run after the dossier-binding change, which
+  failed with `submission_reply_invalid` although the broker had accepted the
+  dossier on attempt 2 of 3. Copilot CLI print mode renders text stdout as
+  terminal Markdown: it wraps lines at the terminal width, re-indents and
+  renumbers lists, inserts blank lines, and emits OSC 8 hyperlink escapes even
+  under `--no-color`, so the raw stdout could never byte-match the accepted
+  candidate and had been silently degrading stdout-extracted reports. Every
+  Copilot child now runs with `--output-format json`, and Harness Contract v6
+  replaces `harness_extract_research_reply` with
+  `harness_normalize_worker_output`, which every adapter implements for the
+  review, research, and report-repair phases to produce a readable narrative
+  plus the exact final assistant reply. The runner extracts the canonical
+  report, the research dossier, and the repair descriptor from that exact
+  reply first and keeps the timeline and rendered transcript as fallbacks.
+- Enforced the approved model and reasoning effort for every Copilot child.
+  The adapter rejects a session whose `assistant.message`, model-call, tool,
+  usage-checkpoint, or subagent-metric records name another model or
+  `reasoning_effort`, and the runner reports the new
+  `approved model enforcement` failure stage with remediation. Claude Code
+  keeps its session-record verification.
+- The research broker now persists the exact accepted canonical dossier bytes
+  as `accepted-dossier.txt` in its transient mode-0700 runtime root. The
+  runner verifies the acceptance proof against those bytes and against the
+  exact final reply, uses the persisted accepted candidate as the canonical
+  dossier, records a differing final reply as a warning in the research
+  errors and timeline instead of discarding validated research, and still
+  fails closed when no verified accepted candidate exists or the persisted
+  candidate contradicts the proof (`submission_candidate_mismatch`).
 - Added broker-validated research dossier submission with at most three
-  same-session correction attempts. Acceptance stores only a SHA-256 proof and
-  byte count; the runner binds it to raw final assistant output before
+  same-session correction attempts. Acceptance stores a SHA-256 proof and
+  byte count in the sanitized summary; the runner binds it before
   sanitization, persists only the sanitized dossier, and blocks the main
   review on missing or mismatched proof. Agent return surfaces now share the
-  versioned `RHYOLITE_AGENT_SELF_CHECK_V1` invariant.
+  versioned `RHYOLITE_AGENT_SELF_CHECK_V2` invariant, which also requires an
+  agent whose return is rejected by a validator or the trusted caller to make
+  a repair attempt that fixes every reported mismatch and resend only the
+  repaired candidate while the surface's attempt limit permits.
 - Fixed broker/runner event-integer parity. Rejected dossier events may retain
   the bounded observed claim count above the 100-claim acceptance limit, while
   accepted events remain capped at 100. A shared packaged inventory now covers

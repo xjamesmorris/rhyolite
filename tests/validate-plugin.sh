@@ -273,7 +273,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v5' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v6' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -2397,19 +2397,30 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=5' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 5.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=6' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 6.'
 for research_function in \
     harness_write_research_mcp_config \
     harness_research_worker_argv \
     harness_research_worker_env \
     harness_finalize_research_session \
-    harness_extract_research_reply; do
+    harness_normalize_worker_output; do
     grep -Fxq "    ${research_function}" "${HARNESS_COMMON}" &&
         grep -Fq "${research_function}() {" "${COPILOT_HARNESS}" &&
         grep -Fq "rhyolite_harness_invoke ${research_function}" "${RUNNER}" ||
-        fail "Harness contract-v5 research function is incomplete: ${research_function}"
+        fail "Harness contract-v6 research function is incomplete: ${research_function}"
 done
+! grep -Fq 'harness_extract_research_reply' "${HARNESS_COMMON}" \
+    "${COPILOT_HARNESS}" "${RUNNER}" ||
+    fail 'Retired raw-stdout research reply extraction is still referenced.'
+for normalized_phase in review research report-repair; do
+    grep -A1 -F 'rhyolite_harness_invoke harness_normalize_worker_output \' \
+        "${RUNNER}" |
+        grep -Eq "^[[:space:]]+${normalized_phase} \\\\$" ||
+        fail "Runner does not normalize ${normalized_phase} worker output through the adapter."
+done
+grep -Fq -- '--output-format json' "${COPILOT_HARNESS}" ||
+    fail 'Copilot adapter does not request structured JSONL worker output.'
 grep -Fq 'harness_resume_policy' "${HARNESS_COMMON}" &&
     grep -Fq 'harness_resume_policy() {' "${COPILOT_HARNESS}" ||
     fail 'Harness contract-v4 resume policy is incomplete.'
@@ -7278,6 +7289,70 @@ printf 'mock-session-database\n' \
 printf 'repo-reviewer-secret-sentinel\n' \
     > "${COPILOT_HOME}/other-state/must-not-persist.txt"
 
+# Real Copilot print mode renders text stdout as terminal Markdown, so every
+# Rhyolite child requests --output-format json. Capture the mock's plain reply
+# and emit it at exit as the structured event stream the adapter normalizes.
+# MOCK_REPLY_MODEL and MOCK_REPLY_EFFORT inject a substituted model or effort.
+output_format="text"
+previous=""
+for argument in "$@"; do
+    if [[ "${previous}" == "--output-format" ]]; then
+        output_format="${argument}"
+    fi
+    previous="${argument}"
+done
+[[ "${output_format}" == json ]] || exit 120
+mock_structured_capture="$(
+    mktemp "${TMPDIR:-/tmp}/mock-copilot-stdout.XXXXXXXX"
+)"
+exec 3>&1 1>"${mock_structured_capture}"
+emit_structured_events() {
+    local exit_status=$?
+
+    exec 1>&3 3>&-
+    /usr/bin/python3 - \
+        "${mock_structured_capture}" \
+        "${MOCK_REPLY_MODEL:-${model}}" \
+        "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" <<'EVENTS'
+import json
+import pathlib
+import sys
+
+content = pathlib.Path(sys.argv[1]).read_bytes().decode(
+    "utf-8", "surrogateescape"
+)
+model, effort = sys.argv[2], sys.argv[3]
+
+
+def event(kind, data):
+    print(json.dumps({"type": kind, "data": data, "id": "mock"}))
+
+
+event("model.call_start", {"turnId": "0", "model": model})
+if content:
+    event(
+        "assistant.message",
+        {"model": model, "content": content.rstrip("\n"), "toolRequests": []},
+    )
+event("model.call_final_result", {"model": model, "result": "success"})
+event(
+    "session.usage_checkpoint",
+    {
+        "promptCacheBreakState": [
+            {
+                "conversation": "main",
+                "models": {model: {"model": model, "reasoning_effort": effort}},
+            }
+        ]
+    },
+)
+print(json.dumps({"type": "result", "exitCode": 0}))
+EVENTS
+    rm -f -- "${mock_structured_capture}"
+    exit "${exit_status}"
+}
+trap emit_structured_events EXIT
+
 if [[ "${phase}" == 'report-repair' ]]; then
     [[ ! -e "${working_directory}/source" &&
         ! -e "${working_directory}/.git" ]] || exit 79
@@ -7536,7 +7611,7 @@ PY
         "${repository_url}" == https://* &&
         "${policy_digest}" =~ ^[0-9a-f]{64}$ &&
         "${web_provider}" == 'duckduckgo-html-v1' ]] || exit 100
-    research_stdout_path="$(readlink -- "/proc/$$/fd/1")"
+    research_stdout_path="$(readlink -- "/proc/$$/fd/3")"
     research_stderr_path="$(readlink -- "/proc/$$/fd/2")"
     [[ "${research_stdout_path}" == \
             "${broker_runtime}/research-output.raw" &&
@@ -8129,7 +8204,13 @@ PY
         wait "${mock_research_block_child_pid}"
         exit 96
     fi
-    if [[ "${MOCK_RESEARCH_REPLY_MISMATCH-}" == "1" ]]; then
+    # The real broker persists the exact accepted canonical bytes in its
+    # runtime root; the runner treats them as the canonical dossier.
+    if [[ "${MOCK_RESEARCH_REPLY_MISMATCH-}" != "unpersisted" ]]; then
+        cp -- "${accepted_candidate}" "${broker_runtime}/accepted-dossier.txt"
+        chmod 600 -- "${broker_runtime}/accepted-dossier.txt"
+    fi
+    if [[ -n "${MOCK_RESEARCH_REPLY_MISMATCH-}" ]]; then
         sed \
             's/No material TLS or HTTP anomaly/One material TLS or HTTP anomaly/' \
             "${accepted_candidate}"
@@ -11350,7 +11431,7 @@ for research_failure_case in \
     proof-missing \
     proof-mismatch \
     proof-integer-string \
-    reply-mismatch \
+    reply-mismatch-unpersisted \
     integer-summary \
     integer-validation \
     integer-capability \
@@ -11395,7 +11476,7 @@ for research_failure_case in \
             research_failure_value='mismatch'
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
-            expected_research_error='submission_proof_mismatch'
+            expected_research_error='submission_candidate_mismatch'
             ;;
         proof-integer-string)
             research_failure_env='MOCK_RESEARCH_INTEGER_MUTATION'
@@ -11404,8 +11485,9 @@ for research_failure_case in \
             expected_research_stage='research validation'
             expected_research_error='submission_proof_invalid'
             ;;
-        reply-mismatch)
+        reply-mismatch-unpersisted)
             research_failure_env='MOCK_RESEARCH_REPLY_MISMATCH'
+            research_failure_value='unpersisted'
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
             expected_research_error='submission_proof_mismatch'
@@ -11627,8 +11709,10 @@ const rawNames = new Set([
   "research-output.raw",
   "research-errors.raw",
   "research-session.raw",
+  "research-output.normalized",
   "final-reply.raw",
   "accepted-candidate.raw",
+  "accepted-dossier.txt",
 ]);
 const rawSentinels = [
   "researcher@example.org",
@@ -11683,7 +11767,7 @@ if (expectedError !== "") {
     "utf8",
   );
   const proofFailure = failureCase.startsWith("proof-") ||
-    failureCase === "reply-mismatch";
+    failureCase === "reply-mismatch-unpersisted";
   const malformedSummary = failureCase === "integer-summary";
   if ((!malformedSummary &&
        summary.Requests?.SuccessfulPublicResponses !== 1) ||
@@ -11697,6 +11781,174 @@ if (expectedError !== "") {
       ))) {
     throw new Error(`${failureCase} research failure was not explicit`);
   }
+}
+JS
+done
+
+# A final research reply that no longer reproduces the accepted candidate must
+# not discard validated research: the broker's persisted accepted bytes are
+# canonical, the difference is recorded, and the main review proceeds.
+reply_differs_output="${fixture_dir}/reply-differs-research-output"
+reply_differs_workspace="${fixture_dir}/reply-differs-research-workspace"
+reply_differs_plan="${fixture_dir}/reply-differs-research-plan.json"
+reply_differs_stdout="${fixture_dir}/reply-differs-research.stdout"
+reply_differs_stderr="${fixture_dir}/reply-differs-research.stderr"
+PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${reply_differs_workspace}" \
+        --output-root "${reply_differs_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only > "${reply_differs_plan}"
+reply_differs_hash="$(
+    node -e \
+        'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+        "${reply_differs_plan}"
+)"
+: > "${mock_log}"
+: > "${mock_git_log}"
+if ! env \
+    MOCK_RESEARCH_REPLY_MISMATCH=1 \
+    MOCK_RESEARCH_PRIVATE_TEXT=1 \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${reply_differs_workspace}" \
+        --output-root "${reply_differs_output}" \
+        --expected-plan-hash "${reply_differs_hash}" \
+        --non-interactive \
+        --no-open-html >"${reply_differs_stdout}" \
+        2>"${reply_differs_stderr}"; then
+    cat -- "${reply_differs_stdout}" "${reply_differs_stderr}" >&2
+    fail 'A differing final research reply discarded the broker-accepted dossier.'
+fi
+grep -Fq 'final reply differed from the accepted dossier; using the broker-accepted candidate' \
+    "${reply_differs_stdout}" ||
+    fail 'Differing final research reply was not reported as progress.'
+grep -Fq 'AGENT=rhyolite:repo-review-worker' "${mock_log}" ||
+    fail 'Main review did not run after the broker-accepted dossier was used.'
+reply_differs_run="$(
+    find "${reply_differs_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+node - "${reply_differs_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const research = path.join(repository, "research");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const dossier = fs.readFileSync(path.join(research, "research.txt"), "utf8");
+const errors = fs.readFileSync(path.join(research, "research-errors.txt"), "utf8");
+const timeline = fs.readFileSync(
+  path.join(research, "research-timeline.txt"),
+  "utf8",
+);
+if (state.Status !== "Completed" || state.Research?.Status !== "Completed") {
+  throw new Error("accepted-candidate binding did not complete the review");
+}
+if (!dossier.includes("No material TLS or HTTP anomaly") ||
+    dossier.includes("One material TLS or HTTP anomaly")) {
+  throw new Error("the differing final reply replaced the accepted dossier");
+}
+if (dossier.includes("researcher@example.org") ||
+    dossier.includes("fixture-secret-value") ||
+    !dossier.includes("[email omitted]")) {
+  throw new Error("the accepted dossier was not privacy-sanitized");
+}
+if (!errors.includes(
+      "Warning: the final research reply differed from the broker-accepted dossier",
+    ) ||
+    !errors.includes("submission_reply_differs")) {
+  throw new Error("the differing final reply was not recorded as a warning");
+}
+if (!timeline.includes(
+      "[Rhyolite runner] Dossier binding: the final research reply differed",
+    )) {
+  throw new Error("the research timeline does not record the dossier binding");
+}
+for (const name of ["accepted-dossier.txt", "research-output.normalized",
+  "final-reply.raw", "research-output.raw"]) {
+  const walk = (root) => fs.readdirSync(root, {withFileTypes: true}).flatMap(
+    (entry) => entry.isDirectory()
+      ? walk(path.join(root, entry.name))
+      : [path.join(root, entry.name)]);
+  if (walk(run).some((file) => path.basename(file) === name)) {
+    throw new Error(`raw research artifact ${name} leaked into the run output`);
+  }
+}
+JS
+
+# A Copilot session that answers with a model or effort other than the
+# approved plan fails closed before any report is accepted.
+for substitution_case in 'MOCK_REPLY_MODEL=gpt-5.5|substituted output' \
+    'MOCK_REPLY_EFFORT=high|substituted effort'; do
+    substitution_env="${substitution_case%%|*}"
+    substitution_fragment="${substitution_case#*|}"
+    substitution_output="${fixture_dir}/${substitution_env%%=*}-output"
+    substitution_workspace="${fixture_dir}/${substitution_env%%=*}-workspace"
+    substitution_stdout="${fixture_dir}/${substitution_env%%=*}.stdout"
+    substitution_stderr="${fixture_dir}/${substitution_env%%=*}.stderr"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    if env "${substitution_env}" \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        COPILOT_GITHUB_TOKEN=mock-token \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 1 \
+            --output-root "${substitution_output}" \
+            --workspace-root "${substitution_workspace}" \
+            --non-interactive \
+            --no-open-html >"${substitution_stdout}" \
+            2>"${substitution_stderr}"; then
+        fail "Runner accepted ${substitution_env} output from a non-approved model or effort."
+    fi
+    grep -Fq 'Stage: approved model enforcement' "${substitution_stdout}" ||
+        {
+            cat -- "${substitution_stdout}" "${substitution_stderr}" >&2
+            fail "Runner did not classify ${substitution_env} as approved model enforcement."
+        }
+    substitution_run="$(
+        find "${substitution_output}" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    grep -Fq "${substitution_fragment}" \
+        "${substitution_run}/github--octocat--hello-world/errors.txt" ||
+        fail "Runner errors do not explain the ${substitution_env} rejection."
+    grep -Fq 'Rhyolite never accepts substituted or downgraded output' \
+        "${substitution_stdout}" ||
+        fail "Runner did not print the ${substitution_env} remediation."
+    node - "${substitution_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run] = process.argv.slice(2);
+const repository = path.join(run, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "ReviewFailed" || state.ReportRepair?.Status !== "NotReached") {
+  throw new Error("substituted output did not fail closed before report acceptance");
+}
+if (report.includes("EXECUTIVE SUMMARY")) {
+  throw new Error("substituted output was promoted into the canonical report");
 }
 JS
 done
@@ -11922,8 +12174,10 @@ const rawNames = new Set([
   "research-output.raw",
   "research-errors.raw",
   "research-session.raw",
+  "research-output.normalized",
   "final-reply.raw",
   "accepted-candidate.raw",
+  "accepted-dossier.txt",
 ]);
 
 function walk(root) {
@@ -14232,7 +14486,7 @@ JS
 ! grep -Fq 'PHASE=report-repair' "${mock_log}" ||
     fail 'Incomplete report unexpectedly started a repair worker.'
 
-for failure_case in worker timeout model; do
+for failure_case in worker timeout model effort effort-unsupported; do
     case "${failure_case}" in
         worker)
             failure_exit=33
@@ -14249,6 +14503,18 @@ for failure_case in worker timeout model; do
         model)
             failure_exit=1
             failure_message='Error: Model "example-unlisted-model" from --model flag is not available.'
+            expected_stage='model availability'
+            expected_status='ReviewFailed'
+            ;;
+        effort)
+            failure_exit=1
+            failure_message='Error: Reasoning effort "max" is not supported for model "example-unlisted-model".'
+            expected_stage='model availability'
+            expected_status='ReviewFailed'
+            ;;
+        effort-unsupported)
+            failure_exit=1
+            failure_message='Error: Model "example-unlisted-model" does not support reasoning effort configuration (requested: "max").'
             expected_stage='model availability'
             expected_status='ReviewFailed'
             ;;
@@ -14282,12 +14548,12 @@ for failure_case in worker timeout model; do
             ! grep -Fq 'worker-secret-value' "${case_stdout}" ||
             fail 'Bash worker terminal summary did not redact credentials.'
     fi
-    if [[ "${failure_case}" == 'model' ]]; then
-        grep -Fq 'Remediation: Select a model that your Copilot account can use' \
+    if [[ "${failure_case}" == model || "${failure_case}" == effort* ]]; then
+        grep -Fq 'Remediation: Select a model that your Copilot account can use at the approved reasoning effort' \
             "${case_stdout}" &&
-            grep -Fq 'Rhyolite never substitutes another model.' \
+            grep -Fq 'Rhyolite never substitutes another model or effort.' \
                 "${case_stdout}" ||
-            fail 'Bash model-availability failure lost its model remediation.'
+            fail "Bash ${failure_case} availability failure lost its model remediation."
     fi
     case_run="$(
         find "${case_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1

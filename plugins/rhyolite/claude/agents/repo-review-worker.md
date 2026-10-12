@@ -39,7 +39,7 @@ Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`.
 Apply the complete SECURITY PASS RETURN SELF-CHECK block below to that
 dedicated pass before integrating any result into the report.
 
-SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning a specialist handoff, or before integrating the dedicated
 security pass when no specialist exists, compare the complete candidate
 security-pass output against every item below:
@@ -72,7 +72,7 @@ analysis. Do not ask for a different model and do not shorten the review to
 save effort. If a required capability is unavailable, stop and report the
 capability limitation instead.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 Review only the anonymously cloned public HTTPS repository, exact commit, scope,
 research modes, and provenance window specified by the request.
@@ -186,7 +186,7 @@ text or a numbered list and never use a Markdown table in any ASSESSMENT
 section or anywhere in the report.
 Never wrap or hyphenate a heading or field label to meet a line width.
 
-MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning, build the complete candidate response and compare it against
 the full report contract above plus every item below:
 1. Candidate envelope: apart from a caller-mandated security summary that may

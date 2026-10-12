@@ -375,9 +375,15 @@ harness_finalize_research_session() {
     noop_fixture_research_unavailable
 }
 
-harness_extract_research_reply() {
-    noop_fixture_require_success harness_extract_research_reply || return 1
-    noop_fixture_research_unavailable
+# The no-op worker writes its deterministic final response directly to stdout,
+# so the identity normalization is exact. The research phase stays unreachable.
+harness_normalize_worker_output() {
+    noop_fixture_require_success harness_normalize_worker_output || return 1
+    if [[ "${1-}" == research ]]; then
+        noop_fixture_research_unavailable
+        return 1
+    fi
+    rhyolite_harness_normalize_worker_output_identity "$@"
 }
 
 harness_render_request() {

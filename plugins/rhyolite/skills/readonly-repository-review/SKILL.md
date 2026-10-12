@@ -186,7 +186,7 @@ Maximum reasoning effort is the default for every project task. High is the
 hard minimum; never use none, minimal, low, or medium effort, including for
 general-purpose or mechanical work.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 Outside mandatory ASSESSMENT sections, substantive findings, conclusions,
 provenance observations, source-landscape conclusions, and remediation
@@ -227,7 +227,7 @@ or assessment point there.
    plain-text numbered finding. Never place a Markdown table, or any line
    that begins and ends with `|`, between the report delimiters.
 
-SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning a specialist handoff, or before integrating the dedicated
 security pass when no specialist exists, compare the complete candidate
 security-pass output against every item below:
@@ -852,7 +852,7 @@ is terminal and review-only: do not use `ask_user`, ask any post-run question,
 offer to open a report, invoke a browser, re-fetch an inaccessible source,
 or request a user-provided copy.
 
-GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before sending a successful completion, build the complete candidate response
 and compare it against every item below:
 1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.
@@ -1071,7 +1071,7 @@ recommendations inside the report or executive summary.
 - Write each field value as plain text or a numbered list. Never use a
   Markdown table in any ASSESSMENT section, or anywhere in the report.
 
-MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)
+MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning, build the complete candidate response and compare it against
 the full report contract above plus every item below:
 1. Candidate envelope: apart from a caller-mandated security summary that may

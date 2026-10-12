@@ -2694,7 +2694,7 @@ assert_contains "${PLUGIN_ROOT}/claude/commands/version.md" \
     'Claude Code version command'
 
 # ---------------------------------------------------------------------------
-# Contract-v5 dedicated research functions.
+# Contract-v5 dedicated research functions and the Contract-v6 output normalizer.
 # ---------------------------------------------------------------------------
 claude_research_launcher="${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/launch-research-egress-broker.sh"
 claude_research_tools_csv='research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary'
@@ -2868,20 +2868,41 @@ JS
     assert_contains "${research_transcript}" '### Tool call: Read' \
         'Claude Code research transcript rendering'
     research_exact_reply="${research_root}/exact-reply.txt"
-    harness_extract_research_reply \
+    research_normalized_output="${research_root}/normalized-output.txt"
+    for claude_phase in review research report-repair; do
+        rm -f -- "${research_exact_reply}" "${research_normalized_output}"
+        harness_normalize_worker_output \
+            "${claude_phase}" \
+            "${research_root}/raw-dossier" \
+            claude-opus-5-5 \
+            max \
+            "${research_normalized_output}" \
+            "${research_exact_reply}" ||
+            fail "Claude Code ${claude_phase} output normalization failed."
+        cmp -s "${research_root}/raw-dossier" "${research_exact_reply}" ||
+            fail "Claude Code ${claude_phase} normalization changed the exact print-mode reply."
+        cmp -s "${research_root}/raw-dossier" "${research_normalized_output}" ||
+            fail "Claude Code ${claude_phase} normalization changed the readable output."
+        assert_equal 600 "$(stat -c '%a' "${research_exact_reply}")" \
+            "Claude Code ${claude_phase} exact reply mode"
+    done
+    if harness_normalize_worker_output \
+        research \
         "${research_root}/raw-dossier" \
-        "${research_transcript}" \
-        "${research_exact_reply}" ||
-        fail 'Claude Code research reply extraction failed.'
-    cmp -s "${research_root}/raw-dossier" "${research_exact_reply}" ||
-        fail 'Claude Code research reply extraction used rendered transcript content.'
-    assert_equal 600 "$(stat -c '%a' "${research_exact_reply}")" \
-        'Claude Code exact research reply mode'
-    if harness_extract_research_reply \
-        "${research_root}/raw-dossier" \
-        "${research_transcript}" \
+        claude-opus-5-5 \
+        max \
+        "${research_normalized_output}" \
         "${research_exact_reply}" >/dev/null 2>&1; then
-        fail 'Claude Code research reply extraction overwrote an existing destination.'
+        fail 'Claude Code output normalization overwrote an existing destination.'
+    fi
+    if harness_normalize_worker_output \
+        bogus \
+        "${research_root}/raw-dossier" \
+        claude-opus-5-5 \
+        max \
+        "${research_root}/bogus-normalized" \
+        "${research_root}/bogus-reply" >/dev/null 2>&1; then
+        fail 'Claude Code output normalization accepted an unsupported phase.'
     fi
     [[ ! -e "${research_home}/rhyolite-research-filtered.jsonl" ]] ||
         fail 'Claude Code kept a research continuation copy.'

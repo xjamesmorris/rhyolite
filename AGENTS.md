@@ -469,24 +469,55 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v5 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v6 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
-  `ForwardedEnvVarNames`. Contract v5 adds the adapter-owned research
+  `ForwardedEnvVarNames`. Contract v5 added the adapter-owned research
   functions `harness_write_research_mcp_config`,
   `harness_research_worker_argv`, `harness_research_worker_env`, and
-  `harness_finalize_research_session`, plus
-  `harness_extract_research_reply` and the `research` runtime-home phase,
-  and gates scope 2/3 on the adapter's `web_research` capability. Follow
+  `harness_finalize_research_session` plus the `research` runtime-home
+  phase, and gates scope 2/3 on the adapter's `web_research` capability.
+  Contract v6 replaces the raw-stdout `harness_extract_research_reply` seam
+  with `harness_normalize_worker_output <phase> <raw_output>
+  <approved_model> <approved_effort> <normalized_output>
+  <final_reply_output>`, which every adapter implements for the `review`,
+  `research`, and `report-repair` phases. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
-- The research-reply extraction function lets the trusted runner bind the
-  broker's accepted dossier proof to the raw final
-  assistant reply before transcript rendering or privacy sanitization.
-  The shared review skill defines `RHYOLITE_AGENT_SELF_CHECK_V1` and the
+- Harness print-mode text stdout is never the assistant reply. Copilot CLI
+  renders text output as terminal Markdown: it wraps lines at the terminal
+  width, re-indents and renumbers lists, inserts blank lines, and emits OSC 8
+  hyperlink escapes even under `--no-color`. Every Copilot child therefore
+  runs with `--output-format json`, and the adapter's normalizer translates
+  the JSONL event stream into a readable narrative plus the exact final
+  `assistant.message` content, failing closed when any recorded model call,
+  tool call, usage checkpoint, or subagent metric names a model or
+  `reasoning_effort` other than the approved plan. Claude Code print mode
+  writes the exact reply, so its normalizer is the identity copy and its
+  session record supplies model/effort verification. The runner extracts the
+  canonical report, the research dossier, and the repair descriptor from the
+  exact final reply first; the readable timeline and rendered transcript are
+  fallbacks only. A substituted model or effort surfaces as the
+  `approved model enforcement` failure stage.
+- The research broker persists the exact accepted canonical dossier bytes as
+  `accepted-dossier.txt` in its mode-0700 runtime root at acceptance time.
+  The runner verifies the acceptance proof against those persisted bytes and
+  against the exact final research reply, treats the persisted accepted
+  candidate as the canonical dossier, records a differing final reply as a
+  warning in the research errors and timeline instead of discarding
+  validated research, and fails closed only when no verified accepted
+  candidate exists or the persisted candidate contradicts the proof. The
+  runtime root is destroyed after the phase, so no additional public
+  research artifact is created.
+  The shared review skill defines `RHYOLITE_AGENT_SELF_CHECK_V2` and the
   exact main-report, security-pass, and guided-completion return contracts;
-  the shared output helper defines the repair-return contract.
+  the shared output helper defines the repair-return contract. The V2
+  invariant requires every agent to validate a return against its exact
+  contract before submitting and, when a validator or the trusted caller
+  rejects it, to make a repair attempt that fixes every reported mismatch and
+  resend only the repaired candidate while the surface's attempt limit
+  permits.
   Harness-specific copies must remain byte-for-byte equivalent where the
   same surface exists.
 - `ReportRepairPolicy`, including `DeterministicNormalizations`, is part of

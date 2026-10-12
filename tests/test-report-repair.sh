@@ -414,10 +414,14 @@ texts = {
     for name, path in paths.items()
 }
 invariant = (
-    "RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated "
+    "RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated "
     "return, compare the complete candidate against the exact return contract "
     "for that surface, correct every mismatch, and submit only a matching "
-    "candidate; any downstream validation remains defense in depth and never "
+    "candidate; when a validator or the trusted caller rejects a return, make "
+    "a repair attempt that corrects every reported mismatch and resend only "
+    "the repaired candidate while that surface's attempt limit permits, never "
+    "stopping at the first rejection or resending the rejected candidate "
+    "unchanged; any downstream validation remains defense in depth and never "
     "replaces this self-check."
 )
 for name, text in texts.items():
@@ -434,7 +438,7 @@ def extract_block(name, start, end):
     return "\n".join(lines[first:last + 1])
 
 
-main_start = "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+main_start = "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)"
 main_end = "END MAIN REPORT RETURN SELF-CHECK"
 main_blocks = {
     name: extract_block(name, main_start, main_end)
@@ -462,7 +466,7 @@ for required in (
         raise SystemExit(f"main-report self-check lost required coverage: {required}")
 
 security_start = (
-    "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+    "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)"
 )
 security_end = "END SECURITY PASS RETURN SELF-CHECK"
 security_blocks = {
@@ -500,7 +504,7 @@ if "Apply the complete SECURITY PASS RETURN SELF-CHECK block" not in texts[
     raise SystemExit("Claude worker lost the dedicated security-pass self-check")
 
 completion_start = (
-    "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)"
+    "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)"
 )
 completion_end = "END GUIDED COMPLETION RETURN SELF-CHECK"
 completion_blocks = {
@@ -551,7 +555,7 @@ for name in (
 
 repair_text = texts["repair helper"]
 for required in (
-    '"REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)\\n"',
+    '"REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)\\n"',
     "Its key set is exactly ProtocolVersion, Section, Field, Occurrence, "
     "OriginalValueSha256, and ConservativeLevel",
     "Every JSON type and value exactly matches the object under EXPECTED "
@@ -700,11 +704,11 @@ for scope_specification in \
         "scope ${scope} prompt path isolation"
     assert_contains \
         "${request}" \
-        'RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return' \
+        'RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return' \
         "scope ${scope} versioned repair self-check"
     assert_contains \
         "${request}" \
-        'REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)' \
+        'REPAIR RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)' \
         "scope ${scope} repair self-check block"
     assert_contains \
         "${request}" \

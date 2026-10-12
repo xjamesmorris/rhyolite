@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=5
+RHYOLITE_HARNESS_CONTRACT_VERSION=6
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
 # is absent from the offline catalog and eligible for explicit operator opt-in.
 RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
+# Exact phase names accepted by harness_normalize_worker_output.
+RHYOLITE_HARNESS_WORKER_PHASES=(review research report-repair)
 RHYOLITE_HARNESS_LOADED_ID=''
 RHYOLITE_HARNESS_LOADED_PATH=''
 RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
@@ -38,7 +40,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_research_worker_argv
     harness_research_worker_env
     harness_finalize_research_session
-    harness_extract_research_reply
+    harness_normalize_worker_output
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -59,6 +61,74 @@ rhyolite_harness_set_error() {
 
 rhyolite_harness_valid_id() {
     [[ "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]]
+}
+
+# Every adapter translates its CLI's raw worker stdout into a readable
+# narrative plus the exact final assistant reply through
+# harness_normalize_worker_output <phase> <raw_output> <approved_model>
+# <approved_effort> <normalized_output> <final_reply_output>. These helpers
+# validate the shared argument contract and implement the identity case for a
+# CLI whose print mode writes the exact final reply to stdout.
+rhyolite_harness_valid_worker_phase() {
+    local candidate="$1"
+    local phase
+
+    for phase in "${RHYOLITE_HARNESS_WORKER_PHASES[@]}"; do
+        [[ "${candidate}" != "${phase}" ]] || return 0
+    done
+    return 1
+}
+
+rhyolite_harness_validate_normalize_arguments() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local normalized_output="$5"
+    local final_reply_output="$6"
+
+    rhyolite_harness_valid_worker_phase "${phase}" || {
+        rhyolite_harness_set_error \
+            'The worker output normalization phase is unsupported.'
+        return 1
+    }
+    [[ "${approved_model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
+        "${approved_effort}" =~ ^[a-z]{1,32}$ ]] || {
+        rhyolite_harness_set_error \
+            'The approved model or reasoning effort for worker output normalization is invalid.'
+        return 1
+    }
+    [[ "${raw_output}" == /* && -f "${raw_output}" && ! -L "${raw_output}" &&
+        "${normalized_output}" == /* && ! -e "${normalized_output}" &&
+        ! -L "${normalized_output}" &&
+        "${final_reply_output}" == /* && ! -e "${final_reply_output}" &&
+        ! -L "${final_reply_output}" &&
+        "${normalized_output}" != "${final_reply_output}" &&
+        "${raw_output}" != "${normalized_output}" &&
+        "${raw_output}" != "${final_reply_output}" ]] || {
+        rhyolite_harness_set_error \
+            'The worker output normalization paths are invalid.'
+        return 1
+    }
+}
+
+rhyolite_harness_normalize_worker_output_identity() {
+    local raw_output="$2"
+    local normalized_output="$5"
+    local final_reply_output="$6"
+
+    rhyolite_harness_validate_normalize_arguments "$@" || return 1
+    if ! (
+        umask 077
+        cat -- "${raw_output}" > "${normalized_output}" &&
+            cat -- "${raw_output}" > "${final_reply_output}" &&
+            chmod 600 -- "${normalized_output}" "${final_reply_output}"
+    ); then
+        rm -f -- "${normalized_output}" "${final_reply_output}"
+        rhyolite_harness_set_error \
+            'Could not preserve the exact worker reply during output normalization.'
+        return 1
+    fi
 }
 
 rhyolite_harness_capture() {

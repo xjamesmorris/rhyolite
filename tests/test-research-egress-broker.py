@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import copy
 import dataclasses
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -42,6 +44,7 @@ OUTPUT_HELPER = (
 )
 COPILOT_ADAPTER = PLUGIN_ROOT / "lib/harness/copilot.sh"
 CLAUDE_ADAPTER = PLUGIN_ROOT / "lib/harness/claude.sh"
+HARNESS_COMMON = PLUGIN_ROOT / "lib/harness/common.sh"
 RUNNER = (
     PLUGIN_ROOT
     / "skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
@@ -254,6 +257,7 @@ class BrokerTests(unittest.TestCase):
         cookie_mode: str = "off",
         policy=None,
         inspect_capabilities: bool = True,
+        accepted_candidate_path: pathlib.Path | None = None,
     ):
         transport = QueueTransport(responses)
         instance = broker_module.ResearchBroker(
@@ -264,13 +268,21 @@ class BrokerTests(unittest.TestCase):
             resolver=StaticResolver(["93.184.216.34"]),
             transport=transport,
             sleep=lambda seconds: None,
+            accepted_candidate_path=accepted_candidate_path,
         )
         if inspect_capabilities:
             instance.capabilities()
         return instance, transport
 
-    def make_submission_broker(self):
-        instance, transport = self.make_broker([response(b"retrieved")])
+    def make_submission_broker(
+        self,
+        *,
+        accepted_candidate_path: pathlib.Path | None = None,
+    ):
+        instance, transport = self.make_broker(
+            [response(b"retrieved")],
+            accepted_candidate_path=accepted_candidate_path,
+        )
         if not instance.fetch("https://example.org/research")["ok"]:
             raise AssertionError("submission fixture retrieval failed")
         if not instance.network_summary()["ok"]:
@@ -1756,9 +1768,12 @@ class BrokerTests(unittest.TestCase):
             json.dumps(instance.summary()),
             encoding="utf-8",
         )
-        broker_module.verify_research_submission_binding(
-            reply_path,
-            summary_path,
+        self.assertEqual(
+            broker_module.verify_research_submission_binding(
+                reply_path,
+                summary_path,
+            ),
+            broker_module.RESEARCH_SUBMISSION_REPLY_VERIFIED,
         )
 
         missing = instance.summary()
@@ -1830,6 +1845,90 @@ class BrokerTests(unittest.TestCase):
                         "The accepted research submission proof is malformed",
                     )
                     self.assertEqual(context.exception.details, {})
+
+    def test_accepted_candidate_is_persisted_and_binds_without_reply_reproduction(
+        self,
+    ) -> None:
+        candidate_path = self.root / "runtime" / "accepted-dossier.txt"
+        candidate_path.parent.mkdir(mode=0o700)
+        instance, _ = self.make_submission_broker(
+            accepted_candidate_path=candidate_path,
+        )
+        self.assertFalse(candidate_path.exists())
+        rejected = instance.network_summary(
+            valid_dossier(instance).replace(
+                "RESEARCH SOURCE LANDSCAPE\n", "RESEARCH SOURCE LANDSCAPE\n\n"
+            ).replace("TOP USER RETRIEVAL PRIORITIES\n", "TOP USER PRIORITIES\n")
+        )
+        self.assertFalse(rejected["ok"])
+        self.assertFalse(candidate_path.exists())
+
+        candidate = valid_dossier(
+            instance,
+            source_extra="\n   PERSISTED-CANDIDATE-SENTINEL",
+        )
+        accepted = instance.network_summary(candidate)
+        self.assertTrue(accepted["ok"])
+        canonical, _ = broker_module.canonicalize_research_dossier_candidate(
+            candidate
+        )
+        self.assertEqual(candidate_path.read_bytes(), canonical)
+        self.assertEqual(stat.S_IMODE(candidate_path.stat().st_mode), 0o600)
+        self.assertFalse(
+            list(candidate_path.parent.glob(".accepted-dossier.txt.*.tmp"))
+        )
+        summary_path = self.root / "persisted-summary.json"
+        summary_path.write_text(json.dumps(instance.summary()), encoding="utf-8")
+
+        exact_reply = self.root / "exact-reply.txt"
+        exact_reply.write_text(candidate, encoding="utf-8")
+        self.assertEqual(
+            broker_module.verify_research_submission_binding(
+                exact_reply, summary_path, candidate_path
+            ),
+            broker_module.RESEARCH_SUBMISSION_REPLY_VERIFIED,
+        )
+
+        # A Markdown-rendered or paraphrased final reply no longer discards the
+        # validated research: the persisted accepted candidate is canonical.
+        rendered_reply = self.root / "rendered-reply.txt"
+        rendered_reply.write_text(
+            " 1. " + candidate.replace("\n", "\n\x1b]8;;\x07"),
+            encoding="utf-8",
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(
+                broker_module.verify_research_submission_binding(
+                    rendered_reply, summary_path, candidate_path
+                ),
+                broker_module.RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE,
+            )
+        self.assertIn("submission_reply_differs", stderr.getvalue())
+        self.assertNotIn("PERSISTED-CANDIDATE-SENTINEL", stderr.getvalue())
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.verify_research_submission_binding(
+                rendered_reply, summary_path
+            )
+        self.assertEqual(context.exception.code, "submission_reply_invalid")
+
+        # A persisted candidate that no longer matches the proof is corruption
+        # and fails closed even when the reply would have matched.
+        candidate_path.write_bytes(canonical.replace(b"PERSISTED", b"ALTERED"))
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.verify_research_submission_binding(
+                exact_reply, summary_path, candidate_path
+            )
+        self.assertEqual(
+            context.exception.code, "submission_candidate_mismatch"
+        )
+        candidate_path.unlink()
+        self.assertEqual(
+            broker_module.verify_research_submission_binding(
+                exact_reply, summary_path, candidate_path
+            ),
+            broker_module.RESEARCH_SUBMISSION_REPLY_VERIFIED,
+        )
 
     def test_embedded_runner_integer_contract_accepts_broker_artifacts(
         self,
@@ -2795,45 +2894,243 @@ class ResearchSelfValidationTests(unittest.TestCase):
         ]
         accepted = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(accepted.returncode, 0)
-        self.assertEqual(accepted.stdout, "")
+        self.assertEqual(accepted.stdout, "reply-verified\n")
         self.assertEqual(accepted.stderr, "")
 
         summary.write_text("{}")
         missing = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(missing.returncode, 2)
+        self.assertEqual(missing.stdout, "")
         self.assertIn("submission_proof_missing", missing.stderr)
 
         summary.write_text(json.dumps(proof_summary(self.candidate)))
         reply.write_text(self.candidate.replace("Contact:", "Contacts:"))
         mismatched = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(mismatched.returncode, 2)
+        self.assertEqual(mismatched.stdout, "")
         self.assertIn("submission_proof_mismatch", mismatched.stderr)
 
-    def test_harnesses_preserve_raw_reply_not_rendered_transcript(self) -> None:
+        # With the broker's persisted accepted candidate the runner keeps the
+        # validated dossier and records that the reply differed.
+        persisted = self.root / "accepted-dossier.txt"
+        canonical, _ = broker_module.canonicalize_research_dossier_candidate(
+            self.candidate
+        )
+        persisted.write_bytes(canonical)
+        with_candidate = [*command, "--accepted-candidate", str(persisted)]
+        differed = subprocess.run(with_candidate, text=True, capture_output=True)
+        self.assertEqual(
+            differed.returncode,
+            broker_module.RESEARCH_SUBMISSION_ACCEPTED_CANDIDATE_STATUS,
+        )
+        self.assertEqual(differed.stdout, "accepted-candidate\n")
+        self.assertIn("submission_reply_differs", differed.stderr)
+        self.assertNotIn("fixture-secret-value", differed.stderr)
+
+        reply.write_text(self.candidate, encoding="utf-8")
+        both = subprocess.run(with_candidate, text=True, capture_output=True)
+        self.assertEqual(both.returncode, 0)
+        self.assertEqual(both.stdout, "reply-verified\n")
+        self.assertEqual(both.stderr, "")
+
+        persisted.write_bytes(canonical + b"tampered\n")
+        tampered = subprocess.run(with_candidate, text=True, capture_output=True)
+        self.assertEqual(tampered.returncode, 2)
+        self.assertEqual(tampered.stdout, "")
+        self.assertIn("submission_candidate_mismatch", tampered.stderr)
+
+        candidate_only = subprocess.run(
+            [
+                sys.executable,
+                str(BROKER_PATH),
+                "--accepted-candidate",
+                str(persisted),
+            ],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(candidate_only.returncode, 2)
+        self.assertIn("invalid_configuration", candidate_only.stderr)
+
+    def normalize(
+        self,
+        adapter: pathlib.Path,
+        phase: str,
+        raw: pathlib.Path,
+        model: str,
+        effort: str,
+        label: str,
+    ) -> tuple[subprocess.CompletedProcess[str], pathlib.Path, pathlib.Path]:
+        normalized = self.root / f"{label}-normalized.txt"
+        reply = self.root / f"{label}-reply.txt"
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; source "$2"; '
+                'harness_normalize_worker_output "$3" "$4" "$5" "$6" "$7" "$8" '
+                '|| { status=$?; printf \'%s\' "${RHYOLITE_HARNESS_ERROR_DETAIL}" >&2; exit "${status}"; }',
+                "test",
+                str(HARNESS_COMMON),
+                str(adapter),
+                phase,
+                str(raw),
+                model,
+                effort,
+                str(normalized),
+                str(reply),
+            ],
+            text=True,
+            capture_output=True,
+            env={**os.environ, "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        )
+        return completed, normalized, reply
+
+    def test_harnesses_normalize_exact_reply_not_rendered_output(self) -> None:
         raw = self.root / "raw.txt"
-        transcript = self.root / "rendered.md"
         raw.write_text(self.candidate, encoding="utf-8")
-        transcript.write_text(
-            "### Assistant\n\n"
-            + "\n".join(f"    {line}" for line in self.candidate.splitlines())
-            + "\n\nGenerated footer\n",
+        for phase in ("review", "research", "report-repair"):
+            with self.subTest(harness="claude", phase=phase):
+                completed, normalized, reply = self.normalize(
+                    CLAUDE_ADAPTER, phase, raw, "claude-opus-5.5", "max",
+                    f"claude-{phase}",
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(reply.read_bytes(), raw.read_bytes())
+                self.assertEqual(normalized.read_bytes(), raw.read_bytes())
+                self.assertEqual(stat.S_IMODE(reply.stat().st_mode), 0o600)
+
+        def event(kind: str, **data: object) -> str:
+            return json.dumps({"type": kind, "data": data, "id": "x"})
+
+        narration = "Collecting evidence before validation."
+        structured = self.root / "copilot.jsonl"
+        structured.write_text(
+            "\n".join(
+                [
+                    event("session.tools_updated", tools=[]),
+                    event("user.message", content="prompt"),
+                    event("model.call_start", turnId="0", model="gpt-5.6-sol"),
+                    event(
+                        "assistant.message",
+                        model="gpt-5.6-sol",
+                        content=narration,
+                        toolRequests=[{"name": "fetch_public_url"}],
+                    ),
+                    event(
+                        "tool.execution_start",
+                        toolName="fetch_public_url",
+                        model="gpt-5.6-sol",
+                    ),
+                    event(
+                        "assistant.message",
+                        model="gpt-5.6-sol",
+                        content=self.candidate.rstrip("\n"),
+                        toolRequests=[],
+                    ),
+                    event("model.call_final_result", model="gpt-5.6-sol"),
+                    event(
+                        "session.usage_checkpoint",
+                        promptCacheBreakState=[
+                            {
+                                "conversation": "main",
+                                "models": {
+                                    "gpt-5.6-sol": {
+                                        "model": "gpt-5.6-sol",
+                                        "reasoning_effort": "max",
+                                    }
+                                },
+                            }
+                        ],
+                        accountingSnapshot={
+                            "modelMetrics": {"gpt-5.6-sol": {}},
+                            "agentMetrics": {"main": {"modelMetrics": {"gpt-5.6-sol": {}}}},
+                        },
+                    ),
+                    json.dumps({"type": "result", "exitCode": 0}),
+                ]
+            )
+            + "\n",
             encoding="utf-8",
         )
-        for label, adapter in (
-            ("copilot", COPILOT_ADAPTER),
-            ("claude", CLAUDE_ADAPTER),
-        ):
-            with self.subTest(harness=label):
-                output = self.root / f"{label}-reply.txt"
-                self.run_bash(
-                    'source "$1"; harness_extract_research_reply "$2" "$3" "$4"',
-                    adapter,
-                    raw,
-                    transcript,
-                    output,
+        for phase in ("review", "research", "report-repair"):
+            with self.subTest(harness="copilot", phase=phase):
+                completed, normalized, reply = self.normalize(
+                    COPILOT_ADAPTER, phase, structured, "gpt-5.6-sol", "max",
+                    f"copilot-{phase}",
                 )
-                self.assertEqual(output.read_bytes(), raw.read_bytes())
-                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(reply.read_bytes(), raw.read_bytes())
+                self.assertEqual(stat.S_IMODE(reply.stat().st_mode), 0o600)
+                text = normalized.read_text(encoding="utf-8")
+                self.assertTrue(text.startswith(narration + "\n\n"))
+                self.assertTrue(text.endswith(self.candidate))
+                self.assertNotIn('"type"', text)
+                self.assertEqual(
+                    broker_module.verify_research_submission_binding(
+                        reply,
+                        self.write_proof_summary("copilot-structured"),
+                    ),
+                    broker_module.RESEARCH_SUBMISSION_REPLY_VERIFIED,
+                )
+
+        # Terminal-rendered Markdown (wrapped lines, re-indented lists, OSC 8
+        # hyperlinks) is never treated as the assistant reply.
+        rendered = self.root / "copilot-rendered.txt"
+        rendered.write_text(
+            " 1. wrapped line\n\x1b]8;id=1;https://example.org\x07link\x1b]8;;\x07\n",
+            encoding="utf-8",
+        )
+        completed, normalized, reply = self.normalize(
+            COPILOT_ADAPTER, "research", rendered, "gpt-5.6-sol", "max",
+            "copilot-rendered",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(reply.read_bytes(), b"")
+        self.assertIn("wrapped line", normalized.read_text(encoding="utf-8"))
+
+        for label, model, effort, fragment in (
+            ("substituted", "gpt-5.5", "max", "substituted output"),
+            ("effort", "gpt-5.6-sol", "high", "downgraded or substituted effort"),
+        ):
+            with self.subTest(copilot_rejection=label):
+                completed, normalized, reply = self.normalize(
+                    COPILOT_ADAPTER, "review", structured, model, effort,
+                    f"copilot-{label}",
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(fragment, completed.stderr)
+                self.assertFalse(normalized.exists())
+                self.assertFalse(reply.exists())
+
+        for label, arguments in (
+            ("phase", ("bogus", str(structured), "gpt-5.6-sol", "max")),
+            ("model", ("review", str(structured), "../x", "max")),
+            ("effort", ("review", str(structured), "gpt-5.6-sol", "MAX!")),
+        ):
+            with self.subTest(copilot_argument=label):
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'source "$1"; source "$2"; '
+                        'harness_normalize_worker_output "$3" "$4" "$5" "$6" "$7" "$8"',
+                        "test",
+                        str(HARNESS_COMMON),
+                        str(COPILOT_ADAPTER),
+                        *arguments,
+                        str(self.root / f"bad-{label}-normalized"),
+                        str(self.root / f"bad-{label}-reply"),
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+
+    def write_proof_summary(self, label: str) -> pathlib.Path:
+        summary = self.root / f"{label}-summary.json"
+        summary.write_text(json.dumps(proof_summary(self.candidate)))
+        return summary
 
     def test_existing_tool_grant_accepts_optional_candidate_schema(self) -> None:
         definitions = broker_module.tool_definitions()
@@ -2937,17 +3234,19 @@ class ResearchSelfValidationTests(unittest.TestCase):
                 self.assertIn("U+2028", normalized)
                 self.assertIn("U+2029", normalized)
 
-    def test_runner_binds_raw_reply_before_sanitization_and_main_review(
+    def test_runner_binds_accepted_candidate_before_sanitization_and_main_review(
         self,
     ) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
-        extract = runner.index(
-            "if ! rhyolite_harness_invoke harness_extract_research_reply"
+        normalize = runner.index(
+            "if ! rhyolite_harness_invoke harness_normalize_worker_output \\\n"
+            "                research"
         )
-        verify = runner.index("--verify-submission-reply", extract)
+        verify = runner.index("--verify-submission-reply", normalize)
+        candidate = runner.index("--accepted-candidate", verify)
         sanitize = runner.index(
-            '< "${research_final_reply_raw}"',
-            verify,
+            '< "${research_dossier_source}"',
+            candidate,
         )
         dossier = runner.index(
             '"${research_final_reply_sanitized}"',
@@ -2957,14 +3256,22 @@ class ResearchSelfValidationTests(unittest.TestCase):
             "harness_worker_argv",
             dossier,
         )
-        self.assertLess(extract, verify)
-        self.assertLess(verify, sanitize)
+        self.assertLess(normalize, verify)
+        self.assertLess(verify, candidate)
+        self.assertLess(candidate, sanitize)
         self.assertLess(sanitize, dossier)
         self.assertLess(dossier, main_review)
+        self.assertNotIn("harness_extract_research_reply", runner)
         self.assertIn(
             'local research_final_reply_raw="${research_runtime_root}/final-reply.raw"',
             runner,
         )
+        self.assertIn(
+            'local research_accepted_candidate="${research_runtime_root}/accepted-dossier.txt"',
+            runner,
+        )
+        self.assertIn("0:reply-verified)", runner)
+        self.assertIn("3:accepted-candidate)", runner)
         self.assertIn(
             'RESEARCH_BROKER_RUNTIME_TO_CLEAN="${research_runtime_root}"',
             runner,
@@ -2981,6 +3288,11 @@ class ResearchSelfValidationTests(unittest.TestCase):
         self.assertIn(
             '"research_dossier_validation_accepted" not in event_types',
             runner,
+        )
+        broker = BROKER_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            'accepted_candidate_path=runtime_root / "accepted-dossier.txt"',
+            broker,
         )
 
 

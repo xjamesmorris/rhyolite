@@ -9,7 +9,7 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v5.
+- The implemented production seam is Contract v6.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
   and Claude Code (`claude`). A contract refactor does not itself add another
@@ -54,7 +54,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v5 function and every negative and
+12. The adapter can satisfy every Contract-v6 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -78,10 +78,13 @@ Harness work crosses a strict set of surfaces:
   publication checks when production support changes.
 
 Each contract version lands as one coordinated behavior change. Contract v5
-retains plan schema 5, state schema 6, provider identity, preferences, and the
-Contract-v4 bounded-repair lifecycle, and moves the dedicated scope 2/3
-research worker behind five adapter functions. Do not register an adapter
-before validation understands its complete lifecycle.
+retained plan schema 5, state schema 6, provider identity, preferences, and
+the Contract-v4 bounded-repair lifecycle, and moved the dedicated scope 2/3
+research worker behind adapter functions. Contract v6 keeps those schemas and
+makes the adapter translate its CLI's raw worker stdout into a readable
+narrative plus the exact final assistant reply for every child phase, with
+approved model and effort verification. Do not register an adapter before
+validation understands its complete lifecycle.
 
 ## Fixed registry procedure
 
@@ -119,12 +122,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v5 boundary
+## Contract-v6 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=5
+RHYOLITE_HARNESS_CONTRACT_VERSION=6
 ```
 
 The shared loader must require all functions in this document before calling
@@ -174,7 +177,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v5 capability keys remain:
+Contract-v6 capability keys remain:
 
 ```text
 fleet
@@ -287,7 +290,7 @@ release artifacts.
 | `harness_research_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, protected variable names, MCP config path, comma-separated broker tool names, and transcript path. Status only. | Populate the research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the named broker tools from that MCP configuration. |
 | `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
-| `harness_extract_research_reply` | Raw research stdout path, rendered research transcript path, and a new destination path. Status only. | Preserve the exact final assistant reply from raw print-mode stdout in the destination with mode 0600. The transcript argument is context only; never derive the proof-bound reply from rendered transcript framing. |
+| `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, or subagent metric names a model or reasoning effort other than the approved values; remove both outputs on failure. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -386,10 +389,10 @@ Report-repair environment must:
 
 The runner owns scope 2/3 research: policy resolution, the broker launcher
 and its arguments, timeouts, dossier extraction and validation, the network
-summary, cleanup, and artifacts. It calls the five research functions only
-when the adapter reports `web_research=yes`; otherwise scope 2/3 fails at
-stage `harness <id> harness_capability` before any broker or worker activity.
-The adapter must:
+summary, cleanup, and artifacts. It calls the four research functions and the
+shared output normalizer only when the adapter reports `web_research=yes`;
+otherwise scope 2/3 fails at stage `harness <id> harness_capability` before
+any broker or worker activity. The adapter must:
 
 - write an MCP configuration with exactly one local stdio server, the bundled
   broker launcher, and no other server, credential, header, or endpoint;
@@ -398,9 +401,11 @@ The adapter must:
 - keep the review worker's write, shell, agent, hook, and instruction-file
   restrictions;
 - prepare the runtime home with phase `research`;
-- preserve raw print-mode final output without transcript parsing so the
-  runner can verify the broker's accepted candidate digest before any privacy
-  sanitization;
+- deliver the exact final assistant reply through
+  `harness_normalize_worker_output` from the CLI's structured or exact
+  print-mode output, never from a rendered transcript or terminal-rendered
+  text, so the runner can verify the broker's accepted candidate digest
+  before any privacy sanitization;
 - when the harness records per-turn model and effort, verify the research
   session record with the same model, effort, and subagent rules as the
   review worker before the runtime home is removed.
@@ -580,7 +585,7 @@ deterministically implied by the approved harness and contract version.
 
 ## Plan schema 5 and approval hash
 
-Contract v5 retains the Contract-v3 approved runtime selection and plan
+Contract v6 retains the Contract-v3 approved runtime selection and plan
 schema 5. It includes these exact top-level fields:
 
 ```json
@@ -932,7 +937,7 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v5 function inventory for the adapter;
+- the complete Contract-v6 function inventory for the adapter;
 - an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
   real runs, and their consequences;
 - a capability decision table with evidence;

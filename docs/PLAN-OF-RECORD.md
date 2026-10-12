@@ -57,9 +57,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v5 seam.
+  Contract-v6 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v5 and any future production adapter.
+  playbook for Contract v6 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -68,6 +68,14 @@ decision; compatibility must not be preserved speculatively.
   adapter functions and gates scope 2/3 on the adapter's `web_research`
   capability. The runner keeps broker lifecycle, validation, cleanup, and
   artifacts.
+- Contract v6 adds `harness_normalize_worker_output`: the adapter translates
+  its CLI's raw worker stdout into a readable narrative plus the exact final
+  assistant reply for the review, research, and report-repair phases and
+  fails closed on a substituted model or reasoning effort. Copilot children
+  run with `--output-format json` because Copilot print-mode text is
+  terminal-rendered Markdown, not the assistant reply. The research broker
+  persists the accepted canonical dossier in its transient runtime root, so
+  validated research survives a final reply that fails to reproduce it.
 - Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved

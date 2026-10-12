@@ -52,7 +52,7 @@ Maximum reasoning effort is the default and high is the hard minimum; never
 use none, minimal, low, or medium effort, including for mechanical
 normalization or formatting.
 
-RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; any downstream validation remains defense in depth and never replaces this self-check.
+RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 ## Goal
 
@@ -353,9 +353,12 @@ content and fix every reported category before retrying. If the limit is
 exhausted, stop without presenting an unaccepted dossier. Once accepted, return
 exactly that accepted candidate as the whole final assistant reply, with no
 fence, preface, proof, explanation, or trailing text. Do not edit it: the
-runner verifies its SHA-256 proof against the raw final assistant reply. That
-verification occurs before privacy sanitization and before the main review
-starts.
+runner reads the exact final assistant message from the harness's structured
+output, verifies the SHA-256 proof against that raw final assistant reply and
+against the accepted candidate the broker persisted at acceptance, uses the
+persisted accepted candidate as the canonical dossier, and records any
+difference. That verification occurs before privacy sanitization and before
+the main review starts.
 
 Attach confidence and an evidence basis to each substantive community,
 research, commercial, freshness, claim-verification, prior-art, lineage,

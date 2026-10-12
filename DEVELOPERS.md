@@ -183,7 +183,7 @@ Changes to these surfaces normally move together:
   `scripts/run-parallel-reviews.sh`, the Copilot and Claude Code worker
   agents, and validation for research/prompt/runner behavior.
 - `skills/readonly-repository-review/SKILL.md`, both harness agent copies, and
-  return-contract validation whenever `RHYOLITE_AGENT_SELF_CHECK_V1` or a
+  return-contract validation whenever `RHYOLITE_AGENT_SELF_CHECK_V2` or a
   main-report, security-pass, research-dossier, repair-JSON, or guided-summary
   self-check changes. Shared and harness-specific copies must not diverge.
 - `scripts/review-output.sh` and validation for artifact rendering and
@@ -204,7 +204,7 @@ adapter belongs only under `tests/fixtures` and may be loaded only through
 test-owned fixed fixture wiring. It must never be added to the production
 registry, plugin assets, launcher choices, marketplace metadata, or public
 support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
-for Contract-v5 work and any future adapter.
+for Contract-v6 work and any future adapter.
 [docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
 probes and real runs behind the Claude Code adapter's capability values.
 
@@ -214,6 +214,22 @@ also runs it. Keep the strict report validator
 unchanged; repair replies are exact edit descriptors, not replacement reports.
 The runner owns the sole bounded attempt, canonical promotion, interruption,
 cleanup, and synchronized repair artifacts/state.
+
+Harness child output is structured, never terminal-rendered text. Copilot
+CLI print mode renders text stdout as Markdown for a terminal: it wraps at
+the terminal width, re-indents and renumbers lists, inserts blank lines, and
+emits OSC 8 hyperlink escapes even under `--no-color`, so a raw text reply
+can never byte-match what the model wrote. Every Copilot child runs with
+`--output-format json`, and `harness_normalize_worker_output` turns the JSONL
+event stream into a readable narrative plus the exact final
+`assistant.message` while rejecting any recorded model or `reasoning_effort`
+other than the approved plan. The mocked validators emit the same event
+shapes. Before changing an adapter's output assumptions, re-verify the
+real CLI with a cheap live probe, for example
+`copilot -p 'Reply with exactly: 1. one' --model gpt-5-mini --no-color
+--stream off --silent --output-format json --available-tools ''`, and
+compare the `assistant.message` `content` with the text-mode stdout; the
+mocked validators cannot detect a CLI rendering change on their own.
 
 Scope 1 must remain transport-free: no research worker, MCP config,
 broker process, cookie jar, or research/network artifact. Scope 2/3 must

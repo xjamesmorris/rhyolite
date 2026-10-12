@@ -234,10 +234,16 @@
   receives only a validated read-only dossier and sanitized network summary.
 - The optional `candidate` input on `research_network_summary` does not add a
   sixth capability or network path. It validates the complete dossier with a
-  three-attempt same-session bound and persists only a SHA-256 proof and byte
-  count. The runner verifies that proof against the raw final assistant reply
-  before any lossy transcript rendering or privacy sanitization, deletes the
-  raw copy, and persists only the sanitized dossier. Missing or mismatched
+  three-attempt same-session bound, persists a SHA-256 proof and byte count in
+  the sanitized summary, and writes the exact accepted canonical bytes only to
+  the broker's mode-0700 runtime root, which the runner consumes and destroys.
+  The runner verifies the proof against those persisted bytes and against the
+  exact final assistant message that the harness adapter extracts from the
+  CLI's structured output, never from lossy terminal-rendered text. The
+  persisted accepted candidate is the canonical dossier; a final reply that
+  differs is recorded as a warning rather than discarding validated research.
+  Verification happens before privacy sanitization, raw copies are deleted,
+  and only the sanitized dossier persists. Missing, corrupted, or mismatched
   proof fails before the main reviewer can start; downstream dossier and event
   validation remains an independent defense-in-depth gate.
 - Broker event integers are governed by one packaged producer/consumer

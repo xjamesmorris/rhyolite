@@ -622,6 +622,7 @@ harness_worker_argv() {
         --deny-tool write
         --deny-tool shell
         --stream off
+        --output-format json
         --share "${transcript_path}"
         --silent
     )
@@ -714,6 +715,7 @@ harness_report_repair_argv() {
         --deny-tool shell
         --deny-tool url
         --stream off
+        --output-format json
         --share "${transcript_path}"
         --silent
     )
@@ -843,6 +845,7 @@ harness_research_worker_argv() {
         --deny-tool write
         --deny-tool shell
         --stream off
+        --output-format json
         --share "${transcript_path}"
         --silent
     )
@@ -852,39 +855,239 @@ harness_research_worker_env() {
     copilot_populate_worker_environment "$1" "${COPILOT_RUNTIME_HOME}"
 }
 
-# Copilot writes the research transcript itself through --share and its
-# worker is bound to the approved model by the CLI, so there is no
-# additional session record to export or verify.
+# Copilot binds every non-interactive worker to the approved model through
+# the CLI, and its structured JSONL output records the model and reasoning
+# effort of every model call. harness_normalize_worker_output verifies them
+# after the worker exits, so this hook has no separate session record to
+# export.
 harness_finalize_research_session() {
     return 0
 }
 
-# Copilot print mode writes the final assistant reply directly to stdout.
-# Preserve those bytes for submission-proof verification instead of parsing
-# the rendered Markdown transcript, which adds framing and a generated footer.
-harness_extract_research_reply() {
+# Copilot print mode renders text output as terminal Markdown: it wraps lines
+# at the terminal width, re-indents and renumbers lists, inserts blank lines,
+# and emits OSC 8 hyperlink escapes even with --no-color. Those bytes are not
+# the assistant reply. Every Copilot child therefore runs with
+# --output-format json, and this helper translates the JSONL event stream into
+# a readable narrative plus the exact final assistant message while verifying
+# that every recorded model call used the approved model and effort.
+copilot_normalize_structured_output() {
     local raw_output="$1"
-    local transcript="$2"
-    local reply_output="$3"
+    local normalized_output="$2"
+    local final_reply_output="$3"
+    local approved_model="$4"
+    local approved_effort="$5"
 
-    : "${transcript}"
-    [[ "${raw_output}" == /* && -f "${raw_output}" &&
-        ! -L "${raw_output}" && "${reply_output}" == /* &&
-        ! -e "${reply_output}" && ! -L "${reply_output}" ]] || {
-        rhyolite_harness_set_error \
-            'The Copilot research reply extraction paths are invalid.'
-        return 1
-    }
-    if ! (
+    python3 - \
+        "${raw_output}" \
+        "${normalized_output}" \
+        "${final_reply_output}" \
+        "${approved_model}" \
+        "${approved_effort}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+raw_path = pathlib.Path(sys.argv[1])
+normalized_path = pathlib.Path(sys.argv[2])
+reply_path = pathlib.Path(sys.argv[3])
+approved_model = sys.argv[4]
+approved_effort = sys.argv[5]
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def safe_token(value):
+    if isinstance(value, str) and SAFE_TOKEN.fullmatch(value):
+        return value
+    return "unrecognized"
+
+
+def finish(status, detail=""):
+    sys.stdout.write(f"{status}\n{detail}\n")
+    raise SystemExit(0 if status == "ok" else 1)
+
+
+try:
+    raw_bytes = raw_path.read_bytes()
+except OSError:
+    finish("unreadable", "The Copilot worker output could not be read.")
+
+narrative = []
+passthrough = []
+final_reply = None
+event_count = 0
+observed_models = []
+observed_efforts = []
+
+
+def flush_passthrough():
+    if passthrough:
+        narrative.append("\n".join(passthrough))
+        passthrough.clear()
+
+
+def observe_model(value):
+    if isinstance(value, str) and value:
+        observed_models.append(value)
+
+
+def observe_effort(value):
+    if isinstance(value, str) and value:
+        observed_efforts.append(value)
+
+
+def observe_metrics(metrics):
+    if isinstance(metrics, dict):
+        for model_id in metrics:
+            observe_model(model_id)
+
+
+def observe_agent_metrics(agent_metrics):
+    if isinstance(agent_metrics, dict):
+        entries = agent_metrics.values()
+    elif isinstance(agent_metrics, list):
+        entries = agent_metrics
+    else:
+        return
+    for entry in entries:
+        if isinstance(entry, dict):
+            observe_metrics(entry.get("modelMetrics"))
+
+
+for raw_line in raw_bytes.split(b"\n"):
+    line = raw_line.rstrip(b"\r")
+    if not line.strip():
+        continue
+    event = None
+    if line.lstrip()[:1] == b"{":
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            event = None
+    if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+        passthrough.append(line.decode("utf-8", "replace"))
+        continue
+    event_count += 1
+    event_type = event["type"]
+    data = event.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    if event_type == "assistant.message":
+        observe_model(data.get("model"))
+        content = data.get("content")
+        if isinstance(content, str):
+            final_reply = content
+            if content.strip():
+                flush_passthrough()
+                narrative.append(content)
+    elif event_type in (
+        "model.call_start",
+        "model.call_final_result",
+        "tool.execution_start",
+        "tool.execution_complete",
+    ):
+        observe_model(data.get("model"))
+    elif event_type == "session.usage_checkpoint":
+        for state in data.get("promptCacheBreakState") or []:
+            if not isinstance(state, dict):
+                continue
+            models = state.get("models")
+            if not isinstance(models, dict):
+                continue
+            for model_id, call in models.items():
+                observe_model(model_id)
+                if isinstance(call, dict):
+                    observe_model(call.get("model"))
+                    observe_effort(call.get("reasoning_effort"))
+        snapshot = data.get("accountingSnapshot")
+        if isinstance(snapshot, dict):
+            observe_metrics(snapshot.get("modelMetrics"))
+            observe_agent_metrics(snapshot.get("agentMetrics"))
+        observe_agent_metrics(data.get("agentMetrics"))
+
+substituted = [model for model in observed_models if model != approved_model]
+if substituted:
+    finish("substituted", safe_token(substituted[0]))
+changed = [effort for effort in observed_efforts if effort != approved_effort]
+if changed:
+    finish("effort-changed", safe_token(changed[0]))
+
+flush_passthrough()
+normalized_text = "\n\n".join(block.rstrip("\n") for block in narrative)
+if normalized_text:
+    normalized_text += "\n"
+reply_text = final_reply or ""
+if reply_text and not reply_text.endswith("\n"):
+    reply_text += "\n"
+
+
+def exact_bytes(text):
+    # JSON may carry lone surrogates that stand for undecodable bytes; round
+    # them back to the original bytes so strict validation still sees them.
+    try:
+        return text.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace")
+
+
+try:
+    normalized_path.write_bytes(exact_bytes(normalized_text))
+    reply_path.write_bytes(exact_bytes(reply_text))
+except OSError:
+    finish("unwritable", "The normalized Copilot worker output could not be written.")
+finish("ok", "structured" if event_count else "unstructured")
+PY
+}
+
+harness_normalize_worker_output() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local normalized_output="$5"
+    local final_reply_output="$6"
+    local result status detail
+
+    rhyolite_harness_validate_normalize_arguments "$@" || return 1
+    result="$(
         umask 077
-        cat -- "${raw_output}" > "${reply_output}"
-        chmod 600 -- "${reply_output}"
-    ); then
-        rm -f -- "${reply_output}"
-        rhyolite_harness_set_error \
-            'Could not preserve the exact Copilot research reply.'
-        return 1
+        copilot_normalize_structured_output \
+            "${raw_output}" \
+            "${normalized_output}" \
+            "${final_reply_output}" \
+            "${approved_model}" \
+            "${approved_effort}" 2>/dev/null
+    )" || true
+    status="${result%%$'\n'*}"
+    detail=''
+    if [[ "${result}" == *$'\n'* ]]; then
+        detail="${result#*$'\n'}"
+        detail="${detail%%$'\n'*}"
     fi
+    if [[ "${status}" == ok ]] &&
+        chmod 600 -- "${normalized_output}" "${final_reply_output}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "${normalized_output}" "${final_reply_output}"
+    case "${status}" in
+        substituted)
+            rhyolite_harness_set_error \
+                "Copilot answered the ${phase} phase with model '${detail}' instead of the approved model '${approved_model}'; Rhyolite does not accept substituted output."
+            ;;
+        effort-changed)
+            rhyolite_harness_set_error \
+                "Copilot recorded reasoning effort '${detail}' in the ${phase} phase instead of the approved effort '${approved_effort}'; Rhyolite does not accept downgraded or substituted effort."
+            ;;
+        unreadable | unwritable)
+            rhyolite_harness_set_error "${detail}"
+            ;;
+        *)
+            rhyolite_harness_set_error \
+                "The Copilot ${phase} worker output could not be normalized."
+            ;;
+    esac
+    return 1
 }
 
 harness_render_request() {

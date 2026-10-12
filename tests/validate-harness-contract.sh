@@ -51,7 +51,7 @@ required_contract_functions=(
     harness_research_worker_argv
     harness_research_worker_env
     harness_finalize_research_session
-    harness_extract_research_reply
+    harness_normalize_worker_output
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -271,7 +271,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '5' \
+assert_equal '6' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 production_registry_path=''
@@ -865,6 +865,7 @@ expected_worker_arguments=(
     --deny-tool write
     --deny-tool shell
     --stream off
+    --output-format json
     --share "${worker_transcript}"
     --silent
 )
@@ -894,6 +895,7 @@ expected_research_worker_arguments=(
     --deny-tool write
     --deny-tool shell
     --stream off
+    --output-format json
     --share "${worker_transcript}"
     --silent
 )
@@ -957,6 +959,7 @@ expected_repair_arguments=(
     --deny-tool shell
     --deny-tool url
     --stream off
+    --output-format json
     --share "${repair_transcript}"
     --silent
 )
@@ -1080,6 +1083,7 @@ expected_copilot_research_arguments=(
     --deny-tool write
     --deny-tool shell
     --stream off
+    --output-format json
     --share "${research_transcript_path}"
     --silent
 )
@@ -1092,28 +1096,141 @@ cmp -s "${fixture_root}/copilot-research-expected.vector" \
     fail 'Copilot research worker argv changed from the pre-Contract-v5 runner vector.'
 harness_finalize_research_session "${fixture_root}" /dev/null ||
     fail 'Copilot research finalization is not an explicit success.'
-copilot_research_raw_reply="${fixture_root}/copilot-research-raw-reply.txt"
-copilot_research_rendered_transcript="${fixture_root}/copilot-research-rendered.md"
-copilot_research_exact_reply="${fixture_root}/copilot-research-exact-reply.txt"
-printf 'raw research reply\n' > "${copilot_research_raw_reply}"
-printf '### Copilot\n\n    lossy rendered reply\n' \
-    > "${copilot_research_rendered_transcript}"
-harness_extract_research_reply \
-    "${copilot_research_raw_reply}" \
-    "${copilot_research_rendered_transcript}" \
-    "${copilot_research_exact_reply}" ||
-    fail 'Copilot research reply extraction failed.'
-cmp -s "${copilot_research_raw_reply}" "${copilot_research_exact_reply}" ||
-    fail 'Copilot research reply extraction used lossy transcript content.'
-assert_equal 600 "$(stat -c '%a' "${copilot_research_exact_reply}")" \
-    'Copilot exact research reply mode'
-if harness_extract_research_reply \
-    "${copilot_research_raw_reply}" \
-    "${copilot_research_rendered_transcript}" \
-    "${copilot_research_exact_reply}" >/dev/null 2>&1; then
-    fail 'Copilot research reply extraction overwrote an existing destination.'
+copilot_structured_output="${fixture_root}/copilot-structured-output.jsonl"
+copilot_rendered_output="${fixture_root}/copilot-rendered-output.txt"
+copilot_normalized_output="${fixture_root}/copilot-normalized-output.txt"
+copilot_exact_reply="${fixture_root}/copilot-exact-reply.txt"
+copilot_expected_reply="${fixture_root}/copilot-expected-reply.txt"
+printf '%s\n' \
+    '================================================================================' \
+    'REPOSITORY RESEARCH DOSSIER' \
+    '1. First numbered entry with a URL https://example.org/a?x=1&y=2 that a terminal renderer would wrap and hyperlink.' \
+    '10. Tenth entry that a Markdown renderer would renumber.' \
+    '   Sources checked: https://example.org/x' \
+    '================================================================================' \
+    > "${copilot_expected_reply}"
+node - "${copilot_expected_reply}" "${copilot_structured_output}" <<'JS'
+const fs = require("fs");
+const [replyPath, outputPath] = process.argv.slice(2);
+const reply = fs.readFileSync(replyPath, "utf8").replace(/\n$/, "");
+const event = (type, data) => JSON.stringify({type, data, id: "fixture"});
+const model = "gpt-5.6-sol";
+fs.writeFileSync(outputPath, [
+  event("session.tools_updated", {tools: []}),
+  event("user.message", {content: "fixture prompt"}),
+  event("model.call_start", {turnId: "0", model}),
+  event("assistant.message", {model, content: "Collecting evidence first.",
+    toolRequests: [{name: "view"}]}),
+  event("tool.execution_start", {toolName: "view", model}),
+  event("tool.execution_complete", {toolName: "view", model, success: true}),
+  event("assistant.message", {model, content: reply, toolRequests: []}),
+  event("model.call_final_result", {model, result: "success"}),
+  event("session.usage_checkpoint", {
+    promptCacheBreakState: [{conversation: "main",
+      models: {[model]: {model, reasoning_effort: "max"}}}],
+    accountingSnapshot: {modelMetrics: {[model]: {}},
+      agentMetrics: {main: {modelMetrics: {[model]: {}}}}},
+  }),
+  JSON.stringify({type: "result", exitCode: 0}),
+].join("\n") + "\n");
+JS
+# The terminal-rendered form of the same reply: wrapped, re-indented,
+# renumbered, with OSC 8 hyperlink escapes even under --no-color.
+printf '%s\n' \
+    '================================================================================' \
+    'REPOSITORY RESEARCH DOSSIER' \
+    '' \
+    ' 1. First numbered entry with a URL' \
+    $'\e]8;id=md-1;https://example.org/a?x=1&y=2\ahttps://example.org/a?x=1&y=2\e]8;;\a that a terminal renderer' \
+    'would wrap and hyperlink.' \
+    ' 2. Tenth entry that a Markdown renderer would renumber.' \
+    '    Sources checked: https://example.org/x' \
+    '================================================================================' \
+    > "${copilot_rendered_output}"
+for copilot_phase in review research report-repair; do
+    rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+    harness_normalize_worker_output \
+        "${copilot_phase}" \
+        "${copilot_structured_output}" \
+        gpt-5.6-sol \
+        max \
+        "${copilot_normalized_output}" \
+        "${copilot_exact_reply}" ||
+        fail "Copilot ${copilot_phase} output normalization failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    cmp -s "${copilot_expected_reply}" "${copilot_exact_reply}" ||
+        fail "Copilot ${copilot_phase} normalization did not preserve the exact final reply."
+    assert_equal 600 "$(stat -c '%a' "${copilot_exact_reply}")" \
+        "Copilot ${copilot_phase} exact reply mode"
+    assert_equal 600 "$(stat -c '%a' "${copilot_normalized_output}")" \
+        "Copilot ${copilot_phase} normalized output mode"
+    assert_contains "${copilot_normalized_output}" \
+        'Collecting evidence first.' \
+        "Copilot ${copilot_phase} normalized narrative"
+    assert_contains "${copilot_normalized_output}" \
+        '10. Tenth entry that a Markdown renderer would renumber.' \
+        "Copilot ${copilot_phase} normalized final reply"
+    assert_not_contains "${copilot_normalized_output}" \
+        '"type"' \
+        "Copilot ${copilot_phase} normalized output leaked JSONL framing"
+done
+if harness_normalize_worker_output \
+    review \
+    "${copilot_structured_output}" \
+    gpt-5.6-sol \
+    max \
+    "${copilot_normalized_output}" \
+    "${copilot_exact_reply}" >/dev/null 2>&1; then
+    fail 'Copilot output normalization overwrote an existing destination.'
+fi
+rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+harness_normalize_worker_output \
+    research \
+    "${copilot_rendered_output}" \
+    gpt-5.6-sol \
+    max \
+    "${copilot_normalized_output}" \
+    "${copilot_exact_reply}" ||
+    fail 'Copilot normalization rejected unstructured text output.'
+[[ ! -s "${copilot_exact_reply}" ]] ||
+    fail 'Copilot normalization treated terminal-rendered text as the assistant reply.'
+assert_contains "${copilot_normalized_output}" \
+    'Tenth entry that a Markdown renderer would renumber.' \
+    'Copilot unstructured output passthrough'
+for copilot_rejection in \
+    'gpt-5.5|max|substituted output' \
+    'gpt-5.6-sol|high|downgraded or substituted effort'; do
+    IFS='|' read -r rejection_model rejection_effort rejection_fragment \
+        <<< "${copilot_rejection}"
+    rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+    if harness_normalize_worker_output \
+        review \
+        "${copilot_structured_output}" \
+        "${rejection_model}" \
+        "${rejection_effort}" \
+        "${copilot_normalized_output}" \
+        "${copilot_exact_reply}" >/dev/null 2>&1; then
+        fail "Copilot normalization accepted ${rejection_model}/${rejection_effort} against the approved gpt-5.6-sol/max plan."
+    fi
+    [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"${rejection_fragment}"* ]] ||
+        fail "Copilot normalization rejection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    [[ ! -e "${copilot_normalized_output}" && ! -e "${copilot_exact_reply}" ]] ||
+        fail 'Copilot normalization left outputs behind after rejecting substituted output.'
+done
+if harness_normalize_worker_output \
+    bogus \
+    "${copilot_structured_output}" \
+    gpt-5.6-sol \
+    max \
+    "${copilot_normalized_output}" \
+    "${copilot_exact_reply}" >/dev/null 2>&1; then
+    fail 'Copilot normalization accepted an unsupported phase.'
 fi
 for secure_research_runner_fragment in \
+    'local research_normalized_output="${research_runtime_root}/research-output.normalized"' \
+    'local research_accepted_candidate="${research_runtime_root}/accepted-dossier.txt"' \
+    '--accepted-candidate "${research_accepted_candidate}"' \
+    '0:reply-verified)' \
+    '3:accepted-candidate)' \
     'local research_raw_output="${research_runtime_root}/research-output.raw"' \
     'local research_raw_error="${research_runtime_root}/research-errors.raw"' \
     'local research_raw_transcript="${research_runtime_root}/research-session.raw"' \
@@ -3152,16 +3269,72 @@ printf 'started\n' > "${RHYOLITE_WORKER_CAPTURE}/started"
 
 share_path=""
 working_directory=""
+output_format="text"
+mock_model=""
+mock_reasoning_effort=""
 previous=""
 for argument in "$@"; do
     if [[ "${previous}" == "--share" ]]; then
         share_path="${argument}"
     elif [[ "${previous}" == "-C" ]]; then
         working_directory="${argument}"
+    elif [[ "${previous}" == "--output-format" ]]; then
+        output_format="${argument}"
+    elif [[ "${previous}" == "--model" ]]; then
+        mock_model="${argument}"
+    elif [[ "${previous}" == "--reasoning-effort" ]]; then
+        mock_reasoning_effort="${argument}"
     fi
     previous="${argument}"
 done
 [[ -n "${share_path}" && -n "${working_directory}" ]] || exit 72
+[[ "${output_format}" == json && -n "${mock_model}" &&
+    -n "${mock_reasoning_effort}" ]] || exit 79
+
+# Real Copilot print mode renders text output as terminal Markdown, so the
+# mock emits the structured JSONL stream that the adapter normalizes. A
+# substituted model or effort can be injected to prove the runner rejects it.
+emit_structured_reply() {
+    local reply_file
+    reply_file="$(mktemp "${TMPDIR:-/tmp}/mock-copilot-reply.XXXXXXXX")"
+    cat > "${reply_file}"
+    /usr/bin/python3 - \
+        "${reply_file}" \
+        "${RHYOLITE_MOCK_REPLY_MODEL:-${mock_model}}" \
+        "${RHYOLITE_MOCK_REPLY_EFFORT:-${mock_reasoning_effort}}" <<'MOCK_EVENTS'
+import json
+import pathlib
+import sys
+
+content = pathlib.Path(sys.argv[1]).read_bytes().decode("utf-8")
+model, effort = sys.argv[2], sys.argv[3]
+
+
+def event(kind, data):
+    print(json.dumps({"type": kind, "data": data, "id": "mock"}))
+
+
+event("model.call_start", {"turnId": "0", "model": model})
+event(
+    "assistant.message",
+    {"model": model, "content": content.rstrip("\n"), "toolRequests": []},
+)
+event("model.call_final_result", {"model": model, "result": "success"})
+event(
+    "session.usage_checkpoint",
+    {
+        "promptCacheBreakState": [
+            {
+                "conversation": "main",
+                "models": {model: {"model": model, "reasoning_effort": effort}},
+            }
+        ]
+    },
+)
+print(json.dumps({"type": "result", "exitCode": 0}))
+MOCK_EVENTS
+    rm -f -- "${reply_file}"
+}
 [[ -d "${working_directory}/source" &&
     ! -e "${working_directory}/.git" ]] || exit 73
 [[ -f "${COPILOT_HOME}/settings.json" &&
@@ -3194,7 +3367,7 @@ if [[ "${RHYOLITE_MOCK_UNSAFE_TEXT:-0}" == 1 ]]; then
         printf '### Copilot\n\n'
         printf '%s\n' "${unsafe_text}"
     } > "${share_path}"
-    printf '%s\n' "${unsafe_text}"
+    printf '%s\n' "${unsafe_text}" | emit_structured_reply
     printf '%s\n' "${unsafe_text}" >&2
     exit 17
 fi
@@ -3205,7 +3378,7 @@ if [[ "${RHYOLITE_MOCK_INCOMPLETE:-0}" == 1 ]]; then
         printf '# Mock Copilot session\n\n### Copilot\n\n'
         cat -- "${canonical_report}"
     } > "${share_path}"
-    sed -n '1,4p' "${canonical_report}"
+    sed -n '1,4p' "${canonical_report}" | emit_structured_reply
     exit 0
 fi
 
@@ -3215,10 +3388,11 @@ if [[ "${RHYOLITE_MOCK_PLACEHOLDER_REPORT:-0}" == 1 ]]; then
         '================================================================================' \
         'REPOSITORY REVIEW REPORT' \
         'Mock placeholder that omits every required section.' \
-        '================================================================================'
+        '================================================================================' |
+        emit_structured_reply
     exit 0
 fi
-cat -- "${canonical_report}"
+emit_structured_reply < "${canonical_report}"
 MOCK_RUNNER_COPILOT
 # A complete canonical scope-1 report, so strict report validation runs for
 # real in every runner seam test.
@@ -3346,6 +3520,7 @@ JS
         --deny-tool write
         --deny-tool shell
         --stream off
+        --output-format json
         --share "${state_values[3]}"
         --silent
     )

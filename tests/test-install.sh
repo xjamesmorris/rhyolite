@@ -140,10 +140,14 @@ for (const file of executables) {
 }
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const invariant =
-    "RHYOLITE_AGENT_SELF_CHECK_V1: Before submitting any agent-generated " +
+    "RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated " +
     "return, compare the complete candidate against the exact return contract " +
     "for that surface, correct every mismatch, and submit only a matching " +
-    "candidate; any downstream validation remains defense in depth and never " +
+    "candidate; when a validator or the trusted caller rejects a return, make " +
+    "a repair attempt that corrects every reported mismatch and resend only " +
+    "the repaired candidate while that surface's attempt limit permits, never " +
+    "stopping at the first rejection or resending the rejected candidate " +
+    "unchanged; any downstream validation remains defense in depth and never " +
     "replaces this self-check.";
 for (const file of [
     "skills/readonly-repository-review/SKILL.md",
@@ -173,7 +177,7 @@ const extractBlock = (file, start, end) => {
 };
 for (const [start, end, files] of [
     [
-        "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "MAIN REPORT RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)",
         "END MAIN REPORT RETURN SELF-CHECK",
         [
             "skills/readonly-repository-review/SKILL.md",
@@ -183,7 +187,7 @@ for (const [start, end, files] of [
         ],
     ],
     [
-        "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)",
         "END SECURITY PASS RETURN SELF-CHECK",
         [
             "skills/readonly-repository-review/SKILL.md",
@@ -193,7 +197,7 @@ for (const [start, end, files] of [
         ],
     ],
     [
-        "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V1)",
+        "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)",
         "END GUIDED COMPLETION RETURN SELF-CHECK",
         [
             "skills/readonly-repository-review/SKILL.md",
@@ -207,9 +211,11 @@ for (const [start, end, files] of [
         `Packaged self-check surfaces diverged: ${start}`);
 }
 for (const file of ["lib/harness/copilot.sh", "lib/harness/claude.sh"]) {
-    expect(read(file).includes("harness_extract_research_reply()"),
-        `Packaged harness cannot preserve raw research replies: ${file}`);
+    expect(read(file).includes("harness_normalize_worker_output()"),
+        `Packaged harness cannot normalize exact worker replies: ${file}`);
 }
+expect(read("lib/harness/copilot.sh").includes("--output-format json"),
+    "Packaged Copilot adapter does not request structured worker output");
 expect(read("skills/readonly-repository-review/research-prompt.txt")
     .includes("Dossier validation: protocol=1; tool=research_network_summary; attemptLimit=3; canonicalization=utf8-lf-single-terminal-newline-v1; digestAlgorithm=sha256"),
     "Packaged research prompt lost the candidate-proof contract");

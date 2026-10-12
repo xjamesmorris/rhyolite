@@ -16,17 +16,21 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v5 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v6 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
-descriptor. Contract v5 moves the dedicated scope 2/3 research worker behind
-five adapter functions, so each production adapter builds its own research
+descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
+four adapter functions, so each production adapter builds its own research
 worker while the runner keeps broker lifecycle, validation, cleanup, and
-artifacts. The contract never resumes the review worker, permits a model to
-rewrite the report, or falls back to another harness.
+artifacts. Contract v6 makes the adapter responsible for translating its
+CLI's raw worker stdout into a readable narrative plus the exact final
+assistant reply for every child phase, with approved model and effort
+verification, because print-mode text stdout is not the assistant reply. The
+contract never resumes the review worker, permits a model to rewrite the
+report, or falls back to another harness.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v5 and any future production adapter.
+playbook for Contract v6 and any future production adapter.
 
 ## I1a invariants
 
@@ -110,7 +114,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v5 function exists.
+6. Assert every required Contract-v6 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -147,7 +151,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v5 functions
+## Contract-v6 functions
 
 Every mapped adapter must define all functions below.
 
@@ -182,7 +186,7 @@ Every mapped adapter must define all functions below.
 | `harness_research_worker_argv` | Build the ordered research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the runner-supplied broker tools from the written MCP configuration. |
 | `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
-| `harness_extract_research_reply` | Preserve the exact final research assistant reply from raw print-mode stdout in a new mode-0600 file. Do not reconstruct it from a rendered transcript. |
+| `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
@@ -251,7 +255,11 @@ Copilot was the only mapped I1a adapter and remains the default harness.
   approval-bound `ModelCatalogMembership` `unlisted`; `auto` is always
   rejected. Non-interactive review, research, and repair children fail
   closed when Copilot reports `Model "<id>" from --model flag is not
-  available.`, and the runner reports a `model availability` stage. The
+  available.`, `Reasoning effort "<effort>" is not supported for model
+  "<id>".`, or `Model "<id>" does not support reasoning effort
+  configuration`, and the runner reports a `model availability` stage. A
+  child that starts but whose structured output records another model or
+  `reasoning_effort` is rejected at the `approved model enforcement` stage. The
   launcher's interactive orchestrator session instead falls back to
   Copilot's default model, so it cannot prove availability.
 - Reasoning effort: `max` recommended; `xhigh` and `high` selectable
@@ -625,10 +633,22 @@ amendment adds the optional unlisted-model status for
 return that status keep exact-catalog behavior.
 
 Contract v5 keeps plan schema `5`, state schema `6`, and preference schema
-`3`. It adds the five research functions, the optional `research` home phase,
-and capability-based scope 2/3 gating. The Copilot research argv is the pre-v5
-runner vector byte for byte. The fixed registry now maps `copilot` and
+`3`. It adds the research functions, the optional `research` home phase, and
+capability-based scope 2/3 gating. The fixed registry maps `copilot` and
 `claude`.
+
+Contract v6 keeps the same schemas and registry. It retires the raw-stdout
+`harness_extract_research_reply` seam and adds
+`harness_normalize_worker_output`, which the runner calls after every review,
+research, and report-repair child exits. Copilot's review, research, and
+repair argv vectors gain `--output-format json`; the adapter parses the JSONL
+stream for the exact final `assistant.message` content and rejects any
+`model` or `reasoning_effort` that differs from the approved plan, including
+subagent metrics. The runner extracts the canonical report, the research
+dossier, and the repair descriptor from that exact reply first and keeps the
+readable timeline and rendered transcript as fallbacks. The research broker
+persists the accepted canonical dossier bytes in its transient runtime root so
+the canonical dossier never depends on the worker reproducing the candidate.
 
 ## Adding a future adapter
 
@@ -637,7 +657,7 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v5 function; do not inherit missing behavior from
+3. Implement every Contract-v6 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.

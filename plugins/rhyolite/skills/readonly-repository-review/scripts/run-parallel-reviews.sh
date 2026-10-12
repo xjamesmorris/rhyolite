@@ -317,11 +317,15 @@ raise SystemExit(
 ' "${state_path}"
 }
 
+# Copilot CLI fails closed, without substitution, when the approved model is
+# unavailable to the account or does not accept the approved reasoning effort.
 errors_report_unavailable_model() {
     grep -Eq \
         -e '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*"[^"]* is not available' \
         -e "[Mm]odel '[A-Za-z0-9][A-Za-z0-9._-]*'[^']* is not available" \
         -e '\[claude-code:unrecognized_model\] \{"model":"[A-Za-z0-9][A-Za-z0-9._-]*"' \
+        -e 'Reasoning effort "[a-z]+" is not supported for model "[A-Za-z0-9][A-Za-z0-9._-]*"' \
+        -e '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*" does not support reasoning effort configuration' \
         "$1" 2>/dev/null
 }
 
@@ -339,6 +343,13 @@ repository_failure_stage() {
         if [[ "${harness_stage}" == \
             "harness ${HARNESS} harness_sanitize_runtime_home" ]]; then
             printf 'cleanup'
+            return
+        fi
+        if [[ "${harness_stage}" == \
+            "harness ${HARNESS} harness_normalize_worker_output" ]] &&
+            grep -Eq 'substituted output|substituted effort' \
+                "${errors_path}" 2>/dev/null; then
+            printf 'approved model enforcement'
             return
         fi
         printf '%s' "${harness_stage}"
@@ -374,6 +385,10 @@ repository_failure_stage() {
                 printf 'research cleanup'
             elif errors_report_unavailable_model "${errors_path}"; then
                 printf 'model availability'
+            elif grep -Eq \
+                'substituted output|substituted effort' \
+                "${errors_path}" 2>/dev/null; then
+                printf 'approved model enforcement'
             elif grep -Eq \
                 'dossier|REPOSITORY RESEARCH DOSSIER|claim verification evidence|successful public response' \
                 "${errors_path}" 2>/dev/null; then
@@ -447,6 +462,9 @@ repository_failure_summary() {
                     printf 'The dedicated research worker could not start because %s rejected the approved model as unavailable.' \
                         "${HARNESS_DISPLAY_NAME}"
                     ;;
+                'approved model enforcement')
+                    printf 'The dedicated research session recorded a model or reasoning effort other than the approved plan, so Rhyolite rejected its output.'
+                    ;;
                 *)
                     printf 'The dedicated public-research worker failed before the main repository review began.'
                     ;;
@@ -467,6 +485,9 @@ repository_failure_summary() {
                     printf 'The repository-review worker could not start because %s rejected the approved model as unavailable.' \
                         "${HARNESS_DISPLAY_NAME}"
                     ;;
+                'approved model enforcement')
+                    printf 'The repository-review session recorded a model or reasoning effort other than the approved plan, so Rhyolite rejected its output.'
+                    ;;
                 harness\ *)
                     printf 'The selected review harness failed while preparing, running, or finalizing the worker session.'
                     ;;
@@ -482,7 +503,12 @@ repository_failure_summary() {
 }
 
 model_availability_remediation() {
-    printf 'Select a model that your %s account can use, regenerate and approve the plan, and retry. Rhyolite never substitutes another model.' \
+    printf 'Select a model that your %s account can use at the approved reasoning effort, regenerate and approve the plan, and retry. Rhyolite never substitutes another model or effort.' \
+        "${HARNESS_DISPLAY_NAME}"
+}
+
+approved_model_enforcement_remediation() {
+    printf 'Inspect the sanitized errors for the recorded model or effort, confirm that your %s account can run the approved model at the approved effort, regenerate and approve the plan, and retry. Rhyolite never accepts substituted or downgraded output.' \
         "${HARNESS_DISPLAY_NAME}"
 }
 
@@ -536,6 +562,9 @@ repository_failure_remediation() {
                 'model availability')
                     model_availability_remediation
                     ;;
+                'approved model enforcement')
+                    approved_model_enforcement_remediation
+                    ;;
                 *)
                     printf '%s' \
                         'Inspect the sanitized research errors, timeline, state, and network summary. Repair the reported broker or worker failure and retry.'
@@ -550,6 +579,9 @@ repository_failure_remediation() {
                     ;;
                 'model availability')
                     model_availability_remediation
+                    ;;
+                'approved model enforcement')
+                    approved_model_enforcement_remediation
                     ;;
                 'report validation')
                     printf '%s' \
@@ -3511,14 +3543,30 @@ EOF
 }
 
 sanitize_report_repair_output() {
-    if [[ -f "${report_repair_raw_output:-}" ]]; then
-        tr -d '\r' < "${report_repair_raw_output}" |
+    local timeline_source="${report_repair_raw_output:-}"
+
+    if [[ -f "${report_repair_normalized_output:-}" ]]; then
+        timeline_source="${report_repair_normalized_output}"
+    fi
+    if [[ -n "${timeline_source}" && -f "${timeline_source}" ]]; then
+        tr -d '\r' < "${timeline_source}" |
             strip_terminal_controls |
             strip_runner_error_controls |
             redact_credentials |
             redact_emails > "${REPORT_REPAIR_TIMELINE_PATH}"
-        rm -f -- "${report_repair_raw_output}"
     fi
+    if [[ -f "${report_repair_final_reply:-}" ]]; then
+        tr -d '\r' < "${report_repair_final_reply}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${report_repair_final_reply_sanitized}"
+        chmod 600 -- "${report_repair_final_reply_sanitized}"
+    fi
+    rm -f -- \
+        "${report_repair_raw_output:-}" \
+        "${report_repair_normalized_output:-}" \
+        "${report_repair_final_reply:-}"
     if [[ -s "${report_repair_errors_path:-}" ]]; then
         tr -d '\r' < "${report_repair_errors_path}" |
             strip_terminal_controls |
@@ -3548,6 +3596,7 @@ sanitize_report_repair_output() {
 cleanup_report_repair_runtime() {
     local cleanup_failed=0
 
+    rm -f -- "${report_repair_final_reply_sanitized:-}"
     if [[ -n "${report_repair_runtime_home:-}" ]]; then
         if rhyolite_harness_invoke harness_sanitize_runtime_home \
             "${report_repair_runtime_home}" \
@@ -3978,6 +4027,10 @@ run_report_repair() {
     local report_repair_runtime_home=""
     local report_repair_workdir=""
     local report_repair_raw_output=""
+    local report_repair_normalized_output=""
+    local report_repair_final_reply=""
+    local report_repair_final_reply_sanitized=""
+    local report_repair_normalization_error=""
     local report_repair_errors_path=""
     local report_repair_transcript_plain=""
     local repair_session_id
@@ -4092,6 +4145,9 @@ run_report_repair() {
     REPORT_REPAIR_TIMELINE_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-timeline.txt"
     REPORT_REPAIR_TRANSCRIPT_PATH="${REPORT_REPAIR_DIRECTORY}/attempt-1-session.md"
     report_repair_raw_output="${REPORT_REPAIR_DIRECTORY}/attempt-1-output.raw"
+    report_repair_normalized_output="${REPORT_REPAIR_DIRECTORY}/attempt-1-output.normalized"
+    report_repair_final_reply="${REPORT_REPAIR_DIRECTORY}/attempt-1-final-reply.raw"
+    report_repair_final_reply_sanitized="${REPORT_REPAIR_DIRECTORY}/attempt-1-final-reply.sanitized"
     report_repair_errors_path="${REPORT_REPAIR_DIRECTORY}/attempt-1-errors.txt"
     report_repair_transcript_plain="${REPORT_REPAIR_TRANSCRIPT_PATH}.plain"
     : > "${REPORT_REPAIR_TIMELINE_PATH}"
@@ -4222,11 +4278,30 @@ run_report_repair() {
         repair_exit_code=0
         wait "${repair_process_id}" || repair_exit_code=$?
         RHYOLITE_ACTIVE_CHILD_PID=""
+        if [[ -f "${report_repair_raw_output}" ]] &&
+            ! rhyolite_harness_invoke harness_normalize_worker_output \
+                report-repair \
+                "${report_repair_raw_output}" \
+                "${MODEL}" \
+                "${REASONING_EFFORT}" \
+                "${report_repair_normalized_output}" \
+                "${report_repair_final_reply}" \
+                >/dev/null 2>> "${report_repair_errors_path}"; then
+            report_repair_normalization_error="${RHYOLITE_HARNESS_ERROR_DETAIL:-Report repair output normalization failed.}"
+            printf '%s\n' \
+                "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
+                "${report_repair_normalization_error}" \
+                >> "${report_repair_errors_path}"
+        fi
     fi
     if ! sanitize_report_repair_output; then
         printf '%s\n' 'Report repair output sanitization failed.' \
             >> "${error_path}"
         repair_ready=0
+    fi
+    local report_repair_reply_source="${REPORT_REPAIR_TIMELINE_PATH}"
+    if [[ -s "${report_repair_final_reply_sanitized}" ]]; then
+        report_repair_reply_source="${report_repair_final_reply_sanitized}"
     fi
 
     if ((repair_ready == 0)); then
@@ -4236,12 +4311,14 @@ run_report_repair() {
         REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair exceeded ${REPORT_REPAIR_TIMEOUT_SECONDS} seconds."
     elif ((repair_exit_code != 0)); then
         REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair worker exited with status ${repair_exit_code}."
+    elif [[ -n "${report_repair_normalization_error}" ]]; then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair output was rejected: ${report_repair_normalization_error}"
     elif ! rhyolite_harness_invoke harness_verify_isolation \
         "${REPORT_REPAIR_TIMELINE_PATH}" \
         >/dev/null 2>> "${report_repair_errors_path}"; then
         REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair harness isolation verification failed.'
     elif ! rhyolite_harness_invoke harness_extract_report_repair \
-        "${REPORT_REPAIR_TIMELINE_PATH}" \
+        "${report_repair_reply_source}" \
         "${report_repair_transcript_plain}" \
         "${REPORT_REPAIR_EDIT_PATH}" \
         >/dev/null 2>> "${report_repair_errors_path}"; then
@@ -7131,6 +7208,9 @@ process_repository() {
     local handoff_path="${result_path}/handoff.md"
     local agent_state_path="${result_path}/agent-state"
     local raw_output="${result_path}/${HARNESS}-output.raw"
+    local normalized_output="${result_path}/${HARNESS}-output.normalized"
+    local final_reply_path="${result_path}/${HARNESS}-final-reply.raw"
+    local final_reply_sanitized_path="${result_path}/${HARNESS}-final-reply.sanitized"
     local transcript_plain_path="${transcript_path}.plain"
     local transcript_report_path="${report_path}.transcript"
     local final_message_path="${transcript_report_path}.final-message"
@@ -7528,7 +7608,11 @@ EOF
         local research_raw_output="${research_runtime_root}/research-output.raw"
         local research_raw_error="${research_runtime_root}/research-errors.raw"
         local research_raw_transcript="${research_runtime_root}/research-session.raw"
+        local research_normalized_output="${research_runtime_root}/research-output.normalized"
         local research_final_reply_raw="${research_runtime_root}/final-reply.raw"
+        local research_accepted_candidate="${research_runtime_root}/accepted-dossier.txt"
+        local research_dossier_source=""
+        local research_binding_note=""
         local research_final_reply_sanitized="${session_root}/research-final-reply.sanitized"
         local research_mcp_config="${session_root}/research-mcp-config.json"
         local research_runtime_home=""
@@ -7560,9 +7644,27 @@ EOF
         trap '
             if [[ "${RESEARCH_RUNTIME_OUTPUTS_SANITIZED-0}" != 1 ]] &&
                 [[ -n "${RESEARCH_BROKER_RUNTIME_TO_CLEAN-}" ]]; then
+                if [[ -f "${research_raw_output-}" &&
+                    ! -e "${research_normalized_output-}" &&
+                    ! -e "${research_final_reply_raw-}" ]]; then
+                    rhyolite_harness_invoke harness_normalize_worker_output \
+                        research \
+                        "${research_raw_output}" \
+                        "${MODEL}" \
+                        "${REASONING_EFFORT}" \
+                        "${research_normalized_output}" \
+                        "${research_final_reply_raw}" \
+                        >/dev/null 2>&1 || true
+                fi
                 persist_sanitized_research_runtime_artifacts \
                     "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" \
-                    "${research_raw_output-}" \
+                    "$(
+                        if [[ -f "${research_normalized_output-}" ]]; then
+                            printf "%s" "${research_normalized_output}"
+                        else
+                            printf "%s" "${research_raw_output-}"
+                        fi
+                    )" \
                     "${research_raw_error-}" \
                     "${research_raw_transcript-}" \
                     "${research_timeline_path-}" \
@@ -7813,40 +7915,87 @@ EOF
         fi
 
         if ((research_exit_code == 0)); then
-            if ! rhyolite_harness_invoke harness_extract_research_reply \
+            if ! rhyolite_harness_invoke harness_normalize_worker_output \
+                research \
                 "${research_raw_output}" \
-                "${research_raw_transcript}" \
+                "${MODEL}" \
+                "${REASONING_EFFORT}" \
+                "${research_normalized_output}" \
                 "${research_final_reply_raw}" \
                 >/dev/null 2>> "${research_raw_error}"; then
                 printf '%s\n' \
-                    "Harness failure stage: harness ${HARNESS} harness_extract_research_reply" \
-                    "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research reply extraction failed.}" \
+                    "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
+                    "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research output normalization failed.}" \
                     >> "${research_raw_error}"
                 research_exit_code=1
-            elif ! python3 "${RESEARCH_BROKER}" \
-                --verify-submission-reply "${research_final_reply_raw}" \
-                --submission-summary "${RESEARCH_NETWORK_SUMMARY_PATH}" \
-                2>> "${research_raw_error}"; then
-                printf '%s\n' \
-                    'The final research assistant reply did not match an accepted broker-validated dossier candidate.' \
-                    >> "${research_raw_error}"
-                research_exit_code=1
-            elif ! (
-                umask 077
-                sanitize_review_text \
-                    < "${research_final_reply_raw}" \
-                    > "${research_final_reply_sanitized}" &&
-                    chmod 600 -- "${research_final_reply_sanitized}"
-            ); then
-                printf '%s\n' \
-                    'Could not sanitize the accepted final research reply.' \
-                    >> "${research_raw_error}"
-                research_exit_code=1
+            else
+                # The broker persisted the exact accepted candidate bytes in the
+                # trusted runtime root at acceptance time. Those bytes are the
+                # canonical dossier; the final reply is checked against the
+                # acceptance proof as the agent's return contract.
+                local research_binding_status=0
+                local research_binding_result=""
+                research_binding_result="$(
+                    python3 "${RESEARCH_BROKER}" \
+                        --verify-submission-reply "${research_final_reply_raw}" \
+                        --submission-summary "${RESEARCH_NETWORK_SUMMARY_PATH}" \
+                        --accepted-candidate "${research_accepted_candidate}" \
+                        2>> "${research_raw_error}"
+                )" || research_binding_status=$?
+                case "${research_binding_status}:${research_binding_result}" in
+                    0:reply-verified)
+                        research_binding_note='the final research reply matched the broker-accepted dossier'
+                        ;;
+                    3:accepted-candidate)
+                        research_binding_note='the final research reply differed from the broker-accepted dossier, so the trusted broker-accepted candidate was used'
+                        printf 'Warning: %s.\n' "${research_binding_note}" \
+                            >> "${research_raw_error}"
+                        review_progress \
+                            "${slug}" \
+                            'research' \
+                            'final reply differed from the accepted dossier; using the broker-accepted candidate'
+                        ;;
+                    *)
+                        printf '%s\n' \
+                            'The final research assistant reply did not match an accepted broker-validated dossier candidate.' \
+                            >> "${research_raw_error}"
+                        research_exit_code=1
+                        ;;
+                esac
+            fi
+            if ((research_exit_code == 0)); then
+                if [[ -f "${research_accepted_candidate}" &&
+                    ! -L "${research_accepted_candidate}" ]]; then
+                    research_dossier_source="${research_accepted_candidate}"
+                else
+                    research_dossier_source="${research_final_reply_raw}"
+                fi
+                printf '\n[Rhyolite runner] Dossier binding: %s.\n' \
+                    "${research_binding_note}" \
+                    >> "${research_normalized_output}"
+                if ! (
+                    umask 077
+                    sanitize_review_text \
+                        < "${research_dossier_source}" \
+                        > "${research_final_reply_sanitized}" &&
+                        chmod 600 -- "${research_final_reply_sanitized}"
+                ); then
+                    printf '%s\n' \
+                        'Could not sanitize the accepted research dossier.' \
+                        >> "${research_raw_error}"
+                    research_exit_code=1
+                fi
             fi
         fi
         if ! persist_sanitized_research_runtime_artifacts \
             "${research_runtime_root}" \
-            "${research_raw_output}" \
+            "$(
+                if [[ -f "${research_normalized_output}" ]]; then
+                    printf '%s' "${research_normalized_output}"
+                else
+                    printf '%s' "${research_raw_output}"
+                fi
+            )" \
             "${research_raw_error}" \
             "${research_raw_transcript}" \
             "${research_timeline_path}" \
@@ -8242,9 +8391,40 @@ EOF
         post_process_failure=1
     fi
 
-    tr -d '\r' < "${raw_output}" |
-        sanitize_review_text > "${timeline_path}"
-    rm -f -- "${raw_output}"
+    # The adapter translates its CLI's raw stdout into a readable narrative and
+    # the exact final assistant reply, failing closed when the recorded model
+    # or reasoning effort differs from the approved plan.
+    rm -f -- "${normalized_output}" "${final_reply_path}" \
+        "${final_reply_sanitized_path}"
+    if ((worker_started)) &&
+        ! rhyolite_harness_invoke harness_normalize_worker_output \
+            review \
+            "${raw_output}" \
+            "${MODEL}" \
+            "${REASONING_EFFORT}" \
+            "${normalized_output}" \
+            "${final_reply_path}" \
+            >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker output normalization failed.}" \
+            >> "${error_path}"
+        rm -f -- "${normalized_output}" "${final_reply_path}"
+        exit_code=1
+    fi
+    if [[ -f "${normalized_output}" ]]; then
+        tr -d '\r' < "${normalized_output}" |
+            sanitize_review_text > "${timeline_path}"
+    else
+        tr -d '\r' < "${raw_output}" |
+            sanitize_review_text > "${timeline_path}"
+    fi
+    rm -f -- "${raw_output}" "${normalized_output}"
+    if [[ -f "${final_reply_path}" ]]; then
+        tr -d '\r' < "${final_reply_path}" |
+            sanitize_review_text > "${final_reply_sanitized_path}"
+        rm -f -- "${final_reply_path}"
+    fi
     if [[ -s "${error_path}" ]]; then
         tr -d '\r' < "${error_path}" |
             sanitize_review_text > "${error_path}.tmp"
@@ -8271,7 +8451,14 @@ EOF
     if ((exit_code == 0)); then
         review_progress "${slug}" 'analysis' 'agent response received'
         local report_extracted=0
-        if extract_report "${timeline_path}" "${candidate_report_path}"; then
+        # The exact final assistant reply is the primary report source; the
+        # readable timeline and the rendered transcript remain fallbacks.
+        if [[ -s "${final_reply_sanitized_path}" ]] &&
+            extract_report "${final_reply_sanitized_path}" \
+                "${candidate_report_path}" &&
+            report_has_closing_delimiter "${candidate_report_path}"; then
+            report_extracted=1
+        elif extract_report "${timeline_path}" "${candidate_report_path}"; then
             report_extracted=1
         fi
         if ((report_extracted == 0)) ||
@@ -8420,6 +8607,7 @@ EOF
     else
         status="ReviewFailed"
     fi
+    rm -f -- "${final_reply_sanitized_path}"
 
     finalize_repository_artifacts \
         "${state_path}" "${slug}" "${repository}" "${session_name}" \
