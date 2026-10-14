@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-14, for the 0.8.2 release
+**Last updated:** 2026-10-14, after the 0.8.2 release
 
 ## Priorities
 
@@ -22,7 +22,7 @@ Status values:
 
 - **Open:** work has not started.
 - **Needs triage:** confirm the problem statement before work starts.
-- **Verify:** fixed in a release; live verification is pending.
+- **Verify:** fixed; live verification is pending.
 - **Deferred:** needs an explicit project decision before work starts.
 
 ## Summary
@@ -30,13 +30,15 @@ Status values:
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
 | T1 | P0 | Verify | Live-verify review resilience with real models |
+| T6 | P0 | Verify | Select every command-line repository without extra setup turns |
 | T2 | P1 | Open | Offer the highest supported reasoning effort with explicit approval |
 | T3 | P1 | Open | Probe Claude Code same-session continuation |
 | T4 | P1 | Open | Complete the interactive and remote release smoke tests |
 | T5 | P1 | Open | Confirm the public-repository gates |
-| T6 | P2 | Needs triage | Clarify multi-repository review behavior |
 | T7 | P2 | Verify | Confirm scope-only research selection in a live guided run |
 | T8 | P2 | Open | Design research-phase recovery |
+| T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
+| T13 | P2 | Open | Fix the intermittent subagent-enforcement assertion |
 | T9 | P3 | Open | Keep the interactive setup session on the selected model |
 | T10 | P3 | Open | Make validators independent of symlinked checkout paths |
 | T11 | P3 | Deferred | Deferred review and platform features |
@@ -110,18 +112,30 @@ Status values:
   vulnerability reporting is enabled.
 - **Done when:** every pre-publication gate is confirmed.
 
-### T6 (P2, Needs triage): Clarify multi-repository review behavior
+### T6 (P0, Verify): Select every command-line repository without extra setup turns
 
-- **Report:** "can't understand multiple repos?"
-- **Context:** One run can review several repositories. Each repository is
-  reviewed in its own isolated snapshot by its own worker and produces its
-  own report. Run-level artifacts index the per-repository results, but no
-  step analyzes the repositories together.
-- **Next step:** reproduce a guided multi-repository setup, confirm that
-  every source reaches the effective plan and the executive summary, and
-  decide whether cross-repository analysis is in scope. Any such analysis
-  must keep per-repository isolation and the neutral-assessment rules.
-- **Source:** maintainer issue notes.
+- **Problem:** Reviewing several repositories in one run is a primary
+  feature. The launcher's `--repo` option took one URL, so
+  `rhyolite --repo A B` put only `A` in the trusted setup block and
+  forwarded `B` as free-text request; the launcher extracted URLs from the
+  request only when no `--repo` was given. In two-repository sessions on
+  2026-10-13 and 2026-10-14, the orchestrator either stopped to ask which
+  repositories to review, once after reading the launcher source, or
+  silently promoted the request text to a source.
+- **State:** fixed for the next release (see the `CHANGELOG.md`
+  `Unreleased` section). Every command-line URL becomes one trusted
+  `Source=` line, whether it follows `--repo`, shares a comma- or
+  whitespace-separated `--repo` value, or appears in the initial review
+  request. Spellings that differ only by a trailing `.git` are selected once,
+  an invalid URL stops the launcher, and a request that holds only URLs is
+  not forwarded. Both orchestrators select every launcher source without
+  asking about sources again, `--help` documents `--repo`, and launcher
+  regression cases cover each form.
+- **Done when:** live two-repository launches in each form reach the
+  effective plan with both sources and no source question, on both
+  harnesses.
+- **Source:** maintainer issue notes and the 2026-10-13 and 2026-10-14
+  two-repository sessions.
 
 ### T7 (P2, Verify): Confirm scope-only research selection in a live guided run
 
@@ -144,6 +158,35 @@ Status values:
   that keeps an auditable network log for every attempt and preserves the
   rule that retained ledgers are never reloadable state.
 - **Source:** 2026-10-13 incident report, remaining limits.
+
+### T12 (P2, Open): Keep the launcher setup block intact in native fleet mode
+
+- **Problem:** With `--fleet-mode native`, Copilot CLI delivered the
+  launcher's first turn as a single line prefixed with `Fleet deployed:` and
+  added fleet instructions to dispatch subagents and track todos. The
+  orchestrators expect the exact multi-line `RHYOLITE_LAUNCHER_SETUP_V1`
+  block and must not start subagents of their own, so they have to tolerate
+  a flattened block and conflicting instructions. The observed sessions
+  still recognized the block.
+- **Next step:** confirm the transformation with the current Copilot CLI,
+  then decide whether the launcher should deliver the setup block another
+  way in native mode or whether the orchestrators should explicitly accept
+  the flattened form and ignore fleet dispatch instructions.
+- **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
+
+### T13 (P2, Open): Fix the intermittent subagent-enforcement assertion
+
+- **Problem:** On 2026-10-14 one `bash ./tests/validate-all.sh` run failed in
+  `tests/validate-harness-contract.sh`: `errors.txt` lacked the line
+  `Harness failure stage: harness copilot harness_detect_worker_violation`.
+  The live monitor had still terminated the mock worker, and the terminal
+  stage was correct. The validator and the full gate passed on immediate
+  re-runs. An intermittent release-gate failure can block a release or
+  hide a real regression.
+- **Next step:** reproduce it in a loop or under load, find whether
+  post-exit normalization can record the failure stage before the live
+  monitor's detection does, and make the recorded stage deterministic.
+- **Source:** 2026-10-14 validation run.
 
 ### T9 (P3, Open): Keep the interactive setup session on the selected model
 

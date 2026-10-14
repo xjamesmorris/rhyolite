@@ -308,32 +308,77 @@ join_initial_request() {
     printf '%s' "${joined}"
 }
 
-extract_repository_urls_from_request() {
-    local request="$1"
-    local token
+# Remove the brackets, quotes, and sentence punctuation that commonly wrap a
+# URL typed in prose, so "(https://host/owner/repository)," still selects it.
+trim_url_token() {
+    local token="$1"
 
-    for token in ${request}; do
+    while :; do
         case "${token}" in
-            https://*|HTTPS://*)
-                token="${token%,}"
-                token="${token%;}"
-                token="${token%.}"
-                token="${token%)}"
-                token="${token%]}"
-                printf '%s\n' "${token}"
-                ;;
+            [\(\[\<\"\']*) token="${token#?}" ;;
+            *[,\;.:\!\?\)\]\>\"\']) token="${token%?}" ;;
+            *) break ;;
         esac
+    done
+    printf '%s' "${token}"
+}
+
+# Split text into comma- and whitespace-separated tokens without pathname
+# expansion, trimming each token's wrapping punctuation.
+split_url_tokens() {
+    local token
+    local -a tokens=()
+
+    read -r -a tokens <<< "${1//,/ }"
+    for token in "${tokens[@]}"; do
+        token="$(trim_url_token "${token}")"
+        if [[ -n "${token}" ]]; then
+            printf '%s\n' "${token}"
+        fi
     done
 }
 
+is_https_url_token() {
+    case "$(rhyolite_ascii_lower "${1:0:8}")" in
+        https://) return 0 ;;
+    esac
+    return 1
+}
+
+extract_repository_urls_from_request() {
+    local token
+
+    while IFS= read -r token; do
+        if is_https_url_token "${token}"; then
+            printf '%s\n' "${token}"
+        fi
+    done < <(split_url_tokens "$1")
+}
+
+# A request that holds only repository URLs adds nothing beyond the sources
+# the launcher already selected from it.
+request_has_non_url_text() {
+    local token
+
+    while IFS= read -r token; do
+        is_https_url_token "${token}" || return 0
+    done < <(split_url_tokens "$1")
+    return 1
+}
+
 split_repository_input() {
-    printf '%s\n' "$1" |
-        tr ',' '\n' |
-        while IFS= read -r value; do
-            value="${value#"${value%%[![:space:]]*}"}"
-            value="${value%"${value##*[![:space:]]}"}"
-            [[ -n "${value}" ]] && printf '%s\n' "${value}"
-        done
+    split_url_tokens "$1"
+}
+
+# Spellings of one repository that differ only by a terminal .git endpoint
+# select it once; the first spelling remains the selected source.
+repository_selection_key() {
+    local repository="$1"
+
+    case "$(rhyolite_ascii_lower "${repository}")" in
+        *.git) repository="${repository%????}" ;;
+    esac
+    printf '%s' "${repository}"
 }
 
 prompt_for_fleet_mode() {
@@ -646,13 +691,18 @@ Rhyolite v${version} Beta
 Usage:
   rhyolite [--help]
   rhyolite [--version]
-  rhyolite [--repo URL ...] [--harness ID] [--fleet-mode native|standard]
+  rhyolite [--repo URL]... [--harness ID] [--fleet-mode native|standard]
            [--model MODEL] [--allow-unlisted-model]
            [--reasoning-effort high|xhigh|max]
            [--context default|long_context] [--yolo]
-           [--] [initial review request...]
+           [--] [URL...] [initial review request...]
 
 Options:
+  --repo URL          Add a public HTTPS Git repository to review. Repeat
+                      --repo or separate URLs with commas or spaces. Every
+                      public HTTPS URL on the command line, including URLs in
+                      the initial review request, is reviewed; spellings that
+                      differ only by a trailing .git are reviewed once.
   --harness ID        Select a registered review harness.
   --model MODEL       Select an exact ID from Copilot's offline model catalog
                       (default: gpt-5.6-sol; alternates: claude-opus-5.5,
@@ -711,6 +761,8 @@ main() {
     local preference_status
     local repository_input
     local repository
+    local repository_key
+    local repository_input_count
     local existing_repository
     local duplicate
     local invalid_repository=''
@@ -827,7 +879,17 @@ main() {
                         '--repo requires a public HTTPS Git repository URL.' \
                         'Pass --repo URL or omit it to use interactive launcher setup.' \
                         2
-                repository_inputs+=("$2")
+                repository_input_count=${#repository_inputs[@]}
+                while IFS= read -r repository; do
+                    repository_inputs+=("${repository}")
+                done < <(split_repository_input "$2")
+                ((${#repository_inputs[@]} > repository_input_count)) ||
+                    fail \
+                        'launcher argument validation' \
+                        'A repository URL argument is missing.' \
+                        '--repo requires a public HTTPS Git repository URL.' \
+                        'Pass --repo URL or omit it to use interactive launcher setup.' \
+                        2
                 shift 2
                 ;;
             --fleet-mode)
@@ -1061,10 +1123,13 @@ main() {
     fi
 
     initial_request="$(join_initial_request "${request_parts[@]}")"
-    if [[ ${#repository_inputs[@]} -eq 0 && -n "${initial_request}" ]]; then
+    # Every repository URL on the command line is a source, whether it
+    # follows --repo or appears in the initial review request.
+    if [[ -n "${initial_request}" ]]; then
         while IFS= read -r repository; do
-            [[ -n "${repository}" ]] && repository_inputs+=("${repository}")
+            repository_inputs+=("${repository}")
         done < <(extract_repository_urls_from_request "${initial_request}")
+        request_has_non_url_text "${initial_request}" || initial_request=''
     fi
     if [[ -t 0 && -t 1 ]]; then
         is_interactive=1
@@ -1078,10 +1143,10 @@ main() {
                 'Pass --repo URL, include the URL in the initial request, or run interactively.' \
                 2
         fi
-        printf 'Public repository URL(s), comma-separated: '
+        printf 'Public repository URL(s), separated by commas or spaces: '
         IFS= read -r repository_input
         while IFS= read -r repository; do
-            [[ -n "${repository}" ]] && repository_inputs+=("${repository}")
+            repository_inputs+=("${repository}")
         done < <(split_repository_input "${repository_input}")
     done
 
@@ -1091,9 +1156,11 @@ main() {
             break
         fi
         repository="${RHYOLITE_CANONICAL_REPOSITORY}"
+        repository_key="$(repository_selection_key "${repository}")"
         duplicate=0
         for existing_repository in "${repositories[@]}"; do
-            if [[ "${existing_repository}" == "${repository}" ]]; then
+            if [[ "$(repository_selection_key "${existing_repository}")" == \
+                "${repository_key}" ]]; then
                 duplicate=1
                 break
             fi

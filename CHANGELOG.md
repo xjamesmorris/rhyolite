@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fixed multi-repository launches. `rhyolite --repo A B` put only `A` in the
+  launcher's trusted setup block and forwarded `B` as free-text request, so
+  the orchestrator either stopped to ask which repositories to review or
+  silently promoted that text to a source. Every repository URL on the
+  command line now becomes a trusted source, whether it follows `--repo`,
+  shares a comma- or whitespace-separated `--repo` value, or appears in the
+  initial review request. Spellings that differ only by a trailing `.git`
+  are selected once, an invalid URL stops the launcher, and a request that
+  holds only URLs is no longer forwarded. Both orchestrators select every
+  launcher source without asking about sources again, and `--help` now
+  documents `--repo`.
+
 ## 0.8.2 - 2026-10-14
 
 - Fixed the review failures of 2026-10-13 and the recurring class behind

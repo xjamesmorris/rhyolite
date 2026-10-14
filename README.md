@@ -40,6 +40,9 @@ other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
    ./rhyolite --repo https://github.com/owner/repository
    ```
 
+   To review several repositories in one run, list every URL, for example
+   `./rhyolite --repo https://github.com/owner/one https://github.com/owner/two`.
+
 3. Press Enter at each launcher prompt to accept the default execution
    mode, model, reasoning effort, and context. Copilot CLI then opens with
    the `repo-review` agent selected and starts guided setup, as in the
@@ -1072,6 +1075,23 @@ wrapper on Fedora Linux 44:
 ```bash
 ./rhyolite --repo https://github.com/owner/repository
 ```
+
+To review several repositories in one run, repeat `--repo`, separate URLs
+with commas or spaces, or list them after the options:
+
+```bash
+./rhyolite --repo https://github.com/owner/one --repo https://github.com/owner/two
+./rhyolite --repo https://github.com/owner/one https://github.com/owner/two
+./rhyolite https://github.com/owner/one,https://github.com/owner/two
+```
+
+Every public HTTPS URL on the command line, including a URL inside an
+initial review request, becomes one trusted source in the launcher's setup
+block, and the agent selects all of them without asking about sources again.
+Spellings that differ only by a trailing `.git` are reviewed once, and an
+invalid URL stops the launcher before the harness CLI starts. The
+`EFFECTIVE REVIEW PLAN` lists every source, and `Edit setup` can still change
+them.
 
 The optional `--yolo` switch changes the outer Copilot session permissions
 for that launch:

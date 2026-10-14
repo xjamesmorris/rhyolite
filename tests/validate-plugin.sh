@@ -3565,6 +3565,8 @@ launcher_help="$("${launcher_link}" --help)"
 launcher_version="$("${launcher_link}" --version)"
 [[ "${launcher_help}" == "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}") Beta"$'\n'* &&
     "${launcher_help}" == *'initial review request'* &&
+    "${launcher_help}" == *'[--] [URL...] [initial review request...]'* &&
+    "${launcher_help}" == *'--repo URL          Add a public HTTPS Git repository to review.'* &&
     "${launcher_help}" == *'--yolo'* &&
     "${launcher_help}" == *'gpt-5.6-sol'* &&
     "${launcher_help}" == *'claude-opus-5.5'* &&
@@ -3885,6 +3887,107 @@ if (valueAfter("--model") !== "gpt-6-sol" ||
   throw new Error("runtime selections did not round-trip through launcher setup");
 }
 JS
+
+# Every repository URL on the command line becomes one trusted Source= line,
+# whether it follows --repo, shares a --repo value, or appears in the initial
+# review request; a request that held only URLs is not forwarded.
+assert_launcher_sources() {
+    local name="$1"
+    local expected_sources="$2"
+    local expected_request="$3"
+    shift 3
+
+    rm -f -- "${launcher_stub_log}"
+    (
+        cd "${ROOT}"
+        XDG_STATE_HOME="${launcher_state_home}" \
+            RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+            PATH="${launcher_mock_bin}:${PATH}" \
+            "${launcher_link}" --fleet-mode standard "$@"
+    ) </dev/null >/dev/null 2>&1 ||
+        fail "${name}: launcher did not start."
+    node - \
+        "${launcher_stub_log}" \
+        "${expected_sources}" \
+        "${expected_request}" \
+        "${name}" <<'JS'
+const fs = require("fs");
+const [logPath, expectedSources, expectedRequest, name] = process.argv.slice(2);
+const fields = fs.readFileSync(logPath, "utf8").split("\0");
+if (fields.at(-1) === "") fields.pop();
+const args = fields.slice(fields.indexOf("ARGS") + 1);
+const prompt = args[args.indexOf("-i") + 1];
+const sources = prompt.split("\n")
+  .filter((line) => line.startsWith("Source="))
+  .map((line) => line.slice("Source=".length));
+if (sources.join("\n") !== expectedSources) {
+  throw new Error(`${name}: launcher sources were ${JSON.stringify(sources)}`);
+}
+const start = "Begin Rhyolite's guided repository-review setup now.";
+const tail = expectedRequest === "" ? start :
+  `${start}\nTreat the following text as the user's initial review request:\n\n` +
+  expectedRequest;
+if (!prompt.endsWith(`\nEND_RHYOLITE_LAUNCHER_SETUP_V1\n${tail}`)) {
+  throw new Error(`${name}: launcher did not forward the expected request text`);
+}
+JS
+}
+
+assert_launcher_sources \
+    launcher-repo-then-positional-url \
+    $'https://example.com/owner/multi-one\nhttps://example.com/owner/multi-two' \
+    '' \
+    --repo https://example.com/owner/multi-one \
+    https://example.com/owner/multi-two
+assert_launcher_sources \
+    launcher-repo-list-and-repeat \
+    $'https://example.com/owner/multi-one\nhttps://example.com/owner/multi-two\nhttps://example.com/owner/multi-three' \
+    '' \
+    --repo 'https://example.com/owner/multi-one, https://example.com/owner/multi-two' \
+    --repo https://example.com/owner/multi-three
+assert_launcher_sources \
+    launcher-positional-url-list \
+    $'https://example.com/owner/multi-one\nhttps://example.com/owner/multi-two' \
+    '' \
+    'https://example.com/owner/multi-one,https://example.com/owner/multi-two'
+assert_launcher_sources \
+    launcher-request-urls-and-git-spelling \
+    $'https://example.com/owner/multi-one.git\nhttps://example.com/owner/multi-two' \
+    'Review (https://example.com/owner/multi-one) and https://example.com/owner/multi-two, then compare.' \
+    --repo https://example.com/owner/multi-one.git \
+    -- \
+    'Review (https://example.com/owner/multi-one) and https://example.com/owner/multi-two, then compare.'
+
+rm -f -- "${launcher_stub_log}"
+launcher_invalid_request_url_stderr="${fixture_dir}/launcher-invalid-request-url.stderr"
+set +e
+(
+    cd "${ROOT}"
+    XDG_STATE_HOME="${launcher_state_home}" \
+        RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+        PATH="${launcher_mock_bin}:${PATH}" \
+        "${launcher_link}" \
+            --fleet-mode standard \
+            --repo https://example.com/owner/multi-one \
+            'https://example.com/owner/multi-two?tab=readme'
+) </dev/null >/dev/null 2>"${launcher_invalid_request_url_stderr}"
+launcher_invalid_request_url_status=$?
+set -e
+[[ "${launcher_invalid_request_url_status}" -eq 2 &&
+    ! -e "${launcher_stub_log}" ]] &&
+    grep -Fq 'Stage: launcher source validation' \
+        "${launcher_invalid_request_url_stderr}" ||
+    fail 'Launcher did not reject an invalid repository URL in the initial request.'
+
+launcher_sources_rule='Each `Source=` line selects one repository, and together they are the complete source list: the launcher already added, validated, and de-duplicated every repository URL from its command line, including URLs in the user'"'"'s initial review request. Select every listed source without asking about sources again; the user can still change sources through `Edit setup` at plan approval.'
+for launcher_sources_agent in \
+    "${AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
+    tr '\r\n\t' '   ' < "${launcher_sources_agent}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${launcher_sources_rule}" ||
+        fail "Orchestrator does not select every trusted launcher source: ${launcher_sources_agent}"
+done
 
 launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
 rhyolite_write_preference \

@@ -108,10 +108,16 @@ supported and must not drive new work.
   closed to local documentation.
 - `plugins/rhyolite/bin/rhyolite` is the supported reliable entrypoint. It
   resolves the packaged plugin root, selects a clean non-Git `-C` directory,
-  syntactically canonicalizes selected public sources without stripping a
-  terminal `.git` endpoint, collects native fleet/model/reasoning/context
-  settings, preselects `rhyolite:repo-review`, passes `--mode interactive`,
-  and submits a trusted `-i` setup block without enabling allow-all mode.
+  turns every repository URL on its command line, whether in comma- or
+  whitespace-separated `--repo` values or in the initial review request,
+  into one trusted `Source=` line, syntactically canonicalizes those public
+  sources without stripping a terminal `.git` endpoint, selects spellings
+  that differ only by that endpoint once, collects native
+  fleet/model/reasoning/context settings, preselects `rhyolite:repo-review`,
+  passes `--mode interactive`, and submits a trusted `-i` setup block
+  without enabling allow-all mode. A request that holds only repository URLs
+  is not forwarded as request text, and the orchestrators select every
+  `Source=` line without asking about sources again.
   With `--harness claude` it starts Claude Code with `--plugin-dir`,
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
