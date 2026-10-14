@@ -9166,6 +9166,10 @@ EOF
             'analysis' \
             "${MODEL} review started; scope ${SCOPE}"
         WORKER_REVIEW_STARTED_EPOCH="$(date +%s)"
+        # Start errors.txt empty, then let the worker append: the live monitor
+        # appends to the same file, and a worker that writes to stderr while it
+        # stops must not overwrite those lines from a stale file offset.
+        : > "${error_path}"
         set +e
         timeout \
             --signal=TERM \
@@ -9176,7 +9180,7 @@ EOF
             "${HARNESS_CLI_NAME}" "${worker_arguments[@]}" \
             < "${request_path}" \
             > "${raw_output}" \
-            2> "${error_path}" &
+            2>> "${error_path}" &
         local review_process_id=$!
         RHYOLITE_ACTIVE_CHILD_PID="${review_process_id}"
         worker_started=1

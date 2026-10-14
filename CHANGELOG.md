@@ -13,6 +13,13 @@
   holds only URLs is no longer forwarded. Both orchestrators select every
   launcher source without asking about sources again, and `--help` now
   documents `--repo`.
+- Fixed an intermittent loss of the live monitor's record in `errors.txt`.
+  The review worker's stderr was opened without append mode while the live
+  approved-plan monitor appended its `harness_detect_worker_violation` stage
+  and detail to the same file, so a worker that wrote to stderr while
+  stopping could overwrite them. The runner now empties `errors.txt` and
+  starts the worker in append mode, and the subagent-enforcement regression
+  writes to stderr while stopping.
 
 ## 0.8.2 - 2026-10-14
 

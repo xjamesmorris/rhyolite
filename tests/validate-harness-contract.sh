@@ -3847,6 +3847,10 @@ if [[ -n "${RHYOLITE_MOCK_SUBAGENT_MODEL:-}" ]]; then
         # written even when the runner's tree-wide TERM arrives mid-exit.
         trap '' INT TERM HUP
         printf 'terminated\n' > "${RHYOLITE_WORKER_CAPTURE}/subagent-terminated"
+        # Write to stderr while stopping, as a CLI or its shell may, after the
+        # live monitor appended its detection to errors.txt; the record must
+        # survive.
+        printf 'mock Copilot worker stopped after a signal\n' >&2
         if [[ -n "${mock_subagent_sleep_pid}" ]]; then
             kill "${mock_subagent_sleep_pid}" 2>/dev/null || true
             wait "${mock_subagent_sleep_pid}" 2>/dev/null || true

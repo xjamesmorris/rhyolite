@@ -38,7 +38,6 @@ Status values:
 | T7 | P2 | Verify | Confirm scope-only research selection in a live guided run |
 | T8 | P2 | Open | Design research-phase recovery |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
-| T13 | P2 | Open | Fix the intermittent subagent-enforcement assertion |
 | T9 | P3 | Open | Keep the interactive setup session on the selected model |
 | T10 | P3 | Open | Make validators independent of symlinked checkout paths |
 | T11 | P3 | Deferred | Deferred review and platform features |
@@ -105,11 +104,11 @@ Status values:
 ### T5 (P1, Open): Confirm the public-repository gates
 
 - **Problem:** The repository is now public, so every pre-publication gate
-  in [PUBLISHING.md](PUBLISHING.md) applies. Confirm branch protection for
-  `main` without hosted-CI requirements, the published support routes,
-  including the issue forms and the private conduct contact, and a smoke
-  test of the published support and release paths. GitHub private
-  vulnerability reporting is enabled.
+  in [PUBLISHING.md](PUBLISHING.md) applies. Branch protection for `main` is
+  configured without hosted-CI requirements or required reviews, and GitHub
+  private vulnerability reporting is enabled. Still confirm the published
+  support routes, including the issue forms and the private conduct
+  contact, and smoke-test the published support and release paths.
 - **Done when:** every pre-publication gate is confirmed.
 
 ### T6 (P0, Verify): Select every command-line repository without extra setup turns
@@ -173,20 +172,6 @@ Status values:
   way in native mode or whether the orchestrators should explicitly accept
   the flattened form and ignore fleet dispatch instructions.
 - **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
-
-### T13 (P2, Open): Fix the intermittent subagent-enforcement assertion
-
-- **Problem:** On 2026-10-14 one `bash ./tests/validate-all.sh` run failed in
-  `tests/validate-harness-contract.sh`: `errors.txt` lacked the line
-  `Harness failure stage: harness copilot harness_detect_worker_violation`.
-  The live monitor had still terminated the mock worker, and the terminal
-  stage was correct. The validator and the full gate passed on immediate
-  re-runs. An intermittent release-gate failure can block a release or
-  hide a real regression.
-- **Next step:** reproduce it in a loop or under load, find whether
-  post-exit normalization can record the failure stage before the live
-  monitor's detection does, and make the recorded stage deterministic.
-- **Source:** 2026-10-14 validation run.
 
 ### T9 (P3, Open): Keep the interactive setup session on the selected model
 
