@@ -288,8 +288,9 @@ harness_capability() {
             printf '%s\n' 'yes'
             ;;
         # Re-invoking a non-interactive JSON worker with the same
-        # --session-id and runtime home resumes that session with its full
-        # context (verified live with Copilot CLI 1.0.98).
+        # --session-id and runtime home, without --name, resumes that
+        # session with its full context (verified live with Copilot CLI
+        # 1.0.98-2).
         worker_continuation)
             printf '%s\n' 'yes'
             ;;
@@ -1485,37 +1486,66 @@ harness_worker_outcome() {
 
 # Copilot CLI resumes an existing non-interactive session when it is invoked
 # again with the same --session-id and runtime home, so a continuation reuses
-# the exact approved worker argv; only the request on stdin changes.
+# the exact approved worker argv without its --name pair; only the request on
+# stdin changes. --name only labels a brand-new session, and Copilot CLI
+# 1.0.98-2 rejects it when --session-id resolves to an existing session
+# (verified live).
 harness_worker_continuation_argv() {
     local destination_name="$1"
     local source_name="$2"
-    local index session_count=0
+    local copilot_continuation_index=0
+    local copilot_continuation_sessions=0
+    local -a copilot_continuation_source_copy=()
+    local -a copilot_continuation_result=()
 
     copilot_require_array_destination "${destination_name}" || return 1
     [[ "${source_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ &&
-        "${source_name}" != "${destination_name}" ]] || {
+        "${source_name}" != "${destination_name}" &&
+        "${source_name}" != copilot_continuation_* &&
+        "${destination_name}" != copilot_continuation_* ]] || {
         rhyolite_harness_set_error \
             'The Copilot continuation source argv name is invalid.'
         return 1
     }
-    local -n continuation_source="${source_name}"
-    local -n continuation_output="${destination_name}"
-    for index in "${!continuation_source[@]}"; do
-        if [[ "${continuation_source[index]}" == --session-id ]]; then
-            session_count=$((session_count + 1))
-            [[ "${continuation_source[index + 1]-}" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || {
+    local -n copilot_continuation_source_ref="${source_name}"
+    local -n copilot_continuation_output_ref="${destination_name}"
+    copilot_continuation_source_copy=("${copilot_continuation_source_ref[@]}")
+    while ((copilot_continuation_index < ${#copilot_continuation_source_copy[@]})); do
+        case "${copilot_continuation_source_copy[copilot_continuation_index]}" in
+            --session-id)
+                copilot_continuation_sessions=$((copilot_continuation_sessions + 1))
+                [[ "${copilot_continuation_source_copy[copilot_continuation_index + 1]-}" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || {
+                    rhyolite_harness_set_error \
+                        'The Copilot continuation session identifier is invalid.'
+                    return 1
+                }
+                ;;
+            --name)
+                ((copilot_continuation_index + 1 < ${#copilot_continuation_source_copy[@]})) || {
+                    rhyolite_harness_set_error \
+                        'The Copilot continuation session name is missing.'
+                    return 1
+                }
+                copilot_continuation_index=$((copilot_continuation_index + 2))
+                continue
+                ;;
+            -n|--name=*)
                 rhyolite_harness_set_error \
-                    'The Copilot continuation session identifier is invalid.'
+                    'The Copilot continuation argv names the session in an unsupported form.'
                 return 1
-            }
-        fi
+                ;;
+        esac
+        copilot_continuation_result+=(
+            "${copilot_continuation_source_copy[copilot_continuation_index]}"
+        )
+        copilot_continuation_index=$((copilot_continuation_index + 1))
     done
-    ((session_count == 1)) || {
+    ((copilot_continuation_sessions == 1)) || {
         rhyolite_harness_set_error \
             'The Copilot continuation argv must name exactly one session.'
         return 1
     }
-    continuation_output=("${continuation_source[@]}")
+    copilot_continuation_output_ref=("${copilot_continuation_result[@]}")
 }
 
 harness_render_request() {

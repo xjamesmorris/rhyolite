@@ -39,8 +39,9 @@ own session, through `harness_worker_continuation_argv`, after a transient
 model-service failure, after an automatic model fallback that was blocked
 before it produced output, or to fetch missing, truncated, or invalid report
 sections in bounded pages (`RHYOLITE_REPORT_DELIVERY_V1`). A continuation
-uses the exact approved argv, environment, runtime home, tools, model,
-effort, and context, and live enforcement applies to it. The contract never
+uses the exact approved argv less only its new-session name label, and the
+same environment, runtime home, tools, model, effort, and context, and live
+enforcement applies to it. The contract never
 permits a model to rewrite accepted report sections, accepts substituted
 output, relaunches research, or falls back to another harness or model.
 
@@ -712,8 +713,11 @@ and treats a malformed or missing outcome as `unknown`, which never continues
 a session. `harness_worker_continuation_argv <destination> <source_argv_name>`
 returns the argv that resumes the same session; Copilot CLI resumes a
 non-interactive JSON session when it is invoked again with the same
-`--session-id` and runtime home (verified live with Copilot CLI 1.0.98), so
-the Copilot adapter returns the exact approved worker argv. Claude Code reports
+`--session-id` and runtime home (verified live with Copilot CLI 1.0.98-2), so
+the Copilot adapter returns the exact approved worker argv without its
+`--name` pair. `--name` only labels a brand-new session, and Copilot CLI
+1.0.98-2 rejects it when `--session-id` resolves to an existing session; any
+other session-name spelling in the source argv fails closed. Claude Code reports
 `worker_continuation` as `unverified` until a live probe proves same-session
 print-mode continuation, so the runner never continues a Claude Code session.
 

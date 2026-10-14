@@ -245,6 +245,18 @@ dedicated security pass itself. Re-run that probe before ever offering
 `task`, `list_agents`, or `read_agent` to a worker again, and only if the
 CLI gains a configuration that rejects the override.
 
+Same-session continuation replays the approved worker argv without its
+`--name` pair. `--name` only labels a brand-new session, and Copilot CLI
+1.0.98-2 rejects it when `--session-id` resolves to an existing session.
+Both mocked CLIs reproduce that rejection. Before you change
+`harness_worker_argv` or `harness_worker_continuation_argv`, and after every
+Copilot CLI upgrade, re-verify live:
+
+1. Create a session with the adapter-built worker argv in an isolated runtime
+   home, using a low-cost model.
+2. Invoke the exact continuation argv on the same session.
+3. Confirm a `session.resume` event and that the session kept its context.
+
 `harness_detect_worker_violation` is the live counterpart of the normalizer.
 The runner's `wait_for_monitored_worker` calls it every
 `RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS` loop iterations (five, counted per

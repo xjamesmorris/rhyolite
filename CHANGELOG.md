@@ -24,6 +24,14 @@
   assembled report that passes unchanged strict finalization. Claude Code
   reports `worker_continuation` as `unverified` and keeps its previous
   behavior.
+- Fixed Copilot same-session recovery on Copilot CLI 1.0.98-2, which rejects
+  `--name` when `--session-id` resolves to an existing session. The first
+  paged-delivery continuation of a report cut at the 32,000-token output
+  limit failed before it reached the model, so the review produced no
+  report. The continuation argv is now the approved worker argv without its
+  `--name` pair (re-verified live), and both mocked CLIs reproduce the
+  rejection. The deterministic failure analysis now classifies a harness CLI
+  option rejection as `harness-invocation` instead of recommending a rerun.
 - Added collect-mode report validation that reports every violation with its
   section; strict mode keeps its exact first diagnostic.
 - Every failed repository now gets a deterministic `failure-analysis.md` and

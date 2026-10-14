@@ -2,7 +2,8 @@
 
 # Unit regressions for collect-mode report validation and the paged report
 # delivery protocol (RHYOLITE_REPORT_DELIVERY_V1) that lets the trusted runner
-# ask a review worker to resend only missing, truncated, or invalid sections.
+# ask a review worker to resend only missing, truncated, or invalid sections,
+# plus the deterministic failure analysis of a failed delivery.
 
 set -euo pipefail
 umask 077
@@ -612,5 +613,51 @@ grep -rqa $'\xef\xbf\xbd' "${workdir}/sections" &&
 expect_exit 2 'unknown delivery command' review_report_delivery explode
 expect_exit 2 'invalid assess reason' \
     review_report_delivery assess '' 1 "${workdir}" whatever
+
+# ---------------------------------------------------------------------------
+# 7. Failure analysis of a failed delivery: when the harness CLI rejects the
+#    continuation's options (the 2026-10-13 run, Copilot CLI 1.0.98-2), the
+#    class is harness-invocation rather than the output-limit trigger, and a
+#    rerun is not recommended. Without that rejection the same artifacts keep
+#    the output-limit class.
+# ---------------------------------------------------------------------------
+analysis_rejected="${FIXTURE_ROOT}/analysis-rejected"
+analysis_cut="${FIXTURE_ROOT}/analysis-cut"
+mkdir -p -- "${analysis_rejected}/worker-recovery"
+cat > "${analysis_rejected}/state.json" <<'EOF'
+{"Status": "ReviewFailed", "Repository": "https://github.com/octocat/Hello-World", "Harness": "copilot", "WorkerRecovery": {"Status": "Failed", "Trigger": "missing"}, "ReportRepair": {"Status": "NotReached"}}
+EOF
+cat > "${analysis_rejected}/worker-recovery/initial-outcome.json" <<'EOF'
+{"ExitCode": 0, "FallbackModel": "", "FinalReplyAtOutputLimit": false, "ModelCallFailures": 0, "Outcome": "completed", "OutputLimitHits": 3, "OutputTokenLimit": 32000, "Phase": "review", "Retryable": false, "Schema": 1, "SessionErrors": [], "TurnRetries": 0}
+EOF
+cat > "${analysis_rejected}/errors.txt" <<'EOF'
+Final report header or end marker was not found.
+error: option '-n, --name <name>' cannot be used with option '--session-id <id>' when it resolves to an existing or remote session or task.
+--name only names a brand-new session created by --session-id=<new-uuid>; the resolved session was not renamed.
+Worker responses that reached the per-response output token limit of 32000 tokens: 3.
+Worker recovery Failed: The worker continuation ended without an acceptable reply (outcome unknown).
+EOF
+cp -R -- "${analysis_rejected}" "${analysis_cut}"
+grep -v -e '^error: option ' -e '^--name only ' "${analysis_rejected}/errors.txt" \
+    > "${analysis_cut}/errors.txt"
+write_failure_analysis "${analysis_rejected}" 'worker recovery' ||
+    fail 'failure analysis of a rejected continuation was not written'
+write_failure_analysis "${analysis_cut}" 'worker recovery' ||
+    fail 'failure analysis of a cut report was not written'
+python3 - "${analysis_rejected}/failure-analysis.json" \
+    "${analysis_cut}/failure-analysis.json" <<'PY'
+import json
+import sys
+
+rejected = json.load(open(sys.argv[1], encoding="utf-8"))
+cut = json.load(open(sys.argv[2], encoding="utf-8"))
+assert rejected["FailureClass"] == "harness-invocation", rejected
+assert "error: option '-n, --name <name>' cannot be used" in rejected["RootCause"], rejected
+assert rejected["RecommendedActions"][0].startswith("Do not rerun"), rejected
+assert rejected["OutputLimitHits"] == 3 and rejected["OutputTokenLimit"] == 32000, rejected
+assert cut["FailureClass"] == "output-limit", cut
+PY
+assert_contains "${analysis_rejected}/failure-analysis.md" \
+    '- Failure class: harness-invocation' 'rejected continuation analysis'
 
 printf 'Report delivery regressions passed.\n'

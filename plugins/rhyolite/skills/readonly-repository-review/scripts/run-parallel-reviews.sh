@@ -3951,8 +3951,9 @@ if data["OutputLimitHits"]:
 PY
 }
 
-# Run one continuation of the review worker's own session under the same
-# approved argv, environment, runtime home, tools, and live enforcement.
+# Run one continuation of the review worker's own session under the adapter's
+# continuation argv (the approved worker argv less any new-session-only
+# option) and the same environment, runtime home, tools, and live enforcement.
 run_worker_continuation() {
     local request_file="$1"
     local label="$2"

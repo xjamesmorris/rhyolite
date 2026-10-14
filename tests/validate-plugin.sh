@@ -7139,6 +7139,8 @@ additional_mcp_config=""
 model=""
 reasoning_effort=""
 context_tier=""
+session_id=""
+session_named=0
 previous=""
 for argument in "$@"; do
     if [[ "${previous}" == "--agent" ]]; then
@@ -7162,8 +7164,30 @@ for argument in "$@"; do
     if [[ "${previous}" == "--context" ]]; then
         context_tier="${argument}"
     fi
+    if [[ "${previous}" == "--session-id" ]]; then
+        session_id="${argument}"
+    fi
+    case "${argument}" in
+        -n|--name|--name=*) session_named=1 ;;
+    esac
     previous="${argument}"
 done
+# Like Copilot CLI 1.0.98-2, reject --name when --session-id resolves to an
+# existing session in this runtime home; a resumed session must not be named.
+if [[ -n "${session_id}" ]]; then
+    if grep -Fxq -- "${COPILOT_HOME:-}"$'\t'"${session_id}" \
+        "${MOCK_LOG}.sessions" 2>/dev/null; then
+        if ((session_named)); then
+            printf '%s\n' \
+                "error: option '-n, --name <name>' cannot be used with option '--session-id <id>' when it resolves to an existing or remote session or task." \
+                '--name only names a brand-new session created by --session-id=<new-uuid>; the resolved session was not renamed.' >&2
+            exit 1
+        fi
+    else
+        printf '%s\t%s\n' "${COPILOT_HOME:-}" "${session_id}" \
+            >> "${MOCK_LOG}.sessions"
+    fi
+fi
 if [[ -n "${agent}" ]]; then
     phase="${agent}"
 else

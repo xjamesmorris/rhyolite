@@ -501,14 +501,17 @@ supported and must not drive new work.
   `unknown`, with sanitized session errors and output-token-limit evidence),
   `harness_worker_continuation_argv <destination> <source_argv_name>`, and
   the `worker_continuation` capability. Copilot reports it `yes` (verified
-  live: the same `--session-id` and runtime home resume a non-interactive
-  session); Claude Code reports `unverified`. Follow
+  live with Copilot CLI 1.0.98-2: the same `--session-id` and runtime home
+  resume a non-interactive session; the continuation argv omits `--name`,
+  which only labels a brand-new session and which the CLI rejects for an
+  existing one); Claude Code reports `unverified`. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
 - Same-session worker recovery is approval-bound as `WorkerRecoveryPolicy`.
   When `worker_continuation` is `yes`, the runner may continue the review
-  worker's own session, with the exact approved argv, environment, runtime
-  home, tools, model, effort, and context and with live enforcement: after a
+  worker's own session, with the exact approved argv less only its
+  new-session `--name` label, and the same environment, runtime home, tools,
+  model, effort, and context and with live enforcement: after a
   transient model-service failure or an automatic model fallback that was
   blocked before it produced output (at most 2 retries), and to fetch
   missing, truncated, or invalid report sections through the paged

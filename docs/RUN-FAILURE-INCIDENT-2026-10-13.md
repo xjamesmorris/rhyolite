@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-13 (local time)
 **Status:** Root causes confirmed; generic recovery implemented (Harness
-Contract v8)
+Contract v8); follow-up continuation fix applied (see the follow-up below)
 **Severity:** High (review reliability and resource efficiency)
 **Security impact:** None observed. Every enforcement boundary held; no
 substituted output was accepted.
@@ -174,8 +174,9 @@ symptom-specific recovery with one general, bounded, deterministic loop:
   the adapter has verified `worker_continuation` (Copilot: the same
   `--session-id` and runtime home resume a non-interactive session, verified
   live), the runner continues the worker's own session with the exact
-  approved argv, environment, tools, model, effort, and context, under live
-  enforcement.
+  approved argv less only its new-session `--name` label (see the follow-up
+  below), and the same environment, tools, model, effort, and context,
+  under live enforcement.
 - **Paged report delivery (`RHYOLITE_REPORT_DELIVERY_V1`).** When the final
   report is missing, cut, or invalid, the runner keeps every section that
   passes strict validation verbatim and asks the same session to resend only
@@ -241,3 +242,48 @@ symptom-specific recovery with one general, bounded, deterministic loop:
 - `tests/validate-plugin.sh` and `tests/test-report-repair.sh`: existing
   contracts, updated for the new terminal stage when recovery exhausts.
 - The full `bash ./tests/validate-all.sh` gate.
+
+## Follow-up: first live continuation rejected by Copilot CLI 1.0.98-2
+
+Run `20261013-224846-8087d3672af9ddf1` (scope 3, `claude-opus-5.5`, two
+repositories) was the first live run of same-session recovery. One review
+completed. In the other, three responses reached the 32,000-token output
+limit, and the final reply held only the last 8 of the 16 required report
+sections. Recovery started as designed (trigger `missing`, first page request
+`R1P1.1`), but Copilot CLI rejected that first continuation before it reached
+the model:
+
+    error: option '-n, --name <name>' cannot be used with option '--session-id <id>' when it resolves to an existing or remote session or task.
+
+The continuation produced no output, its outcome was `unknown`, and
+recovery failed after one continuation, so no report was produced.
+
+- **Root cause.** `harness_worker_continuation_argv` returned the approved
+  worker argv verbatim, including `--name`. `--name` only labels a
+  brand-new session, and Copilot CLI 1.0.98-2 rejects it when
+  `--session-id` resolves to an existing session.
+- **Why validation missed it.** The Contract-v8 live probe resumed a session
+  without `--name`. The unit test used a synthetic source argv without
+  `--name`, and the mocked CLIs accepted any argv on resume, so nothing
+  exercised the real worker argv against the real CLI rule.
+- **Misleading analysis.** The deterministic failure analysis classified the
+  failure by its trigger as `output-limit`. It recommended a rerun, which
+  would have failed the same way, and a smaller page budget, which was
+  irrelevant.
+- **Fix.** The Copilot continuation argv is now the approved worker argv
+  without its `--name` pair. Any other session-name spelling fails closed.
+  The deterministic failure analysis now classifies a harness CLI option
+  rejection as `harness-invocation` and advises against a rerun until the
+  adapter matches the installed CLI.
+- **Live re-verification (Copilot CLI 1.0.98-2).** The probe used the
+  adapter-built worker argv, an isolated runtime home, and a low-cost model:
+  - Replaying the argv verbatim reproduced the rejection (exit code 1).
+  - The same argv without `--name` resumed the session (`session.resume`),
+    with its context and only the approved model.
+- **Regression tests.**
+  - The contract unit test derives the expected continuation from the
+    golden worker argv.
+  - Both mocked CLIs reject `--name` for an existing session, as the real
+    CLI does, so the end-to-end recovery scenarios fail on the old behavior.
+  - `tests/test-report-delivery.sh` replays this run's errors through the
+    failure analysis.

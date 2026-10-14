@@ -4335,6 +4335,26 @@ def _():
                 [])
 
 
+# A harness CLI that refuses a worker or continuation argv while parsing its
+# options fails every rerun that reaches the same invocation.
+CLI_OPTION_REJECTION = re.compile(
+    r"^error: (?:option '|unknown option |too many arguments|"
+    r"missing required argument|required option |unknown command )")
+
+
+@rule("harness-invocation")
+def _():
+    rejected = [line for line in errors + research_errors if CLI_OPTION_REJECTION.match(line)]
+    if rejected:
+        return ("The harness CLI rejected one of Rhyolite's worker invocations.",
+                f"The installed harness CLI refused a worker invocation while parsing its options ({rejected[0]}), "
+                "so that invocation never reached a model and produced no output. "
+                f"Same-session worker recovery: {recovery.get('Status', 'not attempted')}.",
+                ["Do not rerun until the harness adapter matches the installed harness CLI; a rerun that reaches the same invocation fails the same way.",
+                 "Report the sanitized errors.txt lines and the harness CLI version to the Rhyolite maintainers."],
+                ["Compare the rejected options with the installed harness CLI's --help, fix the adapter argv builder, re-verify it live with the adapter-built argv, and make the mocked CLI reproduce the rejection."])
+
+
 @rule("model-unavailable")
 def _():
     if stage == "model availability" or has(r"is not available|not supported for model|does not support reasoning effort"):

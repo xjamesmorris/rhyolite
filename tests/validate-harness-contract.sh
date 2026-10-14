@@ -1522,15 +1522,36 @@ for copilot_v8_invalid in \
     fi
 done
 
-# Copilot resumes a session when invoked again with the same --session-id,
-# so the continuation argv is the exact approved worker argv.
-copilot_v8_source_argv=(-C /tmp/session --session-id "${copilot_v8_session}" --model claude-opus-5.5 --output-format json)
+# Copilot resumes a session when invoked again with the same --session-id and
+# runtime home. --name only labels a brand-new session, and Copilot CLI
+# 1.0.98-2 rejects it when --session-id resolves to an existing session, so
+# the continuation argv is the exact approved worker argv without its --name
+# pair.
+[[ "${expected_worker_arguments[4]}" == --name &&
+    "${expected_worker_arguments[5]}" == "${worker_session_name}" ]] ||
+    fail 'The golden Copilot worker argv no longer names its session at index 4.'
+copilot_v8_expected_continuation=(
+    "${expected_worker_arguments[@]:0:4}"
+    "${expected_worker_arguments[@]:6}"
+)
 copilot_v8_continuation_argv=()
 rhyolite_harness_invoke harness_worker_continuation_argv \
-    copilot_v8_continuation_argv copilot_v8_source_argv ||
+    copilot_v8_continuation_argv expected_worker_arguments ||
     fail "Copilot continuation argv failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
-[[ "${copilot_v8_continuation_argv[*]}" == "${copilot_v8_source_argv[*]}" ]] ||
-    fail 'Copilot continuation argv differs from the approved worker argv.'
+cmp -s <(printf '%s\0' "${copilot_v8_continuation_argv[@]}") \
+    <(printf '%s\0' "${copilot_v8_expected_continuation[@]}") ||
+    fail 'Copilot continuation argv is not the approved worker argv without --name.'
+for copilot_v8_bad_name in \
+    "-n ${worker_session_name}" \
+    "--name=${worker_session_name}" \
+    '--name'; do
+    read -r -a copilot_v8_source_argv <<< \
+        "--session-id ${copilot_v8_session} ${copilot_v8_bad_name}"
+    if rhyolite_harness_invoke harness_worker_continuation_argv \
+        copilot_v8_continuation_argv copilot_v8_source_argv; then
+        fail "Copilot continuation argv accepted a session name: ${copilot_v8_bad_name}"
+    fi
+done
 copilot_v8_source_argv=(-C /tmp/session --model claude-opus-5.5)
 if rhyolite_harness_invoke harness_worker_continuation_argv \
     copilot_v8_continuation_argv copilot_v8_source_argv; then
@@ -3594,6 +3615,8 @@ working_directory=""
 output_format="text"
 mock_model=""
 mock_reasoning_effort=""
+mock_session_id=""
+mock_session_named=0
 previous=""
 for argument in "$@"; do
     if [[ "${previous}" == "--share" ]]; then
@@ -3606,9 +3629,31 @@ for argument in "$@"; do
         mock_model="${argument}"
     elif [[ "${previous}" == "--reasoning-effort" ]]; then
         mock_reasoning_effort="${argument}"
+    elif [[ "${previous}" == "--session-id" ]]; then
+        mock_session_id="${argument}"
     fi
+    case "${argument}" in
+        -n|--name|--name=*) mock_session_named=1 ;;
+    esac
     previous="${argument}"
 done
+# Like Copilot CLI 1.0.98-2, reject --name when --session-id resolves to an
+# existing session in this runtime home; a resumed session must not be named.
+if [[ -n "${mock_session_id}" ]]; then
+    mock_session_key="${COPILOT_HOME:-}"$'\t'"${mock_session_id}"
+    if grep -Fxq -- "${mock_session_key}" \
+        "${RHYOLITE_WORKER_CAPTURE}/sessions" 2>/dev/null; then
+        if ((mock_session_named)); then
+            printf '%s\n' \
+                "error: option '-n, --name <name>' cannot be used with option '--session-id <id>' when it resolves to an existing or remote session or task." \
+                '--name only names a brand-new session created by --session-id=<new-uuid>; the resolved session was not renamed.' >&2
+            exit 1
+        fi
+    else
+        printf '%s\n' "${mock_session_key}" \
+            >> "${RHYOLITE_WORKER_CAPTURE}/sessions"
+    fi
+fi
 [[ -n "${share_path}" && -n "${working_directory}" ]] || exit 72
 [[ "${output_format}" == json && -n "${mock_model}" &&
     -n "${mock_reasoning_effort}" ]] || exit 79
@@ -5866,7 +5911,8 @@ JS
 
 # Same-session worker recovery, end to end through the real runner, the real
 # Copilot adapter, and a mock CLI that resumes the session on the same
-# --session-id: a report cut at the output token limit, a transient
+# --session-id (and, like Copilot CLI 1.0.98-2, rejects --name for it): a
+# report cut at the output token limit, a transient
 # model-service failure, and a blocked automatic model fallback must all
 # complete through paged delivery, and exhausted retries must fail truthfully
 # with a deterministic failure analysis.
@@ -5987,12 +6033,19 @@ grep -Fq 'is missing required assessment field: Evidence basis:' \
     fail 'Resubmission did not tell the worker the exact rejected-page diagnostic.'
 assert_contains "${recovery_repository}/handoff.md" 'Worker recovery: Recovered;' \
     'Truncation recovery handoff summary'
-# Every continuation reused the exact approved worker argv and session.
-initial_argv="$(tr '\0' '\n' < "${recovery_capture}/argv")"
-[[ "${initial_argv}" == *"--session-id"* ]] ||
-    fail 'Recovery worker argv lost its session identifier.'
+# Every continuation resumed the review session with one argv. The mock CLI,
+# like Copilot CLI 1.0.98-2, rejects --name when --session-id resolves to an
+# existing session, so a continuation that replays the approved worker argv
+# verbatim cannot recover.
+recovery_session_id="$(
+    node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).Session.Id' \
+        "${recovery_repository}/state.json"
+)"
 [[ "$(sort -u "${recovery_capture}/continuations" | wc -l)" -eq 1 ]] ||
     fail 'Recovery continuations used different worker argv.'
+[[ " $(head -n 1 "${recovery_capture}/continuations") " == \
+    *" --session-id ${recovery_session_id} "* ]] ||
+    fail 'Recovery continuations did not resume the review session.'
 
 run_recovery_scenario transient \
     RHYOLITE_MOCK_TRANSIENT_FAILURE=1 \

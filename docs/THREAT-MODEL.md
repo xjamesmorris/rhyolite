@@ -450,9 +450,10 @@
 
 - Recovery continues only the review worker's own session and only when the
   adapter has verified `worker_continuation` live. A continuation reuses the
-  exact approved argv, environment, isolated runtime home, read-only tools,
-  model, effort, and context; it receives no new tool, path, or network
-  access, and live approved-plan enforcement applies to it.
+  exact approved argv less only its new-session name label, and the same
+  environment, isolated runtime home, read-only tools, model, effort, and
+  context; it receives no new tool, path, or network access, and live
+  approved-plan enforcement applies to it.
 - Continuation requests are fixed runner text plus validator diagnostics and
   section names; they never include repository content, research evidence,
   or private artifacts.
