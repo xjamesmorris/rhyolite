@@ -50,6 +50,8 @@
   `--enable-provenance-research` as legacy aliases that cannot be combined
   with `--scope`, and both orchestrators select research only with
   `--scope`.
+- Added `docs/TASKS.md`, a prioritized tracker for open engineering,
+  verification, and release tasks.
 
 - Fixed the Copilot review failures observed after the Contract-v6 change,
   where two scope-1 runs ended with `approved model enforcement` after a

@@ -310,3 +310,6 @@ Before release:
   explicit project decision.
 - Private repository support remains deferred pending an approved
   least-privilege credential and audit design.
+
+Open engineering, verification, and release tasks and their priorities are
+tracked in [docs/TASKS.md](docs/TASKS.md).
