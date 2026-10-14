@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.2 - 2026-10-14
+
 - Fixed the review failures of 2026-10-13 and the recurring class behind
   them; see `docs/RUN-FAILURE-INCIDENT-2026-10-13.md`. At maximum reasoning
   effort, final reports did not fit in one model response: Copilot's
