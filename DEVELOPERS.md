@@ -204,7 +204,7 @@ adapter belongs only under `tests/fixtures` and may be loaded only through
 test-owned fixed fixture wiring. It must never be added to the production
 registry, plugin assets, launcher choices, marketplace metadata, or public
 support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
-for Contract-v6 work and any future adapter.
+for Contract-v7 work and any future adapter.
 [docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
 probes and real runs behind the Claude Code adapter's capability values.
 
@@ -223,13 +223,36 @@ can never byte-match what the model wrote. Every Copilot child runs with
 `--output-format json`, and `harness_normalize_worker_output` turns the JSONL
 event stream into a readable narrative plus the exact final
 `assistant.message` while rejecting any recorded model or `reasoning_effort`
-other than the approved plan. The mocked validators emit the same event
+other than the approved plan and any recorded subagent event. The mocked
+validators emit the same event
 shapes. Before changing an adapter's output assumptions, re-verify the
 real CLI with a cheap live probe, for example
 `copilot -p 'Reply with exactly: 1. one' --model gpt-5-mini --no-color
 --stream off --silent --output-format json --available-tools ''`, and
 compare the `assistant.message` `content` with the text-mode stdout; the
 mocked validators cannot detect a CLI rendering change on their own.
+
+No Rhyolite worker receives a subagent tool. A live probe with an isolated
+`COPILOT_HOME` whose `settings.json` pinned `subagents.agents.explore.model`
+showed that a `task` call's `model` argument still wins
+(`subagent.started` records `taskModelSource: "task_argument"` and
+`modelSelectionSource: "explicit_override"`), so the review worker's
+available tools are exactly `view,glob,rg,skill` and the worker performs the
+dedicated security pass itself. Re-run that probe before ever offering
+`task`, `list_agents`, or `read_agent` to a worker again, and only if the
+CLI gains a configuration that rejects the override.
+
+`harness_detect_worker_violation` is the live counterpart of the normalizer.
+The runner's `wait_for_monitored_worker` calls it every
+`RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS` loop iterations (five, counted per
+one-second sleep rather than by wall clock, so the mocked frozen `date` in
+the validators still exercises it); the adapter scans only the complete
+lines appended since the runner-owned cursor and returns
+`RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` on the first recorded model,
+effort, or subagent outside the approved plan. The runner then terminates
+the child's process tree and records the `harness_detect_worker_violation`
+stage; `tests/validate-harness-contract.sh` proves the whole path with a
+mock that emits a `subagent.started` event and then blocks.
 
 Scope 1 must remain transport-free: no research worker, MCP config,
 broker process, cookie jar, or research/network artifact. Scope 2/3 must

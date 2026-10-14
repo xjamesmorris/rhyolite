@@ -141,7 +141,7 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` and
   `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
   Production runtime support covers GitHub Copilot CLI and Claude Code.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v5 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v7 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -469,7 +469,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v6 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v7 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -478,13 +478,34 @@ supported and must not drive new work.
   `harness_research_worker_argv`, `harness_research_worker_env`, and
   `harness_finalize_research_session` plus the `research` runtime-home
   phase, and gates scope 2/3 on the adapter's `web_research` capability.
-  Contract v6 replaces the raw-stdout `harness_extract_research_reply` seam
+  Contract v6 replaced the raw-stdout `harness_extract_research_reply` seam
   with `harness_normalize_worker_output <phase> <raw_output>
   <approved_model> <approved_effort> <normalized_output>
   <final_reply_output>`, which every adapter implements for the `review`,
-  `research`, and `report-repair` phases. Follow
+  `research`, and `report-repair` phases. Contract v7 adds
+  `harness_detect_worker_violation <phase> <raw_output> <approved_model>
+  <approved_effort> <cursor_path>`: while a worker runs, the runner calls it
+  every five seconds and the adapter scans only the complete lines appended
+  since the runner-owned cursor, returning 0 when nothing is recorded,
+  `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on
+  the first recorded model, effort, or subagent outside the approved plan,
+  and 1 for a monitor error that the runner records once as a warning. On a
+  violation the runner terminates the worker's process tree immediately,
+  records the `harness_detect_worker_violation` failure stage, and the
+  post-exit normalization still fails closed on the same evidence. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
+- No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
+  argument override every configured `subagents.agents.<name>.model` value
+  (verified live: `modelSelectionSource: "explicit_override"`), so a
+  specialist can never be bound to the approved model by configuration. The
+  Copilot review worker therefore gets `--available-tools view,glob,rg,skill`
+  and `tools: ["read", "search"]`, reports `subagents` and
+  `builtin_security_specialist` as `no`, and performs the dedicated security
+  pass itself exactly like the Claude Code worker. Worker prompts state that
+  the runner already bound the session to the approved model, effort, and
+  context and must never invite the model to select, name, or request one.
+  Any recorded subagent event, even on the approved model, fails the phase.
 - Harness print-mode text stdout is never the assistant reply. Copilot CLI
   renders text output as terminal Markdown: it wraps lines at the terminal
   width, re-indents and renumbers lists, inserts blank lines, and emits OSC 8
@@ -492,14 +513,17 @@ supported and must not drive new work.
   runs with `--output-format json`, and the adapter's normalizer translates
   the JSONL event stream into a readable narrative plus the exact final
   `assistant.message` content, failing closed when any recorded model call,
-  tool call, usage checkpoint, or subagent metric names a model or
-  `reasoning_effort` other than the approved plan. Claude Code print mode
+  tool call, usage checkpoint, subagent event, or subagent metric names a
+  model or `reasoning_effort` other than the approved plan, or when any
+  subagent event appears at all. Claude Code print mode
   writes the exact reply, so its normalizer is the identity copy and its
   session record supplies model/effort verification. The runner extracts the
   canonical report, the research dossier, and the repair descriptor from the
   exact final reply first; the readable timeline and rendered transcript are
-  fallbacks only. A substituted model or effort surfaces as the
-  `approved model enforcement` failure stage.
+  fallbacks only. A substituted model, effort, or unapproved subagent
+  surfaces as the `approved model enforcement` failure stage from either
+  harness, whether the live monitor stopped the worker or the exit checks
+  caught it.
 - The research broker persists the exact accepted canonical dossier bytes as
   `accepted-dossier.txt` in its mode-0700 runtime root at acceptance time.
   The runner verifies the acceptance proof against those persisted bytes and
@@ -554,7 +578,7 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v5 requirement, negative test,
+  decision and must satisfy every Contract-v7 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with

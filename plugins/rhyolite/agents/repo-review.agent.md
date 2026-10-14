@@ -420,7 +420,7 @@ one sentence per line, with no bullets, table, wrapping into a paragraph,
 or extra scope prose:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a security specialist with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
 Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.

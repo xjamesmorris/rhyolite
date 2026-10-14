@@ -386,6 +386,13 @@ harness_normalize_worker_output() {
     rhyolite_harness_normalize_worker_output_identity "$@"
 }
 
+# The no-op worker records no model, effort, or subagent evidence while it
+# runs, so live detection validates its arguments and reports nothing.
+harness_detect_worker_violation() {
+    noop_fixture_require_success harness_detect_worker_violation || return 1
+    rhyolite_harness_detect_worker_violation_none "$@"
+}
+
 harness_render_request() {
     local request_path="$2"
 

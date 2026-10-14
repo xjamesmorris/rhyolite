@@ -199,6 +199,104 @@ terminate_process_tree() {
     signal_process_tree KILL "${process_id}"
 }
 
+# Seconds between incremental approved-plan checks of a running worker's
+# recorded output.
+RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS=5
+WORKER_VIOLATION_DETAIL=''
+
+# Wait for a tracked worker while emitting heartbeats and asking the adapter,
+# every RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS, whether the output recorded so
+# far already names a model, reasoning effort, or subagent other than the
+# approved plan. The first violation terminates the worker's process tree at
+# once instead of letting an unacceptable session run to completion; the
+# detail is recorded as a harness failure stage and in WORKER_VIOLATION_DETAIL,
+# and the post-exit normalization still fails closed on the same evidence.
+# A monitor error never stops the worker; it is recorded once as a warning.
+wait_for_monitored_worker() {
+    local process_id="$1"
+    local subject="$2"
+    local progress_stage="$3"
+    local heartbeat_style="$4"
+    local phase="$5"
+    local raw_output="$6"
+    local cursor_path="$7"
+    local error_path="$8"
+    local started_epoch
+    local last_heartbeat_epoch
+    local now_epoch
+    local elapsed_seconds
+    local ticks=0
+    local terminated=0
+    local monitor_warned=0
+
+    WORKER_VIOLATION_DETAIL=''
+    rm -f -- "${cursor_path}"
+    started_epoch="$(date +%s)"
+    last_heartbeat_epoch="${started_epoch}"
+    while kill -0 "${process_id}" 2>/dev/null; do
+        sleep 1
+        kill -0 "${process_id}" 2>/dev/null || break
+        now_epoch="$(date +%s)"
+        ticks=$((ticks + 1))
+        # Each loop iteration sleeps one second, so the iteration count is the
+        # poll cadence; it does not depend on the clock advancing.
+        if ((terminated == 0 &&
+            ticks % RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS == 0)); then
+            if ! rhyolite_harness_invoke harness_detect_worker_violation \
+                "${phase}" \
+                "${raw_output}" \
+                "${MODEL}" \
+                "${REASONING_EFFORT}" \
+                "${cursor_path}" \
+                >/dev/null 2>&1; then
+                if ((RHYOLITE_HARNESS_LAST_STATUS == RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS)); then
+                    WORKER_VIOLATION_DETAIL="${RHYOLITE_HARNESS_ERROR_DETAIL:-The ${phase} worker recorded output outside the approved plan.}"
+                    elapsed_seconds=$((now_epoch - started_epoch))
+                    printf '%s\n' \
+                        "Harness failure stage: harness ${HARNESS} harness_detect_worker_violation" \
+                        "${WORKER_VIOLATION_DETAIL}" \
+                        "Rhyolite terminated the ${phase} worker ${elapsed_seconds}s after it started instead of accepting the session." \
+                        >> "${error_path}"
+                    review_progress \
+                        "${subject}" \
+                        "${progress_stage}" \
+                        "approved model enforcement: terminating the ${phase} worker after ${elapsed_seconds}s; ${WORKER_VIOLATION_DETAIL}"
+                    terminated=1
+                    terminate_process_tree "${process_id}"
+                    continue
+                fi
+                if ((monitor_warned == 0)); then
+                    monitor_warned=1
+                    printf 'Warning: live approved-plan monitoring of the %s worker is unavailable (%s); enforcement continues when the worker exits.\n' \
+                        "${phase}" \
+                        "${RHYOLITE_HARNESS_ERROR_DETAIL:-monitor failure}" \
+                        >> "${error_path}"
+                fi
+            fi
+        fi
+        if ((now_epoch - last_heartbeat_epoch >= 30)); then
+            elapsed_seconds=$((now_epoch - started_epoch))
+            case "${heartbeat_style}" in
+                attempt)
+                    review_progress \
+                        "${subject}" \
+                        "${progress_stage}" \
+                        "attempt 1/1 still running; elapsed ${elapsed_seconds}s"
+                    ;;
+                *)
+                    review_progress \
+                        "${subject}" \
+                        "${progress_stage}" \
+                        "still running; elapsed $((elapsed_seconds / 60))m $((elapsed_seconds % 60))s"
+                    ;;
+            esac
+            last_heartbeat_epoch="${now_epoch}"
+        fi
+    done
+    rm -f -- "${cursor_path}"
+    return 0
+}
+
 repository_interrupt_exit_code() {
     case "$1" in
         INT) printf '130' ;;
@@ -329,6 +427,17 @@ errors_report_unavailable_model() {
         "$1" 2>/dev/null
 }
 
+# Adapter detail phrases that mean a session recorded a model, reasoning
+# effort, or subagent other than the approved plan, from either harness.
+errors_report_approved_plan_violation() {
+    grep -Eq \
+        -e 'substituted output|substituted effort|unapproved subagent' \
+        -e 'substituted review|downgraded review|substituted research' \
+        -e 'other than the approved model|other than the approved effort' \
+        -e 'subagent turn' \
+        "$1" 2>/dev/null
+}
+
 repository_failure_stage() {
     local status="$1"
     local errors_path="$2"
@@ -345,13 +454,20 @@ repository_failure_stage() {
             printf 'cleanup'
             return
         fi
-        if [[ "${harness_stage}" == \
-            "harness ${HARNESS} harness_normalize_worker_output" ]] &&
-            grep -Eq 'substituted output|substituted effort' \
-                "${errors_path}" 2>/dev/null; then
-            printf 'approved model enforcement'
-            return
-        fi
+        # Every adapter seam that rejects a recorded model, effort, or
+        # subagent outside the approved plan reports the same stage, whether
+        # the live monitor stopped the worker or the exit checks caught it.
+        case "${harness_stage}" in
+            "harness ${HARNESS} harness_detect_worker_violation" | \
+            "harness ${HARNESS} harness_normalize_worker_output" | \
+            "harness ${HARNESS} harness_verify_isolation" | \
+            "harness ${HARNESS} harness_finalize_research_session")
+                if errors_report_approved_plan_violation "${errors_path}"; then
+                    printf 'approved model enforcement'
+                    return
+                fi
+                ;;
+        esac
         printf '%s' "${harness_stage}"
         return
     fi
@@ -385,9 +501,7 @@ repository_failure_stage() {
                 printf 'research cleanup'
             elif errors_report_unavailable_model "${errors_path}"; then
                 printf 'model availability'
-            elif grep -Eq \
-                'substituted output|substituted effort' \
-                "${errors_path}" 2>/dev/null; then
+            elif errors_report_approved_plan_violation "${errors_path}"; then
                 printf 'approved model enforcement'
             elif grep -Eq \
                 'dossier|REPOSITORY RESEARCH DOSSIER|claim verification evidence|successful public response' \
@@ -463,7 +577,7 @@ repository_failure_summary() {
                         "${HARNESS_DISPLAY_NAME}"
                     ;;
                 'approved model enforcement')
-                    printf 'The dedicated research session recorded a model or reasoning effort other than the approved plan, so Rhyolite rejected its output.'
+                    printf 'The dedicated research session recorded a model, reasoning effort, or subagent other than the approved plan, so Rhyolite stopped it and rejected its output.'
                     ;;
                 *)
                     printf 'The dedicated public-research worker failed before the main repository review began.'
@@ -486,7 +600,7 @@ repository_failure_summary() {
                         "${HARNESS_DISPLAY_NAME}"
                     ;;
                 'approved model enforcement')
-                    printf 'The repository-review session recorded a model or reasoning effort other than the approved plan, so Rhyolite rejected its output.'
+                    printf 'The repository-review session recorded a model, reasoning effort, or subagent other than the approved plan, so Rhyolite stopped it and rejected its output.'
                     ;;
                 harness\ *)
                     printf 'The selected review harness failed while preparing, running, or finalizing the worker session.'
@@ -508,7 +622,7 @@ model_availability_remediation() {
 }
 
 approved_model_enforcement_remediation() {
-    printf 'Inspect the sanitized errors for the recorded model or effort, confirm that your %s account can run the approved model at the approved effort, regenerate and approve the plan, and retry. Rhyolite never accepts substituted or downgraded output.' \
+    printf 'Inspect the sanitized errors for the recorded model, effort, or subagent, confirm that your %s account can run the approved model at the approved effort, regenerate and approve the plan, and retry. Rhyolite never accepts substituted or downgraded output.' \
         "${HARNESS_DISPLAY_NAME}"
 }
 
@@ -2046,7 +2160,7 @@ if ((!SCOPE_SPECIFIED)); then
         cat <<'EOF'
 Select review scope:
   1. Core review (recommended for a first run): source, history,
-     architecture, quality, and a security specialist. Roughly 15-45
+     architecture, quality, and a dedicated security pass. Roughly 15-45
      minutes per repository; lowest AI-credit and network use.
   2. Core + public prior-art/community research: adds a dedicated research
      worker and constrained local broker requests. Roughly 30-90+ minutes per
@@ -4259,26 +4373,21 @@ run_report_repair() {
             2>> "${report_repair_errors_path}" &
         local repair_process_id=$!
         RHYOLITE_ACTIVE_CHILD_PID="${repair_process_id}"
-        local repair_started_epoch
-        local repair_heartbeat_epoch
-        local repair_now_epoch
-        repair_started_epoch="$(date +%s)"
-        repair_heartbeat_epoch="${repair_started_epoch}"
-        while kill -0 "${repair_process_id}" 2>/dev/null; do
-            sleep 1
-            if kill -0 "${repair_process_id}" 2>/dev/null; then
-                repair_now_epoch="$(date +%s)"
-                if ((repair_now_epoch - repair_heartbeat_epoch >= 30)); then
-                    review_progress "${slug}" 'report repair' \
-                        "attempt 1/1 still running; elapsed $((repair_now_epoch - repair_started_epoch))s"
-                    repair_heartbeat_epoch="${repair_now_epoch}"
-                fi
-            fi
-        done
+        wait_for_monitored_worker \
+            "${repair_process_id}" \
+            "${slug}" \
+            'report repair' \
+            attempt \
+            report-repair \
+            "${report_repair_raw_output}" \
+            "${report_repair_raw_output}.cursor" \
+            "${report_repair_errors_path}"
         repair_exit_code=0
         wait "${repair_process_id}" || repair_exit_code=$?
         RHYOLITE_ACTIVE_CHILD_PID=""
-        if [[ -f "${report_repair_raw_output}" ]] &&
+        if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+            report_repair_normalization_error="${WORKER_VIOLATION_DETAIL}"
+        elif [[ -f "${report_repair_raw_output}" ]] &&
             ! rhyolite_harness_invoke harness_normalize_worker_output \
                 report-repair \
                 "${report_repair_raw_output}" \
@@ -4306,6 +4415,8 @@ run_report_repair() {
 
     if ((repair_ready == 0)); then
         REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair harness preparation failed.'
+    elif [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair output was rejected: ${WORKER_VIOLATION_DETAIL}"
     elif ((repair_exit_code == 124 || repair_exit_code == 137)); then
         REPORT_REPAIR_STATUS='TimedOut'
         REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair exceeded ${REPORT_REPAIR_TIMEOUT_SECONDS} seconds."
@@ -7875,31 +7986,22 @@ EOF
                 2>> "${research_raw_error}" &
             local research_process_id=$!
             RHYOLITE_ACTIVE_CHILD_PID="${research_process_id}"
-            local research_started_epoch
-            local research_last_heartbeat_epoch
-            research_started_epoch="$(date +%s)"
-            research_last_heartbeat_epoch="${research_started_epoch}"
-            while kill -0 "${research_process_id}" 2>/dev/null; do
-                sleep 1
-                if kill -0 "${research_process_id}" 2>/dev/null; then
-                    local research_now_epoch
-                    research_now_epoch="$(date +%s)"
-                    if ((research_now_epoch - research_last_heartbeat_epoch >= 30)); then
-                        local research_elapsed_seconds=$(( \
-                            research_now_epoch - research_started_epoch \
-                        ))
-                        review_progress \
-                            "${slug}" \
-                            'research' \
-                            "still running; elapsed $((research_elapsed_seconds / 60))m $((research_elapsed_seconds % 60))s"
-                        research_last_heartbeat_epoch="${research_now_epoch}"
-                    fi
-                fi
-            done
+            wait_for_monitored_worker \
+                "${research_process_id}" \
+                "${slug}" \
+                'research' \
+                elapsed \
+                research \
+                "${research_raw_output}" \
+                "${research_raw_output}.cursor" \
+                "${research_raw_error}"
             wait "${research_process_id}"
             research_exit_code=$?
             RHYOLITE_ACTIVE_CHILD_PID=""
             set -e
+            if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+                research_exit_code=1
+            fi
             if ! rhyolite_harness_invoke harness_finalize_research_session \
                 "${research_runtime_home}" \
                 "${research_raw_output}" \
@@ -8243,7 +8345,10 @@ EOF
     session_name="${session_prefix}${session_slug}${session_suffix}"
 
     local available_tools
-    available_tools='view,glob,rg,skill,task,list_agents,read_agent'
+    # No subagent tool: Copilot CLI lets a `task` argument override every
+    # configured subagent model, so the worker performs the security pass
+    # itself and any recorded subagent fails the review.
+    available_tools='view,glob,rg,skill'
 
     local -a worker_arguments=()
     local -a worker_environment=()
@@ -8329,32 +8434,23 @@ EOF
             2> "${error_path}" &
         local review_process_id=$!
         RHYOLITE_ACTIVE_CHILD_PID="${review_process_id}"
-        local analysis_started_epoch
-        local analysis_last_heartbeat_epoch
         worker_started=1
-        analysis_started_epoch="$(date +%s)"
-        analysis_last_heartbeat_epoch="${analysis_started_epoch}"
-        while kill -0 "${review_process_id}" 2>/dev/null; do
-            sleep 1
-            if kill -0 "${review_process_id}" 2>/dev/null; then
-                local analysis_now_epoch
-                analysis_now_epoch="$(date +%s)"
-                if ((analysis_now_epoch - analysis_last_heartbeat_epoch >= 30)); then
-                    local elapsed_seconds=$(( \
-                        analysis_now_epoch - analysis_started_epoch \
-                    ))
-                    review_progress \
-                        "${slug}" \
-                        'analysis' \
-                        "still running; elapsed $((elapsed_seconds / 60))m $((elapsed_seconds % 60))s"
-                    analysis_last_heartbeat_epoch="${analysis_now_epoch}"
-                fi
-            fi
-        done
+        wait_for_monitored_worker \
+            "${review_process_id}" \
+            "${slug}" \
+            'analysis' \
+            elapsed \
+            review \
+            "${raw_output}" \
+            "${raw_output}.cursor" \
+            "${error_path}"
         wait "${review_process_id}"
         exit_code=$?
         RHYOLITE_ACTIVE_CHILD_PID=""
         set -e
+        if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+            exit_code=1
+        fi
     else
         : > "${raw_output}"
         exit_code=1

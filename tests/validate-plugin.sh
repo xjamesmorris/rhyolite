@@ -273,7 +273,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v6' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v7' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -609,8 +609,10 @@ for runtime_agent in \
         fail "Runtime agent frontmatter overrides the validated CLI model: ${runtime_agent}"
 done
 grep -Fq \
-    'tools: ["read", "search", "agent"]' \
+    'tools: ["read", "search"]' \
     "${WORKER_AGENT}" || fail 'Worker agent does not use the expected tool set.'
+! grep -Eq 'tools:.*"agent"' "${WORKER_AGENT}" ||
+    fail 'Worker agent enables subagent tools; Copilot CLI lets a task argument override the approved model.'
 grep -Fq \
     'tools: ["read", "search", "rhyolite-research-research_capabilities", "rhyolite-research-fetch_public_url", "rhyolite-research-search_public_github", "rhyolite-research-search_public_web", "rhyolite-research-research_network_summary"]' \
     "${RESEARCH_WORKER_AGENT}" ||
@@ -1020,7 +1022,7 @@ for guided_file in "${AGENT}" "${SKILL}"; do
 done
 for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
     grep -Fq \
-        'Scope 1 covers source, history, architecture, quality, and a security specialist with the lowest AI-credit use and only anonymous Git network access.' \
+        'Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.' \
         "${scope_ui_file}" ||
         fail "Scope 1 UI wording drifted: ${scope_ui_file}"
     grep -Fq \
@@ -2397,8 +2399,18 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=6' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 6.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=7' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 7.'
+grep -Fq 'harness_detect_worker_violation' "${HARNESS_COMMON}" &&
+    grep -Fq 'RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare live worker violation detection.'
+grep -Fq "available_tools='view,glob,rg,skill'" "${RUNNER}" &&
+    ! grep -Fq 'task,list_agents,read_agent' "${RUNNER}" ||
+    fail 'Runner still offers subagent tools to the review worker.'
+grep -Fq 'wait_for_monitored_worker' "${RUNNER}" &&
+    grep -Fq 'harness_detect_worker_violation' "${RUNNER}" &&
+    grep -Fq 'RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS=5' "${RUNNER}" ||
+    fail 'Runner does not monitor running workers for approved-plan violations.'
 for research_function in \
     harness_write_research_mcp_config \
     harness_research_worker_argv \
@@ -7169,6 +7181,8 @@ import sys
 from pathlib import Path
 
 settings = json.loads(Path(sys.argv[1]).read_text())
+if settings.get("memory") is not False or settings.get("ide") != {"autoConnect": False}:
+    raise SystemExit(f"review settings leave memory or IDE connections enabled: {settings!r}")
 agents = settings.get("subagents", {}).get("agents", {})
 for name in (
     "explore",
@@ -7196,6 +7210,11 @@ case "${phase}" in
     rhyolite:repo-review-worker)
         [[ "${COPILOT_HOME}" == \
             "${TMPDIR:-/tmp}"/rhyolite-repo-review-copilot.* ]] || exit 81
+        awk '
+            previous == "--available-tools" { found = ($0 == "view,glob,rg,skill") }
+            { previous = $0 }
+            END { exit(found ? 0 : 1) }
+        ' "${invocation_log}" || exit 121
         ;;
     report-repair)
         [[ "${COPILOT_HOME}" == \

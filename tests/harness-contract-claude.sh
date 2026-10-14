@@ -1769,11 +1769,11 @@ claude_assert_failed_run() {
 }
 claude_run_case substituted 1 --env RHYOLITE_MOCK_CLAUDE_MODE=substituted
 claude_assert_failed_run substituted \
-    'harness claude harness_verify_isolation' \
+    'Stage: approved model enforcement' \
     'answered with a model other than the approved model'
 claude_run_case effort 1 --env RHYOLITE_MOCK_CLAUDE_MODE=effort
 claude_assert_failed_run effort \
-    'harness claude harness_verify_isolation' \
+    'Stage: approved model enforcement' \
     'reasoning effort other than the approved effort'
 claude_run_case no-transcript 1 --env RHYOLITE_MOCK_CLAUDE_MODE=no-transcript
 claude_assert_failed_run no-transcript \
@@ -2915,6 +2915,92 @@ JS
     fi
     [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *'model other than the approved model'* ]] ||
         fail 'Claude Code substituted-research detail changed.'
+
+    # Live detection reads the same private session record incrementally while
+    # the worker runs, so a substituted model, effort, or sidechain ends the
+    # phase at the first offending record instead of after the worker exits.
+    research_cursor="${research_root}/research-session.cursor"
+    research_record="${research_project}/${research_session_id}.jsonl"
+    rm -f -- "${research_cursor}" "${research_record}"
+    rhyolite_harness_invoke harness_detect_worker_violation \
+        research "${research_root}/raw-dossier" claude-opus-5-5 max \
+        "${research_cursor}" ||
+        fail "Claude Code live detection failed without a session record: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    [[ ! -e "${research_cursor}" ]] ||
+        fail 'Claude Code live detection wrote a cursor without a session record.'
+    claude_write_session_fixture complete "${research_record}" \
+        "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
+    rhyolite_harness_invoke harness_detect_worker_violation \
+        research "${research_root}/raw-dossier" claude-opus-5-5 max \
+        "${research_cursor}" ||
+        fail "Claude Code live detection rejected an approved session: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    assert_equal 600 "$(stat -c '%a' "${research_cursor}")" \
+        'Claude Code live detection cursor mode'
+    [[ "$(cat "${research_cursor}")" == "$(stat -c '%s' "${research_record}")" ]] ||
+        fail 'Claude Code live detection cursor did not reach the end of the record.'
+    # Records already scanned are never re-read; only appended records count.
+    claude_write_session_fixture substituted "${research_root}/substituted.jsonl" \
+        "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
+    grep -F 'model_refusal_fallback' "${research_root}/substituted.jsonl" |
+        head -c 60 | tr -d '\n' >> "${research_record}"
+    rhyolite_harness_invoke harness_detect_worker_violation \
+        research "${research_root}/raw-dossier" claude-opus-5-5 max \
+        "${research_cursor}" ||
+        fail 'Claude Code live detection judged a partially written record.'
+    grep -F 'model_refusal_fallback' "${research_root}/substituted.jsonl" |
+        tail -c +61 >> "${research_record}"
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        research "${research_root}/raw-dossier" claude-opus-5-5 max \
+        "${research_cursor}"; then
+        fail 'Claude Code live detection missed a model-refusal fallback record.'
+    fi
+    assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+        "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        'Claude Code live detection violation status'
+    [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == \
+        "Claude Code answered with a model other than the approved model in the research phase (recorded 'model_refusal_fallback'); Rhyolite does not accept a substituted review." ]] ||
+        fail "Claude Code live detection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    for claude_live_case in \
+        'substituted|model_refusal_fallback|answered with a model other than the approved model' \
+        'effort|high|recorded a reasoning effort other than the approved effort' \
+        'subagent|sidechain|recorded a subagent turn in the research phase'; do
+        IFS='|' read -r live_mode live_detail live_fragment <<< "${claude_live_case}"
+        rm -f -- "${research_cursor}"
+        claude_write_session_fixture "${live_mode}" "${research_record}" \
+            "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
+        if rhyolite_harness_invoke harness_detect_worker_violation \
+            research "${research_root}/raw-dossier" claude-opus-5-5 max \
+            "${research_cursor}"; then
+            fail "Claude Code live detection accepted a ${live_mode} session."
+        fi
+        assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+            "${RHYOLITE_HARNESS_LAST_STATUS}" \
+            "Claude Code live detection ${live_mode} status"
+        [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"${live_fragment}"* ]] ||
+            fail "Claude Code live detection ${live_mode} detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+        if [[ "${live_mode}" != subagent ]]; then
+            [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"(recorded '${live_detail}')"* ]] ||
+                fail "Claude Code live detection ${live_mode} lost the recorded value: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+        fi
+    done
+    # The review phase is not the prepared phase here, and the repair child
+    # persists no session, so neither reports anything.
+    for claude_other_phase in review report-repair; do
+        rhyolite_harness_invoke harness_detect_worker_violation \
+            "${claude_other_phase}" "${research_root}/raw-dossier" \
+            claude-opus-5-5 max "${research_cursor}" ||
+            fail "Claude Code live detection reported the ${claude_other_phase} phase against a research session."
+    done
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        bogus "${research_root}/raw-dossier" claude-opus-5-5 max \
+        "${research_cursor}"; then
+        fail 'Claude Code live detection accepted an unsupported phase.'
+    fi
+    assert_equal 1 "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        'Claude Code live detection invalid-phase status'
+    rm -f -- "${research_cursor}"
+    claude_write_session_fixture substituted "${research_record}" \
+        "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
     harness_sanitize_runtime_home "${research_home}" ||
         fail 'Claude Code research home cleanup failed.'
 )

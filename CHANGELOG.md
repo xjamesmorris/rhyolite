@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Fixed the Copilot review failures observed after the Contract-v6 change,
+  where two scope-1 runs ended with `approved model enforcement` after a
+  full review. The main session had used the approved model, but the worker
+  had started `security-review` and `explore` subagents through the `task`
+  tool with an explicit `model` argument, which Copilot CLI honors over every
+  configured `subagents.agents.<name>.model` value (verified live:
+  `modelSelectionSource: "explicit_override"`), and the worker prompt itself
+  invited a model choice. No Rhyolite worker now receives a subagent tool:
+  the Copilot review worker is restricted to `view`, `glob`, `rg`, and
+  `skill`, reports `subagents` and `builtin_security_specialist` as `no`,
+  and performs the dedicated security pass itself exactly like the Claude
+  Code worker. Worker prompts now state that the runner already bound the
+  session to the approved model, effort, and context and must never select,
+  name, or request one. The Copilot normalizer additionally rejects any
+  recorded subagent event, even on the approved model, and the review
+  settings also disable memory and IDE auto-connect.
+- Added Harness Contract v7 live enforcement. The runner polls the adapter's
+  new `harness_detect_worker_violation` every five seconds while a review,
+  research, or report-repair child runs; the adapter scans only the output
+  appended since a runner-owned cursor (Copilot: the JSONL stdout; Claude
+  Code: its private session record), and the first recorded model, effort,
+  or subagent outside the approved plan terminates the child's process tree
+  immediately instead of after the session completes. The early termination,
+  its elapsed time, and the detail are recorded in the repository errors and
+  progress output, the post-exit normalization still rejects the same
+  evidence, and both harnesses now classify substituted output, downgraded
+  effort, and unapproved subagents as the `approved model enforcement`
+  failure stage.
 - Fixed the first live scope-3 run after the dossier-binding change, which
   failed with `submission_reply_invalid` although the broker had accepted the
   dossier on attempt 2 of 3. Copilot CLI print mode renders text stdout as

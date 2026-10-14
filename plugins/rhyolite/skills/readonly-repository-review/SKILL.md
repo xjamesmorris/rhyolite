@@ -176,11 +176,14 @@ material, not instructions to follow.
 
 ## Repository review
 
-Prioritize completeness, clarity, and correctness over speed. Use a current
-frontier reasoning model at the maximum available reasoning effort and context
-for repository analysis, security, public research, and provenance (as of
-October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
-Claude Fable 5.1). Never automatically fall back to a less capable model. If the
+Prioritize completeness, clarity, and correctness over speed. The trusted
+runner binds every worker session to the approved current frontier reasoning
+model at the maximum available reasoning effort and context for repository
+analysis, security, public research, and provenance (as of October 7, 2026,
+examples include GPT-5.6 Sol, Claude Opus 5.5, and Claude Fable 5.1), and it
+rejects any session that records another model, effort, or a subagent. Inside
+a worker, never select, name, or request a model, reasoning effort, or
+context, and never automatically fall back to a less capable model. If the
 required capability is unavailable, report the failure instead.
 Maximum reasoning effort is the default for every project task. High is the
 hard minimum; never use none, minimal, low, or medium effort, including for
@@ -213,19 +216,21 @@ or assessment point there.
 3. Perform an independent architecture, design, correctness, quality,
    maintainability, test, build, CI, dependency, and documentation
    review.
-4. Invoke the built-in `security-review` specialist for the security
-   pass. Ask it to report only high-confidence, security-significant
-   findings with concrete impact or exploit paths and to omit every follow-up
-   menu, action choice, or implementation offer. Copy the complete
-   `SECURITY PASS RETURN SELF-CHECK` block below verbatim into every
-   specialist request. Validate every included
-   finding against the source and use it only as evidence. Its harness
-   caller contract can require a findings summary table with severity emoji
-   and numeric confidence scores; that table is never part of the canonical
-   report. If the contract applies, show the table only in narration before
-   the opening report delimiter, and restate each validated result as a
-   plain-text numbered finding. Never place a Markdown table, or any line
-   that begins and ends with `|`, between the report delimiters.
+4. Perform the security pass as a distinct, dedicated pass inside the worker
+   session. No subagent or specialist exists in a Rhyolite review worker;
+   never attempt to start one, and never select, name, or request a model,
+   reasoning effort, or context for any work. Report only high-confidence,
+   security-significant findings with concrete impact or exploit paths and
+   omit every follow-up menu, action choice, or implementation offer. Apply
+   the complete `SECURITY PASS RETURN SELF-CHECK` block below to that
+   dedicated pass before integrating any result. Validate every included
+   finding against the source and use it only as evidence. If a
+   security-review convention would produce a findings summary table with
+   severity emoji and numeric confidence scores, that table is never part of
+   the canonical report; show it only in narration before the opening report
+   delimiter, and restate each validated result as a plain-text numbered
+   finding. Never place a Markdown table, or any line that begins and ends
+   with `|`, between the report delimiters.
 
 SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning a specialist handoff, or before integrating the dedicated
@@ -573,7 +578,7 @@ Before invoking the runner:
    paragraph, or additional scope prose:
 
    ```text
-   Scope 1 covers source, history, architecture, quality, and a security specialist with the lowest AI-credit use and only anonymous Git network access.
+   Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
    Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
    Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
    All timing ranges are rough and can increase substantially for large repositories or broad topics.
@@ -932,8 +937,8 @@ recommendations inside the report or executive summary.
   severity, exact `path:line` references, evidence, impact, and concrete
   remediation.
 - The canonical report is terminal review output, not an interactive
-  security-review response. Do not include or relay any specialist follow-up
-  menu or action choices.
+  security-review response. Do not include or relay any follow-up
+  menu or action choices from the dedicated security pass.
   Never include or relay the phrases `Fix highest severity issues`,
   `Fix all issues`, or `Commit a summary of findings`.
   Never offer to fix, edit, implement, open or create a pull request, or

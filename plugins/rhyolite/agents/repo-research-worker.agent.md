@@ -42,10 +42,13 @@ headers, request bodies, proxies, challenge bypasses, or fallback providers.
 Use `research_network_summary` without a candidate after retrieval to obtain
 the current sanitized counts and transport state.
 
-Prioritize completeness, clarity, and correctness. Use a current frontier
-reasoning model at the maximum available reasoning effort and context (as of
-October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
-Claude Fable 5.1). Do not automatically fall back to a less capable model.
+Prioritize completeness, clarity, and correctness. The trusted runner has
+already bound this session to the approved current frontier reasoning model
+at the maximum available reasoning effort and context (as of October 7, 2026,
+examples include GPT-5.6 Sol, Claude Opus 5.5, and Claude Fable 5.1) and
+rejects any session that records another model, effort, or a subagent. Never
+select, name, or request a model, reasoning effort, or context, and do not
+automatically fall back to a less capable model.
 Maximum effort is the default and high is the hard minimum; never use none,
 minimal, low, or medium effort.
 

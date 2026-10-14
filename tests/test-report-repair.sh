@@ -492,16 +492,11 @@ for required in (
 ):
     if required not in security_block:
         raise SystemExit(f"security-pass self-check lost required coverage: {required}")
-for name in ("review prompt", "Copilot worker"):
-    if (
-        "complete SECURITY PASS RETURN SELF-CHECK block below verbatim"
-        not in texts[name]
-    ):
-        raise SystemExit(f"{name} no longer carries the exact specialist request")
-if "Apply the complete SECURITY PASS RETURN SELF-CHECK block" not in texts[
-    "Claude worker"
-]:
-    raise SystemExit("Claude worker lost the dedicated security-pass self-check")
+for name in ("review prompt", "Copilot worker", "Claude worker"):
+    if "Apply the complete SECURITY PASS RETURN SELF-CHECK block" not in texts[name]:
+        raise SystemExit(f"{name} lost the dedicated security-pass self-check")
+    if "specialist request" in texts[name]:
+        raise SystemExit(f"{name} still delegates the security pass to a specialist")
 
 completion_start = (
     "GUIDED COMPLETION RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)"

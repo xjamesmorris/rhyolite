@@ -16,21 +16,27 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v6 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v7 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
 four adapter functions, so each production adapter builds its own research
 worker while the runner keeps broker lifecycle, validation, cleanup, and
-artifacts. Contract v6 makes the adapter responsible for translating its
+artifacts. Contract v6 made the adapter responsible for translating its
 CLI's raw worker stdout into a readable narrative plus the exact final
 assistant reply for every child phase, with approved model and effort
-verification, because print-mode text stdout is not the assistant reply. The
+verification, because print-mode text stdout is not the assistant reply.
+Contract v7 adds live enforcement: while a worker runs, the runner polls the
+adapter's `harness_detect_worker_violation` every five seconds, and the first
+recorded model, reasoning effort, or subagent outside the approved plan
+terminates the worker immediately instead of after completion. No worker on
+either harness receives a subagent tool, because Copilot CLI lets a `task`
+argument override every configured subagent model. The
 contract never resumes the review worker, permits a model to rewrite the
 report, or falls back to another harness.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v6 and any future production adapter.
+playbook for Contract v7 and any future production adapter.
 
 ## I1a invariants
 
@@ -114,7 +120,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v6 function exists.
+6. Assert every required Contract-v7 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -151,7 +157,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v6 functions
+## Contract-v7 functions
 
 Every mapped adapter must define all functions below.
 
@@ -186,7 +192,8 @@ Every mapped adapter must define all functions below.
 | `harness_research_worker_argv` | Build the ordered research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the runner-supplied broker tools from the written MCP configuration. |
 | `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
-| `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
+| `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort and on any recorded subagent event, because no Rhyolite worker receives a subagent tool; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
+| `harness_detect_worker_violation` | For phase `review`, `research`, or `report-repair`, while the worker is still running: scan only the complete lines appended to the recorded output since the offset saved in the runner-owned cursor file, return 0 when nothing outside the approved plan is recorded yet, return `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on the first recorded model, reasoning effort, or subagent other than the approved plan, and return 1 for any other failure, which the runner records once as a warning while the post-exit normalization stays authoritative. Copilot scans its JSONL stdout; Claude Code scans its private session record under the isolated runtime home and reports nothing until that record exists. The runner polls every five seconds and terminates the worker's process tree on the first violation. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
@@ -225,12 +232,21 @@ Contract v5 retains these capability keys:
 | --- | --- | --- |
 | `fleet` | `yes` | `no` |
 | `structured_questions` | `yes` | `yes` |
-| `subagents` | `yes` | `no` |
-| `builtin_security_specialist` | `yes` | `no` |
+| `subagents` | `no` | `no` |
+| `builtin_security_specialist` | `no` | `no` |
 | `builtin_research_specialist` | `yes` | `yes` |
 | `web_research` | `yes` | `yes` |
 | `shell_denial` | `yes` | `yes` |
 | `final_message_file` | `no` | `no` |
+
+Copilot reports `subagents` and `builtin_security_specialist` as `no` since
+Contract v7. A live probe showed that a `task` call's `model` argument
+overrides every configured `subagents.agents.<name>.model` value
+(`taskModelSource: "task_argument"`, `modelSelectionSource:
+"explicit_override"`), so no specialist can be bound to the approved model by
+configuration. The review worker therefore receives no `task`,
+`list_agents`, or `read_agent` tool, performs the dedicated security pass
+itself, and any recorded subagent event fails the phase.
 
 [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) records the probe and
 real-run evidence behind each Claude Code value.
@@ -650,6 +666,25 @@ readable timeline and rendered transcript as fallbacks. The research broker
 persists the accepted canonical dossier bytes in its transient runtime root so
 the canonical dossier never depends on the worker reproducing the candidate.
 
+Contract v7 keeps the same schemas and registry and adds
+`harness_detect_worker_violation <phase> <raw_output> <approved_model>
+<approved_effort> <cursor_path>`. The runner's shared monitored wait calls it
+every five seconds while a review, research, or report-repair child runs; the
+adapter scans only the complete lines appended since the offset in the
+runner-owned cursor file and returns `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS`
+(4) on the first recorded model, effort, or subagent outside the approved
+plan. The runner then terminates the child's process tree, records the
+`harness_detect_worker_violation` failure stage with the detail and the
+elapsed time, and still runs the post-exit normalization, which rejects the
+same evidence. Both outcomes surface as the `approved model enforcement`
+failure stage, as do the Claude Code session-record rejections from
+`harness_verify_isolation` and `harness_finalize_research_session`. Contract
+v7 also removes every subagent tool from the Copilot review worker, because
+the live failure that motivated it was a `security-review` subagent started
+from a `task` call whose explicit `model` argument overrode the adapter's
+`inherit` subagent settings while the main session itself used the approved
+model.
+
 ## Adding a future adapter
 
 A future adapter is a separate implementation phase. It must be added without
@@ -657,7 +692,7 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v6 function; do not inherit missing behavior from
+3. Implement every Contract-v7 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.

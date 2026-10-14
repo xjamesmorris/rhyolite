@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=6
+RHYOLITE_HARNESS_CONTRACT_VERSION=7
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
 # is absent from the offline catalog and eligible for explicit operator opt-in.
 RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
-# Exact phase names accepted by harness_normalize_worker_output.
+# harness_detect_worker_violation returns this status when the output a
+# running worker has recorded so far already names a model, reasoning effort,
+# or subagent other than the approved plan; the runner then terminates the
+# worker instead of waiting for it to finish.
+RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4
+# Exact phase names accepted by harness_normalize_worker_output and
+# harness_detect_worker_violation.
 RHYOLITE_HARNESS_WORKER_PHASES=(review research report-repair)
 RHYOLITE_HARNESS_LOADED_ID=''
 RHYOLITE_HARNESS_LOADED_PATH=''
@@ -41,6 +47,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_research_worker_env
     harness_finalize_research_session
     harness_normalize_worker_output
+    harness_detect_worker_violation
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -129,6 +136,51 @@ rhyolite_harness_normalize_worker_output_identity() {
             'Could not preserve the exact worker reply during output normalization.'
         return 1
     fi
+}
+
+# While a worker is still running, the runner periodically asks the adapter
+# through harness_detect_worker_violation <phase> <raw_output> <approved_model>
+# <approved_effort> <cursor_path> whether the output recorded so far already
+# shows a model, reasoning effort, or subagent other than the approved plan.
+# The adapter scans only the complete lines appended since the offset saved in
+# the runner-owned cursor file, returns 0 when nothing is recorded yet, returns
+# RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS with a sanitized detail on the first
+# violation, and returns 1 for any other failure, which the runner treats as a
+# monitor warning; the post-exit normalization remains authoritative.
+rhyolite_harness_validate_violation_arguments() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local cursor_path="$5"
+
+    rhyolite_harness_valid_worker_phase "${phase}" || {
+        rhyolite_harness_set_error \
+            'The worker output violation-detection phase is unsupported.'
+        return 1
+    }
+    [[ "${approved_model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
+        "${approved_effort}" =~ ^[a-z]{1,32}$ ]] || {
+        rhyolite_harness_set_error \
+            'The approved model or reasoning effort for worker violation detection is invalid.'
+        return 1
+    }
+    [[ "${raw_output}" == /* && ! -L "${raw_output}" &&
+        "${cursor_path}" == /* && ! -L "${cursor_path}" &&
+        "${cursor_path}" != "${raw_output}" &&
+        -d "${cursor_path%/*}" && ! -L "${cursor_path%/*}" ]] || {
+        rhyolite_harness_set_error \
+            'The worker violation-detection paths are invalid.'
+        return 1
+    }
+}
+
+# Shared implementation for an adapter whose CLI records no model, effort, or
+# subagent evidence while the worker runs. It validates the contract arguments
+# and reports nothing, so enforcement happens once the worker exits.
+rhyolite_harness_detect_worker_violation_none() {
+    rhyolite_harness_validate_violation_arguments "$@" || return 1
+    return 0
 }
 
 rhyolite_harness_capture() {

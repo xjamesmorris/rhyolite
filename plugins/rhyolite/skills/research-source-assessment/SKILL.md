@@ -43,11 +43,13 @@ whether replay is off or ephemeral. Unsupported bodies are retained only as
 private content-addressed bytes. Neither surface is model-accessible. Never
 request, reconstruct, or quote raw cookie values or private bodies.
 
-Prioritize completeness, clarity, and correctness. Use a current frontier
-reasoning model at the maximum available reasoning effort and context for
+Prioritize completeness, clarity, and correctness. The trusted runner has
+already bound the research session to the approved current frontier reasoning
+model at the maximum available reasoning effort and context for
 source-landscape, research, commercial-activity, and provenance judgments (as
 of October 7, 2026, examples include GPT-5.6 Sol, Claude Opus 5.5, and
-Claude Fable 5.1). Do not automatically fall back to a less capable model.
+Claude Fable 5.1). Never select, name, or request a model, reasoning effort,
+or context, and do not automatically fall back to a less capable model.
 Maximum reasoning effort is the default and high is the hard minimum; never
 use none, minimal, low, or medium effort, including for mechanical
 normalization or formatting.

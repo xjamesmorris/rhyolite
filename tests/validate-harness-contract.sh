@@ -52,6 +52,7 @@ required_contract_functions=(
     harness_research_worker_env
     harness_finalize_research_session
     harness_normalize_worker_output
+    harness_detect_worker_violation
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -271,9 +272,12 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '6' \
+assert_equal '7' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
+assert_equal '4' \
+    "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+    'Harness worker violation status'
 production_registry_path=''
 rhyolite_harness_registry_lookup \
     production_registry_path "${PLUGIN_ROOT}" copilot ||
@@ -501,8 +505,8 @@ assert_adapter_model_status 1 example-unlisted-model '' 1 \
 declare -A expected_capabilities=(
     [fleet]=yes
     [structured_questions]=yes
-    [subagents]=yes
-    [builtin_security_specialist]=yes
+    [subagents]=no
+    [builtin_security_specialist]=no
     [builtin_research_specialist]=yes
     [web_research]=yes
     [shell_denial]=yes
@@ -777,7 +781,10 @@ authentication_variables_csv="$(
     IFS=,
     printf '%s' "${expected_auth_secret_env_vars[*]}"
 )"
-base_available_tools='view,glob,rg,skill,task,list_agents,read_agent'
+# The runner offers no subagent tool to any worker: Copilot CLI lets a `task`
+# argument override every configured subagent model, so the security pass
+# runs inside the worker session itself.
+base_available_tools='view,glob,rg,skill'
 research_available_tools="${base_available_tools}"
 worker_session_root="${fixture_root}/worker-session"
 worker_transcript="${fixture_root}/worker-result/session.md"
@@ -1225,6 +1232,141 @@ if harness_normalize_worker_output \
     "${copilot_exact_reply}" >/dev/null 2>&1; then
     fail 'Copilot normalization accepted an unsupported phase.'
 fi
+
+# A subagent that Copilot started from a `task` call with its own explicit
+# model is the live failure that motivated Contract v7: the main session used
+# the approved model, so only the subagent events reveal the substitution.
+copilot_subagent_output="${fixture_root}/copilot-subagent-output.jsonl"
+node - "${copilot_expected_reply}" "${copilot_subagent_output}" <<'JS'
+const fs = require("fs");
+const [replyPath, outputPath] = process.argv.slice(2);
+const reply = fs.readFileSync(replyPath, "utf8").replace(/\n$/, "");
+const event = (type, data, extra = {}) =>
+  JSON.stringify({type, data, id: "fixture", ...extra});
+const model = "gpt-5.6-sol";
+const subagentId = "ebd1736a-577c-491f-9702-518285585b7a";
+fs.writeFileSync(outputPath, [
+  event("model.call_start", {turnId: "0", model}),
+  event("assistant.message", {model, content: "Starting the security pass.",
+    toolRequests: [{name: "task"}]}),
+  event("tool.execution_start", {toolName: "task", model}),
+  event("subagent.started", {toolCallId: "call_1", agentName: "security-review",
+    agentDisplayName: "security-pass", model: "gpt-5.5",
+    taskModelSource: "task_argument", modelSelectionSource: "explicit_override",
+    agentType: "security-review"}, {agentId: subagentId}),
+  event("subagent.configured", {model: "gpt-5.5", reasoningEffort: "max",
+    contextTier: "long_context"}, {agentId: subagentId}),
+  event("model.call_start", {turnId: "0", model: "gpt-5.5"}, {agentId: subagentId}),
+  event("assistant.message", {model: "gpt-5.5", content: "subagent reply"},
+    {agentId: subagentId}),
+  event("subagent.completed", {toolCallId: "call_1", agentName: "security-review",
+    model: "gpt-5.5", firstDispatchedModel: "gpt-5.5",
+    explicitModelOverride: "gpt-5.5", modelSelectionSource: "explicit_override"},
+    {agentId: subagentId}),
+  event("tool.execution_complete", {toolName: "task", model, success: true}),
+  event("assistant.message", {model, content: reply, toolRequests: []}),
+  event("model.call_final_result", {model, result: "success"}),
+  JSON.stringify({type: "result", exitCode: 0}),
+].join("\n") + "\n");
+JS
+rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+if harness_normalize_worker_output \
+    review \
+    "${copilot_subagent_output}" \
+    gpt-5.6-sol \
+    max \
+    "${copilot_normalized_output}" \
+    "${copilot_exact_reply}" >/dev/null 2>&1; then
+    fail 'Copilot normalization accepted a session whose subagent ran on another model.'
+fi
+[[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == \
+    "Copilot started subagent 'security-review' with model 'gpt-5.5' in the review phase although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent." ]] ||
+    fail "Copilot subagent rejection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+[[ ! -e "${copilot_normalized_output}" && ! -e "${copilot_exact_reply}" ]] ||
+    fail 'Copilot normalization left outputs behind after rejecting a subagent.'
+# Even a subagent on the approved model is rejected: no worker may start one.
+copilot_same_model_subagent="${fixture_root}/copilot-same-model-subagent.jsonl"
+sed 's/"gpt-5\.5"/"gpt-5.6-sol"/g' "${copilot_subagent_output}" \
+    > "${copilot_same_model_subagent}"
+if harness_normalize_worker_output \
+    review \
+    "${copilot_same_model_subagent}" \
+    gpt-5.6-sol \
+    max \
+    "${copilot_normalized_output}" \
+    "${copilot_exact_reply}" >/dev/null 2>&1; then
+    fail 'Copilot normalization accepted a subagent that used the approved model.'
+fi
+[[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"started subagent 'security-review' with model 'gpt-5.6-sol'"* ]] ||
+    fail "Copilot same-model subagent rejection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+
+# Live detection scans only the complete lines appended since the cursor, so
+# the runner can stop a worker seconds after the first recorded violation.
+copilot_watch_output="${fixture_root}/copilot-watch-output.jsonl"
+copilot_watch_cursor="${fixture_root}/copilot-watch.cursor"
+rm -f -- "${copilot_watch_output}" "${copilot_watch_cursor}"
+rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_watch_output}" gpt-5.6-sol max "${copilot_watch_cursor}" ||
+    fail "Copilot live detection failed before the worker wrote output: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+head -n 3 "${copilot_subagent_output}" > "${copilot_watch_output}"
+rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_watch_output}" gpt-5.6-sol max "${copilot_watch_cursor}" ||
+    fail "Copilot live detection rejected approved-model events: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+assert_equal 600 "$(stat -c '%a' "${copilot_watch_cursor}")" \
+    'Copilot live detection cursor mode'
+copilot_watch_offset="$(cat "${copilot_watch_cursor}")"
+[[ "${copilot_watch_offset}" == "$(stat -c '%s' "${copilot_watch_output}")" ]] ||
+    fail 'Copilot live detection cursor did not advance to the end of the complete lines.'
+# A half-written event is neither consumed nor judged until its newline lands.
+sed -n '4p' "${copilot_subagent_output}" | head -c 40 | tr -d '\n' \
+    >> "${copilot_watch_output}"
+rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_watch_output}" gpt-5.6-sol max "${copilot_watch_cursor}" ||
+    fail 'Copilot live detection judged a partially written event.'
+[[ "$(cat "${copilot_watch_cursor}")" == "${copilot_watch_offset}" ]] ||
+    fail 'Copilot live detection consumed a partially written event.'
+sed -n '4p' "${copilot_subagent_output}" | tail -c +41 >> "${copilot_watch_output}"
+if rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_watch_output}" gpt-5.6-sol max "${copilot_watch_cursor}"; then
+    fail 'Copilot live detection missed the completed subagent event.'
+fi
+assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+    "${RHYOLITE_HARNESS_LAST_STATUS}" \
+    'Copilot live detection violation status'
+[[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"started subagent 'security-review' with model 'gpt-5.5' in the review phase"* ]] ||
+    fail "Copilot live detection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+for copilot_watch_rejection in \
+    'gpt-5.5|max|substituted output' \
+    'gpt-5.6-sol|high|downgraded or substituted effort'; do
+    IFS='|' read -r rejection_model rejection_effort rejection_fragment \
+        <<< "${copilot_watch_rejection}"
+    rm -f -- "${copilot_watch_cursor}"
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        review "${copilot_structured_output}" \
+        "${rejection_model}" "${rejection_effort}" "${copilot_watch_cursor}"; then
+        fail "Copilot live detection accepted ${rejection_model}/${rejection_effort} against the approved gpt-5.6-sol/max plan."
+    fi
+    assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+        "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        "Copilot live detection ${rejection_fragment} status"
+    [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *"${rejection_fragment}"* ]] ||
+        fail "Copilot live detection rejection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+done
+for copilot_watch_invalid in \
+    "bogus|${copilot_watch_output}|${copilot_watch_cursor}" \
+    "review|relative-output.jsonl|${copilot_watch_cursor}" \
+    "review|${copilot_watch_output}|${copilot_watch_output}" \
+    "review|${copilot_watch_output}|${fixture_root}/missing-dir/cursor"; do
+    IFS='|' read -r invalid_phase invalid_output invalid_cursor \
+        <<< "${copilot_watch_invalid}"
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        "${invalid_phase}" "${invalid_output}" gpt-5.6-sol max "${invalid_cursor}"; then
+        fail "Copilot live detection accepted invalid arguments: ${copilot_watch_invalid}"
+    fi
+    assert_equal 1 "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        'Copilot live detection invalid-argument status'
+done
+rm -f -- "${copilot_watch_cursor}"
 for secure_research_runner_fragment in \
     'local research_normalized_output="${research_runtime_root}/research-output.normalized"' \
     'local research_accepted_candidate="${research_runtime_root}/accepted-dossier.txt"' \
@@ -3349,6 +3491,57 @@ printf 'mock-session-database\n' \
     > "${COPILOT_HOME}/session-store/sessions.db"
 cat >/dev/null
 
+# Reproduce the live failure: the session itself used the approved model, but
+# a `task` call started a subagent on another model. The event is flushed at
+# once and the mock then blocks, so only live detection can end the run early.
+if [[ -n "${RHYOLITE_MOCK_SUBAGENT_MODEL:-}" ]]; then
+    mock_subagent_sleep_pid=""
+    mock_subagent_exit() {
+        # Ignore, rather than reset, further signals so the marker is always
+        # written even when the runner's tree-wide TERM arrives mid-exit.
+        trap '' INT TERM HUP
+        printf 'terminated\n' > "${RHYOLITE_WORKER_CAPTURE}/subagent-terminated"
+        if [[ -n "${mock_subagent_sleep_pid}" ]]; then
+            kill "${mock_subagent_sleep_pid}" 2>/dev/null || true
+            wait "${mock_subagent_sleep_pid}" 2>/dev/null || true
+        fi
+        exit 143
+    }
+    trap mock_subagent_exit INT TERM HUP
+    /usr/bin/python3 - "${mock_model}" "${RHYOLITE_MOCK_SUBAGENT_MODEL}" <<'MOCK_SUBAGENT'
+import json
+import sys
+
+model, subagent_model = sys.argv[1], sys.argv[2]
+
+
+def event(kind, data, **extra):
+    print(json.dumps({"type": kind, "data": data, "id": "mock", **extra}), flush=True)
+
+
+event("model.call_start", {"turnId": "0", "model": model})
+event("tool.execution_start", {"toolName": "task", "model": model})
+event(
+    "subagent.started",
+    {
+        "toolCallId": "call_mock",
+        "agentName": "security-review",
+        "model": subagent_model,
+        "taskModelSource": "task_argument",
+        "modelSelectionSource": "explicit_override",
+    },
+    agentId="mock-subagent",
+)
+MOCK_SUBAGENT
+    printf 'started\n' > "${RHYOLITE_WORKER_CAPTURE}/subagent-emitted"
+    sleep 300 &
+    mock_subagent_sleep_pid=$!
+    # The runner signals the sleep child before the mock itself, so either
+    # the returning wait or the TERM trap records the termination.
+    wait "${mock_subagent_sleep_pid}" || true
+    mock_subagent_exit
+fi
+
 if [[ "${RHYOLITE_MOCK_UNSAFE_TEXT:-0}" == 1 ]]; then
     credential_url="$(
         printf '%s%s%s' \
@@ -5262,6 +5455,103 @@ if (state.Status !== "ReviewFailed" ||
     !state.Session.Id ||
     !state.Session.Name) {
   throw new Error("unsafe worker failure lost status or started-session identity");
+}
+JS
+
+# Live approved-plan enforcement: a worker whose `task` subagent runs on
+# another model is terminated seconds after the event is recorded, not after
+# the session completes, and the run fails closed as approved model
+# enforcement with the early termination explained.
+subagent_workspace="${fixture_root}/subagent-worker-workspace"
+subagent_output="${fixture_root}/subagent-worker-output"
+subagent_capture="${runner_capture_root}/subagent-worker"
+subagent_plan="${fixture_root}/subagent-worker-plan.json"
+subagent_stdout="${fixture_root}/subagent-worker.stdout"
+subagent_stderr="${fixture_root}/subagent-worker.stderr"
+mkdir -p -- "${subagent_capture}"
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${runner_mock_bin}:/usr/bin:/bin" \
+    "${RUNNER}" \
+    --harness copilot \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${subagent_workspace}" \
+    --output-root "${subagent_output}" \
+    --non-interactive \
+    --no-open-html \
+    --plan-only >"${subagent_plan}" 2>/dev/null ||
+    fail 'Subagent enforcement plan failed.'
+subagent_plan_hash="$(contract_plan_hash "${subagent_plan}")"
+subagent_started_epoch="$(date +%s)"
+set +e
+env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    COPILOT_HOME="${runner_source_home}" \
+    RHYOLITE_WORKER_CAPTURE="${subagent_capture}" \
+    RHYOLITE_MOCK_SUBAGENT_MODEL=gpt-5.5 \
+    TMPDIR="${runner_tmp_root}" \
+    PATH="${runner_mock_bin}:/usr/bin:/bin" \
+    "${RUNNER}" \
+    --harness copilot \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${subagent_workspace}" \
+    --output-root "${subagent_output}" \
+    --expected-plan-hash "${subagent_plan_hash}" \
+    --non-interactive \
+    --no-open-html >"${subagent_stdout}" 2>"${subagent_stderr}"
+subagent_status=$?
+set -e
+subagent_elapsed=$(( $(date +%s) - subagent_started_epoch ))
+((subagent_status != 0)) ||
+    fail 'Subagent enforcement fixture unexpectedly succeeded.'
+if [[ ! -f "${subagent_capture}/subagent-emitted" ||
+    ! -f "${subagent_capture}/subagent-terminated" ]]; then
+    {
+        printf -- '--- subagent enforcement capture ---\n'
+        ls -la -- "${subagent_capture}" 2>&1 || true
+        printf -- '--- subagent enforcement stdout ---\n'
+        cat -- "${subagent_stdout}" 2>&1 || true
+        printf -- '--- subagent enforcement stderr ---\n'
+        cat -- "${subagent_stderr}" 2>&1 || true
+        printf -- '--- subagent enforcement errors.txt ---\n'
+        cat -- "$(contract_run_path "${subagent_stdout}")/github--octocat--hello-world/errors.txt" 2>&1 || true
+    } >&2
+    fail 'Subagent enforcement fixture was not terminated by the runner.'
+fi
+((subagent_elapsed < 120)) ||
+    fail "Subagent enforcement waited ${subagent_elapsed}s instead of stopping the worker promptly."
+subagent_run="$(contract_run_path "${subagent_stdout}")"
+subagent_repository="${subagent_run}/github--octocat--hello-world"
+subagent_errors="${subagent_repository}/errors.txt"
+assert_contains "${subagent_stdout}" \
+    'Stage: approved model enforcement' \
+    'Subagent enforcement terminal stage'
+assert_contains "${subagent_stdout}" \
+    'approved model enforcement: terminating the review worker after' \
+    'Subagent enforcement progress notice'
+assert_contains "${subagent_stdout}" \
+    'Rhyolite never accepts substituted or downgraded output' \
+    'Subagent enforcement remediation'
+assert_contains "${subagent_errors}" \
+    'Harness failure stage: harness copilot harness_detect_worker_violation' \
+    'Subagent enforcement detection stage'
+assert_contains "${subagent_errors}" \
+    "Copilot started subagent 'security-review' with model 'gpt-5.5' in the review phase" \
+    'Subagent enforcement detail'
+assert_contains "${subagent_errors}" \
+    'Rhyolite terminated the review worker' \
+    'Subagent enforcement early-termination record'
+[[ ! -e "${subagent_repository}/copilot-output.raw" &&
+    ! -e "${subagent_repository}/copilot-output.raw.cursor" ]] ||
+    fail 'Subagent enforcement left raw output or its cursor in the artifact directory.'
+node - "${subagent_repository}/state.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (state.Status !== "ReviewFailed" ||
+    state.ExitCode === 0 ||
+    state.ReportRepair?.Status !== "NotReached" ||
+    !state.Session.Id) {
+  throw new Error("subagent enforcement did not fail closed before report acceptance");
 }
 JS
 

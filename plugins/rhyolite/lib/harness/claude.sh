@@ -1254,6 +1254,198 @@ harness_normalize_worker_output() {
     rhyolite_harness_normalize_worker_output_identity "$@"
 }
 
+# Scan the complete session records appended since the saved cursor for the
+# same evidence the post-exit verification rejects. Prints one status token
+# (clean, substituted, effort-changed, subagent, unreadable, or unwritable)
+# followed by one safe detail line.
+claude_scan_session_record() {
+    local session_jsonl="$1"
+    local approved_model="$2"
+    local approved_effort="$3"
+    local cursor_path="$4"
+
+    python3 -I - \
+        "${session_jsonl}" \
+        "${approved_model}" \
+        "${approved_effort}" \
+        "${cursor_path}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1])
+model, effort = sys.argv[2], sys.argv[3]
+cursor_path = pathlib.Path(sys.argv[4])
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def safe_token(value):
+    if isinstance(value, str) and SAFE_TOKEN.fullmatch(value):
+        return value
+    return "unrecognized"
+
+
+def finish(status, detail=""):
+    sys.stdout.write(f"{status}\n{detail}\n")
+    raise SystemExit(0)
+
+
+offset = 0
+try:
+    if cursor_path.is_file():
+        offset = max(0, int(cursor_path.read_text(encoding="ascii").strip() or 0))
+except (OSError, ValueError, UnicodeError):
+    offset = 0
+try:
+    with source.open("rb") as stream:
+        stream.seek(offset)
+        raw_bytes = stream.read()
+except OSError:
+    finish("unreadable", "The Claude Code session record could not be read.")
+
+lines = raw_bytes.split(b"\n")
+# The split tail is either the empty string after a final newline or the
+# record Claude Code is still writing; neither is consumed, so the cursor
+# stops exactly after the last complete record.
+lines = lines[:-1]
+consumed = sum(len(line) + 1 for line in lines)
+violation = None
+
+
+def escalate(status, detail=""):
+    global violation
+    if violation is None:
+        violation = (status, detail)
+
+
+for raw_line in lines:
+    if not raw_line.strip():
+        continue
+    try:
+        record = json.loads(raw_line.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        continue
+    if not isinstance(record, dict):
+        continue
+    if record.get("isSidechain") is True:
+        escalate("subagent", "sidechain")
+    record_type = record.get("type")
+    if record_type == "system":
+        if record.get("subtype") == "model_refusal_fallback":
+            escalate("substituted", "model_refusal_fallback")
+        continue
+    if record_type != "assistant":
+        continue
+    message = record.get("message")
+    if not isinstance(message, dict):
+        continue
+    used_model = message.get("model")
+    if used_model not in (model, "<synthetic>"):
+        escalate("substituted", safe_token(used_model))
+    if record.get("advisorModel"):
+        escalate("substituted", safe_token(record.get("advisorModel")))
+    for effort_key in ("effort", "perTurnEffort"):
+        used_effort = record.get(effort_key)
+        if used_effort is not None and used_effort != effort:
+            escalate("effort-changed", safe_token(used_effort))
+
+try:
+    cursor_path.write_text(f"{offset + consumed}\n", encoding="ascii")
+    cursor_path.chmod(0o600)
+except OSError:
+    finish("unwritable", "The Claude Code session cursor could not be written.")
+if violation is None:
+    finish("clean")
+finish(*violation)
+PY
+}
+
+# Live enforcement while a worker runs. Claude Code print mode writes only the
+# final reply to stdout, so the private session record under the isolated
+# runtime home is scanned incrementally for another model, an advisor model,
+# another effort, a model-refusal fallback notice, or a sidechain (subagent)
+# record. Until the record exists there is nothing to check, and the
+# report-repair child persists no session, so those cases are verified once
+# the worker exits.
+harness_detect_worker_violation() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local cursor_path="$5"
+    local session_id=''
+    local session_jsonl=''
+    local candidate
+    local candidate_count=0
+    local result status detail
+
+    rhyolite_harness_validate_violation_arguments "$@" || return 1
+    : "${raw_output}"
+    case "${phase}" in
+        review) session_id="${CLAUDE_SESSION_ID}" ;;
+        research) session_id="${CLAUDE_RESEARCH_SESSION_ID}" ;;
+        *) return 0 ;;
+    esac
+    [[ "${CLAUDE_HOME_PHASE}" == "${phase}" ]] || return 0
+    claude_valid_session_id "${session_id}" || return 0
+    [[ -n "${CLAUDE_RUNTIME_HOME}" &&
+        -d "${CLAUDE_RUNTIME_HOME}/projects" &&
+        ! -L "${CLAUDE_RUNTIME_HOME}/projects" ]] || return 0
+    while IFS= read -r -d '' candidate; do
+        session_jsonl="${candidate}"
+        candidate_count=$((candidate_count + 1))
+    done < <(
+        find "${CLAUDE_RUNTIME_HOME}/projects" -mindepth 2 -maxdepth 2 \
+            -type f -name "${session_id}.jsonl" -print0 2>/dev/null
+    )
+    ((candidate_count == 1)) || return 0
+
+    result="$(
+        umask 077
+        claude_scan_session_record \
+            "${session_jsonl}" \
+            "${approved_model}" \
+            "${approved_effort}" \
+            "${cursor_path}" 2>/dev/null
+    )" || true
+    status="${result%%$'\n'*}"
+    detail=''
+    if [[ "${result}" == *$'\n'* ]]; then
+        detail="${result#*$'\n'}"
+        detail="${detail%%$'\n'*}"
+    fi
+    case "${status}" in
+        clean)
+            return 0
+            ;;
+        substituted)
+            rhyolite_harness_set_error \
+                "Claude Code answered with a model other than the approved model in the ${phase} phase (recorded '${detail}'); Rhyolite does not accept a substituted review."
+            return "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}"
+            ;;
+        effort-changed)
+            rhyolite_harness_set_error \
+                "Claude Code recorded a reasoning effort other than the approved effort in the ${phase} phase (recorded '${detail}'); Rhyolite does not accept a downgraded review."
+            return "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}"
+            ;;
+        subagent)
+            rhyolite_harness_set_error \
+                "Claude Code recorded a subagent turn in the ${phase} phase although subagents are disabled for Rhyolite workers."
+            return "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}"
+            ;;
+        unreadable | unwritable)
+            rhyolite_harness_set_error "${detail}"
+            return 1
+            ;;
+        *)
+            rhyolite_harness_set_error \
+                "The Claude Code ${phase} session record could not be scanned for approved-plan violations."
+            return 1
+            ;;
+    esac
+}
+
 harness_render_request() {
     local template_path="$1"
     local request_path="$2"

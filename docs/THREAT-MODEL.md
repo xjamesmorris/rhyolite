@@ -422,6 +422,21 @@
   `--fallback-model` and fails the review when the session record shows
   another model or effort, a safeguard handover, an advisor model, a
   subagent turn, or an unreadable record.
+- Copilot workers receive only `view`, `glob`, `rg`, and `skill`. No
+  Rhyolite worker on either harness receives a subagent tool: a live probe
+  showed that a Copilot `task` call's `model` argument overrides every
+  configured `subagents.agents.<name>.model` value, so a specialist could
+  silently run on another model while the main session stayed on the
+  approved one. The worker performs the dedicated security pass itself, the
+  structured-output normalizer rejects any recorded subagent event, and
+  worker prompts never invite the model to select, name, or request a model,
+  effort, or context.
+- While a review, research, or report-repair child runs, the runner polls
+  the adapter every five seconds for recorded evidence of another model,
+  effort, or a subagent and terminates the child's process tree on the first
+  violation instead of accepting a completed session later. The post-exit
+  checks still reject the same evidence, so live detection shortens the
+  blast radius without widening what is accepted.
 - Claude Code workers raise the per-response output limit to the model's
   maximum. When Claude Code still resumes a cut reply, the transcript
   renderer joins the segments only after an explicit `Output token limit

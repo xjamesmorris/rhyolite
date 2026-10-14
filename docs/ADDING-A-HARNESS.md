@@ -9,7 +9,7 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v6.
+- The implemented production seam is Contract v7.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
   and Claude Code (`claude`). A contract refactor does not itself add another
@@ -54,7 +54,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v6 function and every negative and
+12. The adapter can satisfy every Contract-v7 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -83,7 +83,11 @@ the Contract-v4 bounded-repair lifecycle, and moved the dedicated scope 2/3
 research worker behind adapter functions. Contract v6 keeps those schemas and
 makes the adapter translate its CLI's raw worker stdout into a readable
 narrative plus the exact final assistant reply for every child phase, with
-approved model and effort verification. Do not register an adapter before
+approved model and effort verification. Contract v7 keeps those schemas and
+adds live enforcement: while a child runs, the runner polls the adapter's
+incremental violation detector and terminates the child on the first recorded
+model, effort, or subagent outside the approved plan. No worker receives a
+subagent tool on any harness. Do not register an adapter before
 validation understands its complete lifecycle.
 
 ## Fixed registry procedure
@@ -122,12 +126,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v6 boundary
+## Contract-v7 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=6
+RHYOLITE_HARNESS_CONTRACT_VERSION=7
 ```
 
 The shared loader must require all functions in this document before calling
@@ -177,7 +181,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v6 capability keys remain:
+Contract-v7 capability keys remain:
 
 ```text
 fleet
@@ -290,7 +294,8 @@ release artifacts.
 | `harness_research_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, protected variable names, MCP config path, comma-separated broker tool names, and transcript path. Status only. | Populate the research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the named broker tools from that MCP configuration. |
 | `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
-| `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, or subagent metric names a model or reasoning effort other than the approved values; remove both outputs on failure. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
+| `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, subagent event, or subagent metric names a model or reasoning effort other than the approved values, and when any subagent event appears at all, because no Rhyolite worker receives a subagent tool; remove both outputs on failure. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
+| `harness_detect_worker_violation` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, and a runner-owned cursor path. Status only. | Called every five seconds while the child runs. Validate the shared arguments with `rhyolite_harness_validate_violation_arguments`. Scan only the complete lines appended since the offset stored in the cursor file, then store the new offset in a mode-0600 cursor; a half-written final line is neither consumed nor judged. Return 0 when nothing outside the approved plan is recorded yet (including before any output exists), `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` with a sanitized detail on the first recorded model, effort, or subagent other than the approved plan, and 1 for any other failure, which the runner records once as a warning. Use the same evidence rules as the adapter's post-exit verification. A CLI that records no live evidence may call `rhyolite_harness_detect_worker_violation_none`. The runner terminates the child's process tree on the violation status and still runs the post-exit checks. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -325,6 +330,10 @@ Worker argv must:
 - request long context;
 - disable custom instructions and built-in MCPs;
 - deny write and shell tools;
+- offer no subagent, task, or agent-messaging tool: the runner supplies
+  `view,glob,rg,skill` as the review worker's complete available-tool list,
+  and the adapter must not widen it, because a Copilot `task` argument can
+  override every configured subagent model;
 - disable temporary-directory access and remote export;
 - avoid allow-all mode and broad URL approval;
 - use only the runner-supplied session, transcript, plugin, and tool values;
@@ -568,8 +577,13 @@ Do not use capability values as decorative metadata. They must gate behavior:
 - `fleet`: whether native process-level fleet mode can be selected.
 - `structured_questions`: whether the outer guided experience can use the
   required structured picker behavior.
-- `subagents`: whether the worker can delegate to bundled specialists.
-- `builtin_security_specialist`: whether the required security pass can run.
+- `subagents`: whether the worker may delegate to bundled specialists. Both
+  production adapters report `no`: no Rhyolite worker receives a subagent
+  tool, because a Copilot `task` argument overrides every configured subagent
+  model, and any recorded subagent event fails the phase.
+- `builtin_security_specialist`: whether a bundled specialist performs the
+  required security pass. Both production adapters report `no`; the worker
+  performs the dedicated security pass itself.
 - `builtin_research_specialist`: whether research delegation is available
   where required.
 - `web_research`: whether the harness can use the exact Rhyolite local broker
@@ -585,7 +599,7 @@ deterministically implied by the approved harness and contract version.
 
 ## Plan schema 5 and approval hash
 
-Contract v6 retains the Contract-v3 approved runtime selection and plan
+Contract v7 retains the Contract-v3 approved runtime selection and plan
 schema 5. It includes these exact top-level fields:
 
 ```json
@@ -937,7 +951,7 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v6 function inventory for the adapter;
+- the complete Contract-v7 function inventory for the adapter;
 - an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
   real runs, and their consequences;
 - a capability decision table with evidence;

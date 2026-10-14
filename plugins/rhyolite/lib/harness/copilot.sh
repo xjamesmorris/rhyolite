@@ -67,8 +67,16 @@ copilot_write_settings() {
         fi
         case "${phase}" in
             review)
+                # Rhyolite workers receive no subagent tool, so these profiles
+                # are defense in depth for any subagent the harness itself
+                # might create: a `task` argument can override them, which is
+                # why the runner also fails closed on every recorded subagent.
                 cat <<EOF
   "disableAllHooks": true,
+  "memory": false,
+  "ide": {
+    "autoConnect": false
+  },
   "customAgents": {
     "defaultLocalOnly": true
   },
@@ -274,10 +282,15 @@ harness_require_cli() {
 
 harness_capability() {
     case "$1" in
-        fleet|structured_questions|subagents|builtin_security_specialist|builtin_research_specialist|web_research|shell_denial)
+        fleet|structured_questions|builtin_research_specialist|web_research|shell_denial)
             printf '%s\n' 'yes'
             ;;
-        final_message_file)
+        # Copilot CLI lets a `task` call override every configured subagent
+        # model (verified live: `modelSelectionSource: "explicit_override"`),
+        # so no subagent can be bound to the approved model. Rhyolite workers
+        # therefore receive no subagent tools and perform the security pass
+        # themselves, exactly like the Claude Code worker.
+        subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
         *)
@@ -868,33 +881,54 @@ harness_finalize_research_session() {
 # at the terminal width, re-indents and renumbers lists, inserts blank lines,
 # and emits OSC 8 hyperlink escapes even with --no-color. Those bytes are not
 # the assistant reply. Every Copilot child therefore runs with
-# --output-format json, and this helper translates the JSONL event stream into
-# a readable narrative plus the exact final assistant message while verifying
-# that every recorded model call used the approved model and effort.
-copilot_normalize_structured_output() {
-    local raw_output="$1"
-    local normalized_output="$2"
-    local final_reply_output="$3"
-    local approved_model="$4"
-    local approved_effort="$5"
+# --output-format json, and this scanner reads the JSONL event stream in one
+# of two modes with the same enforcement rules:
+#   normalize  translate the complete stream into a readable narrative plus
+#              the exact final assistant message;
+#   watch      scan only the complete lines appended since the offset saved in
+#              the cursor file while the worker is still running.
+# Both modes verify that every recorded model call, tool call, usage
+# checkpoint, and subagent metric used the approved model and effort, and both
+# reject any subagent event because Rhyolite workers receive no subagent tool
+# and Copilot CLI lets a `task` argument override every configured subagent
+# model. It prints one status token followed by one sanitized detail line.
+copilot_scan_structured_output() {
+    local mode="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local normalized_output="${5:--}"
+    local final_reply_output="${6:--}"
+    local cursor_path="${7:--}"
 
     python3 - \
+        "${mode}" \
         "${raw_output}" \
+        "${approved_model}" \
+        "${approved_effort}" \
         "${normalized_output}" \
         "${final_reply_output}" \
-        "${approved_model}" \
-        "${approved_effort}" <<'PY'
+        "${cursor_path}" <<'PY'
 import json
 import pathlib
 import re
 import sys
 
-raw_path = pathlib.Path(sys.argv[1])
-normalized_path = pathlib.Path(sys.argv[2])
-reply_path = pathlib.Path(sys.argv[3])
-approved_model = sys.argv[4]
-approved_effort = sys.argv[5]
+mode = sys.argv[1]
+raw_path = pathlib.Path(sys.argv[2])
+approved_model = sys.argv[3]
+approved_effort = sys.argv[4]
+normalized_path = pathlib.Path(sys.argv[5]) if sys.argv[5] != "-" else None
+reply_path = pathlib.Path(sys.argv[6]) if sys.argv[6] != "-" else None
+cursor_path = pathlib.Path(sys.argv[7]) if sys.argv[7] != "-" else None
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+SUBAGENT_EVENTS = (
+    "subagent.started",
+    "subagent.configured",
+    "subagent.selected",
+    "subagent.completed",
+    "subagent.failed",
+)
 
 
 def safe_token(value):
@@ -908,8 +942,27 @@ def finish(status, detail=""):
     raise SystemExit(0 if status == "ok" else 1)
 
 
+if mode not in ("normalize", "watch"):
+    finish("invalid", "The Copilot output scanner mode is unsupported.")
+
+offset = 0
+if mode == "watch":
+    try:
+        if cursor_path.is_file():
+            offset = int(cursor_path.read_text(encoding="ascii").strip() or 0)
+    except (OSError, ValueError, UnicodeError):
+        offset = 0
+    if offset < 0:
+        offset = 0
+
 try:
-    raw_bytes = raw_path.read_bytes()
+    if mode == "watch" and not raw_path.is_file():
+        raw_bytes = b""
+    else:
+        with raw_path.open("rb") as stream:
+            if offset:
+                stream.seek(offset)
+            raw_bytes = stream.read()
 except OSError:
     finish("unreadable", "The Copilot worker output could not be read.")
 
@@ -919,6 +972,7 @@ final_reply = None
 event_count = 0
 observed_models = []
 observed_efforts = []
+subagent_seen = None
 
 
 def flush_passthrough():
@@ -955,7 +1009,26 @@ def observe_agent_metrics(agent_metrics):
             observe_metrics(entry.get("modelMetrics"))
 
 
-for raw_line in raw_bytes.split(b"\n"):
+def observe_subagent(data):
+    global subagent_seen
+    for key in ("model", "firstDispatchedModel", "explicitModelOverride"):
+        observe_model(data.get(key))
+    observe_effort(data.get("reasoningEffort"))
+    if subagent_seen is None:
+        name = data.get("agentName") or data.get("agentType") or "unknown"
+        model = data.get("model") or data.get("explicitModelOverride") or ""
+        subagent_seen = (safe_token(name), safe_token(model) if model else "")
+
+
+consumed = 0
+lines = raw_bytes.split(b"\n")
+# In watch mode the split tail is either the empty string after a final
+# newline or the line the writer is still producing; neither is consumed, so
+# the cursor stops exactly after the last complete line.
+if mode == "watch":
+    lines = lines[:-1]
+for raw_line in lines:
+    consumed += len(raw_line) + 1
     line = raw_line.rstrip(b"\r")
     if not line.strip():
         continue
@@ -988,6 +1061,8 @@ for raw_line in raw_bytes.split(b"\n"):
         "tool.execution_complete",
     ):
         observe_model(data.get("model"))
+    elif event_type in SUBAGENT_EVENTS:
+        observe_subagent(data)
     elif event_type == "session.usage_checkpoint":
         for state in data.get("promptCacheBreakState") or []:
             if not isinstance(state, dict):
@@ -1006,12 +1081,24 @@ for raw_line in raw_bytes.split(b"\n"):
             observe_agent_metrics(snapshot.get("agentMetrics"))
         observe_agent_metrics(data.get("agentMetrics"))
 
+if mode == "watch":
+    try:
+        cursor_path.write_text(f"{offset + consumed}\n", encoding="ascii")
+        cursor_path.chmod(0o600)
+    except OSError:
+        finish("unwritable", "The Copilot worker output cursor could not be written.")
+
+if subagent_seen is not None:
+    name, model = subagent_seen
+    finish("subagent", f"{name}:{model}" if model else name)
 substituted = [model for model in observed_models if model != approved_model]
 if substituted:
     finish("substituted", safe_token(substituted[0]))
 changed = [effort for effort in observed_efforts if effort != approved_effort]
 if changed:
     finish("effort-changed", safe_token(changed[0]))
+if mode == "watch":
+    finish("ok", "clean")
 
 flush_passthrough()
 normalized_text = "\n\n".join(block.rstrip("\n") for block in narrative)
@@ -1040,37 +1127,29 @@ finish("ok", "structured" if event_count else "unstructured")
 PY
 }
 
-harness_normalize_worker_output() {
+# Translate one scanner status into the sanitized, phase-specific failure
+# detail shared by normalization and live violation detection.
+copilot_set_scan_error() {
     local phase="$1"
-    local raw_output="$2"
-    local approved_model="$3"
-    local approved_effort="$4"
-    local normalized_output="$5"
-    local final_reply_output="$6"
-    local result status detail
+    local status="$2"
+    local detail="$3"
+    local approved_model="$4"
+    local approved_effort="$5"
+    local subagent_name subagent_model
 
-    rhyolite_harness_validate_normalize_arguments "$@" || return 1
-    result="$(
-        umask 077
-        copilot_normalize_structured_output \
-            "${raw_output}" \
-            "${normalized_output}" \
-            "${final_reply_output}" \
-            "${approved_model}" \
-            "${approved_effort}" 2>/dev/null
-    )" || true
-    status="${result%%$'\n'*}"
-    detail=''
-    if [[ "${result}" == *$'\n'* ]]; then
-        detail="${result#*$'\n'}"
-        detail="${detail%%$'\n'*}"
-    fi
-    if [[ "${status}" == ok ]] &&
-        chmod 600 -- "${normalized_output}" "${final_reply_output}" 2>/dev/null; then
-        return 0
-    fi
-    rm -f -- "${normalized_output}" "${final_reply_output}"
     case "${status}" in
+        subagent)
+            subagent_name="${detail%%:*}"
+            subagent_model=''
+            [[ "${detail}" != *:* ]] || subagent_model="${detail#*:}"
+            if [[ -n "${subagent_model}" ]]; then
+                rhyolite_harness_set_error \
+                    "Copilot started subagent '${subagent_name}' with model '${subagent_model}' in the ${phase} phase although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent."
+            else
+                rhyolite_harness_set_error \
+                    "Copilot started subagent '${subagent_name}' in the ${phase} phase although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent."
+            fi
+            ;;
         substituted)
             rhyolite_harness_set_error \
                 "Copilot answered the ${phase} phase with model '${detail}' instead of the approved model '${approved_model}'; Rhyolite does not accept substituted output."
@@ -1088,6 +1167,93 @@ harness_normalize_worker_output() {
             ;;
     esac
     return 1
+}
+
+harness_normalize_worker_output() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local normalized_output="$5"
+    local final_reply_output="$6"
+    local result status detail
+
+    rhyolite_harness_validate_normalize_arguments "$@" || return 1
+    result="$(
+        umask 077
+        copilot_scan_structured_output \
+            normalize \
+            "${raw_output}" \
+            "${approved_model}" \
+            "${approved_effort}" \
+            "${normalized_output}" \
+            "${final_reply_output}" 2>/dev/null
+    )" || true
+    status="${result%%$'\n'*}"
+    detail=''
+    if [[ "${result}" == *$'\n'* ]]; then
+        detail="${result#*$'\n'}"
+        detail="${detail%%$'\n'*}"
+    fi
+    if [[ "${status}" == ok ]] &&
+        chmod 600 -- "${normalized_output}" "${final_reply_output}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "${normalized_output}" "${final_reply_output}"
+    copilot_set_scan_error \
+        "${phase}" "${status}" "${detail}" \
+        "${approved_model}" "${approved_effort}"
+    return 1
+}
+
+# Live enforcement while a worker runs: scan the JSONL appended since the last
+# call and report the first recorded model, effort, or subagent violation so
+# the runner can terminate the worker immediately instead of after completion.
+harness_detect_worker_violation() {
+    local phase="$1"
+    local raw_output="$2"
+    local approved_model="$3"
+    local approved_effort="$4"
+    local cursor_path="$5"
+    local result status detail
+
+    rhyolite_harness_validate_violation_arguments "$@" || return 1
+    result="$(
+        umask 077
+        copilot_scan_structured_output \
+            watch \
+            "${raw_output}" \
+            "${approved_model}" \
+            "${approved_effort}" \
+            - - \
+            "${cursor_path}" 2>/dev/null
+    )" || true
+    status="${result%%$'\n'*}"
+    detail=''
+    if [[ "${result}" == *$'\n'* ]]; then
+        detail="${result#*$'\n'}"
+        detail="${detail%%$'\n'*}"
+    fi
+    case "${status}" in
+        ok)
+            return 0
+            ;;
+        subagent | substituted | effort-changed)
+            copilot_set_scan_error \
+                "${phase}" "${status}" "${detail}" \
+                "${approved_model}" "${approved_effort}"
+            return "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}"
+            ;;
+        unreadable | unwritable)
+            rhyolite_harness_set_error "${detail}"
+            return 1
+            ;;
+        *)
+            rhyolite_harness_set_error \
+                "The Copilot ${phase} worker output could not be scanned for approved-plan violations."
+            return 1
+            ;;
+    esac
 }
 
 harness_render_request() {

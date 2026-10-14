@@ -57,9 +57,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v6 seam.
+  Contract-v7 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v6 and any future production adapter.
+  playbook for Contract v7 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -76,6 +76,15 @@ decision; compatibility must not be preserved speculatively.
   terminal-rendered Markdown, not the assistant reply. The research broker
   persists the accepted canonical dossier in its transient runtime root, so
   validated research survives a final reply that fails to reproduce it.
+- Contract v7 adds `harness_detect_worker_violation`: while a worker runs,
+  the runner polls the adapter every five seconds and the adapter scans only
+  the output appended since a runner-owned cursor, so a recorded model,
+  effort, or subagent outside the approved plan terminates the worker within
+  seconds instead of after the session completes. No worker receives a
+  subagent tool on either harness: Copilot CLI lets a `task` argument
+  override every configured subagent model, so the Copilot review worker
+  performs the dedicated security pass itself, like the Claude Code worker,
+  and any recorded subagent fails the phase.
 - Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved

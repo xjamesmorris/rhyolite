@@ -434,7 +434,7 @@ subdirectories.
 The scope UI first prints these as separate lines:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a security specialist with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
 Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.
@@ -606,7 +606,7 @@ Missing, duplicated, or empty labels and tables in assessment sections still
 fail explicitly, except for the wrapped-label rejoin described below.
 
 If strict validation rejects a complete report for Markdown table syntax,
-such as a copied security-specialist summary table, the trusted runner first
+such as a copied security summary table, the trusted runner first
 converts each well-formed table outside the field-validated assessment
 sections into labeled plain-text rows without a model. Every cell stays
 verbatim and every other line is unchanged; malformed, field-section, or
@@ -1015,6 +1015,13 @@ Important defaults:
   `Grep` (plus the five broker tools for research). Project instructions,
   hooks, memory, and slash commands are disabled, and a review fails if any
   worker turn used a model or effort other than the approved one.
+- Copilot workers run with only `view`, `glob`, `rg`, and `skill`. No worker
+  on either harness can start a subagent, because a Copilot `task` call's
+  `model` argument overrides every configured subagent model; the worker
+  performs the dedicated security pass itself. While a worker runs, the
+  runner checks its recorded output every five seconds and terminates it on
+  the first recorded model, effort, or subagent outside the approved plan,
+  and the completed session is rejected on the same evidence.
 - Users run under their own Git identity and their own GitHub Copilot or
   Claude Code sign-in.
 - No telemetry or report upload is implemented by this plugin.
@@ -1032,7 +1039,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v6 implementation playbook is in
+Contract-v7 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
