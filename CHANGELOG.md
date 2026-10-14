@@ -52,6 +52,10 @@
   `--scope`.
 - Added `docs/TASKS.md`, a prioritized tracker for open engineering,
   verification, and release tasks.
+- Fixed two release-validation regressions: redaction test fixtures now
+  assemble their email and credential values at runtime, so the
+  public-release content audit passes, and `tests/test-install.sh` runs
+  from a Git-free exported release tree again.
 
 - Fixed the Copilot review failures observed after the Contract-v6 change,
   where two scope-1 runs ended with `approved model enforcement` after a

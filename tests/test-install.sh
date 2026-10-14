@@ -369,31 +369,39 @@ assert_install "${ROOT}" "${version}" "${ROOT}/plugins/rhyolite" checkout
 fixture="${TEST_ROOT}/exported marketplace with spaces"
 contract_path='plugins/rhyolite/skills/readonly-repository-review/research-event-integers.json'
 synthetic_index="${TEST_ROOT}/intended-release.index"
-git -C "${ROOT}" ls-files --error-unmatch -- "${contract_path}" >/dev/null 2>&1 ||
-    fail 'Research event integer contract is not tracked for release.'
-git -C "${ROOT}" diff --quiet -- "${contract_path}" ||
-    fail 'Research event integer contract differs from its indexed release content.'
-indexed_tree="$(git -C "${ROOT}" write-tree)" ||
-    fail 'Could not materialize the indexed release tree.'
-GIT_INDEX_FILE="${synthetic_index}" \
-    git -C "${ROOT}" read-tree "${indexed_tree}" ||
-    fail 'Could not initialize the synthetic release index.'
-GIT_INDEX_FILE="${synthetic_index}" \
-    git -C "${ROOT}" add -u -- . ||
-    fail 'Could not add tracked worktree changes to the synthetic release index.'
-synthetic_tree="$(
-    GIT_INDEX_FILE="${synthetic_index}" git -C "${ROOT}" write-tree
-)" || fail 'Could not materialize the intended release tree.'
-[[ "$(git -C "${ROOT}" ls-tree -r --name-only "${synthetic_tree}" -- \
-    "${contract_path}")" == "${contract_path}" ]] ||
-    fail 'Intended release tree omits the research event integer contract.'
-
-# Archive the intended tracked tree so untracked working-tree files cannot
-# satisfy package coverage.
 mkdir -- "${fixture}"
-git -C "${ROOT}" archive --format=tar "${synthetic_tree}" |
-    tar -xf - -C "${fixture}" ||
-    fail 'Could not extract the synthetic release archive.'
+if [[ -e "${ROOT}/.git" ]]; then
+    git -C "${ROOT}" ls-files --error-unmatch -- "${contract_path}" >/dev/null 2>&1 ||
+        fail 'Research event integer contract is not tracked for release.'
+    git -C "${ROOT}" diff --quiet -- "${contract_path}" ||
+        fail 'Research event integer contract differs from its indexed release content.'
+    indexed_tree="$(git -C "${ROOT}" write-tree)" ||
+        fail 'Could not materialize the indexed release tree.'
+    GIT_INDEX_FILE="${synthetic_index}" \
+        git -C "${ROOT}" read-tree "${indexed_tree}" ||
+        fail 'Could not initialize the synthetic release index.'
+    GIT_INDEX_FILE="${synthetic_index}" \
+        git -C "${ROOT}" add -u -- . ||
+        fail 'Could not add tracked worktree changes to the synthetic release index.'
+    synthetic_tree="$(
+        GIT_INDEX_FILE="${synthetic_index}" git -C "${ROOT}" write-tree
+    )" || fail 'Could not materialize the intended release tree.'
+    [[ "$(git -C "${ROOT}" ls-tree -r --name-only "${synthetic_tree}" -- \
+        "${contract_path}")" == "${contract_path}" ]] ||
+        fail 'Intended release tree omits the research event integer contract.'
+
+    # Archive the intended tracked tree so untracked working-tree files cannot
+    # satisfy package coverage.
+    git -C "${ROOT}" archive --format=tar "${synthetic_tree}" |
+        tar -xf - -C "${fixture}" ||
+        fail 'Could not extract the synthetic release archive.'
+else
+    # A Git-free root, such as a public-export.sh destination, is already the
+    # exact archived release tree; copy it without this run's test output.
+    tar -C "${ROOT}" --exclude=./.test-output -cf - . |
+        tar -xf - -C "${fixture}" ||
+        fail 'Could not copy the Git-free release tree.'
+fi
 [[ -f "${fixture}/${contract_path}" && ! -L "${fixture}/${contract_path}" ]] ||
     fail 'Synthetic release archive omits the research event integer contract.'
 mkdir -p -- "${fixture}/previous/plugins"
