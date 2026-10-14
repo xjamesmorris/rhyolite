@@ -16,7 +16,7 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v7 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v8 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
@@ -31,12 +31,21 @@ adapter's `harness_detect_worker_violation` every five seconds, and the first
 recorded model, reasoning effort, or subagent outside the approved plan
 terminates the worker immediately instead of after completion. No worker on
 either harness receives a subagent tool, because Copilot CLI lets a `task`
-argument override every configured subagent model. The
-contract never resumes the review worker, permits a model to rewrite the
-report, or falls back to another harness.
+argument override every configured subagent model. Contract v8 adds bounded
+same-session recovery: after every worker invocation the adapter classifies
+the outcome through `harness_worker_outcome`, and when the adapter has
+verified `worker_continuation`, the runner may continue the review worker's
+own session, through `harness_worker_continuation_argv`, after a transient
+model-service failure, after an automatic model fallback that was blocked
+before it produced output, or to fetch missing, truncated, or invalid report
+sections in bounded pages (`RHYOLITE_REPORT_DELIVERY_V1`). A continuation
+uses the exact approved argv, environment, runtime home, tools, model,
+effort, and context, and live enforcement applies to it. The contract never
+permits a model to rewrite accepted report sections, accepts substituted
+output, relaunches research, or falls back to another harness or model.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v7 and any future production adapter.
+playbook for Contract v8 and any future production adapter.
 
 ## I1a invariants
 
@@ -120,7 +129,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v7 function exists.
+6. Assert every required Contract-v8 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -157,7 +166,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v7 functions
+## Contract-v8 functions
 
 Every mapped adapter must define all functions below.
 
@@ -194,6 +203,8 @@ Every mapped adapter must define all functions below.
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
 | `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort and on any recorded subagent event, because no Rhyolite worker receives a subagent tool; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
 | `harness_detect_worker_violation` | For phase `review`, `research`, or `report-repair`, while the worker is still running: scan only the complete lines appended to the recorded output since the offset saved in the runner-owned cursor file, return 0 when nothing outside the approved plan is recorded yet, return `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on the first recorded model, reasoning effort, or subagent other than the approved plan, and return 1 for any other failure, which the runner records once as a warning while the post-exit normalization stays authoritative. Copilot scans its JSONL stdout; Claude Code scans its private session record under the isolated runtime home and reports nothing until that record exists. The runner polls every five seconds and terminates the worker's process tree on the first violation. |
+| `harness_worker_outcome` | After every worker invocation, write one JSON outcome with exactly the documented keys: the outcome class (`completed`, `transient-failure`, `fallback-blocked`, `substituted`, `failed`, or `unknown`), whether it is retryable, the CLI exit code when recorded, up to five sanitized session errors, model-call failure and retry counts, how many responses reached the per-response output token limit, and the fallback model of a blocked automatic fallback. The runner validates it before use; an adapter whose CLI records no structured evidence may call `rhyolite_harness_worker_outcome_unknown`. |
+| `harness_worker_continuation_argv` | Return the argv that resumes the same worker session with the exact approved model, effort, context, tools, and isolation, or fail when the adapter has not verified `worker_continuation`. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
@@ -238,6 +249,7 @@ Contract v5 retains these capability keys:
 | `web_research` | `yes` | `yes` |
 | `shell_denial` | `yes` | `yes` |
 | `final_message_file` | `no` | `no` |
+| `worker_continuation` | `yes` | `unverified` |
 
 Copilot reports `subagents` and `builtin_security_specialist` as `no` since
 Contract v7. A live probe showed that a `task` call's `model` argument
@@ -685,6 +697,39 @@ from a `task` call whose explicit `model` argument overrode the adapter's
 `inherit` subagent settings while the main session itself used the approved
 model.
 
+Contract v8 keeps the same schemas and registry and adds two functions and
+one capability. `harness_worker_outcome <phase> <raw_output> <runtime_home>
+<session_id> <approved_model> <approved_effort> <outcome_output>` writes one
+JSON object with exactly the keys `Schema`, `Phase`, `Outcome`, `Retryable`,
+`ExitCode`, `SessionErrors`, `ModelCallFailures`, `TurnRetries`,
+`OutputLimitHits`, `OutputTokenLimit`, `FinalReplyAtOutputLimit`, and
+`FallbackModel`. `Outcome` is `completed`, `transient-failure`,
+`fallback-blocked`, `substituted`, `failed`, or `unknown`, and `Retryable` is
+true only for the first two retryable outcomes. The runner validates the
+object with `rhyolite_harness_validate_outcome_json` before it uses any value,
+appends the sanitized session errors to `errors.txt` for a failed invocation,
+and treats a malformed or missing outcome as `unknown`, which never continues
+a session. `harness_worker_continuation_argv <destination> <source_argv_name>`
+returns the argv that resumes the same session; Copilot CLI resumes a
+non-interactive JSON session when it is invoked again with the same
+`--session-id` and runtime home (verified live with Copilot CLI 1.0.98), so
+the Copilot adapter returns the exact approved worker argv. Claude Code reports
+`worker_continuation` as `unverified` until a live probe proves same-session
+print-mode continuation, so the runner never continues a Claude Code session.
+
+The live failures that motivated Contract v8 were reports cut at Copilot's
+32,000-token per-response output limit, where reasoning tokens count toward
+the limit and Copilot CLI re-requests a cut response without emitting the cut
+text; a final response that the service cut repeatedly; a DNS outage; and an
+automatic refusal fallback to an older model that live enforcement blocked
+before it produced output. See
+[RUN-FAILURE-INCIDENT-2026-10-13.md](RUN-FAILURE-INCIDENT-2026-10-13.md).
+Copilot's scanner now distinguishes a model that only appears in
+`model.call_start`, `model.call_failure`, or `agent.interrupted` events (an
+attempted fallback, reported accurately as such) from a model that produced
+messages or tool calls (substituted output); both still fail the invocation
+closed.
+
 ## Adding a future adapter
 
 A future adapter is a separate implementation phase. It must be added without
@@ -692,7 +737,7 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v7 function; do not inherit missing behavior from
+3. Implement every Contract-v8 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.

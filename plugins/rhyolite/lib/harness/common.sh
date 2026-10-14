@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=7
+RHYOLITE_HARNESS_CONTRACT_VERSION=8
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -11,6 +11,12 @@ RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
 # or subagent other than the approved plan; the runner then terminates the
 # worker instead of waiting for it to finish.
 RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4
+# harness_worker_outcome writes one JSON object with exactly these keys so the
+# runner can decide, deterministically, whether a worker invocation may be
+# continued in the same session (transient model-service failure, or an
+# automatic model fallback that was blocked before it produced any output).
+RHYOLITE_HARNESS_OUTCOME_SCHEMA=1
+RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked substituted failed unknown)
 # Exact phase names accepted by harness_normalize_worker_output and
 # harness_detect_worker_violation.
 RHYOLITE_HARNESS_WORKER_PHASES=(review research report-repair)
@@ -48,6 +54,8 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_finalize_research_session
     harness_normalize_worker_output
     harness_detect_worker_violation
+    harness_worker_outcome
+    harness_worker_continuation_argv
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -181,6 +189,123 @@ rhyolite_harness_validate_violation_arguments() {
 rhyolite_harness_detect_worker_violation_none() {
     rhyolite_harness_validate_violation_arguments "$@" || return 1
     return 0
+}
+
+# After every worker invocation the runner asks the adapter through
+# harness_worker_outcome <phase> <raw_output> <runtime_home> <session_id>
+# <approved_model> <approved_effort> <outcome_output> to classify what
+# happened. The adapter
+# writes one JSON object; rhyolite_harness_validate_outcome_json checks it
+# before the runner uses any value, so adapter output stays data.
+rhyolite_harness_validate_outcome_arguments() {
+    local phase="$1"
+    local raw_output="$2"
+    local runtime_home="$3"
+    local session_id="$4"
+    local approved_model="$5"
+    local approved_effort="$6"
+    local outcome_output="$7"
+
+    rhyolite_harness_valid_worker_phase "${phase}" || {
+        rhyolite_harness_set_error \
+            'The worker outcome phase is unsupported.'
+        return 1
+    }
+    [[ "${approved_model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
+        "${approved_effort}" =~ ^[a-z]{1,32}$ &&
+        "${session_id}" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || {
+        rhyolite_harness_set_error \
+            'The approved model, effort, or session identifier for the worker outcome is invalid.'
+        return 1
+    }
+    [[ "${raw_output}" == /* && -f "${raw_output}" && ! -L "${raw_output}" &&
+        "${runtime_home}" == /* && ! -L "${runtime_home}" &&
+        "${outcome_output}" == /* && ! -e "${outcome_output}" &&
+        ! -L "${outcome_output}" &&
+        "${outcome_output}" != "${raw_output}" ]] || {
+        rhyolite_harness_set_error \
+            'The worker outcome paths are invalid.'
+        return 1
+    }
+}
+
+# Shared implementation for an adapter whose CLI records no structured
+# outcome evidence: the runner then never continues the session.
+rhyolite_harness_worker_outcome_unknown() {
+    local phase="$1"
+    local outcome_output="$7"
+
+    rhyolite_harness_validate_outcome_arguments "$@" || return 1
+    (
+        umask 077
+        printf '{"Schema":1,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}\n' \
+            "${phase}" > "${outcome_output}"
+    ) || {
+        rhyolite_harness_set_error 'Could not write the worker outcome.'
+        return 1
+    }
+}
+
+# Strictly validate an adapter-written worker outcome before the runner uses
+# it. Prints the validated outcome token on success.
+rhyolite_harness_validate_outcome_json() {
+    local outcome_path="$1"
+    local expected_phase="$2"
+
+    [[ -f "${outcome_path}" && ! -L "${outcome_path}" ]] || return 1
+    python3 - "${outcome_path}" "${expected_phase}" <<'PY'
+import json
+import re
+import sys
+
+path, phase = sys.argv[1:3]
+keys = {
+    "Schema", "Phase", "Outcome", "Retryable", "ExitCode", "SessionErrors",
+    "ModelCallFailures", "TurnRetries", "OutputLimitHits", "OutputTokenLimit",
+    "FinalReplyAtOutputLimit", "FallbackModel",
+}
+outcomes = {
+    "completed", "transient-failure", "fallback-blocked", "substituted",
+    "failed", "unknown",
+}
+try:
+    with open(path, encoding="utf-8") as stream:
+        data = json.load(stream)
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+
+
+def count(value):
+    return type(value) is int and 0 <= value <= 1000000
+
+
+if (
+    not isinstance(data, dict)
+    or set(data) != keys
+    or data["Schema"] != 1
+    or data["Phase"] != phase
+    or data["Outcome"] not in outcomes
+    or type(data["Retryable"]) is not bool
+    or data["Retryable"] != (data["Outcome"] in ("transient-failure", "fallback-blocked"))
+    or not (data["ExitCode"] is None or (type(data["ExitCode"]) is int and -1 <= data["ExitCode"] <= 255))
+    or not isinstance(data["SessionErrors"], list)
+    or len(data["SessionErrors"]) > 5
+    or any(
+        not isinstance(item, str)
+        or not 0 < len(item) <= 400
+        or re.search(r"[\x00-\x1f\x7f]", item)
+        for item in data["SessionErrors"]
+    )
+    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits"))
+    or not (data["OutputTokenLimit"] is None or count(data["OutputTokenLimit"]))
+    or type(data["FinalReplyAtOutputLimit"]) is not bool
+    or not isinstance(data["FallbackModel"], str)
+    or not re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?", data["FallbackModel"])
+    or (data["Outcome"] == "fallback-blocked") != bool(data["FallbackModel"])
+):
+    raise SystemExit(1)
+print(data["Outcome"])
+PY
 }
 
 rhyolite_harness_capture() {
@@ -365,7 +490,8 @@ rhyolite_harness_load() {
         builtin_research_specialist \
         web_research \
         shell_denial \
-        final_message_file; do
+        final_message_file \
+        worker_continuation; do
         if ! rhyolite_harness_capture \
             capability_result harness_capability "${capability}"; then
             rhyolite_harness_set_error \

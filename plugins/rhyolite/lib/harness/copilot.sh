@@ -74,6 +74,7 @@ copilot_write_settings() {
                 cat <<EOF
   "disableAllHooks": true,
   "memory": false,
+  "continueOnAutoMode": false,
   "ide": {
     "autoConnect": false
   },
@@ -126,6 +127,7 @@ EOF
                 cat <<'EOF'
   "disableAllHooks": true,
   "memory": false,
+  "continueOnAutoMode": false,
   "ide": {
     "autoConnect": false
   }
@@ -283,6 +285,12 @@ harness_require_cli() {
 harness_capability() {
     case "$1" in
         fleet|structured_questions|builtin_research_specialist|web_research|shell_denial)
+            printf '%s\n' 'yes'
+            ;;
+        # Re-invoking a non-interactive JSON worker with the same
+        # --session-id and runtime home resumes that session with its full
+        # context (verified live with Copilot CLI 1.0.98).
+        worker_continuation)
             printf '%s\n' 'yes'
             ;;
         # Copilot CLI lets a `task` call override every configured subagent
@@ -971,6 +979,7 @@ passthrough = []
 final_reply = None
 event_count = 0
 observed_models = []
+content_models = []
 observed_efforts = []
 subagent_seen = None
 
@@ -981,9 +990,11 @@ def flush_passthrough():
         passthrough.clear()
 
 
-def observe_model(value):
+def observe_model(value, content=False):
     if isinstance(value, str) and value:
         observed_models.append(value)
+        if content:
+            content_models.append(value)
 
 
 def observe_effort(value):
@@ -1047,19 +1058,20 @@ for raw_line in lines:
     if not isinstance(data, dict):
         data = {}
     if event_type == "assistant.message":
-        observe_model(data.get("model"))
+        observe_model(data.get("model"), content=True)
         content = data.get("content")
         if isinstance(content, str):
             final_reply = content
             if content.strip():
                 flush_passthrough()
                 narrative.append(content)
-    elif event_type in (
-        "model.call_start",
-        "model.call_final_result",
-        "tool.execution_start",
-        "tool.execution_complete",
-    ):
+    elif event_type in ("tool.execution_start", "tool.execution_complete"):
+        observe_model(data.get("model"), content=True)
+    elif event_type == "model.call_final_result":
+        observe_model(data.get("model"), content=data.get("result") == "success")
+    elif event_type in ("model.call_start", "model.call_failure", "agent.interrupted"):
+        # A call that started, failed, or was interrupted before its first
+        # token is an attempt; it produced no output the worker could use.
         observe_model(data.get("model"))
     elif event_type in SUBAGENT_EVENTS:
         observe_subagent(data)
@@ -1091,9 +1103,15 @@ if mode == "watch":
 if subagent_seen is not None:
     name, model = subagent_seen
     finish("subagent", f"{name}:{model}" if model else name)
-substituted = [model for model in observed_models if model != approved_model]
+substituted = [model for model in content_models if model != approved_model]
 if substituted:
     finish("substituted", safe_token(substituted[0]))
+# Copilot CLI automatically retries a request on another model when the
+# approved model refuses it. Any such attempt still fails closed; the worker
+# outcome tells the runner whether it was blocked before producing output.
+attempted = [model for model in observed_models if model != approved_model]
+if attempted:
+    finish("fallback", safe_token(attempted[0]))
 changed = [effort for effort in observed_efforts if effort != approved_effort]
 if changed:
     finish("effort-changed", safe_token(changed[0]))
@@ -1153,6 +1171,10 @@ copilot_set_scan_error() {
         substituted)
             rhyolite_harness_set_error \
                 "Copilot answered the ${phase} phase with model '${detail}' instead of the approved model '${approved_model}'; Rhyolite does not accept substituted output."
+            ;;
+        fallback)
+            rhyolite_harness_set_error \
+                "Copilot attempted an automatic fallback from the approved model '${approved_model}' to model '${detail}' in the ${phase} phase after a request to the approved model did not complete; no output from '${detail}' was recorded, and Rhyolite does not accept substituted output."
             ;;
         effort-changed)
             rhyolite_harness_set_error \
@@ -1238,7 +1260,7 @@ harness_detect_worker_violation() {
         ok)
             return 0
             ;;
-        subagent | substituted | effort-changed)
+        subagent | substituted | fallback | effort-changed)
             copilot_set_scan_error \
                 "${phase}" "${status}" "${detail}" \
                 "${approved_model}" "${approved_effort}"
@@ -1254,6 +1276,246 @@ harness_detect_worker_violation() {
             return 1
             ;;
     esac
+}
+
+# Classify one finished Copilot worker invocation for the runner. The raw
+# JSONL stdout carries session errors, model-call failures, retries, the CLI
+# exit code, and every model the invocation attempted; the persisted session
+# events add per-response usage, which shows when a response reached the
+# per-response output token limit. Copilot CLI silently re-requests a response
+# that reaches that limit and emits only the last segment, so this is the only
+# reliable evidence that a reply was cut.
+copilot_scan_worker_outcome() {
+    local phase="$1"
+    local raw_output="$2"
+    local session_events="$3"
+    local approved_model="$4"
+    local approved_effort="$5"
+    local outcome_output="$6"
+
+    python3 - \
+        "${phase}" \
+        "${raw_output}" \
+        "${session_events}" \
+        "${approved_model}" \
+        "${approved_effort}" \
+        "${outcome_output}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+phase, raw_name, events_name, approved_model, approved_effort, output_name = sys.argv[1:7]
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+TRANSIENT = re.compile(
+    r"Failed to get response from the AI model|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|"
+    r"ECONNRESET|ECONNREFUSED|EPIPE|unexpected EOF|timed out|server error|"
+    r"Service Unavailable|Bad Gateway|Gateway Timeout|overloaded|"
+    r"(?:status|HTTP|code)[^0-9A-Za-z]{0,3}(?:5[0-9][0-9]|429)(?![0-9])|"
+    r"(?<![0-9])(?:5[0-9][0-9]|429) (?:internal|service|bad|gateway|too many)|"
+    r"rate limit",
+    re.IGNORECASE,
+)
+PERMANENT = re.compile(
+    r"is not available|not supported for model|does not support reasoning effort|"
+    r"unauthori[sz]ed|forbidden|(?<![0-9])40[13](?![0-9])|authentication|"
+    r"not logged in|quota",
+    re.IGNORECASE,
+)
+SUBAGENT_EVENTS = (
+    "subagent.started",
+    "subagent.configured",
+    "subagent.selected",
+    "subagent.completed",
+    "subagent.failed",
+)
+
+
+def clean(text):
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:400]
+
+
+exit_code = None
+errors = []
+call_failures = 0
+failure_kinds = []
+turn_retries = 0
+observed = []
+content = []
+efforts = []
+subagent = False
+for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
+    line = raw_line.strip()
+    if not line.startswith(b"{"):
+        continue
+    try:
+        event = json.loads(line.decode("utf-8", "replace"))
+    except ValueError:
+        continue
+    if not isinstance(event, dict):
+        continue
+    kind = event.get("type")
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if kind == "result":
+        code = event.get("exitCode")
+        if type(code) is int and -1 <= code <= 255:
+            exit_code = code
+    elif kind == "session.error":
+        message = clean(data.get("message", ""))
+        if message and message not in errors and len(errors) < 5:
+            errors.append(message)
+    elif kind == "model.call_failure":
+        call_failures += 1
+        failure_kinds.append(str(data.get("failureKind", "")))
+        if isinstance(data.get("model"), str):
+            observed.append(data["model"])
+    elif kind == "assistant.turn_retry":
+        turn_retries += 1
+    elif kind in ("model.call_start", "agent.interrupted"):
+        if isinstance(data.get("model"), str):
+            observed.append(data["model"])
+    elif kind == "model.call_final_result":
+        if isinstance(data.get("model"), str):
+            observed.append(data["model"])
+            if data.get("result") == "success":
+                content.append(data["model"])
+    elif kind in ("assistant.message", "tool.execution_start", "tool.execution_complete"):
+        if isinstance(data.get("model"), str):
+            observed.append(data["model"])
+            content.append(data["model"])
+    elif kind in SUBAGENT_EVENTS:
+        subagent = True
+    elif kind == "session.usage_checkpoint":
+        for state in data.get("promptCacheBreakState") or []:
+            models = state.get("models") if isinstance(state, dict) else None
+            if isinstance(models, dict):
+                for call in models.values():
+                    if isinstance(call, dict) and isinstance(call.get("reasoning_effort"), str):
+                        efforts.append(call["reasoning_effort"])
+
+output_limit = None
+limit_hits = 0
+final_at_limit = False
+events_path = pathlib.Path(events_name)
+if events_path.is_file() and not events_path.is_symlink():
+    for raw_line in events_path.read_bytes().split(b"\n"):
+        if b'"session.usage_record"' not in raw_line:
+            continue
+        try:
+            usage = json.loads(raw_line.decode("utf-8", "replace"))["data"]["usage"]
+            produced = int(usage.get("outputTokens") or 0)
+            maximum = int(usage.get("maxOutputTokens") or 0)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if maximum > 0:
+            output_limit = min(maximum, 1000000)
+            final_at_limit = produced >= maximum
+            limit_hits += 1 if final_at_limit else 0
+
+attempted = [model for model in observed if model != approved_model]
+fallback = ""
+if (
+    subagent
+    or any(model != approved_model for model in content)
+    or any(effort != approved_effort for effort in efforts)
+):
+    outcome = "substituted"
+elif attempted:
+    outcome = "fallback-blocked"
+    fallback = attempted[0] if SAFE_TOKEN.fullmatch(attempted[0]) else "unrecognized"
+elif exit_code == 0:
+    outcome = "completed"
+elif any(TRANSIENT.search(item) and not PERMANENT.search(item) for item in errors) or (
+    exit_code not in (None, 0)
+    and not errors
+    and failure_kinds
+    and all(kind == "transport" for kind in failure_kinds)
+):
+    outcome = "transient-failure"
+elif exit_code is not None:
+    outcome = "failed"
+else:
+    outcome = "unknown"
+record = {
+    "Schema": 1,
+    "Phase": phase,
+    "Outcome": outcome,
+    "Retryable": outcome in ("transient-failure", "fallback-blocked"),
+    "ExitCode": exit_code,
+    "SessionErrors": errors,
+    "ModelCallFailures": min(call_failures, 1000000),
+    "TurnRetries": min(turn_retries, 1000000),
+    "OutputLimitHits": min(limit_hits, 1000000),
+    "OutputTokenLimit": output_limit,
+    "FinalReplyAtOutputLimit": final_at_limit,
+    "FallbackModel": fallback,
+}
+pathlib.Path(output_name).write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+harness_worker_outcome() {
+    local phase="$1"
+    local raw_output="$2"
+    local runtime_home="$3"
+    local session_id="$4"
+    local approved_model="$5"
+    local approved_effort="$6"
+    local outcome_output="$7"
+
+    rhyolite_harness_validate_outcome_arguments "$@" || return 1
+    if ! (
+        umask 077
+        copilot_scan_worker_outcome \
+            "${phase}" \
+            "${raw_output}" \
+            "${runtime_home}/session-state/${session_id}/events.jsonl" \
+            "${approved_model}" \
+            "${approved_effort}" \
+            "${outcome_output}" 2>/dev/null
+    ); then
+        rm -f -- "${outcome_output}"
+        rhyolite_harness_set_error \
+            "The Copilot ${phase} worker outcome could not be classified."
+        return 1
+    fi
+}
+
+# Copilot CLI resumes an existing non-interactive session when it is invoked
+# again with the same --session-id and runtime home, so a continuation reuses
+# the exact approved worker argv; only the request on stdin changes.
+harness_worker_continuation_argv() {
+    local destination_name="$1"
+    local source_name="$2"
+    local index session_count=0
+
+    copilot_require_array_destination "${destination_name}" || return 1
+    [[ "${source_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ &&
+        "${source_name}" != "${destination_name}" ]] || {
+        rhyolite_harness_set_error \
+            'The Copilot continuation source argv name is invalid.'
+        return 1
+    }
+    local -n continuation_source="${source_name}"
+    local -n continuation_output="${destination_name}"
+    for index in "${!continuation_source[@]}"; do
+        if [[ "${continuation_source[index]}" == --session-id ]]; then
+            session_count=$((session_count + 1))
+            [[ "${continuation_source[index + 1]-}" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || {
+                rhyolite_harness_set_error \
+                    'The Copilot continuation session identifier is invalid.'
+                return 1
+            }
+        fi
+    done
+    ((session_count == 1)) || {
+        rhyolite_harness_set_error \
+            'The Copilot continuation argv must name exactly one session.'
+        return 1
+    }
+    continuation_output=("${continuation_source[@]}")
 }
 
 harness_render_request() {

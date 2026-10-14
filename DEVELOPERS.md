@@ -130,6 +130,7 @@ Run the narrowest relevant check first:
 | One Bash file | `bash -n <file>` |
 | Research broker/policy | `python3 tests/test-research-egress-broker.py` |
 | Terminal UI validator | `node tests/validate-tui-runtime.mjs --self-check` |
+| Report delivery and recovery | `bash ./tests/test-report-delivery.sh` |
 | Plugin/runtime behavior | `bash ./tests/validate-plugin.sh` |
 | Public-release tooling | `bash ./tools/public-release/test-public-release.sh` |
 | Marketplace installation | `bash ./tests/test-install.sh` |
@@ -142,8 +143,10 @@ The authoritative release validation command is:
 bash ./tests/validate-all.sh
 ```
 
-The fail-fast aggregate runs `tests/validate-harness-contract.sh` before the
-legacy `tests/validate-plugin.sh` stage. The harness contract validator also
+The fail-fast aggregate runs `tests/test-report-delivery.sh` (paged report
+delivery and collect-mode validation regressions) and
+`tests/validate-harness-contract.sh` before the legacy
+`tests/validate-plugin.sh` stage. The harness contract validator also
 runs the Claude Code adapter section, `tests/harness-contract-claude.sh`. Run it locally on Fedora Linux 44.
 There is no hosted CI requirement.
 
@@ -204,7 +207,7 @@ adapter belongs only under `tests/fixtures` and may be loaded only through
 test-owned fixed fixture wiring. It must never be added to the production
 registry, plugin assets, launcher choices, marketplace metadata, or public
 support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
-for Contract-v7 work and any future adapter.
+for Contract-v8 work and any future adapter.
 [docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
 probes and real runs behind the Claude Code adapter's capability values.
 

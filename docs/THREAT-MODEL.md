@@ -446,6 +446,30 @@
   mode-0700 runtime home when no supported authentication variable is set,
   and deletes it with that home.
 
+### Same-session worker recovery
+
+- Recovery continues only the review worker's own session and only when the
+  adapter has verified `worker_continuation` live. A continuation reuses the
+  exact approved argv, environment, isolated runtime home, read-only tools,
+  model, effort, and context; it receives no new tool, path, or network
+  access, and live approved-plan enforcement applies to it.
+- Continuation requests are fixed runner text plus validator diagnostics and
+  section names; they never include repository content, research evidence,
+  or private artifacts.
+- The adapter's worker outcome is data. The runner validates it strictly and
+  treats a malformed or missing outcome as `unknown`, which never continues
+  a session. Substituted output, adapter-function failures, timeouts, and
+  interruptions are never continued.
+- Paged delivery accepts only sections that pass the strict contract program,
+  never accepts invalid UTF-8, and promotes only an assembled report that
+  passes unchanged strict finalization. Limits on retries, resubmission
+  rounds, continuations, and the approved session timeout bound cost.
+- Research is never continued or relaunched automatically; the broker keeps
+  exactly one network log per repository phase.
+- The deterministic failure analysis reads only trusted artifacts in the
+  repository output directory, redacts email addresses, writes mode-0600
+  files, and never changes the run outcome.
+
 ## Residual risks
 
 - Copilot, Claude Code's model provider, and public search services process

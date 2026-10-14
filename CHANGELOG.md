@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- Fixed the review failures of 2026-10-13 and the recurring class behind
+  them; see `docs/RUN-FAILURE-INCIDENT-2026-10-13.md`. At maximum reasoning
+  effort, final reports did not fit in one model response: Copilot's
+  per-response output limit was 32,000 tokens, reasoning tokens count toward
+  it, and Copilot CLI re-requests a cut response without emitting the cut
+  text, so the runner received only part of the report. Earlier repairs had
+  each handled one exact diagnostic, could not regenerate missing content,
+  and never asked the worker that holds the analysis to resend anything.
+- Added Harness Contract v8 and the approval-bound `WorkerRecoveryPolicy`.
+  `harness_worker_outcome` classifies every worker invocation from structured
+  evidence, and when the adapter has verified `worker_continuation`
+  (Copilot, verified live), the runner continues the review worker's own
+  session with the exact approved settings and live enforcement: after a
+  transient model-service failure or a blocked automatic model fallback (at
+  most 2 retries), and to fetch missing, cut, or invalid report sections
+  through paged delivery (`RHYOLITE_REPORT_DELIVERY_V1`, at most 2
+  resubmission rounds and 20 continuations). The runner keeps every valid
+  section verbatim, sends every collect-mode validator diagnostic, validates
+  every page with the strict contract program, and promotes only an
+  assembled report that passes unchanged strict finalization. Claude Code
+  reports `worker_continuation` as `unverified` and keeps its previous
+  behavior.
+- Added collect-mode report validation that reports every violation with its
+  section; strict mode keeps its exact first diagnostic.
+- Every failed repository now gets a deterministic `failure-analysis.md` and
+  `failure-analysis.json` with the failure class, root cause, evidence,
+  recovery already attempted, and recommended repair actions, and failed
+  runs get a run-level index. `RHYOLITE ERROR` blocks list it.
+- Fixed empty error records: failed Copilot review and research invocations
+  now record their sanitized session errors and outcome, and the new
+  `model service` and `worker recovery` failure stages describe them.
+- Fixed the misleading "answered with" diagnostic for an automatic model
+  fallback that live enforcement blocked before it produced output; Copilot's
+  scanner now reports an attempted fallback accurately, and substituted
+  output still fails closed. Copilot children set `continueOnAutoMode` to
+  `false` explicitly.
+- The runner's `--help` now marks `--enable-public-research` and
+  `--enable-provenance-research` as legacy aliases that cannot be combined
+  with `--scope`, and both orchestrators select research only with
+  `--scope`.
+
 - Fixed the Copilot review failures observed after the Contract-v6 change,
   where two scope-1 runs ended with `approved model enforcement` after a
   full review. The main session had used the approved model, but the worker

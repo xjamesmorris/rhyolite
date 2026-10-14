@@ -232,8 +232,14 @@ legacy_validation_line="$(
     grep -nF 'bash "${ROOT}/tests/validate-plugin.sh"' \
         "${VALIDATE_ALL}" | cut -d: -f1
 )"
+delivery_validation_line="$(
+    grep -nF 'bash "${ROOT}/tests/test-report-delivery.sh"' \
+        "${VALIDATE_ALL}" | cut -d: -f1
+)"
 [[ -n "${contract_validation_line}" &&
     -n "${legacy_validation_line}" &&
+    -n "${delivery_validation_line}" &&
+    "${delivery_validation_line}" -lt "${contract_validation_line}" &&
     "${contract_validation_line}" -lt "${legacy_validation_line}" ]] ||
     fail 'validate-all.sh does not run focused harness validation before legacy plugin validation.'
 grep -Fq 'bash ./tests/validate-all.sh' "${COPILOT_INSTRUCTIONS}" &&
@@ -273,7 +279,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v7' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v8' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -2399,8 +2405,19 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=7' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 7.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=8' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 8.'
+grep -Fxq '    harness_worker_outcome' "${HARNESS_COMMON}" &&
+    grep -Fxq '    harness_worker_continuation_argv' "${HARNESS_COMMON}" &&
+    grep -Fq 'worker_continuation; do' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not require the Contract-v8 recovery seam.'
+grep -Fq 'WorkerRecoveryPolicy=%s' "${RUNNER}" &&
+    grep -Fq '"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1"' "${RUNNER}" &&
+    grep -Fq 'review_harness_failure_blocks_recovery' "${RUNNER}" &&
+    grep -Fq 'write_failure_analysis "${output_directory}"' "${RUNNER}" ||
+    fail 'Runner does not bind bounded same-session recovery and failure analysis.'
+grep -Fq 'Legacy alias for --scope 2; never combine with --scope' "${RUNNER}" ||
+    fail 'Runner help does not mark the legacy research switches.'
 grep -Fq 'harness_detect_worker_violation' "${HARNESS_COMMON}" &&
     grep -Fq 'RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4' "${HARNESS_COMMON}" ||
     fail 'Harness common module does not declare live worker violation detection.'
@@ -5932,6 +5949,7 @@ function assertCommonPlan(
     "SessionTimeoutMinutes",
     "Sources",
     "ThrottleLimit",
+    "WorkerRecoveryPolicy",
     "WorkspaceRoot",
   ], `${label} top-level`);
   assertKeys(plan.Provider, [
@@ -6008,6 +6026,26 @@ function assertCommonPlan(
     "ProtocolVersion",
     "TimeoutSeconds",
   ], `${label} report-repair policy`);
+  assertKeys(plan.WorkerRecoveryPolicy, [
+    "Available",
+    "ContinuationLimit",
+    "DeliveryProtocol",
+    "Mode",
+    "PageLineBudget",
+    "PagePartLimit",
+    "PageSectionLimit",
+    "ProtocolVersion",
+    "ResubmissionRoundLimit",
+    "TransientRetryLimit",
+  ], `${label} worker-recovery policy`);
+  if (plan.WorkerRecoveryPolicy.Mode !== "same-session-continuation" ||
+      plan.WorkerRecoveryPolicy.DeliveryProtocol !== "RHYOLITE_REPORT_DELIVERY_V1" ||
+      plan.WorkerRecoveryPolicy.TransientRetryLimit !== 2 ||
+      plan.WorkerRecoveryPolicy.ResubmissionRoundLimit !== 2 ||
+      plan.WorkerRecoveryPolicy.ContinuationLimit !== 20 ||
+      typeof plan.WorkerRecoveryPolicy.Available !== "boolean") {
+    throw new Error(`${label} worker-recovery policy changed`);
+  }
 }
 
 function assertResearchTransport(
@@ -7137,9 +7175,24 @@ fi
     exit 75
 invocation_log="${MOCK_LOG}.${phase//:/-}"
 printf '%s\n' "$@" > "${invocation_log}"
+# A same-session continuation resumes the review worker with a report
+# delivery request on stdin; record it apart from the one analysis run.
+mock_continuation=0
+if [[ "${agent}" == rhyolite:repo-review-worker ]]; then
+    mock_review_request="$(mktemp "${TMPDIR:-/tmp}/mock-review-request.XXXXXXXX")"
+    cat > "${mock_review_request}"
+    if grep -Fxq 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_review_request}"; then
+        mock_continuation=1
+    fi
+    # Re-provide the same request on stdin for the review-request capture.
+    exec 0< "${mock_review_request}"
+    rm -f -- "${mock_review_request}"
+fi
 {
     printf 'PHASE=%s\n' "${phase}"
-    if [[ -n "${agent}" ]]; then
+    if ((mock_continuation)); then
+        printf 'AGENT=%s CONTINUATION\n' "${agent}"
+    elif [[ -n "${agent}" ]]; then
         printf 'AGENT=%s\n' "${agent}"
     fi
     printf 'COPILOT_HOME=%s\n' "${COPILOT_HOME}"
@@ -7168,6 +7221,7 @@ settings = json.loads(Path(sys.argv[1]).read_text())
 if settings != {
     "disableAllHooks": True,
     "memory": False,
+    "continueOnAutoMode": False,
     "ide": {"autoConnect": False},
 }:
     raise SystemExit(f"unexpected report-repair settings: {settings!r}")
@@ -9685,6 +9739,7 @@ if ! MOCK_LOG="${mock_log}" \
         --remember-preferences \
         --non-interactive >"${mock_run_output}" 2>"${mock_run_stderr}"; then
     cat "${mock_run_stderr}" >&2
+    tail -n 40 "${mock_run_output}" >&2
     fail 'Mock Bash run unexpectedly failed.'
 fi
 [[ ! -s "${mock_run_stderr}" ]] ||
@@ -10017,6 +10072,7 @@ assertKeys(reviewPlan, [
   "Sources",
   "StartedAt",
   "ThrottleLimit",
+  "WorkerRecoveryPolicy",
   "WorkspaceRoot",
 ], "review plan");
 assertKeys(reviewPlan.Provider, [
@@ -10275,6 +10331,8 @@ if (runState.SchemaVersion !== 6 ||
       JSON.stringify(reviewPlan.ResearchTransport) ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy) ||
+    JSON.stringify(runState.WorkerRecoveryPolicy) !==
+      JSON.stringify(reviewPlan.WorkerRecoveryPolicy) ||
     runState.Repositories[0].Source?.Kind !== "RemoteUrl" ||
     runState.Repositories[0].RequestedCommit !== state.RequestedCommit ||
     runState.Repositories[0].ResearchStatus !== "Completed" ||
@@ -13878,9 +13936,15 @@ JS
                 fail "Markdown table case ${table_case} progress milestones are incomplete."
             ;;
         agent-targeting-not-eligible)
-            grep -Fq 'Stage: report validation' "${table_case_stdout}" &&
+            # Model-free repair is not eligible, so the runner asks the same
+            # worker session to resend the section; this mock answers every
+            # continuation with a full report instead of a page, so bounded
+            # recovery exhausts and the review still fails closed.
+            grep -Fq 'Stage: worker recovery' "${table_case_stdout}" &&
                 grep -Fq \
                     'a Markdown table appears in a field-validated section' \
+                    "${table_case_stdout}" &&
+                grep -Fq 'Worker recovery Exhausted: Report delivery exhausted 2 resubmission rounds' \
                     "${table_case_stdout}" ||
                 fail 'Ineligible Markdown table failure is not explanatory.'
             ;;
@@ -14085,10 +14149,11 @@ JS
     if ! { grep -Fq \
         'RHYOLITE PROGRESS | github--octocat--hello-world | report repair | Failed; one attempt exhausted; noncanonical evidence preserved' \
         "${repair_failure_stdout}" &&
-        grep -Fq 'Stage: report repair' "${repair_failure_stdout}" &&
+        grep -Fq 'Stage: worker recovery' "${repair_failure_stdout}" &&
         grep -Fq \
-            'Bounded report-only recovery did not produce a fully valid, content-preserving report.' \
-            "${repair_failure_stdout}"; }; then
+            'Bounded same-session recovery did not obtain a fully valid report from the review worker.' \
+            "${repair_failure_stdout}" &&
+        grep -Fq 'Report repair exhausted:' "${repair_failure_stdout}"; }; then
         cat -- "${repair_failure_stdout}" "${repair_failure_stderr}"
         fail "Mock ${repair_failure_mode} repair did not report exhaustion."
     fi
@@ -14269,6 +14334,8 @@ if (state.Status !== "ReviewFailed" ||
     reviewPlan.ReportRepairPolicy?.TimeoutSeconds !== 60 ||
     JSON.stringify(runState.ReportRepairPolicy) !==
       JSON.stringify(reviewPlan.ReportRepairPolicy) ||
+    JSON.stringify(runState.WorkerRecoveryPolicy) !==
+      JSON.stringify(reviewPlan.WorkerRecoveryPolicy) ||
     !initial.includes(originalValue) ||
     !report.includes("No canonical review was produced.") ||
     report.includes(originalValue) ||
@@ -14315,7 +14382,11 @@ if MOCK_INVALID_UTF8=1 \
         2>"${invalid_utf8_stderr}"; then
     fail 'Mock invalid-UTF-8 report unexpectedly completed.'
 fi
-if ! grep -Fq 'Stage: report validation' "${invalid_utf8_stdout}"; then
+# The section with invalid UTF-8 is never accepted or replaced; the same
+# worker session is asked to resend it, and this mock never answers with a
+# page, so bounded recovery exhausts and the review still fails closed.
+if ! grep -Fq 'Stage: worker recovery' "${invalid_utf8_stdout}" ||
+    ! grep -Fq 'not valid UTF-8' "${invalid_utf8_stdout}"; then
     cat "${invalid_utf8_stdout}" >&2
     cat "${invalid_utf8_stderr}" >&2
     fail 'Invalid-UTF-8 report did not surface report validation failure.'
@@ -14446,9 +14517,13 @@ if MOCK_UNTERMINATED=1 \
         2>"${incomplete_stderr}"; then
     fail 'Mock unterminated report unexpectedly completed.'
 fi
-grep -Fq 'Stage: report validation' "${incomplete_stdout}" &&
+# A cut report starts paged same-session recovery; this mock never answers
+# with a page, so recovery exhausts and the review fails closed.
+grep -Fq 'Stage: worker recovery' "${incomplete_stdout}" &&
     ! grep -Fq 'Harness failure stage:' "${incomplete_stdout}" &&
     grep -Fq 'Incomplete report: final closing delimiter was missing' \
+        "${incomplete_stdout}" &&
+    grep -Fq 'worker recovery | truncated report; asking the same worker session to resend only the missing or invalid sections' \
         "${incomplete_stdout}" &&
     grep -Fq 'Artifacts: State ' "${incomplete_stdout}" ||
     fail 'Bash incomplete-report terminal summary is not explanatory.'

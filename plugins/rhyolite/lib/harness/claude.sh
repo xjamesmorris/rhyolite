@@ -567,6 +567,11 @@ harness_capability() {
         fleet|subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
+        # Same-session continuation of a print-mode worker has not been
+        # verified live, so the runner never continues a Claude Code session.
+        worker_continuation)
+            printf '%s\n' 'unverified'
+            ;;
         *)
             printf '%s\n' 'unverified'
             ;;
@@ -1444,6 +1449,149 @@ harness_detect_worker_violation() {
             return 1
             ;;
     esac
+}
+
+# Classify one finished Claude Code worker invocation from its private
+# session record. Print mode writes no structured exit record, so ExitCode is
+# null and the runner's own exit status stays authoritative.
+harness_worker_outcome() {
+    local phase="$1"
+    local raw_output="$2"
+    local runtime_home="$3"
+    local session_id="$4"
+    local approved_model="$5"
+    local approved_effort="$6"
+    local outcome_output="$7"
+    local session_record=''
+
+    rhyolite_harness_validate_outcome_arguments "$@" || return 1
+    if [[ -d "${runtime_home}/projects" ]]; then
+        session_record="$(
+            find "${runtime_home}/projects" -mindepth 2 -maxdepth 2 \
+                -type f -name "${session_id}.jsonl" -print -quit 2>/dev/null
+        )"
+    fi
+    if ! (
+        umask 077
+        python3 -I - \
+            "${phase}" \
+            "${session_record}" \
+            "${approved_model}" \
+            "${approved_effort}" \
+            "${outcome_output}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+phase, record_name, approved_model, approved_effort, output_name = sys.argv[1:6]
+TRANSIENT = re.compile(
+    r"overloaded|Connection error|Request timed out|timed out|ECONNRESET|"
+    r"ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|Internal server error|"
+    r"Service Unavailable|Bad Gateway|Gateway Timeout|"
+    r"API Error:? (?:5[0-9][0-9]|429)(?![0-9])|rate limit",
+    re.IGNORECASE,
+)
+PERMANENT = re.compile(
+    r"invalid api key|unauthori[sz]ed|forbidden|API Error:? 40[0134](?![0-9])|"
+    r"not_found_error|credit balance|login",
+    re.IGNORECASE,
+)
+
+
+def clean(text):
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text))
+    return re.sub(r"\s+", " ", text).strip()[:400]
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(item.get("text", "")) for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
+
+
+errors = []
+substituted = False
+limit_hits = 0
+last_stop = None
+last_error = False
+path = pathlib.Path(record_name) if record_name else None
+if path is not None and path.is_file() and not path.is_symlink():
+    for raw_line in path.read_bytes().split(b"\n"):
+        if not raw_line.strip():
+            continue
+        try:
+            record = json.loads(raw_line.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("isSidechain") is True:
+            substituted = True
+        if record.get("type") == "system" and record.get("subtype") == "model_refusal_fallback":
+            substituted = True
+        if record.get("type") != "assistant":
+            continue
+        message = record.get("message") if isinstance(record.get("message"), dict) else {}
+        if message.get("model") not in (approved_model, "<synthetic>") or record.get("advisorModel"):
+            substituted = True
+        for key in ("effort", "perTurnEffort"):
+            if record.get(key) is not None and record.get(key) != approved_effort:
+                substituted = True
+        last_stop = message.get("stop_reason")
+        last_error = record.get("isApiErrorMessage") is True
+        if last_stop == "max_tokens":
+            limit_hits += 1
+        if last_error:
+            text = clean(text_of(message.get("content")))
+            if text and text not in errors and len(errors) < 5:
+                errors.append(text)
+if substituted:
+    outcome = "substituted"
+elif last_error and any(TRANSIENT.search(e) and not PERMANENT.search(e) for e in errors):
+    outcome = "transient-failure"
+elif last_stop in ("end_turn", "stop_sequence") and not last_error:
+    outcome = "completed"
+elif errors:
+    outcome = "failed"
+else:
+    outcome = "unknown"
+pathlib.Path(output_name).write_text(json.dumps({
+    "Schema": 1,
+    "Phase": phase,
+    "Outcome": outcome,
+    "Retryable": outcome == "transient-failure",
+    "ExitCode": None,
+    "SessionErrors": errors,
+    "ModelCallFailures": 0,
+    "TurnRetries": 0,
+    "OutputLimitHits": min(limit_hits, 1000000),
+    "OutputTokenLimit": None,
+    "FinalReplyAtOutputLimit": last_stop == "max_tokens",
+    "FallbackModel": "",
+}, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    ); then
+        rm -f -- "${outcome_output}"
+        rhyolite_harness_set_error \
+            "The Claude Code ${phase} worker outcome could not be classified."
+        return 1
+    fi
+    : "${raw_output}"
+}
+
+# Same-session continuation is not yet verified live for Claude Code print
+# mode, so worker_continuation stays unverified and the runner never asks.
+harness_worker_continuation_argv() {
+    claude_require_array_destination "$1" || return 1
+    rhyolite_harness_set_error \
+        'Claude Code same-session worker continuation is not verified for Rhyolite.'
+    return 1
 }
 
 harness_render_request() {

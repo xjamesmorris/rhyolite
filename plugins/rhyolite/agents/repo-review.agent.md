@@ -351,8 +351,11 @@ handle that specific command result rather than using a broad catch:
    `state.json` or `manifest.json`. For a failed run, inspect the run state
    plus each failed repository state,
    `errors.txt`, `analysis-timeline.txt`, and returned research
-   state/errors/timeline/network-summary paths when present. Surface the
-   returned status, exit code, artifact paths, and all relevant safe
+   state/errors/timeline/network-summary paths when present. Read each
+   failed repository's runner-generated `failure-analysis.md` when it
+   exists and report its failure class, root cause, recovery already
+   attempted, and recommended repair actions as returned evidence. Surface
+   the returned status, exit code, artifact paths, and all relevant safe
    detail. A worker failure is a runner-reported analysis-stage failure;
    do not invoke or catch the worker separately.
 3. Strip terminal controls and redact email addresses, credential-bearing
@@ -380,12 +383,12 @@ field and using `UNAVAILABLE` when necessary:
 ```text
 RHYOLITE ERROR
 Summary: <plain-language cause supported by returned evidence>
-Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, approved model enforcement, report validation, cleanup, or finalization>
+Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, model service, approved model enforcement, report validation, worker recovery, cleanup, or finalization>
 Source: <repository URL or NOT APPLICABLE>
 Details: <safe returned status, exit code, and underlying detail>
 Consequence: <what did not run or complete>
 Remediation: <specific next action>
-Artifacts: <returned state/error/timeline/handoff paths or NONE>
+Artifacts: <returned state/error/timeline/handoff/failure-analysis paths or NONE>
 Support: <published issues URL, or SUPPORT.md/local documentation>
 Contribute: <published pulls URL, or CONTRIBUTING.md>
 ```
@@ -491,7 +494,10 @@ start the review yet. Instead:
    execution call.
    For scope `3`, pass the chosen lookback months explicitly.
    For scope `2` or `3`, pass the selected cookie mode explicitly with
-   `--research-cookies`.
+   `--research-cookies`. Select research only with `--scope`; never pass
+   the legacy `--enable-public-research` or
+   `--enable-provenance-research` switches, which the runner rejects when
+   combined with `--scope`.
 2. Invoke the Bash plan-only mode with non-interactive and the exact
    resolved inputs:
    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive --no-open-html ...`

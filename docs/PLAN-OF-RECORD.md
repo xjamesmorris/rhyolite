@@ -57,9 +57,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v7 seam.
+  Contract-v8 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v7 and any future production adapter.
+  playbook for Contract v8 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -85,6 +85,18 @@ decision; compatibility must not be preserved speculatively.
   override every configured subagent model, so the Copilot review worker
   performs the dedicated security pass itself, like the Claude Code worker,
   and any recorded subagent fails the phase.
+- Contract v8 adds `harness_worker_outcome` and
+  `harness_worker_continuation_argv` plus the `worker_continuation`
+  capability. When the adapter has verified continuation (Copilot), the
+  approval-bound `WorkerRecoveryPolicy` lets the runner continue the review
+  worker's own session after a transient model-service failure or a blocked
+  automatic model fallback (at most 2 retries), and fetch missing, truncated,
+  or invalid report sections in bounded pages through
+  `RHYOLITE_REPORT_DELIVERY_V1` (at most 2 resubmission rounds and 20
+  continuations). Every page passes the strict section contract and the
+  assembled report passes unchanged strict finalization. Every failed
+  repository gets a deterministic `failure-analysis.md` and
+  `failure-analysis.json`.
 - Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved

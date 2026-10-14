@@ -24,8 +24,9 @@ bash ./tests/validate-all.sh
 ```
 
 `bash ./tests/validate-all.sh` is the mandatory full development and release
-gate. The fail-fast aggregate runs the focused harness contract validator,
-the confidence-edit protocol regressions, and the legacy monolithic plugin
+gate. The fail-fast aggregate runs the paged report delivery and collect-mode
+validation regressions, the focused harness contract validator, the
+confidence-edit protocol regressions, and the legacy monolithic plugin
 validator, in that order. Use
 `bash ./tests/validate-harness-contract.sh` for the focused harness seam or
 `bash -n <file>` as the narrowest syntax check for one changed Bash file. For
@@ -141,7 +142,7 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` and
   `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
   Production runtime support covers GitHub Copilot CLI and Claude Code.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v7 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v8 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -469,7 +470,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v7 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v8 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -492,9 +493,41 @@ supported and must not drive new work.
   and 1 for a monitor error that the runner records once as a warning. On a
   violation the runner terminates the worker's process tree immediately,
   records the `harness_detect_worker_violation` failure stage, and the
-  post-exit normalization still fails closed on the same evidence. Follow
+  post-exit normalization still fails closed on the same evidence. Contract
+  v8 adds `harness_worker_outcome <phase> <raw_output> <runtime_home>
+  <session_id> <approved_model> <approved_effort> <outcome_output>`, which
+  writes one strictly validated JSON outcome (`completed`,
+  `transient-failure`, `fallback-blocked`, `substituted`, `failed`, or
+  `unknown`, with sanitized session errors and output-token-limit evidence),
+  `harness_worker_continuation_argv <destination> <source_argv_name>`, and
+  the `worker_continuation` capability. Copilot reports it `yes` (verified
+  live: the same `--session-id` and runtime home resume a non-interactive
+  session); Claude Code reports `unverified`. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
+- Same-session worker recovery is approval-bound as `WorkerRecoveryPolicy`.
+  When `worker_continuation` is `yes`, the runner may continue the review
+  worker's own session, with the exact approved argv, environment, runtime
+  home, tools, model, effort, and context and with live enforcement: after a
+  transient model-service failure or an automatic model fallback that was
+  blocked before it produced output (at most 2 retries), and to fetch
+  missing, truncated, or invalid report sections through the paged
+  `RHYOLITE_REPORT_DELIVERY_V1` protocol (at most 2 resubmission rounds, 20
+  continuations, and the remaining session timeout). The trusted runner keeps
+  every section that passes strict validation verbatim, sends the exact
+  collect-mode validator diagnostics, validates every page with the same
+  strict contract program, assembles the envelope in canonical order, and
+  promotes only an assembled report that passes unchanged strict
+  finalization. Substituted output, adapter-function failures, timeouts, and
+  interruptions are never continued. Research is never continued or
+  relaunched automatically, because the broker keeps exactly one network log
+  per repository phase.
+- Every failed repository gets a deterministic, model-free initial failure
+  analysis, `failure-analysis.md` and `failure-analysis.json`, that
+  classifies the failure from trusted artifacts, records the evidence and the
+  recovery already attempted, and lists recommended repair actions; failed
+  runs also get a run-level `failure-analysis.md`. It is advisory, never
+  changes the run outcome, and `RHYOLITE ERROR` blocks list it.
 - No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
   argument override every configured `subagents.agents.<name>.model` value
   (verified live: `modelSelectionSource: "explicit_override"`), so a
@@ -578,7 +611,7 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v7 requirement, negative test,
+  decision and must satisfy every Contract-v8 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with

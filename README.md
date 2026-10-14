@@ -870,6 +870,18 @@ manifest entries, run-state repositories, handoffs, and the HTML index. The
 fixed `ReportRepairPolicy`, including `DeterministicNormalizations`, is
 disclosed by the effective plan and included in its approval hash.
 
+The approval-bound `WorkerRecoveryPolicy` adds bounded same-session recovery
+for the Copilot harness. When a report is missing, cut off at the model's
+per-response output limit, or rejected by strict validation, the runner keeps
+every valid section and asks the same review session, which still holds the
+analysis, to resend only the missing or invalid sections in bounded pages
+with the exact validator diagnostics. It also resumes the session after a
+transient model-service failure or a blocked automatic model fallback. The
+additive `WorkerRecovery` object and the `worker-recovery/` directory record
+every continuation. Every failed repository also gets a deterministic
+`failure-analysis.md` with the failure class, root cause, evidence, and
+recommended repair actions.
+
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot
 under a clean, non-Git session root. Before that clone, they perform a
@@ -1039,7 +1051,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v7 implementation playbook is in
+Contract-v8 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in

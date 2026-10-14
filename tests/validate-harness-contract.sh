@@ -53,6 +53,8 @@ required_contract_functions=(
     harness_finalize_research_session
     harness_normalize_worker_output
     harness_detect_worker_violation
+    harness_worker_outcome
+    harness_worker_continuation_argv
     harness_render_request
     harness_extract_final_report
     harness_extract_report_repair
@@ -272,7 +274,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '7' \
+assert_equal '8' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 assert_equal '4' \
@@ -511,6 +513,7 @@ declare -A expected_capabilities=(
     [web_research]=yes
     [shell_denial]=yes
     [final_message_file]=no
+    [worker_continuation]=yes
 )
 for capability in "${!expected_capabilities[@]}"; do
     capability_value="$(harness_capability "${capability}")"
@@ -1367,6 +1370,177 @@ for copilot_watch_invalid in \
         'Copilot live detection invalid-argument status'
 done
 rm -f -- "${copilot_watch_cursor}"
+# Contract v8: an automatic refusal fallback that produced no output is a
+# distinct, accurately described violation, and harness_worker_outcome lets
+# the runner continue only transient failures and blocked fallbacks.
+copilot_v8_root="${fixture_root}/copilot-v8"
+copilot_v8_session='6571f5b3-5552-41d1-bdf3-baee94c91999'
+copilot_v8_home="${copilot_v8_root}/home"
+mkdir -p -- "${copilot_v8_home}/session-state/${copilot_v8_session}"
+chmod 700 -- "${copilot_v8_root}" "${copilot_v8_home}"
+copilot_v8_stream() {
+    local output="$1"
+    shift
+    node - "${output}" "$@" <<'JS'
+const fs = require("fs");
+const [output, ...specs] = process.argv.slice(2);
+const lines = specs.map((spec) => {
+  const [type, json] = spec.split("|", 2);
+  const value = JSON.parse(json);
+  return type === "result"
+    ? JSON.stringify({type, ...value})
+    : JSON.stringify({type, data: value, id: "fixture"});
+});
+fs.writeFileSync(output, lines.join("\n") + "\n");
+JS
+}
+copilot_v8_outcome() {
+    local raw="$1"
+    local expected="$2"
+    local outcome="${copilot_v8_root}/outcome.json"
+
+    rm -f -- "${outcome}"
+    rhyolite_harness_invoke harness_worker_outcome \
+        review "${raw}" "${copilot_v8_home}" "${copilot_v8_session}" \
+        claude-opus-5.5 max "${outcome}" ||
+        fail "Copilot worker outcome failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    assert_equal "${expected}" \
+        "$(rhyolite_harness_validate_outcome_json "${outcome}" review)" \
+        "Copilot worker outcome ${expected}"
+}
+copilot_fallback_output="${copilot_v8_root}/fallback.jsonl"
+copilot_v8_stream "${copilot_fallback_output}" \
+    'model.call_start|{"turnId":"5","model":"claude-opus-5.5"}' \
+    'model.call_start|{"turnId":"5","model":"claude-opus-4.8"}' \
+    'model.call_failure|{"model":"claude-opus-4.8","statusCode":400,"failureKind":"api"}' \
+    'agent.interrupted|{"model":"claude-opus-4.8","cancelPhase":"pre_first_token"}' \
+    'result|{"exitCode":0}'
+rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+if rhyolite_harness_invoke harness_normalize_worker_output \
+    review "${copilot_fallback_output}" claude-opus-5.5 max \
+    "${copilot_normalized_output}" "${copilot_exact_reply}"; then
+    fail 'Copilot normalization accepted an automatic model fallback.'
+fi
+assert_equal \
+    "Copilot attempted an automatic fallback from the approved model 'claude-opus-5.5' to model 'claude-opus-4.8' in the review phase after a request to the approved model did not complete; no output from 'claude-opus-4.8' was recorded, and Rhyolite does not accept substituted output." \
+    "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+    'Copilot fallback diagnostic'
+rm -f -- "${copilot_watch_cursor}"
+if rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_fallback_output}" claude-opus-5.5 max "${copilot_watch_cursor}"; then
+    fail 'Copilot live detection missed an automatic model fallback.'
+fi
+assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+    "${RHYOLITE_HARNESS_LAST_STATUS}" \
+    'Copilot live fallback violation status'
+rm -f -- "${copilot_watch_cursor}"
+copilot_v8_outcome "${copilot_fallback_output}" fallback-blocked
+python3 - "${copilot_v8_root}/outcome.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["FallbackModel"] == "claude-opus-4.8" and data["Retryable"] is True, data
+assert data["ModelCallFailures"] == 1 and data["ExitCode"] == 0, data
+PY
+
+copilot_v8_raw="${copilot_v8_root}/stream.jsonl"
+copilot_v8_stream "${copilot_v8_raw}" \
+    'model.call_start|{"turnId":"30","model":"claude-opus-5.5"}' \
+    'assistant.turn_retry|{"turnId":"30","model":"claude-opus-5.5","reason":"streaming_error"}' \
+    'session.error|{"errorType":"query","message":"Execution failed: Failed to get response from the AI model; retried 5 times Last error: dns error: failed to lookup address information [ENOTFOUND]"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" transient-failure
+python3 - "${copilot_v8_root}/outcome.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["SessionErrors"][0].startswith("Execution failed: Failed to get response"), data
+assert data["TurnRetries"] == 1 and data["ExitCode"] == 1, data
+PY
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.error|{"errorType":"query","message":"Model \"claude-opus-5.5\" is not available for this account (status 503)"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" failed
+copilot_v8_stream "${copilot_v8_raw}" \
+    'assistant.message|{"model":"claude-opus-4.8","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" substituted
+copilot_v8_stream "${copilot_v8_raw}" \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'session.usage_checkpoint|{"promptCacheBreakState":[{"models":{"claude-opus-5.5":{"model":"claude-opus-5.5","reasoning_effort":"high"}}}]}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" substituted
+# Copilot CLI re-requests a response cut at the per-response output limit
+# without emitting the cut text; only the persisted usage records show it.
+copilot_v8_stream "${copilot_v8_raw}" \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Tail of the report."}' \
+    'result|{"exitCode":0}'
+node - "${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl" <<'JS'
+const fs = require("fs");
+const usage = (out, reasoning) => JSON.stringify({type: "session.usage_record",
+  data: {usage: {model: "claude-opus-5.5", outputTokens: out, reasoningTokens: reasoning,
+    maxOutputTokens: 32000}}});
+fs.writeFileSync(process.argv[2], [usage(32000, 32000), usage(32000, 18563)].join("\n") + "\n");
+JS
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["OutputLimitHits"] == 2 and data["OutputTokenLimit"] == 32000, data
+assert data["FinalReplyAtOutputLimit"] is True, data
+PY
+rm -f -- "${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
+
+for copilot_v8_bad_outcome in \
+    'extra|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","Extra":1}' \
+    'retryable|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
+    'fallback|{"Schema":1,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
+    'control|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
+    'phase|{"Schema":1,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}'; do
+    printf '%s\n' "${copilot_v8_bad_outcome#*|}" > "${copilot_v8_root}/bad-outcome.json"
+    if rhyolite_harness_validate_outcome_json \
+        "${copilot_v8_root}/bad-outcome.json" review >/dev/null; then
+        fail "Malformed worker outcome was accepted: ${copilot_v8_bad_outcome%%|*}"
+    fi
+done
+printf '{}\n' > "${copilot_v8_root}/existing-outcome.json"
+for copilot_v8_invalid in \
+    "bogus|${copilot_v8_raw}|${copilot_v8_session}|${copilot_v8_root}/new-outcome.json" \
+    "review|relative.jsonl|${copilot_v8_session}|${copilot_v8_root}/new-outcome.json" \
+    "review|${copilot_v8_raw}|not-a-session|${copilot_v8_root}/new-outcome.json" \
+    "review|${copilot_v8_raw}|${copilot_v8_session}|${copilot_v8_root}/existing-outcome.json"; do
+    IFS='|' read -r invalid_phase invalid_raw invalid_session invalid_output \
+        <<< "${copilot_v8_invalid}"
+    if rhyolite_harness_invoke harness_worker_outcome \
+        "${invalid_phase}" "${invalid_raw}" "${copilot_v8_home}" \
+        "${invalid_session}" claude-opus-5.5 max "${invalid_output}"; then
+        fail "Copilot worker outcome accepted invalid arguments: ${copilot_v8_invalid}"
+    fi
+done
+
+# Copilot resumes a session when invoked again with the same --session-id,
+# so the continuation argv is the exact approved worker argv.
+copilot_v8_source_argv=(-C /tmp/session --session-id "${copilot_v8_session}" --model claude-opus-5.5 --output-format json)
+copilot_v8_continuation_argv=()
+rhyolite_harness_invoke harness_worker_continuation_argv \
+    copilot_v8_continuation_argv copilot_v8_source_argv ||
+    fail "Copilot continuation argv failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+[[ "${copilot_v8_continuation_argv[*]}" == "${copilot_v8_source_argv[*]}" ]] ||
+    fail 'Copilot continuation argv differs from the approved worker argv.'
+copilot_v8_source_argv=(-C /tmp/session --model claude-opus-5.5)
+if rhyolite_harness_invoke harness_worker_continuation_argv \
+    copilot_v8_continuation_argv copilot_v8_source_argv; then
+    fail 'Copilot continuation argv accepted an argv without a session.'
+fi
+copilot_v8_source_argv=(--session-id "${copilot_v8_session}" --session-id "${copilot_v8_session}")
+if rhyolite_harness_invoke harness_worker_continuation_argv \
+    copilot_v8_continuation_argv copilot_v8_source_argv; then
+    fail 'Copilot continuation argv accepted two sessions.'
+fi
 for secure_research_runner_fragment in \
     'local research_normalized_output="${research_runtime_root}/research-output.normalized"' \
     'local research_accepted_candidate="${research_runtime_root}/accepted-dossier.txt"' \
@@ -1631,6 +1805,12 @@ assert_contains \
     "${repair_runtime_home}/settings.json" \
     '"autoConnect": false' \
     'Copilot report-repair IDE isolation'
+for continue_settings in "${runtime_home}/settings.json" "${repair_runtime_home}/settings.json"; do
+    assert_contains \
+        "${continue_settings}" \
+        '"continueOnAutoMode": false' \
+        'Copilot children never switch to auto mode on a rate limit'
+done
 assert_not_contains \
     "${repair_runtime_home}/settings.json" \
     '"subagents"' \
@@ -3489,7 +3669,128 @@ printf '{"status":"saved"}\n' \
     > "${COPILOT_HOME}/session-state/mock-session/state.json"
 printf 'mock-session-database\n' \
     > "${COPILOT_HOME}/session-store/sessions.db"
-cat >/dev/null
+mock_request="$(mktemp "${TMPDIR:-/tmp}/mock-copilot-request.XXXXXXXX")"
+cat > "${mock_request}"
+canonical_report="$(dirname -- "${BASH_SOURCE[0]}")/canonical-report.txt"
+
+emit_transient_failure() {
+    /usr/bin/python3 - "${mock_model}" <<'MOCK_TRANSIENT'
+import json
+import sys
+
+model = sys.argv[1]
+print(json.dumps({"type": "model.call_start", "data": {"turnId": "0", "model": model}}))
+print(json.dumps({"type": "model.call_failure", "data": {"model": model, "failureKind": "transport", "errorMessage": "Connection timed out [ETIMEDOUT]"}}))
+print(json.dumps({"type": "session.error", "data": {"errorType": "query", "message": "Execution failed: Failed to get response from the AI model; retried 5 times Last error: unexpected EOF during chunk size line"}}))
+print(json.dumps({"type": "result", "exitCode": 1}))
+MOCK_TRANSIENT
+}
+
+# Same-session continuation: the runner resumes this session with a report
+# delivery request. Answer with exactly the requested canonical sections as
+# one page, unless a scenario asks the first continuation to fail.
+if grep -qx 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_request}"; then
+    printf '%s\n' "$*" >> "${RHYOLITE_WORKER_CAPTURE}/continuations"
+    cp -- "${mock_request}" \
+        "${RHYOLITE_WORKER_CAPTURE}/continuation-request-$(wc -l < "${RHYOLITE_WORKER_CAPTURE}/continuations")"
+    printf '# Mock Copilot continuation\n' > "${share_path}"
+    if [[ "${RHYOLITE_MOCK_CONTINUATION_TRANSIENT:-0}" == always ||
+        ( "${RHYOLITE_MOCK_CONTINUATION_TRANSIENT:-0}" == 1 &&
+        ! -e "${RHYOLITE_WORKER_CAPTURE}/continuation-transient" ) ]]; then
+        printf 'done\n' > "${RHYOLITE_WORKER_CAPTURE}/continuation-transient"
+        emit_transient_failure
+        rm -f -- "${mock_request}"
+        exit 1
+    fi
+    /usr/bin/python3 - "${mock_request}" "${canonical_report}" \
+        "${RHYOLITE_MOCK_PAGE_STYLE:-valid}" <<'MOCK_PAGE' | emit_structured_reply
+import pathlib
+import re
+import sys
+
+request = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+report = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+style = sys.argv[3]
+page_id = next(line.split(": ", 1)[1] for line in request if line.startswith("Request: "))
+start = request.index("Requested sections, in this exact order:") + 1
+sections = []
+for line in request[start:]:
+    if not line.startswith("- "):
+        break
+    sections.append(line[2:])
+headings = {
+    "REVIEW CONTEXT", "EXECUTIVE SUMMARY", "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT", "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE", "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES", "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS", "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+}
+print(f"Delivering {len(sections)} section(s).")
+if style != "no-markers":
+    print(f"RHYOLITE REPORT PAGE {page_id} BEGIN")
+for section in sections:
+    index = report.index(section)
+    body = []
+    for line in report[index + 1:]:
+        if line in headings or (len(line) >= 80 and set(line) == {"="}):
+            break
+        body.append(line)
+    if style == "invalid-once" and section == sections[0] and page_id.startswith("R1"):
+        body = [line for line in body if not line.startswith("Evidence basis:")]
+    print(section)
+    print("\n".join(body).rstrip("\n"))
+    print()
+if style != "no-markers":
+    print(f"RHYOLITE REPORT PAGE {page_id} END")
+MOCK_PAGE
+    rm -f -- "${mock_request}"
+    exit 0
+fi
+rm -f -- "${mock_request}"
+
+if [[ "${RHYOLITE_MOCK_TRANSIENT_FAILURE:-0}" == 1 ]]; then
+    printf '# Mock Copilot session\n' > "${share_path}"
+    emit_transient_failure
+    exit 1
+fi
+
+# Reproduce the 32,000-token cut: the reply and the shared transcript end in
+# the middle of a section, without the closing delimiter.
+if [[ "${RHYOLITE_MOCK_TRUNCATED_REPORT:-0}" == 1 ]]; then
+    truncated_report="$(
+        awk '{ print } /^CLAIMS AND REPUTATION INTEGRITY ASSESSMENT$/ { getline; print; exit }' \
+            "${canonical_report}"
+    )"
+    {
+        printf '# Mock Copilot session\n\n### Copilot\n\n'
+        printf '%s\n' "${truncated_report}"
+    } > "${share_path}"
+    printf '%s\n' "${truncated_report}" | emit_structured_reply
+    exit 0
+fi
+
+# Reproduce an automatic refusal fallback: the approved call starts, then the
+# CLI starts the same turn on another model; only live detection ends it.
+if [[ -n "${RHYOLITE_MOCK_FALLBACK_MODEL:-}" ]]; then
+    trap 'printf "terminated\n" > "${RHYOLITE_WORKER_CAPTURE}/fallback-terminated"; exit 143' INT TERM HUP
+    /usr/bin/python3 - "${mock_model}" "${RHYOLITE_MOCK_FALLBACK_MODEL}" <<'MOCK_FALLBACK'
+import json
+import sys
+
+model, fallback = sys.argv[1], sys.argv[2]
+print(json.dumps({"type": "model.call_start", "data": {"turnId": "0", "model": model}}), flush=True)
+print(json.dumps({"type": "model.call_start", "data": {"turnId": "0", "model": fallback}}), flush=True)
+MOCK_FALLBACK
+    printf 'started\n' > "${RHYOLITE_WORKER_CAPTURE}/fallback-emitted"
+    sleep 300 &
+    wait $! || true
+    exit 143
+fi
 
 # Reproduce the live failure: the session itself used the approved model, but
 # a `task` call started a subagent on another model. The event is flushed at
@@ -3565,7 +3866,6 @@ if [[ "${RHYOLITE_MOCK_UNSAFE_TEXT:-0}" == 1 ]]; then
     exit 17
 fi
 
-canonical_report="$(dirname -- "${BASH_SOURCE[0]}")/canonical-report.txt"
 if [[ "${RHYOLITE_MOCK_INCOMPLETE:-0}" == 1 ]]; then
     {
         printf '# Mock Copilot session\n\n### Copilot\n\n'
@@ -3876,6 +4176,8 @@ env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
     COPILOT_HOME="${runner_source_home}" \
     RHYOLITE_WORKER_CAPTURE="${runner_placeholder_capture}" \
     RHYOLITE_MOCK_PLACEHOLDER_REPORT=1 \
+    RHYOLITE_MOCK_PAGE_STYLE=no-markers \
+    RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
     TMPDIR="${runner_tmp_root}" \
     PATH="${runner_mock_bin}:/usr/bin:/bin" \
     "${RUNNER}" \
@@ -3896,6 +4198,12 @@ runner_placeholder_errors="$(
 assert_contains "${runner_placeholder_errors}" \
     'Final report contract validation failed' \
     'Runner seam strict report validation'
+# Same-session recovery asked for every section in bounded pages, rejected
+# every page that lacked the exact markers, and failed truthfully once its
+# two resubmission rounds were exhausted.
+assert_contains "${runner_placeholder_errors}" \
+    'Worker recovery Exhausted: Report delivery exhausted 2 resubmission rounds' \
+    'Runner seam bounded resubmission exhaustion'
 
 noop_test_plugin="${fixture_root}/noop-test-plugin"
 noop_test_skill="${noop_test_plugin}/skills/readonly-repository-review"
@@ -4024,6 +4332,7 @@ done
         [web_research]=no
         [shell_denial]=yes
         [final_message_file]=yes
+        [worker_continuation]=no
     )
     for capability in "${!noop_expected_capabilities[@]}"; do
         assert_equal \
@@ -5554,6 +5863,210 @@ if (state.Status !== "ReviewFailed" ||
   throw new Error("subagent enforcement did not fail closed before report acceptance");
 }
 JS
+
+# Same-session worker recovery, end to end through the real runner, the real
+# Copilot adapter, and a mock CLI that resumes the session on the same
+# --session-id: a report cut at the output token limit, a transient
+# model-service failure, and a blocked automatic model fallback must all
+# complete through paged delivery, and exhausted retries must fail truthfully
+# with a deterministic failure analysis.
+run_recovery_scenario() {
+    local name="$1"
+    shift
+    local scenario_workspace="${fixture_root}/recovery-${name}-workspace"
+    local scenario_output="${fixture_root}/recovery-${name}-output"
+    local scenario_plan="${fixture_root}/recovery-${name}-plan.json"
+    local scenario_plan_hash
+
+    recovery_capture="${runner_capture_root}/recovery-${name}"
+    recovery_stdout="${fixture_root}/recovery-${name}.stdout"
+    recovery_stderr="${fixture_root}/recovery-${name}.stderr"
+    rm -rf -- "${recovery_capture}"
+    mkdir -p -- "${recovery_capture}"
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        COPILOT_HOME="${runner_source_home}" \
+        TMPDIR="${runner_tmp_root}" \
+        PATH="${runner_mock_bin}:/usr/bin:/bin" \
+        "${RUNNER}" \
+        --harness copilot \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --workspace-root "${scenario_workspace}" \
+        --output-root "${scenario_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only >"${scenario_plan}" 2>/dev/null ||
+        fail "Recovery scenario ${name} plan failed."
+    scenario_plan_hash="$(contract_plan_hash "${scenario_plan}")"
+    set +e
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        COPILOT_HOME="${runner_source_home}" \
+        RHYOLITE_WORKER_CAPTURE="${recovery_capture}" \
+        RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
+        TMPDIR="${runner_tmp_root}" \
+        PATH="${runner_mock_bin}:/usr/bin:/bin" \
+        "$@" \
+        "${RUNNER}" \
+        --harness copilot \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --workspace-root "${scenario_workspace}" \
+        --output-root "${scenario_output}" \
+        --expected-plan-hash "${scenario_plan_hash}" \
+        --non-interactive \
+        --no-open-html >"${recovery_stdout}" 2>"${recovery_stderr}"
+    recovery_status=$?
+    set -e
+    recovery_run="$(contract_run_path "${recovery_stdout}")"
+    recovery_repository="${recovery_run}/github--octocat--hello-world"
+    if [[ ! -f "${recovery_repository}/state.json" ]]; then
+        cat -- "${recovery_stdout}" "${recovery_stderr}" >&2 || true
+        fail "Recovery scenario ${name} produced no repository state."
+    fi
+}
+
+assert_recovered_report() {
+    local name="$1"
+
+    if ((recovery_status != 0)); then
+        {
+            printf -- '--- %s stdout ---\n' "${name}"
+            cat -- "${recovery_stdout}"
+            printf -- '--- %s errors.txt ---\n' "${name}"
+            cat -- "${recovery_repository}/errors.txt"
+        } >&2 || true
+        fail "Recovery scenario ${name} did not complete."
+    fi
+    # The assembler normalizes only blank lines around the envelope; every
+    # content line must match the canonical report exactly and in order.
+    cmp -s <(grep -v '^$' "${recovery_repository}/review.txt") \
+        <(grep -v '^$' "${runner_mock_bin}/canonical-report.txt") ||
+        fail "Recovery scenario ${name} did not reassemble the canonical report."
+    [[ ! -e "${recovery_repository}/failure-analysis.md" ]] ||
+        fail "Recovery scenario ${name} left a failure analysis for a completed review."
+    [[ -z "$(find "${recovery_repository}" -name '*.raw' -o -name '*.cursor' -o -name '.initial-worker-outcome.json')" ]] ||
+        fail "Recovery scenario ${name} left raw output, cursors, or staging files."
+    [[ "$(stat -c '%a' "${recovery_repository}/worker-recovery")" == 700 ]] ||
+        fail "Recovery scenario ${name} worker-recovery directory is not private."
+    assert_contains "${recovery_stdout}" 'RHYOLITE PROGRESS | github--octocat--hello-world | worker recovery |' \
+        "Recovery scenario ${name} progress"
+}
+
+run_recovery_scenario truncated \
+    RHYOLITE_MOCK_TRUNCATED_REPORT=1 \
+    RHYOLITE_MOCK_PAGE_STYLE=invalid-once
+assert_recovered_report truncated
+node - "${recovery_repository}/state.json" "${recovery_run}/state.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const run = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const recovery = state.WorkerRecovery;
+if (state.Status !== "Completed" || recovery?.Status !== "Recovered" ||
+    recovery.Trigger !== "truncated" || recovery.ResubmissionRounds !== 2 ||
+    recovery.PagesRejected < 1 || recovery.PagesAccepted < 2 ||
+    recovery.Continuations < 3 || recovery.TransientRetries !== 0 ||
+    state.ReportRepair?.Status !== "NotEligible" ||
+    state.Artifacts.FailureAnalysis !== "" ||
+    run.WorkerRecoveryPolicy?.DeliveryProtocol !== "RHYOLITE_REPORT_DELIVERY_V1" ||
+    run.WorkerRecoveryPolicy?.Available !== true ||
+    run.Repositories?.[0]?.WorkerRecovery?.Status !== "Recovered") {
+  throw new Error(`truncated report was not recovered through paged delivery: ${JSON.stringify(recovery)}`);
+}
+JS
+assert_contains "${recovery_capture}/continuation-request-1" \
+    "Reason: Your previous reply ended before the report's closing delimiter, most likely because it reached the per-response output token limit." \
+    'Truncation delivery reason'
+assert_contains "${recovery_capture}/continuation-request-1" \
+    '- CLAIMS AND REPUTATION INTEGRITY ASSESSMENT: This section was cut off before its end, most likely by the per-response output token limit.' \
+    'Truncation delivery diagnostic'
+assert_not_contains "${recovery_capture}/continuation-request-1" \
+    '- REVIEW CONTEXT' \
+    'Truncation delivery re-requested a complete section'
+grep -Fq 'is missing required assessment field: Evidence basis:' \
+    "${recovery_repository}"/worker-recovery/continuation-*-request.txt ||
+    fail 'Resubmission did not tell the worker the exact rejected-page diagnostic.'
+assert_contains "${recovery_repository}/handoff.md" 'Worker recovery: Recovered;' \
+    'Truncation recovery handoff summary'
+# Every continuation reused the exact approved worker argv and session.
+initial_argv="$(tr '\0' '\n' < "${recovery_capture}/argv")"
+[[ "${initial_argv}" == *"--session-id"* ]] ||
+    fail 'Recovery worker argv lost its session identifier.'
+[[ "$(sort -u "${recovery_capture}/continuations" | wc -l)" -eq 1 ]] ||
+    fail 'Recovery continuations used different worker argv.'
+
+run_recovery_scenario transient \
+    RHYOLITE_MOCK_TRANSIENT_FAILURE=1 \
+    RHYOLITE_MOCK_CONTINUATION_TRANSIENT=1
+assert_recovered_report transient
+node - "${recovery_repository}/state.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const recovery = state.WorkerRecovery;
+if (recovery?.Status !== "Recovered" || recovery.Trigger !== "interrupted" ||
+    recovery.TransientRetries !== 2 || recovery.TransientRetryLimit !== 2) {
+  throw new Error(`transient failure was not recovered in the same session: ${JSON.stringify(recovery)}`);
+}
+JS
+assert_contains "${recovery_repository}/errors.txt" \
+    'Worker session error: Execution failed: Failed to get response from the AI model; retried 5 times Last error: unexpected EOF during chunk size line' \
+    'Transient session error is recorded'
+assert_contains "${recovery_repository}/errors.txt" \
+    'Worker outcome: transient model-service failure.' \
+    'Transient outcome is recorded'
+assert_contains "${recovery_capture}/continuation-request-1" \
+    'First finish any remaining analysis that the' \
+    'Interrupted session preface'
+
+run_recovery_scenario fallback RHYOLITE_MOCK_FALLBACK_MODEL=claude-opus-4.8
+assert_recovered_report fallback
+[[ -f "${recovery_capture}/fallback-terminated" ]] ||
+    fail 'The live monitor did not stop the automatic model fallback.'
+assert_contains "${recovery_repository}/errors.txt" \
+    "Copilot attempted an automatic fallback from the approved model 'gpt-5.6-sol' to model 'claude-opus-4.8' in the review phase" \
+    'Fallback diagnostic is accurate'
+assert_contains "${recovery_repository}/errors.txt" \
+    'Worker outcome: automatic model fallback to claude-opus-4.8 was blocked before it produced output.' \
+    'Fallback outcome is recorded'
+node - "${recovery_repository}/state.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (state.WorkerRecovery?.Status !== "Recovered" ||
+    state.WorkerRecovery.Trigger !== "interrupted" ||
+    state.Model !== "gpt-5.6-sol") {
+  throw new Error(`blocked fallback was not recovered on the approved model: ${JSON.stringify(state.WorkerRecovery)}`);
+}
+JS
+
+run_recovery_scenario exhausted \
+    RHYOLITE_MOCK_TRANSIENT_FAILURE=1 \
+    RHYOLITE_MOCK_CONTINUATION_TRANSIENT=always
+((recovery_status != 0)) || fail 'Exhausted recovery unexpectedly succeeded.'
+assert_contains "${recovery_stdout}" 'Stage: worker recovery' 'Exhausted recovery stage'
+assert_contains "${recovery_stdout}" \
+    "Failure analysis ${recovery_repository}/failure-analysis.md" \
+    'Exhausted recovery points to the failure analysis'
+assert_contains "${recovery_repository}/errors.txt" 'Worker recovery Exhausted:' \
+    'Exhausted recovery diagnostic'
+node - "${recovery_repository}/state.json" "${recovery_repository}/failure-analysis.json" <<'JS'
+const fs = require("fs");
+const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const analysis = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+if (state.Status !== "ReviewFailed" ||
+    state.WorkerRecovery?.Status !== "Exhausted" ||
+    state.WorkerRecovery.TransientRetries !== 2 ||
+    state.Artifacts.FailureAnalysis !== process.argv[3].replace(/\.json$/, ".md") ||
+    analysis.FailureClass !== "model-service" ||
+    analysis.Stage !== "worker recovery" ||
+    !analysis.SessionErrors[0].startsWith("Execution failed: Failed to get response") ||
+    analysis.RecoveryAttempted.WorkerRecovery !== "Exhausted" ||
+    !analysis.RecommendedActions.length) {
+  throw new Error(`exhausted recovery analysis is wrong: ${JSON.stringify(analysis)}`);
+}
+JS
+assert_contains "${recovery_run}/failure-analysis.md" '- Status: ReviewFailed; stage: worker recovery; class: model-service' \
+    'Run-level failure analysis'
+[[ "$(stat -c '%a' "${recovery_repository}/failure-analysis.md")" == 600 ]] ||
+    fail 'Failure analysis is not private.'
 
 launcher_mock_bin="${fixture_root}/launcher-mock-bin"
 launcher_caller="${fixture_root}/launcher-caller"

@@ -9,7 +9,7 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v7.
+- The implemented production seam is Contract v8.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
   and Claude Code (`claude`). A contract refactor does not itself add another
@@ -54,7 +54,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v7 function and every negative and
+12. The adapter can satisfy every Contract-v8 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -126,12 +126,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v7 boundary
+## Contract-v8 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=7
+RHYOLITE_HARNESS_CONTRACT_VERSION=8
 ```
 
 The shared loader must require all functions in this document before calling
@@ -181,7 +181,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v7 capability keys remain:
+Contract-v8 capability keys are:
 
 ```text
 fleet
@@ -192,7 +192,13 @@ builtin_research_specialist
 web_research
 shell_denial
 final_message_file
+worker_continuation
 ```
+
+`worker_continuation` is `yes` only after a live probe proves that the CLI
+resumes an existing non-interactive worker session, with its context, under
+the identical approved settings. The runner continues a review worker only
+when it is `yes`.
 
 Capabilities describe proven adapter behavior; they do not relax runner
 policy. `unverified` is not `yes`. A production adapter must report
@@ -285,6 +291,8 @@ release artifacts.
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
 | `harness_prepare_run` | No arguments. Status only; no contract data on stdout. | Run once after approved-plan verification and protected-name validation. Prepare only run-wide ephemeral adapter context. |
+| `harness_worker_outcome` | Phase, raw worker stdout path, the worker's runtime home, session ID, approved model, approved effort, and a new outcome path. Status only. | Validate the arguments with `rhyolite_harness_validate_outcome_arguments`, then write one mode-0600 JSON object with exactly `Schema` (1), `Phase`, `Outcome`, `Retryable`, `ExitCode`, `SessionErrors`, `ModelCallFailures`, `TurnRetries`, `OutputLimitHits`, `OutputTokenLimit`, `FinalReplyAtOutputLimit`, and `FallbackModel`. Classify `substituted` whenever any recorded output or effort is outside the approved plan, `fallback-blocked` only when another model was attempted but produced no output, and `transient-failure` only for network, DNS, stream, or server failures, never for an unavailable model or authentication failure. A CLI without structured evidence may call `rhyolite_harness_worker_outcome_unknown`. The runner validates the object with `rhyolite_harness_validate_outcome_json`. |
+| `harness_worker_continuation_argv` | Destination array name and the name of the approved worker argv array. Status only. | Return the argv that resumes the same session under the identical approval-bound settings, tools, and isolation. Report `worker_continuation` as `yes` only after a live probe proves that the CLI resumes the session with its context in non-interactive mode; otherwise report `unverified` and fail this function. |
 | `harness_render_request` | Template path, request path, repository URL, snapshot path, exact commit, review dates/windows, scope, output path, bounded metadata, research instructions, dossier path, network-summary path, and transport instructions. Status only. | Write the request file without evaluating template or repository content. |
 | `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
 | `harness_worker_env` | Destination array name. Status only. | Populate the exact ordered `env` argument array, including unsets and the isolated home binding. |
@@ -951,7 +959,7 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v7 function inventory for the adapter;
+- the complete Contract-v8 function inventory for the adapter;
 - an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
   real runs, and their consequences;
 - a capability decision table with evidence;

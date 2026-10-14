@@ -61,7 +61,7 @@ harness_capability() {
         shell_denial|final_message_file)
             printf '%s\n' 'yes'
             ;;
-        fleet|structured_questions|subagents|builtin_security_specialist|builtin_research_specialist|web_research)
+        fleet|structured_questions|subagents|builtin_security_specialist|builtin_research_specialist|web_research|worker_continuation)
             printf '%s\n' 'no'
             ;;
         *)
@@ -391,6 +391,20 @@ harness_normalize_worker_output() {
 harness_detect_worker_violation() {
     noop_fixture_require_success harness_detect_worker_violation || return 1
     rhyolite_harness_detect_worker_violation_none "$@"
+}
+
+# The no-op worker records no structured outcome evidence, so the runner
+# never continues its session.
+harness_worker_outcome() {
+    noop_fixture_require_success harness_worker_outcome || return 1
+    rhyolite_harness_worker_outcome_unknown "$@"
+}
+
+harness_worker_continuation_argv() {
+    noop_fixture_require_success harness_worker_continuation_argv || return 1
+    rhyolite_harness_set_error \
+        'The no-op fixture does not support same-session worker continuation.'
+    return 1
 }
 
 harness_render_request() {

@@ -64,6 +64,18 @@ PROVENANCE_LOOKBACK_SPECIFIED=0
 STATE_SCHEMA_VERSION=6
 REPORT_REPAIR_ATTEMPT_LIMIT=1
 REPORT_REPAIR_TIMEOUT_SECONDS=300
+# Same-session worker recovery, approval-bound as WorkerRecoveryPolicy. The
+# runner continues the review worker's own session only when the harness
+# adapter has verified worker_continuation.
+WORKER_CONTINUATION_AVAILABLE=0
+WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT=2
+WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT=2
+WORKER_RECOVERY_CONTINUATION_LIMIT=20
+WORKER_RECOVERY_MINIMUM_SECONDS=120
+WORKER_RECOVERY_RETRY_DELAY_SECONDS=30
+if [[ "${RHYOLITE_WORKER_RETRY_DELAY_SECONDS-}" =~ ^[0-9]{1,3}$ ]]; then
+    WORKER_RECOVERY_RETRY_DELAY_SECONDS=$((10#${RHYOLITE_WORKER_RETRY_DELAY_SECONDS}))
+fi
 REPORT_MARKDOWN_TABLE_DIAGNOSTIC='Final report contains a Markdown table.'
 NON_INTERACTIVE=0
 OPEN_HTML=0
@@ -130,8 +142,9 @@ Options:
   --context TIER                   default or long_context (default: long_context)
   --fleet-mode MODE                Outer launcher mode: native or standard
   --remember-preferences           Save fleet/model per repository after approval
-  --enable-public-research         Enable constrained public research
-  --enable-provenance-research     Enable whole-repository exact-commit provenance research
+  --enable-public-research         Legacy alias for --scope 2; never combine with --scope
+  --enable-provenance-research     Legacy alias for --scope 3 with
+                                   --enable-public-research; never combine with --scope
   --provenance-lookback-months N   Scope 3 calendar-month lookback (1-60, default: 6)
   --research-provider ID           Research transport provider (default: local-broker)
   --research-policy PROFILE|FILE   Bundled default or trusted policy JSON
@@ -318,6 +331,11 @@ interrupt_repository_process() {
     if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
         terminate_process_tree "${RHYOLITE_ACTIVE_CHILD_PID}"
     fi
+    if [[ "${WORKER_RECOVERY_STATUS-}" == 'Running' ]]; then
+        WORKER_RECOVERY_STATUS='Interrupted'
+        WORKER_RECOVERY_FINAL_DIAGNOSTIC="Worker recovery interrupted by ${signal_name}."
+        write_worker_recovery_state 2>/dev/null || true
+    fi
     if [[ "${REPORT_REPAIR_STATUS-}" == 'Running' ||
         "${REPORT_REPAIR_STATUS-}" == 'Succeeded' ]]; then
         REPORT_REPAIR_STATUS='Interrupted'
@@ -435,6 +453,15 @@ errors_report_approved_plan_violation() {
         -e 'substituted review|downgraded review|substituted research' \
         -e 'other than the approved model|other than the approved effort' \
         -e 'subagent turn' \
+        -e 'automatic fallback from the approved model' \
+        "$1" 2>/dev/null
+}
+
+# Sanitized worker session errors that the adapter classified as a transient
+# model-service failure (network, DNS, stream cut, or server error).
+errors_report_model_service_failure() {
+    grep -Eq \
+        -e '^Worker outcome: transient model-service failure\.$' \
         "$1" 2>/dev/null
 }
 
@@ -503,6 +530,9 @@ repository_failure_stage() {
                 printf 'model availability'
             elif errors_report_approved_plan_violation "${errors_path}"; then
                 printf 'approved model enforcement'
+            elif grep -Fq 'Worker outcome: transient model-service failure.' \
+                "${errors_path}" 2>/dev/null; then
+                printf 'model service'
             elif grep -Eq \
                 'dossier|REPOSITORY RESEARCH DOSSIER|claim verification evidence|successful public response' \
                 "${errors_path}" 2>/dev/null; then
@@ -518,6 +548,11 @@ repository_failure_stage() {
                 printf 'cleanup'
             elif errors_report_unavailable_model "${errors_path}"; then
                 printf 'model availability'
+            elif grep -Eq '^Worker recovery (Exhausted|Failed|TimedOut): ' \
+                "${errors_path}" 2>/dev/null; then
+                printf 'worker recovery'
+            elif errors_report_model_service_failure "${errors_path}"; then
+                printf 'model service'
             elif report_repair_attempted \
                 "${errors_path%/errors.txt}/state.json"; then
                 printf 'report repair'
@@ -579,6 +614,9 @@ repository_failure_summary() {
                 'approved model enforcement')
                     printf 'The dedicated research session recorded a model, reasoning effort, or subagent other than the approved plan, so Rhyolite stopped it and rejected its output.'
                     ;;
+                'model service')
+                    printf 'The model service failed repeatedly during the dedicated research phase, before the main repository review began.'
+                    ;;
                 *)
                     printf 'The dedicated public-research worker failed before the main repository review began.'
                     ;;
@@ -594,6 +632,12 @@ repository_failure_summary() {
                     ;;
                 'report repair')
                     printf 'Bounded report-only recovery did not produce a fully valid, content-preserving report.'
+                    ;;
+                'worker recovery')
+                    printf 'Bounded same-session recovery did not obtain a fully valid report from the review worker.'
+                    ;;
+                'model service')
+                    printf 'The model service failed repeatedly during the review session, and the bounded same-session retries did not recover it.'
                     ;;
                 'model availability')
                     printf 'The repository-review worker could not start because %s rejected the approved model as unavailable.' \
@@ -679,6 +723,10 @@ repository_failure_remediation() {
                 'approved model enforcement')
                     approved_model_enforcement_remediation
                     ;;
+                'model service')
+                    printf '%s' \
+                        'Check network, DNS, and model-service status, then rerun the approved review. research-errors.txt and failure-analysis.md record the exact session errors; the broker keeps one network log per phase, so research is never relaunched automatically.'
+                    ;;
                 *)
                     printf '%s' \
                         'Inspect the sanitized research errors, timeline, state, and network summary. Repair the reported broker or worker failure and retry.'
@@ -704,6 +752,14 @@ repository_failure_remediation() {
                 'report repair')
                     printf '%s' \
                         'Inspect the preserved report-repair candidates, diagnostics, and state. Recovery is exhausted; do not bypass report validation or resume the child directly.'
+                    ;;
+                'worker recovery')
+                    printf '%s' \
+                        'Read failure-analysis.md and the worker-recovery state and page diagnostics, then rerun the approved review. Do not bypass report validation or resume the child directly.'
+                    ;;
+                'model service')
+                    printf '%s' \
+                        'The model service was unavailable or cut long responses; check connectivity and service status, then rerun the approved review. failure-analysis.md records the exact session errors.'
                     ;;
                 harness\ *)
                     printf '%s' \
@@ -836,6 +892,9 @@ print_repository_error() {
         artifact_detail+="; Research timeline ${research_timeline_path}; Research state ${research_state_path}"
     fi
     artifact_detail+="; Handoff ${handoff_path}"
+    if [[ -f "${result_directory}/failure-analysis.md" ]]; then
+        artifact_detail+="; Failure analysis ${result_directory}/failure-analysis.md"
+    fi
 
     printf '\n%s\n' 'RHYOLITE ERROR'
     printf '%s\n' \
@@ -1149,6 +1208,8 @@ write_approval_hash_material() {
         "$(approval_hash_string "$(research_transport_json '')")"
     printf 'ReportRepairPolicy=%s\n' \
         "$(approval_hash_string "$(report_repair_policy_json)")"
+    printf 'WorkerRecoveryPolicy=%s\n' \
+        "$(approval_hash_string "$(worker_recovery_policy_json)")"
     printf 'SessionTimeoutMinutes=%s\n' "${SESSION_TIMEOUT_MINUTES}"
     printf 'ThrottleLimit=%s\n' "${THROTTLE_LIMIT}"
     printf 'MaxRepositories=%s\n' "${MAX_REPOSITORIES}"
@@ -1192,6 +1253,25 @@ compute_approval_hash() {
 report_repair_policy_json() {
     printf '{"Mode":"isolated-confidence-edit","ProtocolVersion":1,"AttemptLimit":%s,"TimeoutSeconds":%s,"DeterministicNormalizations":["markdown-table-rows","confidence-level-delimiters","wrapped-field-labels"]}' \
         "${REPORT_REPAIR_ATTEMPT_LIMIT}" "${REPORT_REPAIR_TIMEOUT_SECONDS}"
+}
+
+worker_recovery_policy_json() {
+    printf '{"Mode":"same-session-continuation","ProtocolVersion":1,"Available":%s,"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1","TransientRetryLimit":%s,"ResubmissionRoundLimit":%s,"ContinuationLimit":%s,"PageSectionLimit":3,"PageLineBudget":250,"PagePartLimit":4}' \
+        "$(json_boolean "${WORKER_CONTINUATION_AVAILABLE}")" \
+        "${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT}" \
+        "${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT}" \
+        "${WORKER_RECOVERY_CONTINUATION_LIMIT}"
+}
+
+worker_recovery_policy_text() {
+    if ((WORKER_CONTINUATION_AVAILABLE)); then
+        printf 'same-session continuation; %s transient-failure retries; %s resubmission rounds of paged report delivery; %s continuations maximum; no research rerun' \
+            "${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT}" \
+            "${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT}" \
+            "${WORKER_RECOVERY_CONTINUATION_LIMIT}"
+    else
+        printf 'unavailable for this harness; worker failures stay terminal'
+    fi
 }
 
 prior_art_window_json() {
@@ -1401,6 +1481,7 @@ write_review_plan_json() {
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
   "ReportRepairPolicy": $(report_repair_policy_json),
+  "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "SessionTimeoutMinutes": ${SESSION_TIMEOUT_MINUTES},
   "ThrottleLimit": ${THROTTLE_LIMIT},
   "MaxRepositories": ${MAX_REPOSITORIES},
@@ -1496,6 +1577,7 @@ write_review_plan_text() {
     printf '%-20s %s minutes\n' 'Session timeout:' "${SESSION_TIMEOUT_MINUTES}"
     printf '%-20s %s\n' 'Report repair:' \
         "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated, tool-less confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s maximum; no research rerun"
+    printf '%-20s %s\n' 'Worker recovery:' "$(worker_recovery_policy_text)"
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
@@ -2143,7 +2225,7 @@ fi
 
 if ((SCOPE_SPECIFIED && (ENABLE_PUBLIC_RESEARCH || ENABLE_PROVENANCE_RESEARCH))); then
     printf '%s\n' \
-        'Use either --scope or the legacy research switches, not both.' >&2
+        'Use either --scope or the legacy research switches, not both. Remove --enable-public-research and --enable-provenance-research; --scope 2 and --scope 3 already enable the research they need.' >&2
     exit 2
 fi
 
@@ -2409,6 +2491,24 @@ if [[ -z "${OUTPUT_ROOT}" ]]; then
         read -r -p "Output root [${OUTPUT_ROOT}]: " output_input
         OUTPUT_ROOT="${output_input:-${OUTPUT_ROOT}}"
     fi
+fi
+
+harness_worker_continuation_capability=''
+if ! rhyolite_harness_capture \
+    harness_worker_continuation_capability \
+    harness_capability \
+    worker_continuation; then
+    print_runner_error \
+        'The selected review harness could not report its worker-continuation capability.' \
+        "harness ${HARNESS} harness_capability" \
+        "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker-continuation capability resolution failed.}" \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+if [[ "${harness_worker_continuation_capability}" == yes ]]; then
+    WORKER_CONTINUATION_AVAILABLE=1
 fi
 
 if ((ENABLE_PUBLIC_RESEARCH)); then
@@ -3619,6 +3719,583 @@ print(summary)
 '
 }
 
+worker_recovery_json() {
+    local directory=''
+
+    if [[ -n "${WORKER_RECOVERY_DIRECTORY:-}" &&
+        -d "${WORKER_RECOVERY_DIRECTORY}" ]]; then
+        directory="${WORKER_RECOVERY_DIRECTORY}"
+    fi
+    cat <<EOF
+{
+  "Status": "$(json_escape "${WORKER_RECOVERY_STATUS:-NotReached}")",
+  "Available": $(json_boolean "${WORKER_CONTINUATION_AVAILABLE}"),
+  "Trigger": "$(json_escape "${WORKER_RECOVERY_TRIGGER:-}")",
+  "Continuations": ${WORKER_RECOVERY_CONTINUATIONS:-0},
+  "ContinuationLimit": ${WORKER_RECOVERY_CONTINUATION_LIMIT},
+  "TransientRetries": ${WORKER_RECOVERY_TRANSIENT_RETRIES:-0},
+  "TransientRetryLimit": ${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT},
+  "ResubmissionRounds": ${WORKER_RECOVERY_ROUNDS:-0},
+  "ResubmissionRoundLimit": ${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT},
+  "PageRequests": ${WORKER_RECOVERY_PAGE_REQUESTS:-0},
+  "PagesAccepted": ${WORKER_RECOVERY_PAGES_ACCEPTED:-0},
+  "PagesRejected": ${WORKER_RECOVERY_PAGES_REJECTED:-0},
+  "PartsAccepted": ${WORKER_RECOVERY_PARTS_ACCEPTED:-0},
+  "OutputLimitHits": ${WORKER_RECOVERY_OUTPUT_LIMIT_HITS:-0},
+  "LastOutcome": "$(json_escape "${WORKER_RECOVERY_LAST_OUTCOME:-}")",
+  "FinalDiagnostic": "$(json_escape "${WORKER_RECOVERY_FINAL_DIAGNOSTIC:-}")",
+  "Artifacts": {
+    "Directory": "$(json_escape "${directory}")"
+  }
+}
+EOF
+}
+
+write_worker_recovery_state() {
+    [[ -n "${WORKER_RECOVERY_DIRECTORY:-}" &&
+        -d "${WORKER_RECOVERY_DIRECTORY}" ]] || return 0
+    worker_recovery_json > "${WORKER_RECOVERY_DIRECTORY}/state.json.tmp" ||
+        return 1
+    chmod 600 -- "${WORKER_RECOVERY_DIRECTORY}/state.json.tmp" || return 1
+    mv -- "${WORKER_RECOVERY_DIRECTORY}/state.json.tmp" \
+        "${WORKER_RECOVERY_DIRECTORY}/state.json"
+}
+
+worker_recovery_saved_json() {
+    local output_directory="$1"
+    local recovery_state="${output_directory}/worker-recovery/state.json"
+
+    if [[ -n "${WORKER_RECOVERY_STATUS-}" ]]; then
+        worker_recovery_json
+    elif [[ -f "${recovery_state}" ]]; then
+        cat -- "${recovery_state}"
+    else
+        worker_recovery_json
+    fi
+}
+
+worker_recovery_summary() {
+    python3 - "$(worker_recovery_saved_json "$1")" <<'PY'
+import json, sys
+data = json.loads(sys.argv[1])
+statuses = {"NotReached", "NotNeeded", "NotEligible", "Unavailable", "Running",
+            "Recovered", "Exhausted", "Failed", "TimedOut", "Interrupted"}
+counts = ("Continuations", "ContinuationLimit", "TransientRetries",
+          "TransientRetryLimit", "ResubmissionRounds", "ResubmissionRoundLimit",
+          "PageRequests", "PagesAccepted", "PagesRejected", "PartsAccepted",
+          "OutputLimitHits")
+if (data["Status"] not in statuses or
+    any(type(data[key]) is not int or data[key] < 0 for key in counts) or
+    data["Continuations"] > data["ContinuationLimit"] or
+    data["TransientRetries"] > data["TransientRetryLimit"] or
+    data["ResubmissionRounds"] > data["ResubmissionRoundLimit"]):
+    raise SystemExit("Invalid trusted worker-recovery state")
+summary = "{}; continuations {}/{}; transient retries {}/{}; resubmission rounds {}/{}; pages accepted {}, rejected {}".format(
+    data["Status"], data["Continuations"], data["ContinuationLimit"],
+    data["TransientRetries"], data["TransientRetryLimit"],
+    data["ResubmissionRounds"], data["ResubmissionRoundLimit"],
+    data["PagesAccepted"], data["PagesRejected"])
+if data["Trigger"]:
+    summary += "; trigger " + data["Trigger"]
+if data["OutputLimitHits"]:
+    summary += "; responses at the output token limit {}".format(data["OutputLimitHits"])
+print(summary)
+PY
+}
+
+worker_recovery_attempted() {
+    case "${WORKER_RECOVERY_STATUS:-NotReached}" in
+        NotReached|NotNeeded|NotEligible) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Adapter-function failures stop the operation, as the harness contract
+# requires. The only harness stages that may precede recovery are the
+# approved-plan enforcement records of an automatic fallback that was blocked
+# before it produced output. Returns 0 when recovery must not run.
+review_harness_failure_blocks_recovery() {
+    local stage
+
+    while IFS= read -r stage; do
+        case "${stage}" in
+            "harness ${HARNESS} harness_detect_worker_violation" | \
+            "harness ${HARNESS} harness_normalize_worker_output")
+                [[ "${worker_initial_outcome}" == fallback-blocked ]] ||
+                    return 0
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    done < <(
+        sed -n 's/^Harness failure stage: \(.*\)$/\1/p' "${error_path}" 2>/dev/null
+    )
+    return 1
+}
+
+worker_recovery_remaining_seconds() {
+    local now_epoch
+
+    now_epoch="$(date +%s)"
+    printf '%s' \
+        $((SESSION_TIMEOUT_MINUTES * 60 - (now_epoch - WORKER_REVIEW_STARTED_EPOCH)))
+}
+
+# Persist the worker's agent state and remove its temporary runtime home
+# exactly once. Without same-session continuation this runs immediately after
+# the worker exits; with continuation it runs after bounded recovery ends.
+finalize_review_runtime_home() {
+    ((REVIEW_RUNTIME_HOME_FINALIZED == 0)) || return 0
+    REVIEW_RUNTIME_HOME_FINALIZED=1
+    if ((worker_started)) &&
+        ! rhyolite_harness_invoke harness_persist_agent_state \
+            "${runtime_harness_home}" \
+            "${agent_state_path}" \
+            "${REASONING_EFFORT}" \
+            "${CONTEXT_TIER}" \
+            >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
+            >> "${error_path}"
+        post_process_failure=1
+    fi
+    if rhyolite_harness_invoke harness_sanitize_runtime_home \
+        "${runtime_harness_home}" \
+        >/dev/null 2>> "${error_path}"; then
+        runtime_harness_home=""
+        REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
+        trap - EXIT
+    else
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Could not remove the temporary harness runtime home.}" \
+            >> "${error_path}"
+        post_process_failure=1
+    fi
+}
+
+# Ask the adapter what happened in one finished worker invocation and record
+# the validated outcome in WORKER_INVOCATION_OUTCOME. Any adapter failure or
+# malformed outcome yields `unknown`, which never continues a session.
+classify_worker_invocation() {
+    local raw="$1"
+    local outcome_path="$2"
+    local outcome_token
+
+    WORKER_INVOCATION_OUTCOME='unknown'
+    rm -f -- "${outcome_path}"
+    [[ -n "${runtime_harness_home}" && -f "${raw}" ]] || return 0
+    if ! rhyolite_harness_invoke harness_worker_outcome \
+        review \
+        "${raw}" \
+        "${runtime_harness_home}" \
+        "${session_id}" \
+        "${MODEL}" \
+        "${REASONING_EFFORT}" \
+        "${outcome_path}" \
+        >/dev/null 2>&1; then
+        rm -f -- "${outcome_path}"
+        return 0
+    fi
+    if ! outcome_token="$(
+        rhyolite_harness_validate_outcome_json "${outcome_path}" review
+    )"; then
+        printf 'Warning: the %s worker outcome was malformed, so Rhyolite will not continue the session.\n' \
+            "${HARNESS_DISPLAY_NAME}" >> "${error_path}"
+        rm -f -- "${outcome_path}"
+        return 0
+    fi
+    WORKER_INVOCATION_OUTCOME="${outcome_token}"
+    WORKER_RECOVERY_LAST_OUTCOME="${outcome_token}"
+    WORKER_RECOVERY_OUTPUT_LIMIT_HITS="$(
+        python3 - "${outcome_path}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["OutputLimitHits"])
+PY
+    )" || WORKER_RECOVERY_OUTPUT_LIMIT_HITS=0
+}
+
+# Append the worker's own sanitized session errors and output-limit evidence
+# to errors.txt so a failed invocation never ends with an empty error record.
+append_worker_session_errors() {
+    local outcome_path="$1"
+    local destination="${2:-${error_path}}"
+
+    [[ -f "${outcome_path}" ]] || return 0
+    python3 - "${outcome_path}" >> "${destination}" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for message in data["SessionErrors"]:
+    print(f"Worker session error: {message}")
+if data["Outcome"] == "transient-failure":
+    print("Worker outcome: transient model-service failure.")
+elif data["Outcome"] == "fallback-blocked":
+    print(
+        "Worker outcome: automatic model fallback to "
+        f"{data['FallbackModel']} was blocked before it produced output."
+    )
+if data["OutputLimitHits"]:
+    limit = data["OutputTokenLimit"]
+    print(
+        "Worker responses that reached the per-response output token limit"
+        + (f" of {limit} tokens" if limit else "")
+        + f": {data['OutputLimitHits']}"
+        + ("; the final reply was cut at that limit." if data["FinalReplyAtOutputLimit"] else ".")
+    )
+PY
+}
+
+# Run one continuation of the review worker's own session under the same
+# approved argv, environment, runtime home, tools, and live enforcement.
+run_worker_continuation() {
+    local request_file="$1"
+    local label="$2"
+    local number=$((WORKER_RECOVERY_CONTINUATIONS + 1))
+    local prefix="${WORKER_RECOVERY_DIRECTORY}/continuation-${number}"
+    local raw="${prefix}-output.raw"
+    local normalized="${prefix}-output.normalized"
+    local reply_raw="${prefix}-reply.raw"
+    local reply="${prefix}-reply.txt"
+    local outcome="${prefix}-outcome.json"
+    local remaining continuation_exit=0
+    local -a continuation_arguments=()
+
+    WORKER_CONTINUATION_REPLY=''
+    WORKER_CONTINUATION_EXIT_CODE=1
+    WORKER_INVOCATION_OUTCOME='unknown'
+    WORKER_RECOVERY_CONTINUATIONS="${number}"
+    cp -- "${request_file}" "${prefix}-request.txt" &&
+        chmod 600 -- "${prefix}-request.txt" || return 1
+    if ! rhyolite_harness_invoke harness_worker_continuation_argv \
+        continuation_arguments worker_arguments \
+        >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_worker_continuation_argv" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker continuation argument construction failed.}" \
+            >> "${error_path}"
+        return 1
+    fi
+    remaining="$(worker_recovery_remaining_seconds)"
+    review_progress "${slug}" 'worker recovery' \
+        "continuation ${number}/${WORKER_RECOVERY_CONTINUATION_LIMIT}: ${label}"
+    # The CLI rewrites the shared transcript for the resumed session; keep the
+    # previous sanitized copy until a fresh export exists.
+    rm -f -- "${transcript_path}.previous"
+    if [[ -f "${transcript_path}" ]]; then
+        mv -- "${transcript_path}" "${transcript_path}.previous"
+    fi
+    set +e
+    timeout \
+        --signal=TERM \
+        --kill-after=30s \
+        "${remaining}s" \
+        env \
+        "${worker_environment[@]}" \
+        "${HARNESS_CLI_NAME}" "${continuation_arguments[@]}" \
+        < "${request_file}" \
+        > "${raw}" \
+        2>> "${error_path}" &
+    local continuation_process_id=$!
+    RHYOLITE_ACTIVE_CHILD_PID="${continuation_process_id}"
+    wait_for_monitored_worker \
+        "${continuation_process_id}" \
+        "${slug}" \
+        'worker recovery' \
+        elapsed \
+        review \
+        "${raw}" \
+        "${raw}.cursor" \
+        "${error_path}"
+    wait "${continuation_process_id}"
+    continuation_exit=$?
+    RHYOLITE_ACTIVE_CHILD_PID=""
+    set -e
+    if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+        continuation_exit=1
+    fi
+    classify_worker_invocation "${raw}" "${outcome}"
+    if ! rhyolite_harness_invoke harness_normalize_worker_output \
+        review \
+        "${raw}" \
+        "${MODEL}" \
+        "${REASONING_EFFORT}" \
+        "${normalized}" \
+        "${reply_raw}" \
+        >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker output normalization failed.}" \
+            >> "${error_path}"
+        rm -f -- "${normalized}" "${reply_raw}"
+        continuation_exit=1
+    fi
+    {
+        printf '\n=== Rhyolite worker continuation %s: %s ===\n\n' \
+            "${number}" "${label}"
+        if [[ -f "${normalized}" ]]; then
+            tr -d '\r' < "${normalized}" | sanitize_review_text
+        else
+            tr -d '\r' < "${raw}" | sanitize_review_text
+        fi
+    } >> "${timeline_path}"
+    if [[ -f "${reply_raw}" ]]; then
+        tr -d '\r' < "${reply_raw}" |
+            sanitize_review_text > "${reply}"
+        chmod 600 -- "${reply}"
+        WORKER_CONTINUATION_REPLY="${reply}"
+    fi
+    if ((continuation_exit != 0)); then
+        append_worker_session_errors "${outcome}"
+    fi
+    rm -f -- "${raw}" "${normalized}" "${reply_raw}"
+    if [[ -f "${transcript_path}" ]]; then
+        rm -f -- "${transcript_path}.previous"
+        tr -d '\r' < "${transcript_path}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${transcript_plain_path}"
+        write_safe_markdown_document \
+            "${HARNESS_DISPLAY_NAME} Session Transcript" \
+            "${transcript_plain_path}" \
+            "${transcript_path}.tmp"
+        mv -- "${transcript_path}.tmp" "${transcript_path}"
+        rm -f -- "${transcript_plain_path}"
+    elif [[ -f "${transcript_path}.previous" ]]; then
+        mv -- "${transcript_path}.previous" "${transcript_path}"
+    fi
+    WORKER_CONTINUATION_EXIT_CODE="${continuation_exit}"
+    return 0
+}
+
+worker_recovery_sync_delivery_counters() {
+    local delivery_directory="$1"
+    local counters
+
+    local status_json
+
+    status_json="$(
+        review_report_delivery status "${delivery_directory}" 2>/dev/null
+    )" || return 0
+    counters="$(
+        python3 - "${status_json}" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+print(data["Round"], data["PageRequests"], data["PagesAccepted"],
+      data["PagesRejected"], data["PartsAccepted"], len(data["Needed"]))
+PY
+    )" || return 0
+    read -r WORKER_RECOVERY_ROUNDS WORKER_RECOVERY_PAGE_REQUESTS \
+        WORKER_RECOVERY_PAGES_ACCEPTED WORKER_RECOVERY_PAGES_REJECTED \
+        WORKER_RECOVERY_PARTS_ACCEPTED WORKER_RECOVERY_SECTIONS_NEEDED \
+        <<< "${counters}"
+}
+
+worker_recovery_finish() {
+    local status="$1"
+    local diagnostic="$2"
+
+    WORKER_RECOVERY_STATUS="${status}"
+    WORKER_RECOVERY_FINAL_DIAGNOSTIC="${diagnostic}"
+    write_worker_recovery_state || true
+    if [[ "${status}" != Recovered ]]; then
+        printf 'Worker recovery %s: %s\n' "${status}" "${diagnostic}" \
+            >> "${error_path}"
+    fi
+}
+
+# Bounded same-session recovery. The trusted runner keeps every report section
+# that passes strict validation and asks the same worker session, which still
+# holds the full analysis context, to resend only the missing, truncated, or
+# invalid sections in bounded pages (RHYOLITE_REPORT_DELIVERY_V1). Every page
+# is validated deterministically; the unchanged strict finalization gates the
+# assembled report. Returns 0 only when ${candidate_report_path} holds a
+# strictly valid report.
+run_worker_recovery() {
+    local reason="$1"
+    local candidate="$2"
+    local delivery_directory="${WORKER_RECOVERY_DIRECTORY}/delivery"
+    local request_file="${WORKER_RECOVERY_DIRECTORY}/next-request.txt"
+    local preface_file="${WORKER_RECOVERY_DIRECTORY}/preface.txt"
+    local pending_preface=''
+    local request_status accept_status request_label assembled_error
+    local remaining
+
+    WORKER_RECOVERY_TRIGGER="${reason}"
+    WORKER_RECOVERY_STATUS='Running'
+    if ! {
+        mkdir -p -m 700 -- "${WORKER_RECOVERY_DIRECTORY}" &&
+        mkdir -p -m 700 -- "${delivery_directory}"
+    } 2>> "${error_path}"; then
+        worker_recovery_finish Failed \
+            'Worker recovery could not create its private work directory.'
+        return 1
+    fi
+    if [[ -f "${result_path}/.initial-worker-outcome.json" ]]; then
+        mv -- "${result_path}/.initial-worker-outcome.json" \
+            "${WORKER_RECOVERY_DIRECTORY}/initial-outcome.json"
+    fi
+    write_worker_recovery_state || true
+    if [[ "${reason}" == interrupted ]]; then
+        cat > "${preface_file}" <<EOF
+The previous request in this session ended before you returned the report
+(worker outcome: ${WORKER_RECOVERY_LAST_OUTCOME}). The trusted runner has
+resumed the same session with the same approved model, reasoning effort,
+context, and read-only tools. First finish any remaining analysis that the
+original request requires, using only those tools. Then deliver the report
+in pages: reply now with only the page requested below.
+EOF
+        chmod 600 -- "${preface_file}"
+        pending_preface="${preface_file}"
+        # Resuming after the initial interruption is the first bounded retry.
+        WORKER_RECOVERY_TRANSIENT_RETRIES=1
+        review_progress "${slug}" 'worker recovery' \
+            "${WORKER_RECOVERY_LAST_OUTCOME}; resuming the same session (1/${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT})"
+        sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
+    fi
+    if ! review_report_delivery assess "${candidate}" "${SCOPE}" \
+        "${delivery_directory}" "${reason}" \
+        > "${WORKER_RECOVERY_DIRECTORY}/assessment.json" \
+        2>> "${error_path}"; then
+        worker_recovery_finish Failed \
+            'The trusted runner could not assess the candidate report for paged delivery.'
+        return 1
+    fi
+    review_progress "${slug}" 'worker recovery' \
+        "${reason} report; asking the same worker session to resend only the missing or invalid sections"
+    while :; do
+        request_status=0
+        review_report_delivery request "${delivery_directory}" \
+            "${request_file}" "${pending_preface}" \
+            > /dev/null 2>> "${error_path}" || request_status=$?
+        worker_recovery_sync_delivery_counters "${delivery_directory}"
+        case "${request_status}" in
+            0)
+                ;;
+            3)
+                assembled_error=''
+                if review_report_delivery assemble "${delivery_directory}" \
+                    "${candidate_report_path}" 2>> "${error_path}" &&
+                    assembled_error="$(
+                        validate_final_review_report \
+                            "${candidate_report_path}" "${SCOPE}" 2>&1
+                    )"; then
+                    worker_recovery_finish Recovered \
+                        'The worker resent every missing or invalid section and the assembled report passed strict validation.'
+                    review_progress "${slug}" 'worker recovery' \
+                        'assembled report passed strict validation'
+                    return 0
+                fi
+                printf 'Assembled report failed strict validation: %s\n' \
+                    "${assembled_error:-assembly failed}" >> "${error_path}"
+                if ! review_report_delivery assess "${candidate_report_path}" \
+                    "${SCOPE}" "${delivery_directory}" invalid \
+                    > /dev/null 2>> "${error_path}"; then
+                    worker_recovery_finish Failed \
+                        'The assembled report could not be reassessed.'
+                    return 1
+                fi
+                worker_recovery_sync_delivery_counters "${delivery_directory}"
+                if ((WORKER_RECOVERY_SECTIONS_NEEDED == 0)); then
+                    worker_recovery_finish Failed \
+                        "The assembled report failed strict validation outside any resubmittable section: ${assembled_error:-assembly failed}"
+                    return 1
+                fi
+                continue
+                ;;
+            4)
+                worker_recovery_finish Exhausted \
+                    "Report delivery exhausted ${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT} resubmission rounds with ${WORKER_RECOVERY_SECTIONS_NEEDED} section(s) still missing or invalid."
+                return 1
+                ;;
+            *)
+                worker_recovery_finish Failed \
+                    'The trusted runner could not render the next report delivery request.'
+                return 1
+                ;;
+        esac
+        pending_preface=''
+        if ((WORKER_RECOVERY_CONTINUATIONS >= WORKER_RECOVERY_CONTINUATION_LIMIT)); then
+            worker_recovery_finish Exhausted \
+                "Worker recovery reached its limit of ${WORKER_RECOVERY_CONTINUATION_LIMIT} continuations."
+            return 1
+        fi
+        remaining="$(worker_recovery_remaining_seconds)"
+        if ((remaining < WORKER_RECOVERY_MINIMUM_SECONDS)); then
+            worker_recovery_finish TimedOut \
+                "Fewer than ${WORKER_RECOVERY_MINIMUM_SECONDS} seconds of the approved session timeout remained for another continuation."
+            return 1
+        fi
+        request_label="$(
+            sed -n 's/^Request: \(R[0-9]*P[0-9]*\.[0-9]*\)$/report delivery page \1/p' \
+                "${request_file}" | head -n 1
+        )"
+        if ! run_worker_continuation "${request_file}" \
+            "${request_label:-report delivery}"; then
+            worker_recovery_finish Failed \
+                'The trusted runner could not start a worker continuation.'
+            return 1
+        fi
+        if ((WORKER_CONTINUATION_EXIT_CODE != 0)) ||
+            [[ -z "${WORKER_CONTINUATION_REPLY}" ]]; then
+            case "${WORKER_INVOCATION_OUTCOME}" in
+                transient-failure|fallback-blocked)
+                    if ((WORKER_RECOVERY_TRANSIENT_RETRIES < WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT)); then
+                        WORKER_RECOVERY_TRANSIENT_RETRIES=$((WORKER_RECOVERY_TRANSIENT_RETRIES + 1))
+                        write_worker_recovery_state || true
+                        review_progress "${slug}" 'worker recovery' \
+                            "${WORKER_INVOCATION_OUTCOME}; retrying the same request in the same session (${WORKER_RECOVERY_TRANSIENT_RETRIES}/${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT})"
+                        sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
+                        continue
+                    fi
+                    worker_recovery_finish Exhausted \
+                        "The worker continuation ended with ${WORKER_INVOCATION_OUTCOME} after ${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT} retries."
+                    return 1
+                    ;;
+                *)
+                    worker_recovery_finish Failed \
+                        "The worker continuation ended without an acceptable reply (outcome ${WORKER_INVOCATION_OUTCOME})."
+                    return 1
+                    ;;
+            esac
+        fi
+        accept_status=0
+        review_report_delivery accept "${delivery_directory}" \
+            "${WORKER_CONTINUATION_REPLY}" \
+            > "${WORKER_RECOVERY_DIRECTORY}/continuation-${WORKER_RECOVERY_CONTINUATIONS}-validation.json" \
+            2>> "${error_path}" || accept_status=$?
+        case "${accept_status}" in
+            0)
+                review_progress "${slug}" 'worker recovery' \
+                    "page accepted after strict section validation"
+                ;;
+            10)
+                review_progress "${slug}" 'worker recovery' \
+                    'page part accepted; requesting the next part'
+                ;;
+            20)
+                review_progress "${slug}" 'worker recovery' \
+                    'page rejected by strict section validation; the worker will receive the exact diagnostics'
+                ;;
+            *)
+                worker_recovery_finish Failed \
+                    'The trusted runner could not validate a delivered report page.'
+                return 1
+                ;;
+        esac
+        worker_recovery_sync_delivery_counters "${delivery_directory}"
+        write_worker_recovery_state || true
+    done
+}
+
 validate_final_review_report() {
     local candidate="$1"
     local scope="$2"
@@ -4617,6 +5294,7 @@ write_result() {
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
   "ReportRepair": $(report_repair_saved_json "${output_directory}"),
+  "WorkerRecovery": $(worker_recovery_saved_json "${output_directory}"),
   "Research": {
     "Status": "$(json_escape "${RESEARCH_STATUS:-Disabled}")",
     "Directory": "$(json_escape "${RESEARCH_DIRECTORY:-}")",
@@ -4647,7 +5325,11 @@ write_result() {
     "Errors": "$(json_escape "${errors}")",
     "State": "$(json_escape "${path}")",
     "Handoff": "$(json_escape "${handoff}")",
-    "AgentState": "$(json_escape "${output_directory}/agent-state")"
+    "AgentState": "$(json_escape "${output_directory}/agent-state")",
+    "FailureAnalysis": "$(json_escape "$(
+        [[ "${status}" == Completed ]] ||
+            printf '%s' "${output_directory}/failure-analysis.md"
+    )")"
   }
 }
 EOF
@@ -4742,7 +5424,12 @@ EOF
         "$(provider_forwarded_env_var_names_text)" \
         "${HARNESS_RESUME_POLICY}" \
         "$(report_repair_summary "${output_directory}")
-Artifacts: ${REPORT_REPAIR_DIRECTORY:-}"
+Artifacts: ${REPORT_REPAIR_DIRECTORY:-}$(
+            if worker_recovery_attempted; then
+                printf '\nWorker recovery: %s' \
+                    "$(worker_recovery_summary "${output_directory}")"
+            fi
+        )"
     write_result \
         "${state_path}" "${slug}" "${repository}" "${session}" "${commit}" \
         "${status}" "${exit_code}" "${checkout}" "${output_directory}" \
@@ -4751,6 +5438,17 @@ Artifacts: ${REPORT_REPAIR_DIRECTORY:-}"
         "${completed_at}" "${active_session_id}" \
         "${active_verification_clone}" "${active_requested_commit}" \
         "${active_source_kind}" "${active_source_path}"
+    if [[ "${status}" == Completed ]]; then
+        rm -f -- \
+            "${output_directory}/failure-analysis.json" \
+            "${output_directory}/failure-analysis.md"
+    elif ! write_failure_analysis "${output_directory}" \
+        "$(repository_failure_stage "${status}" "${errors}")" \
+        2>/dev/null; then
+        printf '%s\n' \
+            'Warning: the deterministic initial failure analysis could not be written.' \
+            >> "${errors}"
+    fi
     printf '%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' \
         "${repository}" "${active_source_kind}" "${active_source_path}" \
         "${active_requested_commit}" "${commit}" "${status}" \
@@ -7335,6 +8033,28 @@ process_repository() {
     local runtime_harness_home=""
     local REPORT_REPAIR_STATUS='NotReached'
     local REPORT_REPAIR_ATTEMPT_COUNT=0
+    local WORKER_RECOVERY_STATUS='NotReached'
+    local WORKER_RECOVERY_TRIGGER=''
+    local WORKER_RECOVERY_CONTINUATIONS=0
+    local WORKER_RECOVERY_TRANSIENT_RETRIES=0
+    local WORKER_RECOVERY_ROUNDS=0
+    local WORKER_RECOVERY_PAGE_REQUESTS=0
+    local WORKER_RECOVERY_PAGES_ACCEPTED=0
+    local WORKER_RECOVERY_PAGES_REJECTED=0
+    local WORKER_RECOVERY_PARTS_ACCEPTED=0
+    local WORKER_RECOVERY_SECTIONS_NEEDED=0
+    local WORKER_RECOVERY_OUTPUT_LIMIT_HITS=0
+    local WORKER_RECOVERY_LAST_OUTCOME=''
+    local WORKER_RECOVERY_FINAL_DIAGNOSTIC=''
+    local WORKER_RECOVERY_DIRECTORY="${result_path}/worker-recovery"
+    local WORKER_INVOCATION_OUTCOME='unknown'
+    local WORKER_CONTINUATION_REPLY=''
+    local WORKER_CONTINUATION_EXIT_CODE=1
+    local WORKER_REVIEW_STARTED_EPOCH=0
+    local REVIEW_RUNTIME_HOME_FINALIZED=0
+    local worker_recovery_reason=''
+    local worker_recovery_candidate=''
+    local worker_initial_outcome='unknown'
     local REPORT_REPAIR_TABLE_NORMALIZATION='NotRun'
     local REPORT_REPAIR_TABLES_CONVERTED=0
     local REPORT_REPAIR_CONFIDENCE_NORMALIZATION='NotRun'
@@ -8002,6 +8722,29 @@ EOF
             if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
                 research_exit_code=1
             fi
+            # Record the research worker's own sanitized session errors so a
+            # failed research phase never ends without its cause. The broker
+            # keeps one network log per repository phase, so research is not
+            # continued or relaunched automatically.
+            if ((research_exit_code != 0)); then
+                local research_outcome_path="${research_runtime_root}/research-outcome.json"
+                rm -f -- "${research_outcome_path}"
+                if rhyolite_harness_invoke harness_worker_outcome \
+                    research \
+                    "${research_raw_output}" \
+                    "${research_runtime_home}" \
+                    "${research_session_id}" \
+                    "${MODEL}" \
+                    "${REASONING_EFFORT}" \
+                    "${research_outcome_path}" \
+                    >/dev/null 2>&1 &&
+                    rhyolite_harness_validate_outcome_json \
+                        "${research_outcome_path}" research >/dev/null; then
+                    append_worker_session_errors \
+                        "${research_outcome_path}" "${research_raw_error}"
+                fi
+                rm -f -- "${research_outcome_path}"
+            fi
             if ! rhyolite_harness_invoke harness_finalize_research_session \
                 "${research_runtime_home}" \
                 "${research_raw_output}" \
@@ -8421,6 +9164,7 @@ EOF
             "${slug}" \
             'analysis' \
             "${MODEL} review started; scope ${SCOPE}"
+        WORKER_REVIEW_STARTED_EPOCH="$(date +%s)"
         set +e
         timeout \
             --signal=TERM \
@@ -8459,32 +9203,23 @@ EOF
     if ((worker_started == 0)); then
         session_id=""
         session_name=""
-    fi
-    if ((worker_started)) &&
-        ! rhyolite_harness_invoke harness_persist_agent_state \
-            "${runtime_harness_home}" \
-            "${agent_state_path}" \
-            "${REASONING_EFFORT}" \
-            "${CONTEXT_TIER}" \
-            >/dev/null 2>> "${error_path}"; then
-        printf '%s\n' \
-            "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
-            >> "${error_path}"
-        post_process_failure=1
-    fi
-    if rhyolite_harness_invoke harness_sanitize_runtime_home \
-        "${runtime_harness_home}" \
-        >/dev/null 2>> "${error_path}"; then
-        runtime_harness_home=""
-        REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
-        trap - EXIT
+        WORKER_RECOVERY_STATUS='NotReached'
     else
-        printf '%s\n' \
-            "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Could not remove the temporary harness runtime home.}" \
-            >> "${error_path}"
-        post_process_failure=1
+        # Classify the invocation while its raw output and runtime home still
+        # exist: a transient model-service failure or a blocked automatic
+        # model fallback can then be continued in the same session.
+        classify_worker_invocation \
+            "${raw_output}" "${result_path}/.initial-worker-outcome.json"
+        worker_initial_outcome="${WORKER_INVOCATION_OUTCOME}"
+        if ((exit_code != 0)); then
+            append_worker_session_errors \
+                "${result_path}/.initial-worker-outcome.json"
+        fi
+    fi
+    # Without verified same-session continuation the runtime home is
+    # finalized at once; otherwise it stays available until recovery ends.
+    if ((WORKER_CONTINUATION_AVAILABLE == 0 || worker_started == 0)); then
+        finalize_review_runtime_home
     fi
 
     # The adapter translates its CLI's raw stdout into a readable narrative and
@@ -8598,6 +9333,8 @@ EOF
                 'Final report header or end marker was not found.' \
                 >> "${error_path}"
             exit_code=1
+            worker_recovery_reason='missing'
+            worker_recovery_candidate="${final_reply_sanitized_path}"
         fi
     elif ((exit_code == 124)); then
         printf '%s\n' \
@@ -8609,6 +9346,12 @@ EOF
         printf '%s\n' \
             'Repository review failed. See errors.txt and analysis-timeline.txt.' \
             > "${report_path}"
+        if ((worker_started)) &&
+            [[ "${worker_initial_outcome}" == transient-failure ||
+                "${worker_initial_outcome}" == fallback-blocked ]]; then
+            worker_recovery_reason='interrupted'
+            worker_recovery_candidate=''
+        fi
     fi
     if [[ -f "${transcript_path}" ]]; then
         write_safe_markdown_document \
@@ -8655,6 +9398,18 @@ EOF
                             'Report repair state could not be finalized.' \
                             >> "${error_path}"
                     fi
+                elif ((post_process_failure == 0)); then
+                    # The worker session still holds the full analysis, so it
+                    # can resend the cut or invalid sections in bounded pages.
+                    case "${report_contract_error}" in
+                        'Incomplete report:'*) worker_recovery_reason='truncated' ;;
+                        *) worker_recovery_reason='invalid' ;;
+                    esac
+                    worker_recovery_candidate="${REPORT_REPAIR_INITIAL_PATH:-}"
+                    if [[ -n "${REPORT_REPAIR_NORMALIZED_PATH:-}" &&
+                        -f "${REPORT_REPAIR_NORMALIZED_PATH}" ]]; then
+                        worker_recovery_candidate="${REPORT_REPAIR_NORMALIZED_PATH}"
+                    fi
                 fi
                 write_failed_review_report "${report_path}" \
                     'Final report validation failed and bounded recovery did not complete.'
@@ -8662,6 +9417,46 @@ EOF
             fi
         fi
     fi
+
+    if [[ -n "${worker_recovery_reason}" ]] &&
+        review_harness_failure_blocks_recovery; then
+        WORKER_RECOVERY_TRIGGER="${worker_recovery_reason}"
+        WORKER_RECOVERY_STATUS='NotEligible'
+        WORKER_RECOVERY_FINAL_DIAGNOSTIC='A harness adapter function failed, so the operation stops instead of continuing the worker session.'
+        worker_recovery_reason=''
+    fi
+    if [[ -n "${worker_recovery_reason}" ]]; then
+        if ((WORKER_CONTINUATION_AVAILABLE == 0)); then
+            WORKER_RECOVERY_TRIGGER="${worker_recovery_reason}"
+            WORKER_RECOVERY_STATUS='Unavailable'
+            WORKER_RECOVERY_FINAL_DIAGNOSTIC="${HARNESS_DISPLAY_NAME} same-session worker continuation is not verified, so Rhyolite could not ask the worker to resend its report."
+        elif run_worker_recovery \
+            "${worker_recovery_reason}" "${worker_recovery_candidate}"; then
+            mv -- "${candidate_report_path}" "${report_path}"
+            exit_code=0
+        else
+            write_failed_review_report "${report_path}" \
+                'The worker did not deliver a fully valid report within the approved recovery limits.'
+            exit_code=1
+        fi
+    elif ((worker_started)) &&
+        [[ "${WORKER_RECOVERY_STATUS}" == NotReached ]]; then
+        if ((exit_code == 0)); then
+            WORKER_RECOVERY_STATUS='NotNeeded'
+        else
+            WORKER_RECOVERY_STATUS='NotEligible'
+        fi
+    fi
+    rm -f -- "${result_path}/.initial-worker-outcome.json"
+    if ((REVIEW_RUNTIME_HOME_FINALIZED == 0)); then
+        finalize_review_runtime_home
+        if ((post_process_failure && exit_code == 0)); then
+            write_failed_review_report "${report_path}" \
+                'Harness finalization failed before canonical promotion.'
+            REPORT_REPAIR_PROMOTED=0
+        fi
+    fi
+    write_worker_recovery_state || true
     if ((post_process_failure)); then
         exit_code=1
     fi
@@ -9004,6 +9799,7 @@ INDEX_PATH="${RUN_RESULTS}/index.html"
   "ProvenanceWindow": $(provenance_window_json '  '),
   "ResearchTransport": $(research_transport_json '  '),
   "ReportRepairPolicy": $(report_repair_policy_json),
+  "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "Paths": {
     "ReadOnlyWorkspace": "$(json_escape "${RUN_WORKSPACE}")",
     "WritableOutput": "$(json_escape "${RUN_RESULTS}")"
@@ -9020,6 +9816,15 @@ EOF
     for index in "${!result_files[@]}"; do
         summary_file="${result_files[index]%/state.json}/.result-summary"
         read_result_summary "${summary_file}"
+        worker_recovery_entry="$(
+            python3 - "${result_files[index]}" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps(state.get("WorkerRecovery", {})))
+PY
+        )"
         cat <<EOF
     {
       "Repository": "$(json_escape "${repository}")",
@@ -9037,6 +9842,7 @@ EOF
       "ReportRepair": $(python3 -c \
           'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["ReportRepair"]))' \
           "${result_files[index]}"),
+      "WorkerRecovery": ${worker_recovery_entry},
       "State": "$(json_escape "${state}")",
       "Handoff": "$(json_escape "${handoff}")",
       "Html": "$(json_escape "${html}")"
@@ -9171,6 +9977,10 @@ EOF
 for result_file in "${result_files[@]}"; do
     rm -f -- "${result_file%/state.json}/.result-summary"
 done
+if ((failure)); then
+    write_run_failure_analysis "${RUN_RESULTS}" "${result_files[@]}" \
+        2>/dev/null || true
+fi
 
 printf '\nRun output:    %s\n' "${RUN_RESULTS}"
 review_progress 'run' 'completed' "${RUN_STATUS}; ${RUN_RESULTS}"

@@ -523,6 +523,21 @@ from item 1. Submit only after every item passes. The trusted parent runner
 must still perform independent extraction and strict validation.
 END MAIN REPORT RETURN SELF-CHECK
 
+REPORT DELIVERY REQUESTS (RHYOLITE_REPORT_DELIVERY_V1)
+A single reply has a per-response output limit, and reasoning counts toward
+it. When a reply is cut off, missing, or rejected by strict validation, the
+trusted runner may continue this same session with a RHYOLITE REPORT
+DELIVERY REQUEST. Such a request lists the exact sections to resend, the
+exact validator diagnostics, and a page format with begin, end, and
+continuation marker lines. For that reply only, follow the request's page
+format instead of the report envelope rules: send only the listed sections,
+correct every listed diagnostic, keep the page within the requested line
+budget, and end with the continuation marker when more remains. Validate
+the page against the report contract and the request before replying.
+Never resend a section that is not listed, and never stop at the first
+rejection while the runner's limits permit another page.
+END REPORT DELIVERY REQUESTS
+
 Format it as plain UTF-8 text for Linux-native email and mailing-list users.
 Use LF line endings, simple ASCII-compatible headings and numbered lists, no
 Markdown tables, no ANSI escapes, and wrap lines near 78 columns where practical.
