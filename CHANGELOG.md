@@ -20,6 +20,12 @@
   stopping could overwrite them. The runner now empties `errors.txt` and
   starts the worker in append mode, and the subagent-enforcement regression
   writes to stderr while stopping.
+- The Copilot orchestrator's plan step now names every runner flag, as the
+  Claude Code orchestrator does, so it no longer reads the runner script or
+  its `--help` to rediscover the CLI before planning; that lookup had led an
+  orchestrator to combine the legacy research switches with `--scope`.
+  Validation checks that both orchestrators name every planning flag and
+  that each exists in the runner's `--help`.
 
 ## 0.8.2 - 2026-10-14
 

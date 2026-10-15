@@ -3989,6 +3989,29 @@ for launcher_sources_agent in \
         fail "Orchestrator does not select every trusted launcher source: ${launcher_sources_agent}"
 done
 
+# Both orchestrators name every runner flag their plan step needs, and each
+# flag exists in the runner's --help, so neither has to read the runner or
+# its --help to rediscover the CLI before planning.
+for plan_flag in \
+    --repo --harness --fleet-mode --model --reasoning-effort --context \
+    --output-root --scope --provenance-lookback-months --research-cookies \
+    --remember-preferences --allow-unlisted-model --no-open-html \
+    --plan-only --non-interactive --expected-plan-hash; do
+    plan_flag_pattern="(^|[^-[:alnum:]])${plan_flag}([^-[:alnum:]]|\$)"
+    grep -Eq -- "${plan_flag_pattern}" <<< "${runner_help}" ||
+        fail "Runner --help does not document the planning flag ${plan_flag}."
+    for plan_agent in \
+        "${AGENT}" \
+        "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
+        grep -Eq -- "${plan_flag_pattern}" "${plan_agent}" ||
+            fail "Orchestrator plan step does not name ${plan_flag}: ${plan_agent}"
+    done
+done
+tr '\r\n\t' '   ' < "${AGENT}" |
+    sed -E 's/[[:space:]]+/ /g' |
+    grep -Fq 'These flags are complete for planning and execution; do not read the runner script or run its `--help` to rediscover them.' ||
+    fail 'Copilot orchestrator does not forbid rediscovering the runner CLI.'
+
 launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
 rhyolite_write_preference \
     'https://example.com/owner/custom-preference' \

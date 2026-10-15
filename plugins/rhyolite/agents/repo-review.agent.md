@@ -489,21 +489,22 @@ runtime-settings confirmation, remember-preferences, output, scope,
 optional provenance, and research-cookie answers are collected, do not
 start the review yet. Instead:
 
-1. Build the exact resolved runner arguments from the collected
-   answers. Pass only remote URLs with `--repo`. Always
-   pass `--harness copilot`, the chosen fleet mode, model,
-   `--reasoning-effort`, `--context`, output root, scope, and
-   `--no-open-html`. Pass
-   `--remember-preferences` only when selected. Pass
-   `--allow-unlisted-model` only when the valid launcher block contained
-   `AllowUnlistedModel=true`, and then pass it to every plan-only and
-   execution call.
-   For scope `3`, pass the chosen lookback months explicitly.
-   For scope `2` or `3`, pass the selected cookie mode explicitly with
-   `--research-cookies`. Select research only with `--scope`; never pass
-   the legacy `--enable-public-research` or
+1. Build the exact resolved runner arguments from the collected answers:
+   `--harness copilot`, one `--repo <url>` per source (remote URLs only),
+   `--fleet-mode <native|standard>`, `--model <id>`,
+   `--reasoning-effort <high|xhigh|max>`, `--context <default|long_context>`,
+   `--output-root <path>`, `--scope <1|2|3>`, and `--no-open-html`. For
+   scope `3`, pass `--provenance-lookback-months` with the chosen value. For
+   scope `2` or `3`, pass the selected cookie mode, `off` or `ephemeral`,
+   with `--research-cookies`. Pass `--remember-preferences` only
+   when selected. Pass `--allow-unlisted-model` only when the valid launcher
+   block contained `AllowUnlistedModel=true`, and then pass it to every
+   plan-only and execution call. Select research only with `--scope`; never
+   pass the legacy `--enable-public-research` or
    `--enable-provenance-research` switches, which the runner rejects when
-   combined with `--scope`.
+   combined with `--scope`. These flags are complete for planning and
+   execution; do not read the runner script or run its `--help` to
+   rediscover them.
 2. Invoke the Bash plan-only mode with non-interactive and the exact
    resolved inputs:
    `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --plan-only --non-interactive --no-open-html ...`

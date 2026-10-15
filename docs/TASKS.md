@@ -29,22 +29,22 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T1 | P0 | Verify | Live-verify review resilience with real models |
-| T6 | P0 | Verify | Select every command-line repository without extra setup turns |
+| T1 | P1 | Verify | Live-verify review resilience with real models |
 | T2 | P1 | Open | Offer the highest supported reasoning effort with explicit approval |
 | T3 | P1 | Open | Probe Claude Code same-session continuation |
 | T4 | P1 | Open | Complete the interactive and remote release smoke tests |
 | T5 | P1 | Open | Confirm the public-repository gates |
-| T7 | P2 | Verify | Confirm scope-only research selection in a live guided run |
 | T8 | P2 | Open | Design research-phase recovery |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
+| T14 | P2 | Verify | Name every runner flag in the Copilot orchestrator's plan step |
+| T15 | P2 | Open | Finish interrupt finalization when Claude Code stops a run |
 | T9 | P3 | Open | Keep the interactive setup session on the selected model |
 | T10 | P3 | Open | Make validators independent of symlinked checkout paths |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
 
-### T1 (P0, Verify): Live-verify review resilience with real models
+### T1 (P1, Verify): Live-verify review resilience with real models
 
 - **Problem:** On 2026-10-13, reviews failed after long analysis. Final
   reports exceeded Copilot's 32,000-token per-response output limit,
@@ -52,12 +52,18 @@ Status values:
   model fallback was terminal. See
   [RUN-FAILURE-INCIDENT-2026-10-13.md](RUN-FAILURE-INCIDENT-2026-10-13.md).
 - **State:** 0.8.2 ships Harness Contract v8 same-session recovery, paged
-  report delivery, and the continuation fix that omits `--name`. Mocked
-  end-to-end scenarios and live Copilot CLI argv probes pass, but no
-  real-model review has yet recovered a cut report end to end.
-- **Next step:** run a multi-repository scope-3 review with the recommended
-  Copilot model at maximum effort. Transient-failure and blocked-fallback
-  retries are verified when they occur.
+  report delivery, and the continuation fix that omits `--name`. On
+  2026-10-14 a 0.8.2 scope-3 review with `claude-fable-5.1` recovered live:
+  an invalid report section triggered one same-session continuation and one
+  page request, the page was accepted, and the assembled report passed
+  strict validation. That verifies the continuation fix and paged delivery
+  with a real model, so the priority is now P1. The output-limit trigger
+  has not recurred: a 2026-10-14 two-repository scope-3 run with
+  `gpt-5.6-sol` completed without reaching the limit.
+- **Next step:** rerun a multi-repository scope-3 review with
+  `claude-opus-5.5`, which reached the output limit on 2026-10-13.
+  Transient-failure and blocked-fallback retries are verified when they
+  occur.
 - **Done when:** a real-model review whose report exceeded one response
   completes through paged delivery and unchanged strict finalization, as
   its `WorkerRecovery` state records, and the result is added to the
@@ -111,42 +117,6 @@ Status values:
   contact, and smoke-test the published support and release paths.
 - **Done when:** every pre-publication gate is confirmed.
 
-### T6 (P0, Verify): Select every command-line repository without extra setup turns
-
-- **Problem:** Reviewing several repositories in one run is a primary
-  feature. The launcher's `--repo` option took one URL, so
-  `rhyolite --repo A B` put only `A` in the trusted setup block and
-  forwarded `B` as free-text request; the launcher extracted URLs from the
-  request only when no `--repo` was given. In two-repository sessions on
-  2026-10-13 and 2026-10-14, the orchestrator either stopped to ask which
-  repositories to review, once after reading the launcher source, or
-  silently promoted the request text to a source.
-- **State:** fixed for the next release (see the `CHANGELOG.md`
-  `Unreleased` section). Every command-line URL becomes one trusted
-  `Source=` line, whether it follows `--repo`, shares a comma- or
-  whitespace-separated `--repo` value, or appears in the initial review
-  request. Spellings that differ only by a trailing `.git` are selected once,
-  an invalid URL stops the launcher, and a request that holds only URLs is
-  not forwarded. Both orchestrators select every launcher source without
-  asking about sources again, `--help` documents `--repo`, and launcher
-  regression cases cover each form.
-- **Done when:** live two-repository launches in each form reach the
-  effective plan with both sources and no source question, on both
-  harnesses.
-- **Source:** maintainer issue notes and the 2026-10-13 and 2026-10-14
-  two-repository sessions.
-
-### T7 (P2, Verify): Confirm scope-only research selection in a live guided run
-
-- **Problem:** An orchestrator combined `--scope 3` with the legacy research
-  switches, and the runner correctly rejected the plan before cloning.
-- **State:** fixed in 0.8.2. The runner's `--help` marks the legacy switches
-  as aliases that cannot be combined with `--scope`, and both orchestrators
-  select research only with `--scope`.
-- **Done when:** a live guided scope-2 or scope-3 setup, such as the T1 run,
-  generates its plan with `--scope` alone.
-- **Source:** maintainer issue notes.
-
 ### T8 (P2, Open): Design research-phase recovery
 
 - **Problem:** Research is never continued or relaunched automatically. The
@@ -165,13 +135,46 @@ Status values:
   added fleet instructions to dispatch subagents and track todos. The
   orchestrators expect the exact multi-line `RHYOLITE_LAUNCHER_SETUP_V1`
   block and must not start subagents of their own, so they have to tolerate
-  a flattened block and conflicting instructions. The observed sessions
-  still recognized the block.
+  a flattened block and conflicting instructions. The observed sessions,
+  including a 2026-10-14 run, still recognized the block.
 - **Next step:** confirm the transformation with the current Copilot CLI,
   then decide whether the launcher should deliver the setup block another
   way in native mode or whether the orchestrators should explicitly accept
   the flattened form and ignore fleet dispatch instructions.
 - **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
+
+### T14 (P2, Verify): Name every runner flag in the Copilot orchestrator's plan step
+
+- **Problem:** The Copilot orchestrator's planning step described the
+  runner arguments but never named `--fleet-mode` or `--output-root`; the
+  Claude Code orchestrator names every flag. The Copilot orchestrator
+  therefore looked up the runner's CLI before every plan: it read `--help`
+  on 2026-10-13, which led to the legacy research switches being combined
+  with `--scope`, and the runner source on 2026-10-14. The Claude Code
+  orchestrator planned without such a lookup on 2026-10-14.
+- **State:** fixed for the next release. The Copilot orchestrator's plan
+  step now names every flag and says not to rediscover the CLI, and
+  validation checks that both orchestrators name every planning flag and
+  that each exists in the runner's `--help`.
+- **Done when:** a live Copilot run reaches its effective plan without
+  reading the runner script or its `--help`.
+- **Source:** the 2026-10-13 and 2026-10-14 orchestrator sessions.
+
+### T15 (P2, Open): Finish interrupt finalization when Claude Code stops a run
+
+- **Problem:** On 2026-10-14, exact `stop` in a two-repository scope-3
+  Claude Code run ended the runner's background task with `TaskStop` during
+  research. The first repository was finalized as `Interrupted`, but the
+  second recorded only that it received TERM, and the run-level
+  `state.json`, `manifest.json`, `handoff.md`, and `index.html` were never
+  written. No processes or temporary runtime homes were left behind. The
+  runner exited before its interrupt finalization finished.
+- **Next step:** measure how `TaskStop` signals the task and how long it
+  waits, then either have the orchestrator signal the runner and wait for
+  it to exit before `TaskStop`, or make the runner write run-level
+  `Interrupted` state before finalizing each repository. Check the Copilot
+  CLI `stop` path the same way.
+- **Source:** 2026-10-14 Claude Code run.
 
 ### T9 (P3, Open): Keep the interactive setup session on the selected model
 
