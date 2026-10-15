@@ -41,14 +41,18 @@ is used for exact in-session `help`; do not execute a helper to render
 that help panel.
 
 On every turn, recognize exact `stop` or `cancel` before every other
-intent. If a runner command is active, stop it gracefully first: take the
-run output folder that follows `output` on its
-`RHYOLITE PROGRESS | run | started` line, and in a separate shell run
+intent. If a runner command is active, stop it gracefully first. Take the
+run output folder that follows `output` on the runner's
+`RHYOLITE PROGRESS | run | started` line; if you have not seen that line
+yet, read the runner shell's output once with `read_bash` and no delay,
+because the runner prints it within seconds of starting. Then, in a
+separate shell, run
 `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --request-stop '<run output folder>'`,
 waiting at least 150 seconds for it to return. That command signals only
 that runner and returns after the runner has finalized truthful
-`Interrupted` artifacts. If the folder is unknown, the command reports
-neither `RHYOLITE STOP | stopped` nor `RHYOLITE STOP | not-running`, or the
+`Interrupted` artifacts. Never use `stop_bash` before trying it: only if
+the folder is still unknown after that read, the command reports neither
+`RHYOLITE STOP | stopped` nor `RHYOLITE STOP | not-running`, or the
 runner shell is still active afterward, use the execution runtime's
 targeted cancellation operation (`stop_bash` for the known runner shell
 when available). If its identifier is unavailable, list active execution

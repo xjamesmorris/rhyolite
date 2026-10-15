@@ -194,7 +194,9 @@
   execution cancellation remains the fallback. The
   Bash runner propagates INT/TERM/HUP through tracked repository, timeout,
   Copilot worker, and broker processes, then records `Interrupted` state and
-  artifacts.
+  artifacts. Workers start under util-linux `setpriv --pdeathsig TERM` when
+  available, so a SIGKILL of the runner cannot leave a worker running with
+  its credentials and network access after the run has stopped.
 - Per-repository fleet/model/reasoning/context preferences are keyed by a
   SHA-256 hash of the selected canonical public URL, including its terminal
   `.git` endpoint when present, stored under user-only launcher state, and

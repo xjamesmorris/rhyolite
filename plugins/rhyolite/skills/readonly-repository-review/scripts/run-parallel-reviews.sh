@@ -226,6 +226,16 @@ wait_for_process_tree_exit() {
     signal_process_tree KILL "${process_id}"
 }
 
+# A worker must not outlive the repository subshell that started it. When
+# that subshell dies, even from SIGKILL, the kernel sends TERM to `timeout`,
+# which then stops its own process group: the worker and any broker under
+# it. util-linux `setpriv` provides this; without it, workers start as before.
+WORKER_PARENT_DEATH_PREFIX=()
+if command -v setpriv >/dev/null 2>&1 &&
+    setpriv --pdeathsig TERM -- true >/dev/null 2>&1; then
+    WORKER_PARENT_DEATH_PREFIX=(setpriv --pdeathsig TERM --)
+fi
+
 # A live runner records its process ID and kernel start time in its run output
 # folder so that `--request-stop` can signal exactly that runner and no other
 # process, even after the process ID is reused.
@@ -4237,7 +4247,7 @@ run_worker_continuation() {
         mv -- "${transcript_path}" "${transcript_path}.previous"
     fi
     set +e
-    timeout \
+    "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
         --signal=TERM \
         --kill-after=30s \
         "${remaining}s" \
@@ -5288,7 +5298,7 @@ run_report_repair() {
 
     if ((repair_ready)); then
         env "${repair_environment[@]}" \
-            timeout --signal=TERM --kill-after=30s \
+            "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout --signal=TERM --kill-after=30s \
             "${REPORT_REPAIR_TIMEOUT_SECONDS}s" \
             "${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \
             < "${REPORT_REPAIR_REQUEST_PATH}" \
@@ -8947,7 +8957,7 @@ EOF
             set +e
             (
                 umask 077
-                exec timeout \
+                exec "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
                     --signal=TERM \
                     --kill-after=30s \
                     "${research_timeout_minutes}m" \
@@ -9423,7 +9433,7 @@ EOF
         # stops must not overwrite those lines from a stale file offset.
         : > "${error_path}"
         set +e
-        timeout \
+        "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
             --signal=TERM \
             --kill-after=30s \
             "${SESSION_TIMEOUT_MINUTES}m" \

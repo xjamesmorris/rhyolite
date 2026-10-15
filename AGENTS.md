@@ -292,7 +292,9 @@ supported and must not drive new work.
   `Interrupted` artifacts. On the first signal each repository records its
   `Interrupted` state before cleanup, and the runner writes a provisional
   run-level record when repositories are slow to stop, so a later hard kill
-  still leaves truthful state.
+  still leaves truthful state. Every worker starts under util-linux
+  `setpriv --pdeathsig TERM` when available, so a hard kill of the runner
+  stops the worker's `timeout` process group instead of orphaning it.
 - Plan/autopilot mode is unsupported during guided setup and review
   execution. A mode-related UI notice never changes the approval-bound worker
   model. Return to interactive mode before continuing.

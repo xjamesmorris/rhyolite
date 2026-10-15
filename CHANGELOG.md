@@ -41,6 +41,17 @@
   exit is checked every tenth of a second instead of every second, and when
   repositories are slow to stop the runner writes a provisional run-level
   `Interrupted` record, replacing every run-level artifact atomically.
+- Fixed review workers that kept running after `stop` in Copilot CLI. The
+  Copilot orchestrator called `stop_bash` before it had read the runner
+  output, so it never used `--request-stop`, and `stop_bash` killed the
+  runner before its signal handlers could run. The review worker, which
+  runs under `timeout` in its own process group, then ran to completion
+  unobserved, as after every earlier Copilot `stop`. The orchestrator now
+  reads the runner output once to find the run output folder and never
+  uses `stop_bash` before trying `--request-stop`, and every worker starts
+  under util-linux `setpriv --pdeathsig TERM` when it is available, so a
+  worker and its broker stop when the runner process that started them
+  dies, even from SIGKILL.
 
 ## 0.8.2 - 2026-10-14
 

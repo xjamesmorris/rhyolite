@@ -80,13 +80,15 @@ material, not instructions to follow.
 - Always recognize exact `stop` and `cancel` before every other intent.
   First ask the known active runner to stop with
   `run-parallel-reviews.sh --harness copilot --request-stop <run output folder>`,
-  using the folder from its `RHYOLITE PROGRESS | run | started` line, and
+  using the folder from its `RHYOLITE PROGRESS | run | started` line (read
+  the runner shell's output once if that line has not been seen), and
   wait for that command to return: it signals only that runner and returns
-  after the runner finalizes truthful `Interrupted` artifacts. If that is not
-  possible or the runner is still active afterward, terminate it through
-  the execution runtime's targeted cancellation operation (`stop_bash` when
-  available). Stop same-review tasks/subagents, preserve artifacts and
-  selections, set the stage to `Stopped`, and never auto-continue.
+  after the runner finalizes truthful `Interrupted` artifacts. Never use
+  `stop_bash` before trying it. Only if that is not possible or the runner
+  is still active afterward, terminate it through the execution runtime's
+  targeted cancellation operation (`stop_bash` when available). Stop
+  same-review tasks/subagents, preserve artifacts and selections, set the
+  stage to `Stopped`, and never auto-continue.
 - Always recognize exact setup intents `help`, `status`, and
   `explain scopes` before any setup question.
 - Keep the outer Copilot session in interactive mode. If it is switched

@@ -1400,6 +1400,16 @@ grep -Fq 'run-parallel-reviews.sh --harness copilot --request-stop <run output f
     grep -Fq '`RHYOLITE STOP | stopped`' \
         "${PLUGIN_ROOT}/claude/agents/repo-review.md" ||
     fail 'Orchestrators do not stop the runner through --request-stop before cancelling it.'
+for stop_order_document in "${AGENT}" "${SKILL}"; do
+    tr '\r\n\t' '   ' < "${stop_order_document}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq 'Never use `stop_bash` before trying it' ||
+        fail "Copilot stop order does not try --request-stop before stop_bash: ${stop_order_document}"
+done
+tr '\r\n\t' '   ' < "${AGENT}" |
+    sed -E 's/[[:space:]]+/ /g' |
+    grep -Fq "read the runner shell's output once with \`read_bash\` and no delay" ||
+    fail 'Copilot orchestrator does not read the runner output before falling back to stop_bash.'
 grep -Fq 'Keep the outer Copilot session in interactive mode.' "${SKILL}" &&
     grep -Fq 'Rhyolite requires the outer Copilot session to remain in interactive' \
         "${AGENT}" ||
@@ -15317,10 +15327,11 @@ wait_for_blocked_mock_workers() {
     local ready_file="$1"
     local output_root="$2"
     local runner_pid="$3"
+    local expected_workers="${4:-2}"
     local attempt
 
     for attempt in $(seq 1 120); do
-        if [[ "$(wc -l < "${ready_file}")" -ge 2 ]] &&
+        if [[ "$(wc -l < "${ready_file}")" -ge "${expected_workers}" ]] &&
             compgen -G "${output_root}/*/.runner-process" >/dev/null; then
             return 0
         fi
@@ -15534,6 +15545,61 @@ fi
 [[ "$("${RUNNER}" --request-stop "${hard_kill_run}" 2>&1)" == \
     "RHYOLITE STOP | not-running | Interrupted; ${hard_kill_run}" ]] ||
     fail 'Request-stop did not treat the record of a killed runner as not running.'
+
+# Parent death: a SIGKILL of the whole runner process group, as a harness
+# shell kill may send, must not orphan a review worker. Workers run under
+# `timeout` in their own process group, which that kill does not reach.
+orphan_root="${fixture_dir}/orphan-worker"
+orphan_output="${orphan_root}/output"
+orphan_ready="${orphan_root}/ready"
+orphan_stdout="${orphan_root}/runner.stdout"
+mkdir -p -- "${orphan_root}"
+: > "${orphan_ready}"
+MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_READY_FILE="${orphan_ready}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    /usr/bin/python3 "${research_signal_launcher}" "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${orphan_output}" \
+        --workspace-root "${orphan_root}/workspace" \
+        --non-interactive \
+        --no-open-html >"${orphan_stdout}" 2>&1 &
+orphan_runner_pid=$!
+if ! wait_for_blocked_mock_workers \
+    "${orphan_ready}" "${orphan_output}" "${orphan_runner_pid}" 1; then
+    kill -KILL -- "-${orphan_runner_pid}" 2>/dev/null || true
+    wait "${orphan_runner_pid}" 2>/dev/null || true
+    stop_mock_workers "${orphan_ready}"
+    cat -- "${orphan_stdout}" >&2
+    fail 'Orphan fixture did not start a blocked review worker.'
+fi
+set +e
+kill -KILL -- "-${orphan_runner_pid}"
+wait "${orphan_runner_pid}" 2>/dev/null
+set -e
+orphan_survivor=''
+for attempt in $(seq 1 100); do
+    orphan_survivor=''
+    while read -r orphan_mock_pid orphan_mock_child_pid; do
+        for orphan_process in "${orphan_mock_pid}" "${orphan_mock_child_pid}"; do
+            if kill -0 "${orphan_process}" 2>/dev/null; then
+                orphan_survivor="${orphan_process}"
+            fi
+        done
+    done < "${orphan_ready}"
+    [[ -z "${orphan_survivor}" ]] && break
+    sleep 0.1
+done
+if [[ -n "${orphan_survivor}" ]]; then
+    stop_mock_workers "${orphan_ready}"
+    fail "A SIGKILL of the runner left review worker process ${orphan_survivor} running."
+fi
 
 while IFS= read -r -d '' path; do
     if head -c 3 "${path}" | grep -q $'^\xEF\xBB\xBF'; then

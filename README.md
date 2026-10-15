@@ -1127,7 +1127,9 @@ directly. The runner propagates interruption signals through its tracked
 repository, timeout, Copilot worker, and broker processes before writing
 truthful `Interrupted` artifacts. Each repository records its `Interrupted`
 state as soon as the signal arrives, so even a hard kill during cleanup
-leaves truthful state.
+leaves truthful state. Each worker starts under util-linux
+`setpriv --pdeathsig TERM` when it is available, so a worker stops when the
+runner process that started it dies instead of running on unobserved.
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every
