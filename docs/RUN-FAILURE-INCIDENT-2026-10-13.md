@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-13 (local time)
 **Status:** Root causes confirmed; generic recovery implemented (Harness
-Contract v8); follow-up continuation fix applied (see the follow-up below)
+Contract v8); follow-up continuation fix applied; same-session recovery
+verified live on 2026-10-14 (see the follow-ups below)
 **Severity:** High (review reliability and resource efficiency)
 **Security impact:** None observed. Every enforcement boundary held; no
 substituted output was accepted.
@@ -287,3 +288,24 @@ recovery failed after one continuation, so no report was produced.
     CLI does, so the end-to-end recovery scenarios fail on the old behavior.
   - `tests/test-report-delivery.sh` replays this run's errors through the
     failure analysis.
+
+## Follow-up: live verification of same-session recovery (2026-10-14)
+
+Two real-model reviews on 2026-10-14 completed through same-session
+recovery, confirming the Contract-v8 repair and the continuation fix.
+
+- **Output-limit recovery.** Run `20261014-181139-f592b782112c3dc2`
+  (scope 3, `claude-opus-5.5`, Copilot CLI) reached the 32,000-token output
+  limit 11 times, the failure class of three of the 2026-10-13 runs. Its
+  `WorkerRecovery` state records `Recovered` with trigger `interrupted`:
+  one resubmission round requested 7 report pages, all 7 were accepted, and
+  the assembled report passed unchanged strict finalization. The review
+  completed in about two hours.
+- **Invalid-section recovery.** Run `20261014-145505-7fc1a2dab1d6e303`
+  (scope 3, `claude-fable-5.1`, release 0.8.2) recovered an invalid report
+  section with one continuation and one accepted page, the first live
+  continuation since the `--name` fix.
+- **Not yet observed live.** Transient model-service retries and retries
+  after a blocked automatic model fallback have not occurred in a live run;
+  the mocked end-to-end scenarios in `tests/validate-harness-contract.sh`
+  still cover them.

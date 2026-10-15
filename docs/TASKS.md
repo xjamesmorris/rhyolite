@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-14, after the 0.8.2 release
+**Last updated:** 2026-10-15
 
 ## Priorities
 
@@ -29,46 +29,18 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T1 | P1 | Verify | Live-verify review resilience with real models |
 | T2 | P1 | Open | Offer the highest supported reasoning effort with explicit approval |
 | T3 | P1 | Open | Probe Claude Code same-session continuation |
 | T4 | P1 | Open | Complete the interactive and remote release smoke tests |
 | T5 | P1 | Open | Confirm the public-repository gates |
 | T8 | P2 | Open | Design research-phase recovery |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
-| T14 | P2 | Verify | Name every runner flag in the Copilot orchestrator's plan step |
 | T15 | P2 | Verify | Finish interrupt finalization when a harness stops a run |
 | T9 | P3 | Open | Keep the interactive setup session on the selected model |
 | T10 | P3 | Open | Make validators independent of symlinked checkout paths |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T1 (P1, Verify): Live-verify review resilience with real models
-
-- **Problem:** On 2026-10-13, reviews failed after long analysis. Final
-  reports exceeded Copilot's 32,000-token per-response output limit,
-  transient model-service failures ended sessions, and a blocked automatic
-  model fallback was terminal. See
-  [RUN-FAILURE-INCIDENT-2026-10-13.md](RUN-FAILURE-INCIDENT-2026-10-13.md).
-- **State:** 0.8.2 ships Harness Contract v8 same-session recovery, paged
-  report delivery, and the continuation fix that omits `--name`. On
-  2026-10-14 a 0.8.2 scope-3 review with `claude-fable-5.1` recovered live:
-  an invalid report section triggered one same-session continuation and one
-  page request, the page was accepted, and the assembled report passed
-  strict validation. That verifies the continuation fix and paged delivery
-  with a real model, so the priority is now P1. The output-limit trigger
-  has not recurred: a 2026-10-14 two-repository scope-3 run with
-  `gpt-5.6-sol` completed without reaching the limit.
-- **Next step:** rerun a multi-repository scope-3 review with
-  `claude-opus-5.5`, which reached the output limit on 2026-10-13.
-  Transient-failure and blocked-fallback retries are verified when they
-  occur.
-- **Done when:** a real-model review whose report exceeded one response
-  completes through paged delivery and unchanged strict finalization, as
-  its `WorkerRecovery` state records, and the result is added to the
-  incident report.
-- **Source:** maintainer issue notes and the 2026-10-13 incident report.
 
 ### T2 (P1, Open): Offer the highest supported reasoning effort with explicit approval
 
@@ -142,23 +114,6 @@ Status values:
   way in native mode or whether the orchestrators should explicitly accept
   the flattened form and ignore fleet dispatch instructions.
 - **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
-
-### T14 (P2, Verify): Name every runner flag in the Copilot orchestrator's plan step
-
-- **Problem:** The Copilot orchestrator's planning step described the
-  runner arguments but never named `--fleet-mode` or `--output-root`; the
-  Claude Code orchestrator names every flag. The Copilot orchestrator
-  therefore looked up the runner's CLI before every plan: it read `--help`
-  on 2026-10-13, which led to the legacy research switches being combined
-  with `--scope`, and the runner source on 2026-10-14. The Claude Code
-  orchestrator planned without such a lookup on 2026-10-14.
-- **State:** fixed for the next release. The Copilot orchestrator's plan
-  step now names every flag and says not to rediscover the CLI, and
-  validation checks that both orchestrators name every planning flag and
-  that each exists in the runner's `--help`.
-- **Done when:** a live Copilot run reaches its effective plan without
-  reading the runner script or its `--help`.
-- **Source:** the 2026-10-13 and 2026-10-14 orchestrator sessions.
 
 ### T15 (P2, Verify): Finish interrupt finalization when a harness stops a run
 
