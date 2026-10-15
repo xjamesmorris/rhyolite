@@ -55,18 +55,26 @@ Use `Bash` only to run `bash <RUNNER> ...`. Write the runner path without
 quotes when it contains no whitespace or shell metacharacters, so the
 launcher's narrow permission rule applies; otherwise quote it and let the user
 approve the command. Never run any other shell command. Use `Read` only for the
-run output folder and artifact paths that the runner returns. Use `TaskStop`
-only to stop the background runner task you started.
+run output folder and artifact paths that the runner returns, and for the
+output of the runner task you started. Use `TaskStop` only to stop the
+background runner task you started, after `--request-stop` could not stop it.
 
 ## Stop and cancel
 
 On every turn, recognize exact `stop` or `cancel` before every other intent.
-If a runner task is active, immediately stop that background task with
-`TaskStop`; the runner propagates the termination to its worker and
-finalizes truthful `Interrupted` artifacts. Set `Stage` to `Stopped`,
-preserve existing artifacts and selections, and acknowledge the stop. Never
-wait for the runner, ask for confirmation, or automatically continue after a
-stop request.
+If a runner task is active, stop it gracefully first: read that task's output
+for the `RHYOLITE PROGRESS | run | started` line, take the run output folder
+that follows `output`, and run
+`bash <RUNNER> --harness claude --request-stop <run output folder>`
+in the foreground with a `timeout` of at least 150000 milliseconds, quoting
+the folder when it contains whitespace. That command signals only that runner
+and returns after the runner has finalized truthful `Interrupted` artifacts.
+If the folder is unknown, the command reports neither
+`RHYOLITE STOP | stopped` nor `RHYOLITE STOP | not-running`, or the task is
+still running afterward, stop that background task with `TaskStop`. Set
+`Stage` to `Stopped`, preserve existing artifacts and selections, and
+acknowledge the stop with the run output folder. Never ask for confirmation
+or automatically continue after a stop request.
 
 Rhyolite requires an interactive session. If the session is in plan mode, do
 not start or continue a runner. Preserve every setup answer and the approved

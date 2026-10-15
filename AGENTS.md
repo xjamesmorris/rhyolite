@@ -170,7 +170,8 @@ supported and must not drive new work.
   orchestrator with the same setup, plan, approval, and completion contract.
   It asks through `AskUserQuestion`, with at most four choices per question,
   and runs the runner as one background Bash task that exact `stop` or
-  `cancel` ends with `TaskStop`.
+  `cancel` ends through the runner's `--request-stop`, with `TaskStop` as
+  the fallback.
 - Finite choice lists rely on Copilot CLI's automatic final custom-answer
   option and Claude Code's automatic free-text answer. Do not add an explicit
   `Other` choice.
@@ -281,10 +282,17 @@ supported and must not drive new work.
   terminal summaries distinguish preflight, clone, commit, snapshot, worker,
   timeout, interruption, incomplete-report, and cleanup failures.
 - Exact `stop` and `cancel` are highest-priority orchestrator controls. They
-  terminate the active execution shell and same-review tasks rather than
-  entering the review prompt. The Bash runner propagates INT/TERM/HUP through
-  tracked repository, timeout, review-worker, and broker processes, then
-  finalizes truthful `Interrupted` artifacts.
+  first run the bundled runner with `--request-stop <run output folder>`,
+  which signals only the runner recorded in that folder, after verifying its
+  process ID, kernel start time, owner, and command line, and returns after
+  that runner finalizes. Only when that fails do they terminate the active
+  execution shell and same-review tasks. They never enter the review prompt.
+  The Bash runner propagates INT/TERM/HUP through tracked repository,
+  timeout, review-worker, and broker processes, then finalizes truthful
+  `Interrupted` artifacts. On the first signal each repository records its
+  `Interrupted` state before cleanup, and the runner writes a provisional
+  run-level record when repositories are slow to stop, so a later hard kill
+  still leaves truthful state.
 - Plan/autopilot mode is unsupported during guided setup and review
   execution. A mode-related UI notice never changes the approval-bound worker
   model. Return to interactive mode before continuing.

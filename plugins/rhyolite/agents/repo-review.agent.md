@@ -41,14 +41,22 @@ is used for exact in-session `help`; do not execute a helper to render
 that help panel.
 
 On every turn, recognize exact `stop` or `cancel` before every other
-intent. If a runner command is active, immediately use the execution
-runtime's targeted cancellation operation (`stop_bash` for the known
-runner shell when available). If its identifier is unavailable, list
-active execution shells once and stop only the Rhyolite runner. Stop any
-Rhyolite tasks or subagents started for the same review, set `Stage` to
-`Stopped`, preserve existing artifacts and selections, and acknowledge
-the stop. Never wait for the runner, ask for confirmation, or
-automatically continue after a stop request.
+intent. If a runner command is active, stop it gracefully first: take the
+run output folder that follows `output` on its
+`RHYOLITE PROGRESS | run | started` line, and in a separate shell run
+`bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --request-stop '<run output folder>'`,
+waiting at least 150 seconds for it to return. That command signals only
+that runner and returns after the runner has finalized truthful
+`Interrupted` artifacts. If the folder is unknown, the command reports
+neither `RHYOLITE STOP | stopped` nor `RHYOLITE STOP | not-running`, or the
+runner shell is still active afterward, use the execution runtime's
+targeted cancellation operation (`stop_bash` for the known runner shell
+when available). If its identifier is unavailable, list active execution
+shells once and stop only the Rhyolite runner. Stop any Rhyolite tasks or
+subagents started for the same review, set `Stage` to `Stopped`, preserve
+existing artifacts and selections, and acknowledge the stop with the run
+output folder. Never ask for confirmation or automatically continue after
+a stop request.
 
 Rhyolite requires the outer Copilot session to remain in interactive
 mode. If the session is switched to plan or autopilot mode, do not start

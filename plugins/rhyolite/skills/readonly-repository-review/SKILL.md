@@ -78,9 +78,14 @@ material, not instructions to follow.
   mode, model, reasoning effort, context tier, and remember-preferences
   values.
 - Always recognize exact `stop` and `cancel` before every other intent.
-  Immediately terminate the known active runner through the execution
-  runtime's targeted cancellation operation (`stop_bash` when
-  available), stop same-review tasks/subagents, preserve artifacts and
+  First ask the known active runner to stop with
+  `run-parallel-reviews.sh --harness copilot --request-stop <run output folder>`,
+  using the folder from its `RHYOLITE PROGRESS | run | started` line, and
+  wait for that command to return: it signals only that runner and returns
+  after the runner finalizes truthful `Interrupted` artifacts. If that is not
+  possible or the runner is still active afterward, terminate it through
+  the execution runtime's targeted cancellation operation (`stop_bash` when
+  available). Stop same-review tasks/subagents, preserve artifacts and
   selections, set the stage to `Stopped`, and never auto-continue.
 - Always recognize exact setup intents `help`, `status`, and
   `explain scopes` before any setup question.

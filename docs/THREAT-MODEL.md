@@ -185,7 +185,13 @@
 - Launcher startup emits the plaque once from `sessionStart`; the prompt hook
   matches only exact manual review-start commands and ignores internal
   resumes, marker-bearing continuations, and unrelated prompts.
-- Exact `stop` and `cancel` intents use targeted execution cancellation. The
+- Exact `stop` and `cancel` intents first run the runner's
+  `--request-stop <run output folder>`, which sends TERM only to the runner
+  recorded in that folder's user-only `.runner-process` file, after verifying
+  the recorded process ID, kernel start time, owner, and runner command line,
+  so a stale or altered record cannot signal another process; an optional
+  `--harness` must match the run's planned harness. Targeted
+  execution cancellation remains the fallback. The
   Bash runner propagates INT/TERM/HUP through tracked repository, timeout,
   Copilot worker, and broker processes, then records `Interrupted` state and
   artifacts.

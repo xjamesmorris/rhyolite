@@ -37,7 +37,7 @@ Status values:
 | T8 | P2 | Open | Design research-phase recovery |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
 | T14 | P2 | Verify | Name every runner flag in the Copilot orchestrator's plan step |
-| T15 | P2 | Open | Finish interrupt finalization when Claude Code stops a run |
+| T15 | P2 | Verify | Finish interrupt finalization when a harness stops a run |
 | T9 | P3 | Open | Keep the interactive setup session on the selected model |
 | T10 | P3 | Open | Make validators independent of symlinked checkout paths |
 | T11 | P3 | Deferred | Deferred review and platform features |
@@ -160,20 +160,26 @@ Status values:
   reading the runner script or its `--help`.
 - **Source:** the 2026-10-13 and 2026-10-14 orchestrator sessions.
 
-### T15 (P2, Open): Finish interrupt finalization when Claude Code stops a run
+### T15 (P2, Verify): Finish interrupt finalization when a harness stops a run
 
 - **Problem:** On 2026-10-14, exact `stop` in a two-repository scope-3
   Claude Code run ended the runner's background task with `TaskStop` during
   research. The first repository was finalized as `Interrupted`, but the
   second recorded only that it received TERM, and the run-level
   `state.json`, `manifest.json`, `handoff.md`, and `index.html` were never
-  written. No processes or temporary runtime homes were left behind. The
-  runner exited before its interrupt finalization finished.
-- **Next step:** measure how `TaskStop` signals the task and how long it
-  waits, then either have the orchestrator signal the runner and wait for
-  it to exit before `TaskStop`, or make the runner write run-level
-  `Interrupted` state before finalizing each repository. Check the Copilot
-  CLI `stop` path the same way.
+  written. No processes or temporary runtime homes were left behind.
+  `TaskStop` sent TERM to the runner's process group and killed it about a
+  second and a half later, before its interrupt finalization finished.
+- **State:** fixed for the next release. Both orchestrators first run
+  `run-parallel-reviews.sh --request-stop <run output folder>`, which signals
+  only the verified runner of that folder and returns after it finalizes;
+  `TaskStop` and `stop_bash` remain fallbacks. On the first signal each
+  repository records its `Interrupted` state before it stops its workers,
+  and the runner writes a provisional run-level `Interrupted` record when
+  repositories are slow to stop. Validation covers a graceful two-repository
+  stop and a hard kill four seconds after the first signal.
+- **Done when:** a live `stop` in a Claude Code run and in a Copilot CLI run
+  ends with complete `Interrupted` repository and run-level artifacts.
 - **Source:** 2026-10-14 Claude Code run.
 
 ### T9 (P3, Open): Keep the interactive setup session on the selected model

@@ -26,6 +26,21 @@
   orchestrator to combine the legacy research switches with `--scope`.
   Validation checks that both orchestrators name every planning flag and
   that each exists in the runner's `--help`.
+- Fixed incomplete `Interrupted` artifacts after `stop`. Claude Code's
+  `TaskStop` sent TERM to the runner's process group and killed it about a
+  second and a half later, before the runner had finished its interrupt
+  finalization, so one repository and the run-level `state.json`,
+  `manifest.json`, `handoff.md`, and `index.html` were never written. Exact
+  `stop` and `cancel` now first run the new
+  `run-parallel-reviews.sh --request-stop <run output folder>`, which sends
+  TERM only to the runner recorded in that folder, after verifying its
+  process ID, kernel start time, owner, and command line, and returns after
+  the runner has finalized; `TaskStop` and `stop_bash` remain fallbacks. The
+  runner also hardens hard kills: on the first signal each repository
+  records its `Interrupted` state before it stops its workers, the worker
+  exit is checked every tenth of a second instead of every second, and when
+  repositories are slow to stop the runner writes a provisional run-level
+  `Interrupted` record, replacing every run-level artifact atomically.
 
 ## 0.8.2 - 2026-10-14
 

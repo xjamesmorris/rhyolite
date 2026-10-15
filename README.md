@@ -210,7 +210,8 @@ questions use Claude Code's picker, which adds its own free-text answer.
 `/rhyolite:start`, `/rhyolite:repo-review`, `/rhyolite:status`,
 `/rhyolite:version`, and `/rhyolite:help` are available; the `/repo-review`
 shorthand is a Copilot extension and does not exist in Claude Code. Exact
-`stop` or `cancel` ends the background runner.
+`stop` or `cancel` asks the background runner to stop and waits for its
+`Interrupted` record.
 
 - **Models:** the default is `claude-opus-5-5` and the guided alternate is
   `claude-opus-5`. Claude Code has no local model catalog, so Rhyolite keeps
@@ -1119,10 +1120,14 @@ the model recorded in the approved plan or the explicit model passed to the
 isolated review workers.
 
 Exact `stop` and `cancel` requests are control intents, not review prompts.
-The orchestrator immediately stops the active runner, and the runner
-propagates interruption signals through its tracked repository, timeout,
-Copilot worker, and broker processes before writing truthful `Interrupted`
-artifacts.
+The orchestrator first asks the active runner to stop with
+`run-parallel-reviews.sh --request-stop <run output folder>` and waits for
+it to finish; only if that fails does it end the runner's shell or task
+directly. The runner propagates interruption signals through its tracked
+repository, timeout, Copilot worker, and broker processes before writing
+truthful `Interrupted` artifacts. Each repository records its `Interrupted`
+state as soon as the signal arrives, so even a hard kill during cleanup
+leaves truthful state.
 
 The wrapper resolves the checkout's physical location, supports
 symlinked invocation and paths containing spaces, and forwards every

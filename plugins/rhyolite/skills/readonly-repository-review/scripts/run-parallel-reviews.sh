@@ -117,6 +117,7 @@ Usage:
   run-parallel-reviews.sh --repo URL [--repo URL ...] [options]
   run-parallel-reviews.sh --repo-file FILE [options]
   run-parallel-reviews.sh --harness ID --list-models
+  run-parallel-reviews.sh [--harness ID] --request-stop RUN_OUTPUT_FOLDER
 
 Options:
   --repo URL                       Anonymous public HTTPS Git repository URL
@@ -158,6 +159,10 @@ Options:
   --plan-only                      Resolve and print the effective plan as JSON
   --list-models                    Print available model IDs and exit
   --expected-plan-hash SHA256      Require the resolved plan approval hash
+  --request-stop FOLDER            Stop the live runner of a run output folder
+                                   and wait for its Interrupted finalization;
+                                   allows only --harness, which must match
+                                   the run's planned harness
   --help                           Show this help
 
 Available harnesses:
@@ -201,15 +206,173 @@ signal_process_tree() {
 
 terminate_process_tree() {
     local process_id="$1"
-    local attempt
 
     [[ "${process_id}" =~ ^[0-9]+$ ]] || return 0
     signal_process_tree TERM "${process_id}"
-    for attempt in 1 2 3 4 5; do
+    wait_for_process_tree_exit "${process_id}"
+}
+
+# Give a process tree that already received TERM up to five seconds to exit,
+# checking every tenth of a second, then KILL whatever remains.
+wait_for_process_tree_exit() {
+    local process_id="$1"
+    local attempt
+
+    [[ "${process_id}" =~ ^[0-9]+$ ]] || return 0
+    for ((attempt = 0; attempt < 50; attempt++)); do
         kill -0 "${process_id}" 2>/dev/null || return 0
-        sleep 1
+        sleep 0.1
     done
     signal_process_tree KILL "${process_id}"
+}
+
+# A live runner records its process ID and kernel start time in its run output
+# folder so that `--request-stop` can signal exactly that runner and no other
+# process, even after the process ID is reused.
+RUNNER_PROCESS_RECORD_NAME='.runner-process'
+RUNNER_STOP_WAIT_SECONDS=120
+
+process_start_ticks() {
+    local process_id="$1"
+    local stat_line
+    local -a stat_fields=()
+
+    [[ "${process_id}" =~ ^[1-9][0-9]*$ ]] || return 1
+    stat_line="$(cat -- "/proc/${process_id}/stat" 2>/dev/null)" || return 1
+    read -r -a stat_fields <<< "${stat_line##*) }"
+    [[ "${stat_fields[19]-}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "${stat_fields[19]}"
+}
+
+runner_process_matches() {
+    local process_id="$1"
+    local expected_start_ticks="$2"
+    local actual_start_ticks
+    local process_owner
+    local argument
+
+    actual_start_ticks="$(process_start_ticks "${process_id}")" || return 1
+    [[ "${actual_start_ticks}" == "${expected_start_ticks}" ]] || return 1
+    process_owner="$(stat -c %u -- "/proc/${process_id}" 2>/dev/null)" ||
+        return 1
+    [[ "${process_owner}" == "$(id -u)" ]] || return 1
+    while IFS= read -r -d '' argument; do
+        [[ "${argument}" == */run-parallel-reviews.sh ]] && return 0
+    done 2>/dev/null < "/proc/${process_id}/cmdline"
+    return 1
+}
+
+write_runner_process_record() {
+    local record_path="${RUN_RESULTS}/${RUNNER_PROCESS_RECORD_NAME}"
+    local start_ticks
+
+    start_ticks="$(process_start_ticks "$$")" || return 1
+    printf '%s %s\n' "$$" "${start_ticks}" > "${record_path}.partial" &&
+        chmod 600 -- "${record_path}.partial" &&
+        mv -f -- "${record_path}.partial" "${record_path}"
+}
+
+remove_runner_process_record() {
+    rm -f -- \
+        "${RUN_RESULTS}/${RUNNER_PROCESS_RECORD_NAME}" \
+        "${RUN_RESULTS}/${RUNNER_PROCESS_RECORD_NAME}.partial"
+}
+
+run_state_status() {
+    local run_directory="$1"
+
+    [[ -f "${run_directory}/state.json" ]] || {
+        printf '%s' 'no run state'
+        return 0
+    }
+    python3 - "${run_directory}/state.json" 2>/dev/null <<'PY' ||
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        status = json.load(stream).get("Status")
+except (OSError, ValueError, AttributeError):
+    status = None
+print(status if isinstance(status, str) and status.isalpha() else "unreadable run state", end="")
+PY
+        printf '%s' 'unreadable run state'
+}
+
+# Ask the live runner of one run output folder to stop, then wait for it to
+# finish its Interrupted finalization. Only the recorded runner process is
+# signalled; the runner itself stops its repositories and workers.
+request_run_stop() {
+    local run_directory="$1"
+    local expected_harness="${2-}"
+    local planned_harness
+    local record_path
+    local process_id=''
+    local start_ticks=''
+    local waited_tenths=0
+
+    if [[ "${run_directory}" != /* ]]; then
+        printf '%s\n' \
+            '--request-stop requires the absolute run output folder that the runner reported.' >&2
+        return 2
+    fi
+    if [[ ! -d "${run_directory}" || -L "${run_directory}" ]] ||
+        ! run_directory="$(cd -P -- "${run_directory}" 2>/dev/null && pwd)" ||
+        [[ "$(stat -c %u -- "${run_directory}" 2>/dev/null)" != "$(id -u)" ]] ||
+        [[ ! -f "${run_directory}/review-plan.json" ||
+            -L "${run_directory}/review-plan.json" ]]; then
+        printf '%s\n' \
+            '--request-stop requires an existing Rhyolite run output folder owned by the current user.' >&2
+        return 2
+    fi
+    if [[ -n "${expected_harness}" ]]; then
+        planned_harness="$(
+            python3 - "${run_directory}/review-plan.json" 2>/dev/null <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        harness = json.load(stream).get("Harness")
+except (OSError, ValueError, AttributeError):
+    harness = None
+print(harness if isinstance(harness, str) else "", end="")
+PY
+        )" || planned_harness=''
+        if [[ ! "${expected_harness}" =~ ^[a-z][a-z0-9-]{0,31}$ ||
+            "${planned_harness}" != "${expected_harness}" ]]; then
+            printf '%s\n' \
+                "--request-stop --harness ${expected_harness} does not match the harness planned for this run." >&2
+            return 2
+        fi
+    fi
+    record_path="${run_directory}/${RUNNER_PROCESS_RECORD_NAME}"
+    if [[ -f "${record_path}" && ! -L "${record_path}" ]]; then
+        read -r process_id start_ticks _ 2>/dev/null < "${record_path}" || true
+    fi
+    if ! runner_process_matches "${process_id}" "${start_ticks}"; then
+        printf 'RHYOLITE STOP | not-running | %s; %s\n' \
+            "$(run_state_status "${run_directory}")" "${run_directory}"
+        return 0
+    fi
+    # A run-level state means the runner is already finalizing, so it only
+    # needs time to finish.
+    if [[ ! -e "${run_directory}/state.json" ]]; then
+        kill -TERM "${process_id}" 2>/dev/null || true
+    fi
+    printf 'RHYOLITE STOP | requested | runner %s; %s\n' \
+        "${process_id}" "${run_directory}"
+    while runner_process_matches "${process_id}" "${start_ticks}"; do
+        if ((waited_tenths >= RUNNER_STOP_WAIT_SECONDS * 10)); then
+            printf 'RHYOLITE STOP | timeout | runner %s still running after %ss; %s\n' \
+                "${process_id}" "${RUNNER_STOP_WAIT_SECONDS}" "${run_directory}"
+            return 1
+        fi
+        sleep 0.1
+        waited_tenths=$((waited_tenths + 1))
+    done
+    printf 'RHYOLITE STOP | stopped | %s; %s\n' \
+        "$(run_state_status "${run_directory}")" "${run_directory}"
 }
 
 # Seconds between incremental approved-plan checks of a running worker's
@@ -321,6 +484,8 @@ repository_interrupt_exit_code() {
 interrupt_repository_process() {
     local signal_name="$1"
     local interrupt_exit_code
+    local report_repair_interrupted=0
+    local interrupted_state_written=0
 
     trap '' INT TERM HUP
     interrupt_exit_code="$(repository_interrupt_exit_code "${signal_name}")"
@@ -328,8 +493,10 @@ interrupt_repository_process() {
         printf 'Repository review interrupted by %s; terminating tracked child processes.\n' \
             "${signal_name}" >> "${RHYOLITE_REPOSITORY_ERROR_PATH}"
     fi
+    # Signal the worker tree before recording state: it runs in its own
+    # process group, so a later hard kill of the runner cannot reach it.
     if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
-        terminate_process_tree "${RHYOLITE_ACTIVE_CHILD_PID}"
+        signal_process_tree TERM "${RHYOLITE_ACTIVE_CHILD_PID}"
     fi
     if [[ "${WORKER_RECOVERY_STATUS-}" == 'Running' ]]; then
         WORKER_RECOVERY_STATUS='Interrupted'
@@ -338,9 +505,29 @@ interrupt_repository_process() {
     fi
     if [[ "${REPORT_REPAIR_STATUS-}" == 'Running' ||
         "${REPORT_REPAIR_STATUS-}" == 'Succeeded' ]]; then
+        report_repair_interrupted=1
         REPORT_REPAIR_STATUS='Interrupted'
         REPORT_REPAIR_PROMOTED=0
         REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair interrupted by ${signal_name}."
+    fi
+    # Write-ahead: record the truthful Interrupted state at once, in parallel
+    # with every other repository, so it survives a hard kill of the runner
+    # during the cleanup below. A repository that already finalized keeps
+    # its own state.
+    if [[ -n "${slug-}" && -n "${result_path-}" &&
+        ! -f "${result_path}/.result-summary" ]]; then
+        write_repository_failure_result \
+            "${slug}" "${repository}" "${requested_commit}" \
+            "${source_kind}" "${source_path}" 'Interrupted' \
+            'Repository review interrupted at user request before completion.' \
+            '' "${started_at}" "${interrupt_exit_code}" '' append \
+            2>/dev/null || true
+        interrupted_state_written=1
+    fi
+    if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
+        wait_for_process_tree_exit "${RHYOLITE_ACTIVE_CHILD_PID}"
+    fi
+    if ((report_repair_interrupted)); then
         sanitize_report_repair_output
         cleanup_report_repair_runtime || true
         if [[ -n "${REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH:-}" ]] &&
@@ -364,6 +551,22 @@ interrupt_repository_process() {
             "${transcript_path}" "${request_path}" "${error_path}" \
             "${handoff_path}" "${started_at}" \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        interrupted_state_written=1
+    fi
+    if ((interrupted_state_written)) &&
+        [[ -n "${RHYOLITE_REPOSITORY_ERROR_PATH-}" ]]; then
+        # The stopping worker may have appended to errors.txt after it was
+        # sanitized; sanitize it again before recording the termination.
+        if [[ -s "${RHYOLITE_REPOSITORY_ERROR_PATH}" ]] &&
+            tr -d '\r' < "${RHYOLITE_REPOSITORY_ERROR_PATH}" |
+                sanitize_review_text \
+                    > "${RHYOLITE_REPOSITORY_ERROR_PATH}.tmp" 2>/dev/null; then
+            mv -f -- "${RHYOLITE_REPOSITORY_ERROR_PATH}.tmp" \
+                "${RHYOLITE_REPOSITORY_ERROR_PATH}"
+        fi
+        rm -f -- "${RHYOLITE_REPOSITORY_ERROR_PATH}.tmp"
+        printf 'Runner received %s and terminated its tracked repository-review process tree.\n' \
+            "${signal_name}" >> "${RHYOLITE_REPOSITORY_ERROR_PATH}"
     fi
     exit "${interrupt_exit_code}"
 }
@@ -1605,6 +1808,48 @@ write_review_plan_text() {
     done
     printf '================================================================================\n'
 }
+
+# A stop request needs no model or network: handle it before every other
+# option and prerequisite. It accepts only `--request-stop FOLDER` and an
+# optional `--harness ID` that must match the run's planned harness.
+request_stop_usage_error() {
+    printf '%s\n' \
+        '--request-stop takes one run output folder and allows only --harness besides it.' >&2
+    exit 2
+}
+
+request_stop_requested=0
+for request_stop_argument in "$@"; do
+    if [[ "${request_stop_argument}" == --request-stop ]]; then
+        request_stop_requested=1
+    fi
+done
+if ((request_stop_requested)); then
+    request_stop_folder=''
+    request_stop_harness=''
+    while (($# > 0)); do
+        case "$1" in
+            --request-stop)
+                [[ -z "${request_stop_folder}" && -n "${2-}" ]] ||
+                    request_stop_usage_error
+                request_stop_folder="$2"
+                shift 2
+                ;;
+            --harness)
+                [[ -z "${request_stop_harness}" && -n "${2-}" ]] ||
+                    request_stop_usage_error
+                request_stop_harness="$2"
+                shift 2
+                ;;
+            *)
+                request_stop_usage_error
+                ;;
+        esac
+    done
+    [[ -n "${request_stop_folder}" ]] || request_stop_usage_error
+    request_run_stop "${request_stop_folder}" "${request_stop_harness}"
+    exit $?
+fi
 
 while (($# > 0)); do
     case "$1" in
@@ -5473,6 +5718,7 @@ write_repository_failure_result() {
     local started_at="$9"
     local failure_exit_code="${10:-1}"
     local verification_clone="${11-}"
+    local error_mode="${12:-replace}"
     local result_path="${RUN_RESULTS}/${slug}"
     local report_path="${result_path}/review.txt"
     local markdown_path="${result_path}/review.md"
@@ -5503,7 +5749,13 @@ write_repository_failure_result() {
     local RESEARCH_STATE_PATH=""
 
     mkdir -p -- "${result_path}"
-    if [[ -n "${error_text}" ]]; then
+    if [[ "${error_mode}" == append ]]; then
+        if [[ -n "${error_text}" ]]; then
+            printf '%s\n' "${error_text}" >> "${error_path}"
+        elif [[ ! -f "${error_path}" ]]; then
+            : > "${error_path}"
+        fi
+    elif [[ -n "${error_text}" ]]; then
         printf '%s\n' "${error_text}" > "${error_path}"
     else
         : > "${error_path}"
@@ -9555,6 +9807,7 @@ interrupt_run() {
     for process_id in "${pids[@]}"; do
         signal_process_tree TERM "${process_id}"
     done
+    record_provisional_interrupted_run
 }
 
 # A trapped signal makes wait return before the child exits; wait again so
@@ -9596,9 +9849,364 @@ write_missing_interrupted_results() {
     done
 }
 
+MANIFEST_PATH="${RUN_RESULTS}/manifest.json"
+RUN_STATE_PATH="${RUN_RESULTS}/state.json"
+RUN_HANDOFF_PATH="${RUN_RESULTS}/handoff.md"
+INDEX_PATH="${RUN_RESULTS}/index.html"
+
+read_result_summary() {
+    local summary_path="$1"
+    exec 9< "${summary_path}"
+    IFS= read -r -d '' repository <&9
+    IFS= read -r -d '' source_kind <&9
+    IFS= read -r -d '' source_path <&9
+    IFS= read -r -d '' requested_commit <&9
+    IFS= read -r -d '' commit <&9
+    IFS= read -r -d '' status <&9
+    IFS= read -r -d '' state <&9
+    IFS= read -r -d '' handoff <&9
+    IFS= read -r -d '' html <&9
+    IFS= read -r -d '' research_status <&9
+    IFS= read -r -d '' research_directory <&9
+    IFS= read -r -d '' repair_summary <&9
+    exec 9<&-
+}
+
+# A repository result is complete once its summary holds all twelve fields
+# and its state parses; the provisional run-level record includes only those.
+run_result_ready() {
+    local state_file="$1"
+    local summary_file="${state_file%/state.json}/.result-summary"
+
+    [[ -s "${state_file}" && -s "${summary_file}" ]] || return 1
+    [[ "$(tr -cd '\000' < "${summary_file}" | wc -c)" -eq 12 ]] || return 1
+    python3 - "${state_file}" >/dev/null 2>&1 <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    state = json.load(stream)
+if not isinstance(state.get("Status"), str) or not isinstance(state.get("ReportRepair"), dict):
+    raise SystemExit(1)
+PY
+}
+
+# Replace a run-level artifact atomically. A provisional JSON artifact is
+# promoted only when it parses, so a racing repository cannot corrupt it.
+promote_run_artifact() {
+    local mode="$1"
+    local artifact_path="$2"
+    local artifact_kind="$3"
+
+    if [[ "${mode}" == provisional && "${artifact_kind}" == json ]] &&
+        ! python3 - "${artifact_path}.partial" >/dev/null 2>&1 <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    json.load(stream)
+PY
+    then
+        rm -f -- "${artifact_path}.partial"
+        return 1
+    fi
+    mv -f -- "${artifact_path}.partial" "${artifact_path}"
+}
+
+# Write the run-level manifest, state, handoff, and HTML index. `final`
+# covers every repository result and prints the per-repository summary;
+# `provisional` runs while repositories are still stopping, covers only
+# complete results, and prints nothing, so an interrupted run keeps a
+# truthful run-level record even when the runner is killed before its
+# final pass. The body keeps column-zero heredocs, so it is not indented.
+write_run_level_artifacts() {
+local mode="$1"
+local candidate
+
+shopt -s nullglob
+result_files=()
+for candidate in "${RUN_RESULTS}"/*/state.json; do
+    if [[ "${mode}" == final ]] || run_result_ready "${candidate}"; then
+        result_files+=("${candidate}")
+    fi
+done
+{
+    printf '[\n'
+    for index in "${!result_files[@]}"; do
+        cat "${result_files[index]}"
+        if ((index + 1 < ${#result_files[@]})); then
+            printf ',\n'
+        else
+            printf '\n'
+        fi
+    done
+    printf ']\n'
+} > "${MANIFEST_PATH}.partial"
+promote_run_artifact "${mode}" "${MANIFEST_PATH}" json || return 1
+
+completed_result_count=0
+for result_file in "${result_files[@]}"; do
+    summary_file="${result_file%/state.json}/.result-summary"
+    read_result_summary "${summary_file}"
+    if [[ "${mode}" == final ]]; then
+        printf '%-70s %s\n' "${repository}" "${status}"
+    fi
+    if [[ "${status}" == 'Completed' ]]; then
+        completed_result_count=$((completed_result_count + 1))
+    fi
+done
+
+RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if ((RUN_INTERRUPTED)); then
+    RUN_STATUS='Interrupted'
+elif ((failure == 0)); then
+    RUN_STATUS='Completed'
+elif ((completed_result_count > 0)); then
+    RUN_STATUS='Partial'
+else
+    RUN_STATUS='Failed'
+fi
+
+{
+    cat <<EOF
+{
+  "SchemaVersion": ${STATE_SCHEMA_VERSION},
+  "Harness": "$(json_escape "${HARNESS}")",
+  "Model": "$(json_escape "${MODEL}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "ContextTier": "$(json_escape "${CONTEXT_TIER}")",
+  "Provider": ${HARNESS_PROVIDER_JSON},
+  "RunId": "$(json_escape "${RUN_ID}")",
+  "Status": "$(json_escape "${RUN_STATUS}")",
+  "StartedAt": "$(json_escape "${RUN_STARTED_AT}")",
+  "CompletedAt": "$(json_escape "${RUN_COMPLETED_AT}")",
+  "Scope": {
+    "Name": "$(json_escape "${SCOPE_NAME}")",
+    "PlanningEstimate": "$(json_escape "${SCOPE_ESTIMATE}")",
+    "PublicResearch": $([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf true || printf false),
+    "ProvenanceResearch": $([[ ${ENABLE_PROVENANCE_RESEARCH} -eq 1 ]] && printf true || printf false)
+  },
+  "ProvenanceWindow": $(provenance_window_json '  '),
+  "ResearchTransport": $(research_transport_json '  '),
+  "ReportRepairPolicy": $(report_repair_policy_json),
+  "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
+  "Paths": {
+    "ReadOnlyWorkspace": "$(json_escape "${RUN_WORKSPACE}")",
+    "WritableOutput": "$(json_escape "${RUN_RESULTS}")"
+  },
+  "Artifacts": {
+    "ReviewPlanJson": "$(json_escape "${REVIEW_PLAN_JSON_PATH}")",
+    "ReviewPlanText": "$(json_escape "${REVIEW_PLAN_TEXT_PATH}")",
+    "Manifest": "$(json_escape "${MANIFEST_PATH}")",
+    "Handoff": "$(json_escape "${RUN_HANDOFF_PATH}")",
+    "HtmlIndex": "$(json_escape "${INDEX_PATH}")"
+  },
+  "Repositories": [
+EOF
+    for index in "${!result_files[@]}"; do
+        summary_file="${result_files[index]%/state.json}/.result-summary"
+        read_result_summary "${summary_file}"
+        worker_recovery_entry="$(
+            python3 - "${result_files[index]}" <<'PY'
+import json
+import sys
+
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps(state.get("WorkerRecovery", {})))
+PY
+        )"
+        cat <<EOF
+    {
+      "Repository": "$(json_escape "${repository}")",
+      "Source": {
+        "Kind": "$(json_escape "${source_kind}")",
+        "LocalPath": "$(json_escape "${source_path}")",
+        "RemoteUrl": "$(json_escape "${repository}")"
+      },
+      "RequestedCommit": "$(json_escape "${requested_commit}")",
+      "Commit": "$(json_escape "${commit}")",
+      "Status": "$(json_escape "${status}")",
+      "ProvenanceWindow": $(provenance_window_json '      '),
+      "ResearchStatus": "$(json_escape "${research_status}")",
+      "ResearchDirectory": "$(json_escape "${research_directory}")",
+      "ReportRepair": $(python3 -c \
+          'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["ReportRepair"]))' \
+          "${result_files[index]}"),
+      "WorkerRecovery": ${worker_recovery_entry},
+      "State": "$(json_escape "${state}")",
+      "Handoff": "$(json_escape "${handoff}")",
+      "Html": "$(json_escape "${html}")"
+    }
+EOF
+        if ((index + 1 < ${#result_files[@]})); then
+            printf ','
+        fi
+        printf '\n'
+    done
+    printf '  ]\n}\n'
+} > "${RUN_STATE_PATH}.partial"
+promote_run_artifact "${mode}" "${RUN_STATE_PATH}" json || return 1
+
+{
+    provenance_window="$(provenance_window_text)"
+    printf '# Repository review run handoff\n\n'
+    printf 'Report repair policy:\n\n    %s\n\n' \
+        "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s; no research rerun"
+    printf 'Run ID:\n\n    %s\n\n' "${RUN_ID}"
+    printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
+    printf 'Harness:\n\n    %s (%s)\n\n' \
+        "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
+    printf 'Model:\n\n    %s\n\n' "${MODEL}"
+    printf 'Reasoning effort:\n\n    %s\n\n' "${REASONING_EFFORT}"
+    printf 'Context tier:\n\n    %s\n\n' "${CONTEXT_TIER}"
+    printf 'Provider:\n\n'
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '    %s\n' "${line}"
+    done <<< "$(provider_summary_text)"
+    printf '\n'
+    printf 'Scope:\n\n    %s\n\n' "${SCOPE_NAME}"
+    printf 'Planning estimate:\n\n    %s\n\n' "${SCOPE_ESTIMATE}"
+    printf 'Provenance window:\n\n'
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '    %s\n' "${line}"
+    done <<< "${provenance_window}"
+    printf '\n'
+    printf 'Research transport:\n\n'
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '    %s\n' "${line}"
+    done <<< "$(research_transport_text)"
+    printf '\n'
+    printf 'Read-only workspace:\n\n    %s\n\n' "${RUN_WORKSPACE}"
+    printf 'Writable output:\n\n    %s\n\n' "${RUN_RESULTS}"
+    printf '## Continue safely\n\n'
+    printf '%s\n\n' "${HARNESS_RESUME_POLICY}"
+    printf '%s\n\n' \
+        'Open each repository handoff for its saved session identifiers and state so the trusted Rhyolite `repo-review` runner can re-establish all restrictions.'
+    printf '## Repository sessions\n\n'
+    for result_file in "${result_files[@]}"; do
+        summary_file="${result_file%/state.json}/.result-summary"
+        read_result_summary "${summary_file}"
+        printf 'Repository:\n\n    %s\n\n' "${repository}"
+        printf 'Source kind:\n\n    %s\n\n' "${source_kind}"
+        printf 'Selected source path:\n\n    %s\n\n' "${source_path}"
+        printf 'Status:\n\n    %s\n\n' "${status}"
+        printf 'Research status:\n\n    %s\n\n' "${research_status}"
+        printf 'Report repair:\n\n    %s\n\n' "${repair_summary}"
+        if [[ -n "${research_directory}" ]]; then
+            printf 'Research directory:\n\n    %s\n\n' \
+                "${research_directory}"
+            printf '%s\n\n' \
+                'Private network evidence may contain sensitive tracking identifiers and hostile bytes; keep it local and do not render or execute it.'
+        fi
+        printf 'Handoff:\n\n    %s\n\n' "${handoff}"
+    done
+    printf '\n## Run artifacts\n\n'
+    printf 'Review plan JSON:\n\n    %s\n\n' "${REVIEW_PLAN_JSON_PATH}"
+    printf 'Review plan text:\n\n    %s\n\n' "${REVIEW_PLAN_TEXT_PATH}"
+    printf 'Manifest:\n\n    %s\n\n' "${MANIFEST_PATH}"
+    printf 'State:\n\n    %s\n\n' "${RUN_STATE_PATH}"
+    printf 'HTML index:\n\n    %s\n' "${INDEX_PATH}"
+} > "${RUN_HANDOFF_PATH}.partial"
+promote_run_artifact "${mode}" "${RUN_HANDOFF_PATH}" text || return 1
+
+{
+    cat <<'EOF'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Repository Review Run</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0; font-family: system-ui, sans-serif; line-height: 1.45; }
+main { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .6rem; border: 1px solid currentColor; text-align: left; vertical-align: top; }
+a { color: inherit; }
+code { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+<h1>Repository Review Run</h1>
+EOF
+    printf '<p>Run <code>%s</code>; status <strong>%s</strong>; scope <strong>%s</strong>; public research <strong>%s</strong>; provenance <strong>%s</strong>; research transport <strong>%s</strong>.</p>\n' \
+        "$(html_escape_value "${RUN_ID}")" \
+        "$(html_escape_value "${RUN_STATUS}")" \
+        "$(html_escape_value "${SCOPE_NAME}")" \
+        "$(html_escape_value "$(status_word "${ENABLE_PUBLIC_RESEARCH}")")" \
+        "$(html_escape_value "$(status_word "${ENABLE_PROVENANCE_RESEARCH}")")" \
+        "$(html_escape_value "$([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf dedicated-worker-local-stdio-mcp || printf disabled)")"
+    if ((ENABLE_PUBLIC_RESEARCH)); then
+        printf '%s\n' \
+            '<p>Private research evidence exists under each repository research/network/private directory. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
+    fi
+    printf '<p><a href="review-plan.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (text)</a> · <a href="review-plan.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (JSON)</a> · <a href="handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run handoff</a> · <a href="state.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run state</a> · <a href="manifest.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Manifest</a></p>\n'
+    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
+    for result_file in "${result_files[@]}"; do
+        summary_file="${result_file%/state.json}/.result-summary"
+        read_result_summary "${summary_file}"
+        slug="$(basename -- "$(dirname -- "${result_file}")")"
+        encoded_slug="$(html_escape_value "${slug}")"
+        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
+            "$(html_escape_value "${repository}")" \
+            "$(html_escape_value "${source_kind}")" \
+            "$(html_escape_value "${status}")" \
+            "$(html_escape_value "${research_status}")" \
+            "$(html_escape_value "${repair_summary}")" \
+            "$(html_escape_value "${commit}")"
+        printf '<td><a href="%s/review.html" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">HTML</a> ' "${encoded_slug}"
+        printf '<a href="%s/review.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Markdown</a> ' "${encoded_slug}"
+        printf '<a href="%s/review.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Plain text</a> ' "${encoded_slug}"
+        printf '<a href="%s/handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Handoff</a></td></tr>\n' "${encoded_slug}"
+    done
+    printf '</tbody></table>\n</main>\n</body>\n</html>\n'
+} > "${INDEX_PATH}.partial"
+promote_run_artifact "${mode}" "${INDEX_PATH}" text || return 1
+}
+
+# On the first stop signal, wait up to three seconds for the repositories to
+# finish. If any is still stopping once every started repository has
+# recorded its result, or when the wait ends, record a provisional run-level
+# Interrupted state from the results that already exist.
+record_provisional_interrupted_run() {
+    local attempt
+    local process_id
+    local running
+    local result_directory
+    local complete
+
+    for ((attempt = 0; attempt < 30; attempt++)); do
+        running=0
+        for process_id in "${pids[@]}"; do
+            if kill -0 "${process_id}" 2>/dev/null; then
+                running=1
+                break
+            fi
+        done
+        ((running)) || return 0
+        complete=1
+        for result_directory in "${RUN_RESULTS}"/*/; do
+            if [[ ! -f "${result_directory}.result-summary" ]] ||
+                [[ "$(tr -cd '\000' < "${result_directory}.result-summary" | wc -c)" -ne 12 ]]; then
+                complete=0
+                break
+            fi
+        done
+        ((complete)) && break
+        sleep 0.1
+    done
+    ( trap '' INT TERM HUP; write_run_level_artifacts provisional ) \
+        >/dev/null 2>&1 || true
+}
+
 trap 'interrupt_run INT' INT
 trap 'interrupt_run TERM' TERM
 trap 'interrupt_run HUP' HUP
+write_runner_process_record || true
 
 review_progress \
     'run' \
@@ -9724,260 +10332,7 @@ review_progress \
     'finalizing' \
     'building manifest, state, handoff, and HTML index'
 
-shopt -s nullglob
-result_files=("${RUN_RESULTS}"/*/state.json)
-read_result_summary() {
-    local summary_path="$1"
-    exec 9< "${summary_path}"
-    IFS= read -r -d '' repository <&9
-    IFS= read -r -d '' source_kind <&9
-    IFS= read -r -d '' source_path <&9
-    IFS= read -r -d '' requested_commit <&9
-    IFS= read -r -d '' commit <&9
-    IFS= read -r -d '' status <&9
-    IFS= read -r -d '' state <&9
-    IFS= read -r -d '' handoff <&9
-    IFS= read -r -d '' html <&9
-    IFS= read -r -d '' research_status <&9
-    IFS= read -r -d '' research_directory <&9
-    IFS= read -r -d '' repair_summary <&9
-    exec 9<&-
-}
-MANIFEST_PATH="${RUN_RESULTS}/manifest.json"
-{
-    printf '[\n'
-    for index in "${!result_files[@]}"; do
-        cat "${result_files[index]}"
-        if ((index + 1 < ${#result_files[@]})); then
-            printf ',\n'
-        else
-            printf '\n'
-        fi
-    done
-    printf ']\n'
-} > "${MANIFEST_PATH}"
-
-completed_result_count=0
-for result_file in "${result_files[@]}"; do
-    summary_file="${result_file%/state.json}/.result-summary"
-    read_result_summary "${summary_file}"
-    printf '%-70s %s\n' "${repository}" "${status}"
-    if [[ "${status}" == 'Completed' ]]; then
-        completed_result_count=$((completed_result_count + 1))
-    fi
-done
-
-RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-if ((RUN_INTERRUPTED)); then
-    RUN_STATUS='Interrupted'
-elif ((failure == 0)); then
-    RUN_STATUS='Completed'
-elif ((completed_result_count > 0)); then
-    RUN_STATUS='Partial'
-else
-    RUN_STATUS='Failed'
-fi
-
-RUN_STATE_PATH="${RUN_RESULTS}/state.json"
-RUN_HANDOFF_PATH="${RUN_RESULTS}/handoff.md"
-INDEX_PATH="${RUN_RESULTS}/index.html"
-
-{
-    cat <<EOF
-{
-  "SchemaVersion": ${STATE_SCHEMA_VERSION},
-  "Harness": "$(json_escape "${HARNESS}")",
-  "Model": "$(json_escape "${MODEL}")",
-  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
-  "ContextTier": "$(json_escape "${CONTEXT_TIER}")",
-  "Provider": ${HARNESS_PROVIDER_JSON},
-  "RunId": "$(json_escape "${RUN_ID}")",
-  "Status": "$(json_escape "${RUN_STATUS}")",
-  "StartedAt": "$(json_escape "${RUN_STARTED_AT}")",
-  "CompletedAt": "$(json_escape "${RUN_COMPLETED_AT}")",
-  "Scope": {
-    "Name": "$(json_escape "${SCOPE_NAME}")",
-    "PlanningEstimate": "$(json_escape "${SCOPE_ESTIMATE}")",
-    "PublicResearch": $([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf true || printf false),
-    "ProvenanceResearch": $([[ ${ENABLE_PROVENANCE_RESEARCH} -eq 1 ]] && printf true || printf false)
-  },
-  "ProvenanceWindow": $(provenance_window_json '  '),
-  "ResearchTransport": $(research_transport_json '  '),
-  "ReportRepairPolicy": $(report_repair_policy_json),
-  "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
-  "Paths": {
-    "ReadOnlyWorkspace": "$(json_escape "${RUN_WORKSPACE}")",
-    "WritableOutput": "$(json_escape "${RUN_RESULTS}")"
-  },
-  "Artifacts": {
-    "ReviewPlanJson": "$(json_escape "${REVIEW_PLAN_JSON_PATH}")",
-    "ReviewPlanText": "$(json_escape "${REVIEW_PLAN_TEXT_PATH}")",
-    "Manifest": "$(json_escape "${MANIFEST_PATH}")",
-    "Handoff": "$(json_escape "${RUN_HANDOFF_PATH}")",
-    "HtmlIndex": "$(json_escape "${INDEX_PATH}")"
-  },
-  "Repositories": [
-EOF
-    for index in "${!result_files[@]}"; do
-        summary_file="${result_files[index]%/state.json}/.result-summary"
-        read_result_summary "${summary_file}"
-        worker_recovery_entry="$(
-            python3 - "${result_files[index]}" <<'PY'
-import json
-import sys
-
-state = json.load(open(sys.argv[1], encoding="utf-8"))
-print(json.dumps(state.get("WorkerRecovery", {})))
-PY
-        )"
-        cat <<EOF
-    {
-      "Repository": "$(json_escape "${repository}")",
-      "Source": {
-        "Kind": "$(json_escape "${source_kind}")",
-        "LocalPath": "$(json_escape "${source_path}")",
-        "RemoteUrl": "$(json_escape "${repository}")"
-      },
-      "RequestedCommit": "$(json_escape "${requested_commit}")",
-      "Commit": "$(json_escape "${commit}")",
-      "Status": "$(json_escape "${status}")",
-      "ProvenanceWindow": $(provenance_window_json '      '),
-      "ResearchStatus": "$(json_escape "${research_status}")",
-      "ResearchDirectory": "$(json_escape "${research_directory}")",
-      "ReportRepair": $(python3 -c \
-          'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["ReportRepair"]))' \
-          "${result_files[index]}"),
-      "WorkerRecovery": ${worker_recovery_entry},
-      "State": "$(json_escape "${state}")",
-      "Handoff": "$(json_escape "${handoff}")",
-      "Html": "$(json_escape "${html}")"
-    }
-EOF
-        if ((index + 1 < ${#result_files[@]})); then
-            printf ','
-        fi
-        printf '\n'
-    done
-    printf '  ]\n}\n'
-} > "${RUN_STATE_PATH}"
-
-{
-    provenance_window="$(provenance_window_text)"
-    printf '# Repository review run handoff\n\n'
-    printf 'Report repair policy:\n\n    %s\n\n' \
-        "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s; no research rerun"
-    printf 'Run ID:\n\n    %s\n\n' "${RUN_ID}"
-    printf 'Status:\n\n    %s\n\n' "${RUN_STATUS}"
-    printf 'Harness:\n\n    %s (%s)\n\n' \
-        "${HARNESS_DISPLAY_NAME}" "${HARNESS}"
-    printf 'Model:\n\n    %s\n\n' "${MODEL}"
-    printf 'Reasoning effort:\n\n    %s\n\n' "${REASONING_EFFORT}"
-    printf 'Context tier:\n\n    %s\n\n' "${CONTEXT_TIER}"
-    printf 'Provider:\n\n'
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        printf '    %s\n' "${line}"
-    done <<< "$(provider_summary_text)"
-    printf '\n'
-    printf 'Scope:\n\n    %s\n\n' "${SCOPE_NAME}"
-    printf 'Planning estimate:\n\n    %s\n\n' "${SCOPE_ESTIMATE}"
-    printf 'Provenance window:\n\n'
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        printf '    %s\n' "${line}"
-    done <<< "${provenance_window}"
-    printf '\n'
-    printf 'Research transport:\n\n'
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        printf '    %s\n' "${line}"
-    done <<< "$(research_transport_text)"
-    printf '\n'
-    printf 'Read-only workspace:\n\n    %s\n\n' "${RUN_WORKSPACE}"
-    printf 'Writable output:\n\n    %s\n\n' "${RUN_RESULTS}"
-    printf '## Continue safely\n\n'
-    printf '%s\n\n' "${HARNESS_RESUME_POLICY}"
-    printf '%s\n\n' \
-        'Open each repository handoff for its saved session identifiers and state so the trusted Rhyolite `repo-review` runner can re-establish all restrictions.'
-    printf '## Repository sessions\n\n'
-    for result_file in "${result_files[@]}"; do
-        summary_file="${result_file%/state.json}/.result-summary"
-        read_result_summary "${summary_file}"
-        printf 'Repository:\n\n    %s\n\n' "${repository}"
-        printf 'Source kind:\n\n    %s\n\n' "${source_kind}"
-        printf 'Selected source path:\n\n    %s\n\n' "${source_path}"
-        printf 'Status:\n\n    %s\n\n' "${status}"
-        printf 'Research status:\n\n    %s\n\n' "${research_status}"
-        printf 'Report repair:\n\n    %s\n\n' "${repair_summary}"
-        if [[ -n "${research_directory}" ]]; then
-            printf 'Research directory:\n\n    %s\n\n' \
-                "${research_directory}"
-            printf '%s\n\n' \
-                'Private network evidence may contain sensitive tracking identifiers and hostile bytes; keep it local and do not render or execute it.'
-        fi
-        printf 'Handoff:\n\n    %s\n\n' "${handoff}"
-    done
-    printf '\n## Run artifacts\n\n'
-    printf 'Review plan JSON:\n\n    %s\n\n' "${REVIEW_PLAN_JSON_PATH}"
-    printf 'Review plan text:\n\n    %s\n\n' "${REVIEW_PLAN_TEXT_PATH}"
-    printf 'Manifest:\n\n    %s\n\n' "${MANIFEST_PATH}"
-    printf 'State:\n\n    %s\n\n' "${RUN_STATE_PATH}"
-    printf 'HTML index:\n\n    %s\n' "${INDEX_PATH}"
-} > "${RUN_HANDOFF_PATH}"
-
-{
-    cat <<'EOF'
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<title>Repository Review Run</title>
-<style>
-:root { color-scheme: light dark; }
-body { margin: 0; font-family: system-ui, sans-serif; line-height: 1.45; }
-main { max-width: 1200px; margin: 0 auto; padding: 2rem; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: .6rem; border: 1px solid currentColor; text-align: left; vertical-align: top; }
-a { color: inherit; }
-code { overflow-wrap: anywhere; }
-</style>
-</head>
-<body>
-<main>
-<h1>Repository Review Run</h1>
-EOF
-    printf '<p>Run <code>%s</code>; status <strong>%s</strong>; scope <strong>%s</strong>; public research <strong>%s</strong>; provenance <strong>%s</strong>; research transport <strong>%s</strong>.</p>\n' \
-        "$(html_escape_value "${RUN_ID}")" \
-        "$(html_escape_value "${RUN_STATUS}")" \
-        "$(html_escape_value "${SCOPE_NAME}")" \
-        "$(html_escape_value "$(status_word "${ENABLE_PUBLIC_RESEARCH}")")" \
-        "$(html_escape_value "$(status_word "${ENABLE_PROVENANCE_RESEARCH}")")" \
-        "$(html_escape_value "$([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf dedicated-worker-local-stdio-mcp || printf disabled)")"
-    if ((ENABLE_PUBLIC_RESEARCH)); then
-        printf '%s\n' \
-            '<p>Private research evidence exists under each repository research/network/private directory. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
-    fi
-    printf '<p><a href="review-plan.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (text)</a> · <a href="review-plan.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (JSON)</a> · <a href="handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run handoff</a> · <a href="state.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run state</a> · <a href="manifest.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Manifest</a></p>\n'
-    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
-    for result_file in "${result_files[@]}"; do
-        summary_file="${result_file%/state.json}/.result-summary"
-        read_result_summary "${summary_file}"
-        slug="$(basename -- "$(dirname -- "${result_file}")")"
-        encoded_slug="$(html_escape_value "${slug}")"
-        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
-            "$(html_escape_value "${repository}")" \
-            "$(html_escape_value "${source_kind}")" \
-            "$(html_escape_value "${status}")" \
-            "$(html_escape_value "${research_status}")" \
-            "$(html_escape_value "${repair_summary}")" \
-            "$(html_escape_value "${commit}")"
-        printf '<td><a href="%s/review.html" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">HTML</a> ' "${encoded_slug}"
-        printf '<a href="%s/review.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Markdown</a> ' "${encoded_slug}"
-        printf '<a href="%s/review.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Plain text</a> ' "${encoded_slug}"
-        printf '<a href="%s/handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Handoff</a></td></tr>\n' "${encoded_slug}"
-    done
-    printf '</tbody></table>\n</main>\n</body>\n</html>\n'
-} > "${INDEX_PATH}"
+write_run_level_artifacts final
 
 for result_file in "${result_files[@]}"; do
     rm -f -- "${result_file%/state.json}/.result-summary"
@@ -10000,6 +10355,7 @@ if ((failure)); then
     done
 fi
 
+remove_runner_process_record
 trap - INT TERM HUP
 
 if ((!RUN_INTERRUPTED && OPEN_HTML)); then

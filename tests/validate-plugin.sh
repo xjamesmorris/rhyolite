@@ -1390,6 +1390,16 @@ grep -Fq 'Always recognize exact `stop` and `cancel`' "${SKILL}" &&
     grep -Fq '`stop_bash`' "${SKILL}" &&
     grep -Fq '`stop_bash`' "${AGENT}" ||
     fail 'Guided workflow does not prioritize exact stop/cancel control.'
+grep -Fq 'run-parallel-reviews.sh --harness copilot --request-stop <run output folder>' \
+    "${SKILL}" &&
+    grep -Fq "run-parallel-reviews.sh' --harness copilot --request-stop '<run output folder>'" \
+        "${AGENT}" &&
+    grep -Fq 'bash <RUNNER> --harness claude --request-stop <run output folder>' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review.md" &&
+    grep -Fq '`RHYOLITE STOP | stopped`' "${AGENT}" &&
+    grep -Fq '`RHYOLITE STOP | stopped`' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review.md" ||
+    fail 'Orchestrators do not stop the runner through --request-stop before cancelling it.'
 grep -Fq 'Keep the outer Copilot session in interactive mode.' "${SKILL}" &&
     grep -Fq 'Rhyolite requires the outer Copilot session to remain in interactive' \
         "${AGENT}" ||
@@ -3588,6 +3598,9 @@ runner_help="$("${RUNNER}" --help)"
     "${runner_help}" == *'Explicitly open the HTML run index after completion'* &&
     "${runner_help}" == *'Compatibility spelling for the default never-open policy'* ]] ||
     fail 'Bash runner model help does not expose available-ID discovery.'
+[[ "${runner_help}" == *'run-parallel-reviews.sh [--harness ID] --request-stop RUN_OUTPUT_FOLDER'* &&
+    "${runner_help}" == *'--request-stop FOLDER'* ]] ||
+    fail 'Bash runner help does not document --request-stop.'
 [[ "${launcher_version}" == \
     "Rhyolite v$(tr -d '\r\n' < "${VERSION_FILE}") Beta" ]] ||
     fail 'Unix launcher --version does not match VERSION.'
@@ -7324,7 +7337,13 @@ fi
     -n "${context_tier}" ]] ||
     exit 75
 invocation_log="${MOCK_LOG}.${phase//:/-}"
-printf '%s\n' "$@" > "${invocation_log}"
+# Parallel workers share this per-phase log: publish it atomically and check
+# this invocation's own copy, so concurrent workers cannot corrupt it.
+mock_invocation_copy="$(mktemp "${invocation_log}.XXXXXXXX")"
+printf '%s\n' "$@" > "${mock_invocation_copy}"
+cp -- "${mock_invocation_copy}" "${invocation_log}.$$"
+mv -f -- "${invocation_log}.$$" "${invocation_log}"
+invocation_log="${mock_invocation_copy}"
 # A same-session continuation resumes the review worker with a report
 # delivery request on stdin; record it apart from the one analysis run.
 mock_continuation=0
@@ -7636,9 +7655,15 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
         fi
         exit "${exit_code}"
     }
-    trap 'mock_block_exit 130' INT
-    trap 'mock_block_exit 143' TERM
-    trap 'mock_block_exit 129' HUP
+    if [[ "${MOCK_COPILOT_IGNORE_TERM-}" == "1" && "${phase}" != 'report-repair' ]]; then
+        # Model a worker that ignores termination requests: the ignored
+        # dispositions also pass to its child, so only KILL ends either.
+        trap '' INT TERM HUP
+    else
+        trap 'mock_block_exit 130' INT
+        trap 'mock_block_exit 143' TERM
+        trap 'mock_block_exit 129' HUP
+    fi
     if [[ "${phase}" == 'report-repair' ]]; then
         [[ -n "${MOCK_REPAIR_PID_FILE-}" ]] &&
             printf '%s\n' "$$" > "${MOCK_REPAIR_PID_FILE}"
@@ -7656,6 +7681,10 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
         [[ -n "${MOCK_COPILOT_CHILD_PID_FILE-}" ]] &&
             printf '%s\n' "${mock_block_child_pid}" \
                 > "${MOCK_COPILOT_CHILD_PID_FILE}"
+        # One line per blocked review worker, for multi-repository fixtures.
+        [[ -n "${MOCK_COPILOT_READY_FILE-}" ]] &&
+            printf '%s %s\n' "$$" "${mock_block_child_pid}" \
+                >> "${MOCK_COPILOT_READY_FILE}"
     fi
     wait "${mock_block_child_pid}"
     exit 96
@@ -15246,6 +15275,265 @@ grep -Fq 'Stage: user interruption' "${interrupt_stdout}" &&
     grep -Fq 'RHYOLITE PROGRESS | run | completed | Interrupted;' \
         "${interrupt_stdout}" ||
     fail 'Interrupted runner terminal output lost its cancellation boundary.'
+
+# `--request-stop` accepts only an absolute run output folder and signals only
+# the runner recorded there, after verifying its identity.
+request_stop_checks="${fixture_dir}/request-stop-checks"
+mkdir -p -m 700 -- "${request_stop_checks}/run"
+printf '{}\n' > "${request_stop_checks}/run/review-plan.json"
+set +e
+"${RUNNER}" --request-stop relative/run >/dev/null 2>&1
+request_stop_relative_exit=$?
+"${RUNNER}" --request-stop "${request_stop_checks}" >/dev/null 2>&1
+request_stop_folder_exit=$?
+"${RUNNER}" --request-stop "${request_stop_checks}/run" \
+    --repo https://github.com/octocat/Hello-World >/dev/null 2>&1
+request_stop_combined_exit=$?
+set -e
+[[ "${request_stop_relative_exit}" -eq 2 &&
+    "${request_stop_folder_exit}" -eq 2 &&
+    "${request_stop_combined_exit}" -eq 2 ]] ||
+    fail 'Request-stop accepted a relative path, a non-run folder, or other options.'
+sleep 30 &
+request_stop_bystander_pid=$!
+request_stop_bystander_ticks="$(
+    awk '{ sub(/.*\) /, ""); print $20 }' "/proc/${request_stop_bystander_pid}/stat"
+)"
+printf '%s %s\n' "${request_stop_bystander_pid}" \
+    "${request_stop_bystander_ticks}" \
+    > "${request_stop_checks}/run/.runner-process"
+request_stop_bystander_output="$(
+    "${RUNNER}" --request-stop "${request_stop_checks}/run"
+)" || fail 'Request-stop failed for a record that names another process.'
+kill -0 "${request_stop_bystander_pid}" 2>/dev/null ||
+    fail 'Request-stop signalled a process that is not a Rhyolite runner.'
+kill "${request_stop_bystander_pid}" 2>/dev/null || true
+wait "${request_stop_bystander_pid}" 2>/dev/null || true
+[[ "${request_stop_bystander_output}" == \
+    "RHYOLITE STOP | not-running | no run state; $(cd -P -- "${request_stop_checks}/run" && pwd)" ]] ||
+    fail 'Request-stop did not report a foreign process record as not running.'
+
+wait_for_blocked_mock_workers() {
+    local ready_file="$1"
+    local output_root="$2"
+    local runner_pid="$3"
+    local attempt
+
+    for attempt in $(seq 1 120); do
+        if [[ "$(wc -l < "${ready_file}")" -ge 2 ]] &&
+            compgen -G "${output_root}/*/.runner-process" >/dev/null; then
+            return 0
+        fi
+        kill -0 "${runner_pid}" 2>/dev/null || return 1
+        sleep 0.5
+    done
+    return 1
+}
+
+stop_mock_workers() {
+    local ready_file="$1"
+    local mock_pid
+    local mock_child_pid
+
+    while read -r mock_pid mock_child_pid; do
+        kill -KILL "${mock_pid}" "${mock_child_pid}" 2>/dev/null || true
+    done < "${ready_file}"
+}
+
+# Graceful stop: `--request-stop` returns only after the runner has finalized
+# every repository and the run as Interrupted, with no time limit imposed by
+# the caller.
+request_stop_root="${fixture_dir}/request-stop"
+request_stop_output="${request_stop_root}/output"
+request_stop_ready="${request_stop_root}/ready"
+request_stop_runner_stdout="${request_stop_root}/runner.stdout"
+request_stop_stdout="${request_stop_root}/request.stdout"
+mkdir -p -- "${request_stop_root}"
+: > "${request_stop_ready}"
+MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_READY_FILE="${request_stop_ready}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --repo https://github.com/githubtraining/hellogitworld \
+        --scope 1 \
+        --output-root "${request_stop_output}" \
+        --workspace-root "${request_stop_root}/workspace" \
+        --non-interactive \
+        --no-open-html >"${request_stop_runner_stdout}" 2>&1 &
+request_stop_runner_pid=$!
+if ! wait_for_blocked_mock_workers \
+    "${request_stop_ready}" \
+    "${request_stop_output}" \
+    "${request_stop_runner_pid}"; then
+    kill "${request_stop_runner_pid}" 2>/dev/null || true
+    wait "${request_stop_runner_pid}" 2>/dev/null || true
+    stop_mock_workers "${request_stop_ready}"
+    cat -- "${request_stop_runner_stdout}" >&2
+    fail 'Request-stop fixture did not start two blocked review workers.'
+fi
+request_stop_run="$(
+    find "${request_stop_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+request_stop_run="$(cd -P -- "${request_stop_run}" && pwd)"
+set +e
+"${RUNNER}" --harness claude --request-stop "${request_stop_run}" \
+    >"${request_stop_stdout}" 2>&1
+request_stop_mismatch_exit=$?
+set -e
+if [[ "${request_stop_mismatch_exit}" -ne 2 ]] ||
+    ! kill -0 "${request_stop_runner_pid}" 2>/dev/null; then
+    kill "${request_stop_runner_pid}" 2>/dev/null || true
+    wait "${request_stop_runner_pid}" 2>/dev/null || true
+    stop_mock_workers "${request_stop_ready}"
+    fail 'Request-stop with another harness did not refuse to stop a Copilot run.'
+fi
+set +e
+"${RUNNER}" --harness copilot --request-stop "${request_stop_run}" \
+    >"${request_stop_stdout}" 2>&1
+request_stop_exit=$?
+wait "${request_stop_runner_pid}"
+request_stop_runner_exit=$?
+set -e
+if [[ "${request_stop_exit}" -ne 0 || "${request_stop_runner_exit}" -ne 143 ]]; then
+    stop_mock_workers "${request_stop_ready}"
+    cat -- "${request_stop_stdout}" "${request_stop_runner_stdout}" >&2
+    fail "Request-stop returned ${request_stop_exit} and the runner ${request_stop_runner_exit}, expected 0 and 143."
+fi
+grep -Fqx \
+    "RHYOLITE STOP | requested | runner ${request_stop_runner_pid}; ${request_stop_run}" \
+    "${request_stop_stdout}" &&
+    grep -Fqx "RHYOLITE STOP | stopped | Interrupted; ${request_stop_run}" \
+        "${request_stop_stdout}" ||
+    fail 'Request-stop did not report the stopped runner and its Interrupted run.'
+while read -r request_stop_mock_pid request_stop_mock_child_pid; do
+    if kill -0 "${request_stop_mock_pid}" 2>/dev/null ||
+        kill -0 "${request_stop_mock_child_pid}" 2>/dev/null; then
+        stop_mock_workers "${request_stop_ready}"
+        fail "Request-stop left mock worker process ${request_stop_mock_pid} alive."
+    fi
+done < "${request_stop_ready}"
+node - "${request_stop_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const run = process.argv[2];
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(run, "manifest.json"), "utf8"));
+const leftovers = fs.readdirSync(run).filter(
+  (name) => name === ".runner-process" || name.endsWith(".partial"),
+);
+if (runState.Status !== "Interrupted" ||
+    runState.Repositories.length !== 2 ||
+    runState.Repositories.some((entry) => entry.Status !== "Interrupted") ||
+    manifest.length !== 2 ||
+    !fs.existsSync(path.join(run, "index.html")) ||
+    !fs.existsSync(path.join(run, "handoff.md")) ||
+    leftovers.length !== 0) {
+  throw new Error("request-stop did not finalize a complete Interrupted run");
+}
+for (const slug of [
+  "github--octocat--hello-world",
+  "github--githubtraining--hellogitworld",
+]) {
+  const state = JSON.parse(fs.readFileSync(path.join(run, slug, "state.json"), "utf8"));
+  const errors = fs.readFileSync(path.join(run, slug, "errors.txt"), "utf8");
+  if (state.Status !== "Interrupted" ||
+      state.ExitCode !== 143 ||
+      !errors.includes(
+        "Runner received TERM and terminated its tracked repository-review process tree.",
+      )) {
+    throw new Error(`request-stop did not finalize ${slug} as Interrupted`);
+  }
+}
+JS
+"${RUNNER}" --request-stop "${request_stop_run}" >"${request_stop_stdout}" 2>&1 ||
+    fail 'Request-stop for a finished run did not succeed.'
+grep -Fqx "RHYOLITE STOP | not-running | Interrupted; ${request_stop_run}" \
+    "${request_stop_stdout}" ||
+    fail 'Request-stop for a finished run did not report it as not running.'
+
+# Write-ahead: with review workers that ignore TERM, killing the whole runner
+# process group four seconds after the first signal, before the runner could
+# finish, still leaves every repository and the run recorded as Interrupted.
+hard_kill_root="${fixture_dir}/hard-kill"
+hard_kill_output="${hard_kill_root}/output"
+hard_kill_ready="${hard_kill_root}/ready"
+hard_kill_stdout="${hard_kill_root}/runner.stdout"
+mkdir -p -- "${hard_kill_root}"
+: > "${hard_kill_ready}"
+MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_IGNORE_TERM=1 \
+    MOCK_COPILOT_READY_FILE="${hard_kill_ready}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    /usr/bin/python3 "${research_signal_launcher}" "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --repo https://github.com/githubtraining/hellogitworld \
+        --scope 1 \
+        --output-root "${hard_kill_output}" \
+        --workspace-root "${hard_kill_root}/workspace" \
+        --non-interactive \
+        --no-open-html >"${hard_kill_stdout}" 2>&1 &
+hard_kill_runner_pid=$!
+if ! wait_for_blocked_mock_workers \
+    "${hard_kill_ready}" \
+    "${hard_kill_output}" \
+    "${hard_kill_runner_pid}"; then
+    kill -KILL -- "-${hard_kill_runner_pid}" 2>/dev/null || true
+    wait "${hard_kill_runner_pid}" 2>/dev/null || true
+    stop_mock_workers "${hard_kill_ready}"
+    cat -- "${hard_kill_stdout}" >&2
+    fail 'Hard-kill fixture did not start two blocked review workers.'
+fi
+hard_kill_run="$(
+    find "${hard_kill_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+hard_kill_run="$(cd -P -- "${hard_kill_run}" && pwd)"
+set +e
+kill -TERM -- "-${hard_kill_runner_pid}"
+sleep 4
+kill -KILL -- "-${hard_kill_runner_pid}" 2>/dev/null
+wait "${hard_kill_runner_pid}" 2>/dev/null
+set -e
+# The review workers run under `timeout` in their own process groups, which
+# the group KILL does not reach, and they ignore TERM: end them here.
+stop_mock_workers "${hard_kill_ready}"
+if ! node - "${hard_kill_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const run = process.argv[2];
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+if (runState.Status !== "Interrupted" ||
+    runState.Repositories.length !== 2 ||
+    runState.Repositories.some((entry) => entry.Status !== "Interrupted")) {
+  throw new Error("the provisional run-level state is not a truthful Interrupted record");
+}
+for (const slug of [
+  "github--octocat--hello-world",
+  "github--githubtraining--hellogitworld",
+]) {
+  const state = JSON.parse(fs.readFileSync(path.join(run, slug, "state.json"), "utf8"));
+  if (state.Status !== "Interrupted" || state.ExitCode !== 143) {
+    throw new Error(`${slug} did not record its Interrupted state before the hard kill`);
+  }
+}
+JS
+then
+    cat -- "${hard_kill_stdout}" >&2
+    fail 'A hard kill after the first stop signal lost the Interrupted write-ahead state.'
+fi
+[[ "$("${RUNNER}" --request-stop "${hard_kill_run}" 2>&1)" == \
+    "RHYOLITE STOP | not-running | Interrupted; ${hard_kill_run}" ]] ||
+    fail 'Request-stop did not treat the record of a killed runner as not running.'
 
 while IFS= read -r -d '' path; do
     if head -c 3 "${path}" | grep -q $'^\xEF\xBB\xBF'; then
