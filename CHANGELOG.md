@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.3 - 2026-10-15
+
 - Fixed multi-repository launches. `rhyolite --repo A B` put only `A` in the
   launcher's trusted setup block and forwarded `B` as free-text request, so
   the orchestrator either stopped to ask which repositories to review or

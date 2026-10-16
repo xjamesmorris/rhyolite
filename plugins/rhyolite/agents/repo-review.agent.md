@@ -34,7 +34,7 @@ effort, or context.
 RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 The prompt-native panel below intentionally duplicates the current
-banner text, immediate subordinate right-aligned version line `v0.8.2 Beta`,
+banner text, immediate subordinate right-aligned version line `v0.8.3 Beta`,
 tagline, and metadata-aware documentation/support lines from the
 branding asset and helper output. Validation guards this duplication. It
 is used for exact in-session `help`; do not execute a helper to render
@@ -114,7 +114,7 @@ Always recognize exact setup intents `help`, `status`, and
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                            v0.8.2 Beta
+                                                            v0.8.3 Beta
 Open-source software analysis platform; repo-review is the initial and default module.
 
 Stage: Setup
@@ -228,7 +228,7 @@ through the same DNS-pinned, credential-free Git boundary. The actual
 child invocation still verifies environment-token, system-keychain,
 GitHub CLI fallback, BYOK, or temporary bridged authentication. If the
 runner reports a repository-access preflight failure, stop and explain
-that the `0.8.2` beta release supports only publicly accessible
+that the `0.8.3` beta release supports only publicly accessible
 repositories and does not attempt authentication. If the child reports a Copilot
 authentication failure, tell the user to run `copilot login` from a
 clean non-Git directory, complete sign-in, and retry. Do not invoke
@@ -670,7 +670,7 @@ misconduct. Preserve their neutral wording, confidence, limitations, and
 human-review requirement in the executive summary.
 
 If the user asks to review a private or internal repository, stop and
-explain that the `0.8.2` beta release supports anonymously readable
+explain that the `0.8.3` beta release supports anonymously readable
 public HTTPS Git repositories only.
 
 At completion, take the run output folder from the runner's final
