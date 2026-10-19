@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-19
 
 ## Priorities
 
@@ -29,75 +29,28 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T2 | P1 | Open | Offer the highest supported reasoning effort with explicit approval |
-| T3 | P1 | Open | Probe Claude Code same-session continuation |
-| T4 | P1 | Open | Complete the interactive and remote release smoke tests |
-| T5 | P1 | Open | Confirm the public-repository gates |
-| T8 | P2 | Open | Design research-phase recovery |
+| T4 | P1 | Open | Run the interactive and remote release smoke tests at the next release |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
-| T9 | P3 | Open | Keep the interactive setup session on the selected model |
-| T10 | P3 | Open | Make validators independent of symlinked checkout paths |
+| T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
 
-### T2 (P1, Open): Offer the highest supported reasoning effort with explicit approval
-
-- **Problem:** Reviews request maximum reasoning effort by default. When the
-  harness rejects that effort for the selected model, the worker fails
-  closed at the `model availability` stage, and the user must restart setup
-  and choose a lower effort manually.
-- **Goal:** offer the highest effort that the selected model supports,
-  never below `high`, as an explicit, approval-bound plan change. Rhyolite
-  must never lower effort automatically or silently.
-- **Next step:** design how each adapter learns which efforts a model
-  supports and where the user approves the regenerated plan. Cover
-  rejection, approval, and decline in the validators.
-- **Source:** maintainer issue notes.
-
-### T3 (P1, Open): Probe Claude Code same-session continuation
-
-- **Problem:** Claude Code reports the `worker_continuation` capability as
-  `unverified`, so Claude Code reviews do not use same-session recovery. A
-  cut report or a transient failure still ends the review.
-- **Next step:** probe print-mode continuation live in an isolated runtime
-  home with the approved argv. Promote the capability to `yes` only with
-  live evidence, tests, and documentation, as
-  [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) requires.
-- **Source:** 2026-10-13 incident report, remaining limits.
-
-### T4 (P1, Open): Complete the interactive and remote release smoke tests
+### T4 (P1, Open): Run the interactive and remote release smoke tests at the next release
 
 - **Problem:** The interactive and remote checks in
-  [PUBLISHING.md](PUBLISHING.md) are not yet recorded for the current
-  release. They cover the exported package's agents in a new Copilot CLI
-  session (load status, plaque, and exact setup controls), the Claude Code
-  session checks, and a fresh remote install plus a manual update from the
-  prior release. The remote checks were blocked while the repository was
-  private; it is now public.
+  [PUBLISHING.md](PUBLISHING.md) are only partly recorded for 0.8.3. On
+  2026-10-19, fresh remote installs of 0.8.3 succeeded for Copilot CLI and
+  Claude Code, and scope-1 reviews completed on Copilot CLI 1.0.100 and
+  Claude Code 2.1.303. The installed package's exact `help`, `status`, and
+  `explain scopes` setup controls and the `/repo-review` shorthand were not
+  recorded. The manual update from the prior release could not be tested,
+  because neither CLI installs a marketplace at a tag and `main` already
+  held 0.8.3, so that check moves to the next release as an update from a
+  retained 0.8.3 installation.
 - **Done when:** maintainer release checklist steps 6 and 9 and canonical
-  release workflow steps 10 and 11 pass for the current release.
-
-### T5 (P1, Open): Confirm the public-repository gates
-
-- **Problem:** The repository is now public, so every pre-publication gate
-  in [PUBLISHING.md](PUBLISHING.md) applies. Branch protection for `main` is
-  configured without hosted-CI requirements or required reviews, and GitHub
-  private vulnerability reporting is enabled. Still confirm the published
-  support routes, including the issue forms and the private conduct
-  contact, and smoke-test the published support and release paths.
-- **Done when:** every pre-publication gate is confirmed.
-
-### T8 (P2, Open): Design research-phase recovery
-
-- **Problem:** Research is never continued or relaunched automatically. The
-  broker keeps exactly one network log per repository phase and refuses to
-  start over an existing one, so a transient research failure ends that
-  repository's review.
-- **Next step:** design a broker lifecycle for a bounded research retry
-  that keeps an auditable network log for every attempt and preserves the
-  rule that retained ledgers are never reloadable state.
-- **Source:** 2026-10-13 incident report, remaining limits.
+  release workflow steps 10 and 11 pass for the next release, with step 9's
+  manual update run from a retained 0.8.3 installation.
 
 ### T12 (P2, Open): Keep the launcher setup block intact in native fleet mode
 
@@ -114,24 +67,23 @@ Status values:
   the flattened form and ignore fleet dispatch instructions.
 - **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
 
-### T9 (P3, Open): Keep the interactive setup session on the selected model
+### T16 (P2, Open): Remove runtime homes left by a hard-killed runner
 
-- **Problem:** When the selected model is unavailable, Copilot CLI may run
-  the launcher's interactive setup session on its default model, as the
-  README documents. Review, research, and repair workers are unaffected
-  because they fail closed.
-- **Next step:** check whether newer Copilot CLI releases can keep the
-  interactive session on the selected model, then update the launcher and
-  the README.
-
-### T10 (P3, Open): Make validators independent of symlinked checkout paths
-
-- **Problem:** Validation has failed the Copilot outer-launcher argv
-  baseline in `tests/validate-harness-contract.sh` when the checkout was
-  reached through a symlinked parent directory. Running the validators
-  from the physical checkout path avoids the failure.
-- **Next step:** reproduce it, find the comparison that keeps the logical
-  path, canonicalize it, and add a regression check.
+- **Problem:** A runner stopped with `SIGKILL` cannot run its exit trap, so
+  each isolated harness runtime home under `TMPDIR` keeps its ephemeral
+  authentication bridge, for Copilot a copy of the login token entries from
+  `config.json`, until something removes the directory. The homes are mode
+  0700, so only the same user can read them. Until 2026-10-19 the validation
+  suite's hard-kill fixtures also left such homes, with the contributor's
+  real Copilot token entries, in `/tmp`; they now use fixture authentication
+  and a fixture `TMPDIR`. A launcher stopped the same way during its
+  pre-launch model check leaves its `model-check-<n>` home, with the same
+  bridge, in that launch's session directory under launcher state.
+- **Next step:** design a safe sweep, for example at the next runner or
+  launcher start, that removes only the current user's stale
+  `rhyolite-repo-*` runtime homes and launcher `model-check-*` homes whose
+  recorded process is gone, and document the manual cleanup.
+- **Source:** 2026-10-19 validation run.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 

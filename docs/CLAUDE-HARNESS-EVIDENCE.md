@@ -41,6 +41,7 @@ fully scoped steps, and only to high.
 | P10 AskUserQuestion | Claude Code's tool contract allows 1-4 questions with 2-4 options and always adds a free-text "Other" answer. | Phase 2 pickers never add `Other`. |
 | P11 hook display | Hook stdout `{"systemMessage": "..."}` is recorded as `hook_system_message` and is not sent to the model; SessionStart stdin has `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `source`; UserPromptSubmit adds `prompt_id`, `permission_mode`, `prompt`. ANSI escapes survive in the message. | Phase 2 plaque uses `systemMessage`. |
 | P12 `env --chdir` | Present. | Worker and repair environments start with `-C <dir>`. |
+| P13 same-session continuation | Operator-approved probe on 2026-10-19 with Claude Code 2.1.303, `claude-opus-5-5`, effort `max`, and the adapter-built worker argv, environment, and isolated runtime home on a one-file snapshot. A first `-p` turn with the approved `--session-id` asked the worker to remember a code word and returned `ACK` (exit 0). The same argv with `--session-id <id>` replaced by `--resume <id>` and without the `--name` pair returned the code word (exit 0): the session kept its context, both turns were appended to the one `projects/<slug>/<session-id>.jsonl` record whose `sessionId` matched every line, and every assistant turn was `claude-opus-5-5` at `max` with no sidechain or `model_refusal_fallback`. `harness_detect_worker_violation` and `harness_worker_outcome` reported clean and `completed` after both turns. Invoking the original new-session argv again exited 1 with `Error: Session ID <id> is already in use.` and left the record unchanged. Cleanup removed the credential copy. | `worker_continuation=yes`; `harness_worker_continuation_argv` replaces the `--session-id` pair with `--resume` and drops `--name`. |
 
 ### Settings validity
 
@@ -69,6 +70,7 @@ creates the runtime home.
 | `builtin_research_specialist` | `yes` | Contract v5 research seam with `claude/agents/repo-research-worker.md`; real staged scope-2 run R5. | Scope 2/3 plan cases; research worker run fails closed with cleanup when research stops before the broker. |
 | `web_research` | `yes` | R5: 46 broker calls through the exact local broker grant, validated dossier, verified research transcript. | Research argv/MCP configuration golden checks; substituted-research case. |
 | `final_message_file` | `no` | Final text comes from stdout, then the rendered transcript. | Extraction cases. |
+| `worker_continuation` | `yes` | P13: `--resume` continued an adapter-built print-mode worker session with its context, the same session record, and only the approved model and effort. | Continuation argv golden and rejection cases; the runner recovers a cut report through `--resume`, re-verifies the session record after every continuation, and rejects a continuation that records another model. |
 
 ## Model, effort, context, authentication
 

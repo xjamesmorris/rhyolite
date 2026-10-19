@@ -248,14 +248,20 @@ CLI gains a configuration that rejects the override.
 Same-session continuation replays the approved worker argv without its
 `--name` pair. `--name` only labels a brand-new session, and Copilot CLI
 1.0.98-2 rejects it when `--session-id` resolves to an existing session.
-Both mocked CLIs reproduce that rejection. Before you change
+Both mocked CLIs reproduce that rejection. Claude Code instead resumes with
+`--resume <id>` in place of `--session-id <id>` and rejects the original
+new-session argv once the session exists; its mocked CLI reproduces that
+rejection. Before you change
 `harness_worker_argv` or `harness_worker_continuation_argv`, and after every
-Copilot CLI upgrade, re-verify live:
+Copilot CLI or Claude Code upgrade, re-verify live:
 
 1. Create a session with the adapter-built worker argv in an isolated runtime
    home, using a low-cost model.
 2. Invoke the exact continuation argv on the same session.
-3. Confirm a `session.resume` event and that the session kept its context.
+3. Confirm that the session kept its context: Copilot records a
+   `session.resume` event, and Claude Code appends to the same
+   `projects/<slug>/<session-id>.jsonl` record with only the approved model
+   and effort.
 
 `harness_detect_worker_violation` is the live counterpart of the normalizer.
 The runner's `wait_for_monitored_worker` calls it every

@@ -806,6 +806,19 @@ unresolved public placeholders. Otherwise use local `SUPPORT.md`,
 `README.md`, and `CONTRIBUTING.md` guidance and never emit an unresolved
 URL.
 
+When a failed repository's `failure-analysis.json` reports `FailureClass`
+`effort-unsupported`, the approved model rejected the approved reasoning
+effort before any model call. After `RHYOLITE ERROR`, ask exactly one
+question. When `ReasoningEffortFallback.NextEffort` is nonempty, offer the
+exact choices `Use <NextEffort> reasoning effort`, `Choose another model`,
+and `Stop`, in that order, substituting the named effort; otherwise offer
+`Choose another model` and `Stop`. Never lower the reasoning effort without
+that explicit choice, never offer an effort below `high`, and never change
+any other approved setting on your own. Either change regenerates the plan,
+which must be presented as a refreshed `EFFECTIVE REVIEW PLAN` and
+confirmed with exact `Run review` before the runner executes it under its new
+`ApprovalHash`. `Stop` ends without another question.
+
 ## Persisted artifact bundle
 
 The trusted runner, not the child agent, creates a writable bundle

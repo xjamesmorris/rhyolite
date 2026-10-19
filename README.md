@@ -157,7 +157,8 @@ copilot plugin install rhyolite@rhyolite-tools
 
 Do not distribute personal access tokens or store credentials in this
 repository. The `/rhyolite:*` commands load with the plugin. Run
-`/experimental on` once and start a new session to also load the
+`/settings experimental on` once (Copilot CLI 1.0.100 and later; earlier
+releases use `/experimental on`) and start a new session to also load the
 `/repo-review` shorthand.
 
 ## Update
@@ -875,16 +876,24 @@ fixed `ReportRepairPolicy`, including `DeterministicNormalizations`, is
 disclosed by the effective plan and included in its approval hash.
 
 The approval-bound `WorkerRecoveryPolicy` adds bounded same-session recovery
-for the Copilot harness. When a report is missing, cut off at the model's
-per-response output limit, or rejected by strict validation, the runner keeps
-every valid section and asks the same review session, which still holds the
-analysis, to resend only the missing or invalid sections in bounded pages
-with the exact validator diagnostics. It also resumes the session after a
-transient model-service failure or a blocked automatic model fallback. The
-additive `WorkerRecovery` object and the `worker-recovery/` directory record
-every continuation. Every failed repository also gets a deterministic
-`failure-analysis.md` with the failure class, root cause, evidence, and
-recommended repair actions.
+for the Copilot and Claude Code harnesses. When a report is missing, cut off
+at the model's per-response output limit, or rejected by strict validation,
+the runner keeps every valid section and asks the same review session, which
+still holds the analysis, to resend only the missing or invalid sections in
+bounded pages with the exact validator diagnostics. It also resumes the
+session after a transient model-service failure or a blocked automatic model
+fallback. Research is never continued, but after the research worker's own
+transient failure the runner relaunches the research phase once with a fresh
+broker, session, and network log, and keeps the failed attempt's network log
+and artifacts under `research/attempts/1/` for audit. The additive
+`WorkerRecovery` object and the `worker-recovery/`
+directory record every continuation. Every failed repository also gets a
+deterministic `failure-analysis.md` with the failure class, root cause,
+evidence, and recommended repair actions. When the approved model rejects
+only the approved reasoning effort, that analysis names the next highest
+effort, never below `high`, and the guided agent asks whether to use it,
+choose another model, or stop; either change regenerates the effective plan,
+which you approve again before anything runs.
 
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot
@@ -1154,8 +1163,17 @@ which also accepts a safe model ID outside it (`auto` is always rejected).
 The effective plan then binds `ModelCatalogMembership` `unlisted` into
 approval, and Copilot checks availability when the review starts: an
 unavailable model fails the review without substituting another model.
-Copilot may still run the interactive setup session on its default model when
-the selected model is unavailable.
+Copilot's interactive session would instead silently run setup on its default
+model, so before Copilot starts the launcher sends one short non-interactive
+request (one premium request) from an isolated runtime home in its private
+launcher state and verifies that
+exactly the selected model and reasoning effort answered. If Copilot rejects
+the model, choose another model or quit. If it rejects only the effort, you
+can also choose the next highest effort, never below `high`; there is no
+default answer, so the effort never drops without your choice. Without a
+terminal, the launcher stops with a `launcher model availability` error
+instead, and if the check itself cannot run, it warns and starts Copilot
+unchanged.
 Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
 context is selectable as `long_context` (recommended) or `default`. The
 launcher displays harness, model, effort, and context together and asks the

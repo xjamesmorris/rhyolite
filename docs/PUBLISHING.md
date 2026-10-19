@@ -98,7 +98,8 @@ repository.
    claude plugin install rhyolite@rhyolite-tools
    ```
 
-10. Enable extension commands with `/experimental on`, then start a new
+10. Enable extension commands with `/settings experimental on`
+    (`/experimental on` before Copilot CLI 1.0.100), then start a new
     session. Confirm the one-line version/start status appears, then the
     large plaque appears only after a review-start command;
     `/rhyolite:start` selects `rhyolite:repo-review`,

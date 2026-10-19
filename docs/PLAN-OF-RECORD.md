@@ -87,7 +87,8 @@ decision; compatibility must not be preserved speculatively.
   and any recorded subagent fails the phase.
 - Contract v8 adds `harness_worker_outcome` and
   `harness_worker_continuation_argv` plus the `worker_continuation`
-  capability. When the adapter has verified continuation (Copilot), the
+  capability. When the adapter has verified continuation (Copilot and
+  Claude Code), the
   approval-bound `WorkerRecoveryPolicy` lets the runner continue the review
   worker's own session after a transient model-service failure or a blocked
   automatic model fallback (at most 2 retries), and fetch missing, truncated,

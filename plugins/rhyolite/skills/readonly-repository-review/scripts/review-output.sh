@@ -4291,6 +4291,30 @@ for line in errors:
             session_errors.append(message)
 limit_line = next((l for l in errors if "per-response output token limit" in l), "")
 
+# A harness that rejects only the approved reasoning effort names the
+# rejected level before any model call. Rhyolite never lowers the effort on
+# its own; the analysis names the next highest level, never below high, that
+# a newly approved plan may use.
+EFFORT_LEVELS = ["max", "xhigh", "high"]
+effort_fallback = None
+effort_match = re.search(
+    r'Reasoning effort "([a-z]+)" is not supported for model "[A-Za-z0-9][A-Za-z0-9._-]*"',
+    text)
+configuration_match = re.search(
+    r'[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*" does not support reasoning effort '
+    r'configuration(?: \(requested: "([a-z]+)"\))?',
+    text)
+if effort_match or configuration_match:
+    rejected_effort = (
+        effort_match.group(1) if effort_match
+        else configuration_match.group(1) or str(state.get("ReasoningEffort", "")))
+    next_effort = ""
+    if effort_match and rejected_effort in EFFORT_LEVELS:
+        position = EFFORT_LEVELS.index(rejected_effort)
+        if position + 1 < len(EFFORT_LEVELS):
+            next_effort = EFFORT_LEVELS[position + 1]
+    effort_fallback = {"RejectedEffort": rejected_effort, "NextEffort": next_effort}
+
 
 def has(pattern):
     return re.search(pattern, text, re.IGNORECASE | re.MULTILINE) is not None
@@ -4353,6 +4377,25 @@ def _():
                 ["Do not rerun until the harness adapter matches the installed harness CLI; a rerun that reaches the same invocation fails the same way.",
                  "Report the sanitized errors.txt lines and the harness CLI version to the Rhyolite maintainers."],
                 ["Compare the rejected options with the installed harness CLI's --help, fix the adapter argv builder, re-verify it live with the adapter-built argv, and make the mocked CLI reproduce the rejection."])
+
+
+@rule("effort-unsupported")
+def _():
+    if effort_fallback is None:
+        return None
+    rejected = effort_fallback["RejectedEffort"]
+    following = effort_fallback["NextEffort"]
+    model_name = str(state.get("Model", "")) or "the approved model"
+    if following:
+        return ("The approved model does not accept the approved reasoning effort.",
+                f"The harness rejected reasoning effort {rejected} for model {model_name} before any model call; Rhyolite never lowers the effort on its own.",
+                [f"Approve a regenerated plan that keeps model {model_name} at the next highest reasoning effort, {following}, then rerun; Rhyolite never offers an effort below high.",
+                 f"Or choose another model that accepts {rejected} reasoning effort in a new approved plan."],
+                [])
+    return ("The approved model does not accept any reasoning effort that Rhyolite allows.",
+            f"The harness rejected reasoning effort {rejected} for model {model_name} before any model call, and Rhyolite never runs below high reasoning effort.",
+            ["Choose another model in a new approved plan."],
+            [])
 
 
 @rule("model-unavailable")
@@ -4493,6 +4536,7 @@ record = {
     "OutputLimitHits": limit_hits,
     "OutputTokenLimit": limit_value,
     "FallbackModels": fallback_models,
+    "ReasoningEffortFallback": effort_fallback,
     "RecoveryAttempted": {
         "WorkerRecovery": recovery.get("Status", "NotReached"),
         "ReportRepair": repair.get("Status", "NotReached"),
@@ -4520,6 +4564,13 @@ lines = [
     f"- Failure class: {name}",
     f"- Harness, model, effort: {record['Harness']}, {record['Model']}, {record['ReasoningEffort']}",
     f"- Scope: {record['Scope']}",
+]
+if effort_fallback is not None:
+    lines.append(
+        f"- Reasoning effort fallback: rejected {effort_fallback['RejectedEffort']}; next highest "
+        + (effort_fallback["NextEffort"] or "none (choose another model)")
+        + "; only a newly approved plan may use it")
+lines += [
     "",
     "## Summary",
     "",
@@ -4688,7 +4739,7 @@ write_review_handoff() {
             printf 'Research artifact directory:\n\n    %s\n\n' \
                 "${research_directory}"
             printf '%s\n\n' \
-                'The research network/private directory may contain sensitive tracking identifiers and hostile unsupported bytes. Keep it local and do not render or execute private evidence.'
+                'The research network/private directory, and that of any relaunched attempt under research/attempts/, may contain sensitive tracking identifiers and hostile unsupported bytes. Keep them local and do not render or execute private evidence.'
         fi
         printf 'Read-only checkout:\n\n    %s\n\n' "${checkout}"
         printf 'Writable output directory:\n\n    %s\n\n' "${output_directory}"

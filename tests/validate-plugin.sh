@@ -1352,6 +1352,25 @@ for normalization_disclosure_surface in \
             "${normalization_disclosure_surface}" ||
         fail "Effective plan does not disclose deterministic normalizations: ${normalization_disclosure_surface}"
 done
+# A model that rejects the approved reasoning effort gets an explicit,
+# approval-bound offer of the next highest effort, never below high.
+for effort_fallback_surface in \
+    "${AGENT}" "${SKILL}" "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
+    normalized_effort_fallback="$(
+        tr '\r\n\t' '   ' < "${effort_fallback_surface}" |
+            sed -E 's/[[:space:]]+/ /g'
+    )"
+    for effort_fallback_phrase in \
+        'reports `FailureClass` `effort-unsupported`' \
+        'exact choices `Use <NextEffort> reasoning effort`, `Choose another model`, and `Stop`, in that order' \
+        'otherwise offer `Choose another model` and `Stop`' \
+        'Never lower the reasoning effort without that explicit choice, never offer an effort below `high`' \
+        'confirmed with exact `Run review` before the runner executes it under its new `ApprovalHash`' \
+        '`Stop` ends without another question.'; do
+        grep -Fq "${effort_fallback_phrase}" <<< "${normalized_effort_fallback}" ||
+            fail "Reasoning-effort fallback offer is incomplete in ${effort_fallback_surface}: ${effort_fallback_phrase}"
+    done
+done
 for progress_stage in \
     'started' 'preflight' 'clone' 'snapshot' 'analysis' \
     'report validation' 'report repair' 'artifacts' 'finalizing' \
@@ -1645,8 +1664,10 @@ grep -Fq './rhyolite --harness claude' "${README}" &&
     fail 'README does not document the Claude Code launcher, sign-in, and manifest check.'
 grep -Fq '/repo-review' "${README}" "${PUBLISHING_DOC}" ||
     fail 'Public docs do not describe the short Rhyolite command.'
-grep -Fq '/experimental on' "${README}" "${PUBLISHING_DOC}" ||
-    fail 'Public docs do not explain the extension-mode requirement.'
+for experimental_guidance_document in "${README}" "${PUBLISHING_DOC}"; do
+    grep -Fq '/settings experimental on' "${experimental_guidance_document}" ||
+        fail "Public docs do not explain the extension-mode requirement: ${experimental_guidance_document}"
+done
 normalized_readme="$(
     tr '\r\n\t' '   ' < "${README}" |
         sed -E 's/[[:space:]]+/ /g'
@@ -3558,6 +3579,30 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
 EOF
     exit 0
 fi
+# Rhyolite's pre-launch model check: answer like non-interactive Copilot.
+if [[ " $* " == *' --output-format json '* ]]; then
+    check_model=''
+    check_effort=''
+    previous=''
+    for argument in "$@"; do
+        case "${previous}" in
+            --model) check_model="${argument}" ;;
+            --reasoning-effort) check_effort="${argument}" ;;
+        esac
+        previous="${argument}"
+    done
+    cat > /dev/null
+    printf '{"type":"model.call_start","data":{"turnId":"0","model":"%s"}}\n' \
+        "${check_model}"
+    printf '{"type":"assistant.message","data":{"model":"%s","content":"OK","toolRequests":[]}}\n' \
+        "${check_model}"
+    printf '{"type":"model.call_final_result","data":{"model":"%s","result":"success"}}\n' \
+        "${check_model}"
+    printf '{"type":"session.usage_checkpoint","data":{"promptCacheBreakState":[{"conversation":"main","models":{"%s":{"model":"%s","reasoning_effort":"%s"}}}]}}\n' \
+        "${check_model}" "${check_model}" "${check_effort}"
+    printf '{"type":"result","exitCode":0}\n'
+    exit 0
+fi
 : "${RHYOLITE_STUB_LOG:?}"
 {
     printf 'PWD\0%s\0' "${PWD}"
@@ -3579,6 +3624,18 @@ if [[ -n "${RHYOLITE_STUB_EXIT-}" ]]; then
 fi
 SH
 chmod +x "${launcher_mock_bin}/copilot"
+
+# The launcher's pre-launch model check bridges authentication from
+# COPILOT_HOME, so the launcher cases use an empty fixture home. Check homes
+# belong in each launch's private session directory, so the fixture TMPDIR
+# must stay empty; both variables are restored after these cases.
+launcher_saved_copilot_home="${COPILOT_HOME-}"
+launcher_saved_copilot_home_set="${COPILOT_HOME+1}"
+launcher_saved_tmpdir="${TMPDIR-}"
+launcher_saved_tmpdir_set="${TMPDIR+1}"
+export COPILOT_HOME="${fixture_dir}/launcher copilot home"
+export TMPDIR="${fixture_dir}/launcher check tmp"
+mkdir -p -m 700 -- "${COPILOT_HOME}" "${TMPDIR}"
 
 rm -f -- "${launcher_stub_log}"
 launcher_help="$("${launcher_link}" --help)"
@@ -4126,7 +4183,10 @@ rm -f -- "${launcher_stub_log}"
         "${launcher_link}" \
             --repo https://example.com/owner/repository
 ) 2>"${launcher_mismatched_preference_stderr}"
-[[ ! -s "${launcher_mismatched_preference_stderr}" ]] ||
+# Only the pre-launch model check may report anything.
+! grep -v -e '^Checking that Copilot accepts gpt-5.6-sol at max reasoning effort (one short request)\.\.\.$' \
+    -e '^Copilot accepted gpt-5.6-sol at max reasoning effort\.$' \
+    "${launcher_mismatched_preference_stderr}" | grep -q . ||
     fail 'Harness-mismatched launcher preference changed user-facing output.'
 node - "${launcher_stub_log}" <<'JS'
 const fs = require("fs");
@@ -4247,6 +4307,21 @@ set -e
         "${unresolved_bash_stderr}" &&
     ! grep -Fq "${unresolved_owner_token}" "${unresolved_bash_stderr}" ||
     fail 'Unresolved Bash launcher metadata did not fail closed to local links.'
+
+[[ -z "$(find "${TMPDIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+    fail 'The launcher pre-launch model check wrote to TMPDIR.'
+[[ -z "$(find "${fixture_dir}" -type d -name 'model-check-*' -print -quit)" ]] ||
+    fail 'The launcher pre-launch model check left an isolated runtime home.'
+if [[ -n "${launcher_saved_copilot_home_set}" ]]; then
+    export COPILOT_HOME="${launcher_saved_copilot_home}"
+else
+    unset COPILOT_HOME
+fi
+if [[ -n "${launcher_saved_tmpdir_set}" ]]; then
+    export TMPDIR="${launcher_saved_tmpdir}"
+else
+    unset TMPDIR
+fi
 
 fixture_timeline="${fixture_dir}/timeline.txt"
 fixture_report="${fixture_dir}/report.txt"
@@ -6184,6 +6259,7 @@ function assertCommonPlan(
     "PagePartLimit",
     "PageSectionLimit",
     "ProtocolVersion",
+    "ResearchRelaunchLimit",
     "ResubmissionRoundLimit",
     "TransientRetryLimit",
   ], `${label} worker-recovery policy`);
@@ -6192,6 +6268,7 @@ function assertCommonPlan(
       plan.WorkerRecoveryPolicy.TransientRetryLimit !== 2 ||
       plan.WorkerRecoveryPolicy.ResubmissionRoundLimit !== 2 ||
       plan.WorkerRecoveryPolicy.ContinuationLimit !== 20 ||
+      plan.WorkerRecoveryPolicy.ResearchRelaunchLimit !== 1 ||
       typeof plan.WorkerRecoveryPolicy.Available !== "boolean") {
     throw new Error(`${label} worker-recovery policy changed`);
   }
@@ -7554,6 +7631,7 @@ for argument in "$@"; do
     previous="${argument}"
 done
 [[ "${output_format}" == json ]] || exit 120
+mock_emit_transient=0
 mock_structured_capture="$(
     mktemp "${TMPDIR:-/tmp}/mock-copilot-stdout.XXXXXXXX"
 )"
@@ -7565,7 +7643,8 @@ emit_structured_events() {
     /usr/bin/python3 - \
         "${mock_structured_capture}" \
         "${MOCK_REPLY_MODEL:-${model}}" \
-        "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" <<'EVENTS'
+        "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" \
+        "${mock_emit_transient}" <<'EVENTS'
 import json
 import pathlib
 import sys
@@ -7581,6 +7660,21 @@ def event(kind, data):
 
 
 event("model.call_start", {"turnId": "0", "model": model})
+if sys.argv[4] == "1":
+    # A transient model-service failure that Copilot's own retries did not
+    # recover, as recorded by Copilot CLI 1.0.98.
+    event(
+        "model.call_failure",
+        {"model": model, "failureKind": "transport",
+         "errorMessage": "Connection timed out [ETIMEDOUT]"},
+    )
+    event(
+        "session.error",
+        {"errorType": "query",
+         "message": "Execution failed: Failed to get response from the AI model; retried 5 times Last error: unexpected EOF during chunk size line"},
+    )
+    print(json.dumps({"type": "result", "exitCode": 1}))
+    raise SystemExit(0)
 if content:
     event(
         "assistant.message",
@@ -7889,6 +7983,9 @@ PY
         "${research_stderr_path}" \
         "${share_path}" \
         > "${MOCK_LOG}.research-raw-paths"
+    # Like the real broker, refuse a network root that already exists: a
+    # relaunched research phase must start with a fresh network log.
+    [[ ! -e "${network_root}" ]] || exit 102
     mkdir -p -- "${network_root}/private/bodies"
     chmod 700 -- \
         "${network_root}" \
@@ -8021,6 +8118,19 @@ EOF
     chmod 600 -- "${broker_runtime}/broker-exit.json"
     cat > "${MOCK_LOG}.research-request"
     printf '# Mock Copilot research session\n' > "${share_path}"
+    # MOCK_RESEARCH_TRANSIENT names a marker: the first research attempt ends
+    # with a transient model-service failure, and a marker that holds
+    # `always` fails every attempt.
+    if [[ -n "${MOCK_RESEARCH_TRANSIENT-}" ]]; then
+        printf '%s\n' "${network_root}" >> "${MOCK_RESEARCH_TRANSIENT}.attempts"
+        if [[ ! -e "${MOCK_RESEARCH_TRANSIENT}" ||
+            "$(cat -- "${MOCK_RESEARCH_TRANSIENT}")" == always ]]; then
+            [[ -e "${MOCK_RESEARCH_TRANSIENT}" ]] ||
+                : > "${MOCK_RESEARCH_TRANSIENT}"
+            mock_emit_transient=1
+            exit 1
+        fi
+    fi
     if [[ "${MOCK_RESEARCH_CAPABILITY_FAIL-}" == "1" ]]; then
         printf '%s\n' 'mock research capability failure' >&2
         exit 31
@@ -12053,6 +12163,127 @@ if (expectedError !== "") {
 JS
 done
 
+# A transient research-worker failure gets one fresh relaunch: a new broker,
+# runtime, session, and network log. The failed attempt's network log and
+# sanitized artifacts move under research/attempts/1/ and are never passed to
+# the relaunched broker, which, like the real broker, refuses an existing
+# network root. A second transient failure stays terminal.
+for research_relaunch_case in recovered exhausted; do
+    research_relaunch_root="${fixture_dir}/research-relaunch-${research_relaunch_case}"
+    research_relaunch_marker="${research_relaunch_root}/transient"
+    mkdir -p -- "${research_relaunch_root}"
+    if [[ "${research_relaunch_case}" == exhausted ]]; then
+        printf 'always\n' > "${research_relaunch_marker}"
+    fi
+    PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${research_relaunch_root}/workspace" \
+            --output-root "${research_relaunch_root}/output" \
+            --non-interactive \
+            --no-open-html \
+            --plan-only > "${research_relaunch_root}/plan.json"
+    research_relaunch_hash="$(
+        node -e \
+            'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+            "${research_relaunch_root}/plan.json"
+    )"
+    : > "${mock_log}"
+    : > "${mock_git_log}"
+    set +e
+    env \
+        MOCK_RESEARCH_TRANSIENT="${research_relaunch_marker}" \
+        RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        MOCK_RUNTIME_LOG="${runtime_log}" \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        TMPDIR="${runtime_tmp}" \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope 2 \
+            --workspace-root "${research_relaunch_root}/workspace" \
+            --output-root "${research_relaunch_root}/output" \
+            --expected-plan-hash "${research_relaunch_hash}" \
+            --non-interactive \
+            --no-open-html >"${research_relaunch_root}/stdout" \
+            2>"${research_relaunch_root}/stderr"
+    research_relaunch_exit=$?
+    set -e
+    if [[ "${research_relaunch_case}" == recovered ]]; then
+        if ((research_relaunch_exit != 0)); then
+            cat -- "${research_relaunch_root}/stdout" \
+                "${research_relaunch_root}/stderr" >&2
+            fail 'A transient research failure was not recovered by one relaunch.'
+        fi
+        grep -Fq 'AGENT=rhyolite:repo-review-worker' "${mock_log}" ||
+            fail 'The main review did not run after the research relaunch.'
+    else
+        ((research_relaunch_exit != 0)) ||
+            fail 'Research that failed transiently twice unexpectedly succeeded.'
+        grep -Fq 'Stage: model service' "${research_relaunch_root}/stdout" ||
+            fail 'Exhausted research relaunch lost its model-service stage.'
+        ! grep -Fq 'AGENT=rhyolite:repo-review-worker' "${mock_log}" ||
+            fail 'The main review started after exhausted research relaunches.'
+    fi
+    grep -Fq 'relaunching research with a fresh broker and network log (2/2)' \
+        "${research_relaunch_root}/stdout" ||
+        fail "${research_relaunch_case}: research relaunch progress is missing."
+    research_relaunch_run="$(
+        find "${research_relaunch_root}/output" -mindepth 1 -maxdepth 1 -type d |
+            head -n 1
+    )"
+    node - \
+        "${research_relaunch_run}" \
+        "${research_relaunch_case}" \
+        "${research_relaunch_marker}.attempts" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const [run, relaunchCase, attemptsLog] = process.argv.slice(2);
+const research = path.join(run, "github--octocat--hello-world", "research");
+const archive = path.join(research, "attempts", "1");
+const researchState = JSON.parse(fs.readFileSync(
+  path.join(research, "research-state.json"),
+  "utf8",
+));
+const attempt = JSON.parse(fs.readFileSync(path.join(archive, "attempt.json"), "utf8"));
+const archivedErrors = fs.readFileSync(path.join(archive, "research-errors.txt"), "utf8");
+const finalErrors = fs.readFileSync(path.join(research, "research-errors.txt"), "utf8");
+const mode = (target) => (fs.statSync(target).mode & 0o777).toString(8);
+const expectedStatus = relaunchCase === "recovered" ? "Completed" : "ResearchFailed";
+const attemptRoots = fs.readFileSync(attemptsLog, "utf8").trim().split("\n");
+if (researchState.Status !== expectedStatus ||
+    researchState.Attempts?.Count !== 2 ||
+    researchState.Attempts?.RelaunchLimit !== 1 ||
+    JSON.stringify(researchState.Attempts?.Archived) !== JSON.stringify([archive]) ||
+    attempt.Attempt !== 1 ||
+    attempt.Outcome !== "transient-failure" ||
+    attempt.NetworkLog !== path.join(archive, "network") ||
+    !fs.existsSync(path.join(archive, "network", "summary.json")) ||
+    !fs.existsSync(path.join(archive, "research-timeline.txt")) ||
+    !fs.existsSync(path.join(archive, "research-session.md")) ||
+    mode(path.join(research, "attempts")) !== "700" ||
+    mode(archive) !== "700" ||
+    mode(path.join(archive, "network", "private")) !== "700" ||
+    mode(path.join(archive, "attempt.json")) !== "600" ||
+    !archivedErrors.includes("Worker outcome: transient model-service failure.") ||
+    !finalErrors.includes(
+      `Research relaunch 1 of 1: attempt 1 ended with a transient-failure outcome, so Rhyolite relaunched research with a fresh broker, runtime, session, and network log. The earlier attempt is archived under ${archive}.`) ||
+    attemptRoots.length !== 2 ||
+    attemptRoots.some((root) => root !== path.join(research, "network")) ||
+    fs.existsSync(path.join(research, "attempts", "2"))) {
+  throw new Error(`${relaunchCase} research relaunch artifacts are invalid: ${JSON.stringify(researchState.Attempts)}`);
+}
+JS
+done
+
 # A final research reply that no longer reproduces the accepted candidate must
 # not discard validated research: the broker's persisted accepted bytes are
 # canonical, the difference is recorded, and the main review proceeds.
@@ -14845,17 +15076,53 @@ for failure_case in worker timeout model effort effort-unsupported; do
     case_run="$(
         find "${case_output}" -mindepth 1 -maxdepth 1 -type d | head -n 1
     )"
-    node - "${case_run}" "${expected_status}" "${failure_exit}" <<'JS'
+    node - "${case_run}" "${expected_status}" "${failure_exit}" "${failure_case}" <<'JS'
 const fs = require("fs");
 const path = require("path");
-const [run, expectedStatus, expectedExitText] = process.argv.slice(2);
+const [run, expectedStatus, expectedExitText, failureCase] = process.argv.slice(2);
+const repositoryPath = path.join(run, "github--octocat--hello-world");
 const state = JSON.parse(fs.readFileSync(
-  path.join(run, "github--octocat--hello-world", "state.json"),
+  path.join(repositoryPath, "state.json"),
   "utf8",
 ));
 if (state.Status !== expectedStatus ||
     state.ExitCode !== Number.parseInt(expectedExitText, 10)) {
   throw new Error("worker/timeout failure state lost status or exit code");
+}
+// An effort rejection names the next highest effort, never below high, that
+// only a newly approved plan may use; an unavailable model names none.
+const expected = {
+  model: { failureClass: "model-unavailable", fallback: null },
+  effort: { failureClass: "effort-unsupported", fallback: ["max", "xhigh"] },
+  "effort-unsupported": { failureClass: "effort-unsupported", fallback: ["max", ""] },
+}[failureCase];
+if (expected) {
+  const analysis = JSON.parse(fs.readFileSync(
+    path.join(repositoryPath, "failure-analysis.json"),
+    "utf8",
+  ));
+  const markdown = fs.readFileSync(
+    path.join(repositoryPath, "failure-analysis.md"),
+    "utf8",
+  );
+  const fallback = analysis.ReasoningEffortFallback;
+  if (analysis.FailureClass !== expected.failureClass ||
+      (expected.fallback === null
+        ? fallback !== null
+        : fallback?.RejectedEffort !== expected.fallback[0] ||
+          fallback?.NextEffort !== expected.fallback[1])) {
+    throw new Error(`${failureCase} failure analysis lost its effort fallback: ${JSON.stringify(analysis)}`);
+  }
+  if (failureCase === "effort" &&
+      (!markdown.includes("- Reasoning effort fallback: rejected max; next highest xhigh; only a newly approved plan may use it") ||
+       !analysis.RecommendedActions[0].includes("next highest reasoning effort, xhigh"))) {
+    throw new Error("effort failure analysis does not offer the next highest effort");
+  }
+  if (failureCase === "effort-unsupported" &&
+      (!markdown.includes("next highest none (choose another model)") ||
+       analysis.RecommendedActions.some((action) => action.includes("next highest")))) {
+    throw new Error("effort-configuration failure analysis offered a lower effort");
+  }
 }
 JS
 done
@@ -14978,6 +15245,10 @@ const repairWorkdir = fs.readFileSync(
   "utf8",
 ).trim();
 const repair = state.ReportRepair;
+const reviewHome = fs.readFileSync(
+  `${mockLogPath}.rhyolite-repo-review-worker.home`,
+  "utf8",
+).trim();
 if (runState.Status !== "Interrupted" ||
     state.Status !== "Interrupted" ||
     state.ExitCode !== 143 ||
@@ -15018,7 +15289,9 @@ if (runState.Status !== "Interrupted" ||
       (line) => line === "PHASE=report-repair",
     ).length !== 1 ||
     fs.existsSync(repairHome) ||
-    fs.existsSync(repairWorkdir)) {
+    fs.existsSync(repairWorkdir) ||
+    !path.basename(reviewHome).startsWith("rhyolite-repo-review-copilot.") ||
+    fs.existsSync(reviewHome)) {
   throw new Error("repair interruption did not preserve truthful isolated state");
 }
 for (const artifact of [
@@ -15158,6 +15431,10 @@ const repairWorkdir = fs.readFileSync(
   "utf8",
 ).trim();
 const repair = state.ReportRepair;
+const reviewHome = fs.readFileSync(
+  `${mockLogPath}.rhyolite-repo-review-worker.home`,
+  "utf8",
+).trim();
 if (runState.Status !== "Interrupted" ||
     state.Status !== "Interrupted" ||
     state.ExitCode !== 143 ||
@@ -15193,7 +15470,9 @@ if (runState.Status !== "Interrupted" ||
       (line) => line === "AGENT=rhyolite:repo-research-worker",
     ) ||
     fs.existsSync(repairHome) ||
-    fs.existsSync(repairWorkdir)) {
+    fs.existsSync(repairWorkdir) ||
+    !path.basename(reviewHome).startsWith("rhyolite-repo-review-copilot.") ||
+    fs.existsSync(reviewHome)) {
   throw new Error("post-success repair interruption published stale success state");
 }
 JS
@@ -15475,14 +15754,18 @@ hard_kill_root="${fixture_dir}/hard-kill"
 hard_kill_output="${hard_kill_root}/output"
 hard_kill_ready="${hard_kill_root}/ready"
 hard_kill_stdout="${hard_kill_root}/runner.stdout"
-mkdir -p -- "${hard_kill_root}"
+mkdir -p -- "${hard_kill_root}" "${hard_kill_root}/tmp"
 : > "${hard_kill_ready}"
+# A hard-killed runner cannot remove its runtime homes, so this fixture keeps
+# them inside the fixture directory and bridges only fixture authentication.
 MOCK_COPILOT_BLOCK=1 \
     MOCK_COPILOT_IGNORE_TERM=1 \
     MOCK_COPILOT_READY_FILE="${hard_kill_ready}" \
     MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
     COPILOT_GITHUB_TOKEN=mock-token \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${hard_kill_root}/tmp" \
     GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
     GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
     PATH="${mock_bin}:${PATH}" \
@@ -15553,13 +15836,15 @@ orphan_root="${fixture_dir}/orphan-worker"
 orphan_output="${orphan_root}/output"
 orphan_ready="${orphan_root}/ready"
 orphan_stdout="${orphan_root}/runner.stdout"
-mkdir -p -- "${orphan_root}"
+mkdir -p -- "${orphan_root}" "${orphan_root}/tmp"
 : > "${orphan_ready}"
 MOCK_COPILOT_BLOCK=1 \
     MOCK_COPILOT_READY_FILE="${orphan_ready}" \
     MOCK_LOG="${mock_log}" \
     MOCK_GIT_LOG="${mock_git_log}" \
     COPILOT_GITHUB_TOKEN=mock-token \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${orphan_root}/tmp" \
     GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
     GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
     PATH="${mock_bin}:${PATH}" \

@@ -39,11 +39,21 @@ own session, through `harness_worker_continuation_argv`, after a transient
 model-service failure, after an automatic model fallback that was blocked
 before it produced output, or to fetch missing, truncated, or invalid report
 sections in bounded pages (`RHYOLITE_REPORT_DELIVERY_V1`). A continuation
-uses the exact approved argv less only its new-session name label, and the
+uses the exact approved argv less only its new-session name label (Claude
+Code resumes with `--resume` in place of `--session-id`), and the
 same environment, runtime home, tools, model, effort, and context, and live
-enforcement applies to it. The contract never
+enforcement applies to it. The runner persists the adapter's agent state
+after every worker invocation that keeps the runtime home and calls
+`harness_verify_isolation` after every continuation, so the adapter's
+post-exit verification covers every continuation turn before its reply is
+accepted. The contract never
 permits a model to rewrite accepted report sections, accepts substituted
-output, relaunches research, or falls back to another harness or model.
+output, continues a research session, or falls back to another harness or
+model. After the research worker's own transient model-service failure or
+blocked automatic fallback, the runner relaunches research at most once
+(approval-bound `ResearchRelaunchLimit`) with a fresh broker, runtime,
+session, and network log, archives the failed attempt under
+`research/attempts/<n>/`, and never passes an archived ledger to a broker.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
 playbook for Contract v8 and any future production adapter.
@@ -210,7 +220,7 @@ Every mapped adapter must define all functions below.
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
 | `harness_extract_report_repair` | Extract only the latest compact confidence-edit reply from sanitized repair output or the latest assistant transcript response. |
 | `harness_verify_isolation` | Perform any adapter-specific post-run isolation verification; a no-op must still return success explicitly. |
-| `harness_persist_agent_state` | Persist only the adapter's allowlisted, sanitized continuation state. |
+| `harness_persist_agent_state` | Persist only the adapter's allowlisted, sanitized continuation state, including what the adapter's post-exit verification reads; the runner calls it again after every continuation. |
 | `harness_sanitize_runtime_home` | Remove or sanitize the temporary runtime home and fail if cleanup cannot be completed. |
 | `harness_allow_all_detected` | Retain compatibility detection of the outer harness's allow-all state without propagating it to the worker. The runner must not use this signal to open reports. |
 
@@ -250,7 +260,7 @@ Contract v5 retains these capability keys:
 | `web_research` | `yes` | `yes` |
 | `shell_denial` | `yes` | `yes` |
 | `final_message_file` | `no` | `no` |
-| `worker_continuation` | `yes` | `unverified` |
+| `worker_continuation` | `yes` | `yes` |
 
 Copilot reports `subagents` and `builtin_security_specialist` as `no` since
 Contract v7. A live probe showed that a `task` call's `model` argument
@@ -286,11 +296,16 @@ Copilot was the only mapped I1a adapter and remains the default harness.
   closed when Copilot reports `Model "<id>" from --model flag is not
   available.`, `Reasoning effort "<effort>" is not supported for model
   "<id>".`, or `Model "<id>" does not support reasoning effort
-  configuration`, and the runner reports a `model availability` stage. A
+  configuration`, and the runner reports a `model availability` stage; an
+  effort rejection is classified `effort-unsupported` with the next highest
+  effort, never below `high`, that only a newly approved plan may use. A
   child that starts but whose structured output records another model or
   `reasoning_effort` is rejected at the `approved model enforcement` stage. The
-  launcher's interactive orchestrator session instead falls back to
-  Copilot's default model, so it cannot prove availability.
+  launcher's interactive orchestrator session would instead fall back to
+  Copilot's default model (re-verified with Copilot CLI 1.0.100), so the
+  launcher first checks the selected model and effort with one isolated
+  non-interactive request and asks for another model, the next highest
+  effort, or quit when Copilot rejects them.
 - Reasoning effort: `max` recommended; `xhigh` and `high` selectable
 - Context tier: `long_context` recommended; `default` selectable
 - Provider summary ID: `github-copilot`
@@ -717,9 +732,18 @@ non-interactive JSON session when it is invoked again with the same
 the Copilot adapter returns the exact approved worker argv without its
 `--name` pair. `--name` only labels a brand-new session, and Copilot CLI
 1.0.98-2 rejects it when `--session-id` resolves to an existing session; any
-other session-name spelling in the source argv fails closed. Claude Code reports
-`worker_continuation` as `unverified` until a live probe proves same-session
-print-mode continuation, so the runner never continues a Claude Code session.
+other session-name spelling in the source argv fails closed. Claude Code
+resumes a print-mode session with `--resume <id>` under the same runtime home
+(verified live with Claude Code 2.1.303: the resumed worker kept its context,
+appended to the same session record, and recorded only the approved model and
+effort), and the original `--session-id` argv fails once the session exists,
+so the Claude Code adapter replaces the `--session-id` pair with `--resume`
+and drops the `--name` pair. Because Claude Code verifies the model and
+effort from its rendered session record rather than from stdout, the runner
+persists the adapter's agent state after every worker invocation that keeps
+the runtime home and calls `harness_verify_isolation` after every
+continuation, and a continuation re-selects the review runtime home even
+after a report-repair child prepared its own.
 
 The live failures that motivated Contract v8 were reports cut at Copilot's
 32,000-token per-response output limit, where reasoning tokens count toward

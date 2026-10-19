@@ -139,6 +139,12 @@ import sys
 (mode, output, cwd, model, effort, session_id,
  report_path, email, unsafe_text) = sys.argv[1:10]
 report = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n")
+if mode == "cut":
+    # The reply and the session record both end inside a section, before the
+    # closing delimiter, so only same-session recovery can complete the report.
+    report_lines = report.split("\n")
+    cut_index = report_lines.index("CLAIMS AND REPUTATION INTEGRITY ASSESSMENT")
+    report = "\n".join(report_lines[:cut_index + 2])
 base = {
     "sessionId": session_id,
     "cwd": cwd,
@@ -270,6 +276,79 @@ path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(text, encoding="utf-8")
 PY
 
+# Answers one same-session report delivery request the way a resumed Claude
+# Code print-mode session does: it appends the request and the reply to the
+# existing session record and prints only the reply.
+claude_session_continuer="${fixture_root}/claude-session-continuer.py"
+cat > "${claude_session_continuer}" <<'PY'
+import json
+import pathlib
+import sys
+
+(record_path, request_path, report_path, model, effort, session_id, cwd,
+ mode) = sys.argv[1:9]
+request = pathlib.Path(request_path).read_text(encoding="utf-8").splitlines()
+report = pathlib.Path(report_path).read_text(encoding="utf-8").splitlines()
+page_id = next(line.split(": ", 1)[1] for line in request
+               if line.startswith("Request: "))
+start = request.index("Requested sections, in this exact order:") + 1
+sections = []
+for line in request[start:]:
+    if not line.startswith("- "):
+        break
+    sections.append(line[2:])
+headings = {
+    "REVIEW CONTEXT", "EXECUTIVE SUMMARY", "FINDINGS",
+    "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+    "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT", "COMMUNITY HEALTH ASSESSMENT",
+    "RESEARCH SOURCE LANDSCAPE", "INACCESSIBLE RESOURCE REGISTER",
+    "TOP USER RETRIEVAL PRIORITIES", "RESEARCH TRANSPORT OBSERVATIONS",
+    "PRIOR ART AND ORIGINALITY ASSESSMENT",
+    "CODE AND ARCHITECTURE PROVENANCE ASSESSMENT",
+    "GENERATED-CODE PROVENANCE ASSESSMENT",
+    "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS", "PRIORITIZED REMEDIATION",
+    "OVERALL ASSESSMENT",
+}
+page = [f"Delivering {len(sections)} section(s).",
+        f"RHYOLITE REPORT PAGE {page_id} BEGIN"]
+for section in sections:
+    index = report.index(section)
+    body = []
+    for line in report[index + 1:]:
+        if line in headings or (len(line) >= 80 and set(line) == {"="}):
+            break
+        body.append(line)
+    page.append(section)
+    page.append("\n".join(body).rstrip("\n"))
+    page.append("")
+page.append(f"RHYOLITE REPORT PAGE {page_id} END")
+reply = "\n".join(page)
+base = {
+    "sessionId": session_id,
+    "cwd": cwd,
+    "version": "2.1.303",
+    "userType": "external",
+    "entrypoint": "sdk-cli",
+    "isSidechain": False,
+}
+used_model = "claude-opus-4-8" if mode == "substituted" else model
+records = [
+    {**base, "type": "user", "uuid": f"u-continuation-{page_id}",
+     "message": {"role": "user", "content": "\n".join(request)}},
+    {**base, "type": "assistant", "uuid": f"a-continuation-{page_id}",
+     "effort": effort, "perTurnEffort": effort, "advisorModel": None,
+     "message": {"id": f"msg_continuation_{page_id}", "type": "message",
+                 "role": "assistant", "model": used_model,
+                 "content": [{"type": "text", "text": reply}],
+                 "stop_reason": "end_turn"}},
+]
+with pathlib.Path(record_path).open("a", encoding="utf-8") as stream:
+    for record in records:
+        stream.write(json.dumps(record, ensure_ascii=False,
+                                separators=(",", ":")) + "\n")
+print(reply)
+PY
+
 claude_unsafe_text() {
     local credential_url
     local email_address
@@ -374,6 +453,7 @@ claude_clear_auth_environment=(
         [web_research]=yes
         [shell_denial]=yes
         [final_message_file]=no
+        [worker_continuation]=yes
     )
     for capability in "${!claude_capabilities[@]}"; do
         assert_equal \
@@ -630,6 +710,60 @@ PY
     claude_rejects_worker_argv 'a relative transcript path' \
         "${claude_valid_worker_inputs[@]:0:9}" session.md 0
 
+    # Claude Code resumes a print-mode session with --resume <id> under the
+    # same runtime home: the new-session --session-id fails once the session
+    # exists, and --name only labels a brand-new session.
+    [[ "${claude_expected_worker_arguments[5]}" == --session-id &&
+        "${claude_expected_worker_arguments[7]}" == --name ]] ||
+        fail 'The golden Claude Code worker argv no longer names its session at index 5.'
+    declare -a claude_expected_continuation_arguments=(
+        "${claude_expected_worker_arguments[@]:0:5}"
+        --resume "${claude_session_id}"
+        "${claude_expected_worker_arguments[@]:9}"
+    )
+    declare -a claude_resumed_arguments=()
+    harness_worker_continuation_argv \
+        claude_resumed_arguments claude_worker_arguments ||
+        fail "Claude Code continuation argv failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    cmp -s <(printf '%s\0' "${claude_resumed_arguments[@]}") \
+        <(printf '%s\0' "${claude_expected_continuation_arguments[@]}") ||
+        fail 'Claude Code continuation argv is not the approved worker argv resumed with --resume and without --name.'
+    claude_rejects_continuation_argv() {
+        local label="$1"
+        shift
+        local -a claude_rejected_source=("$@")
+        local -a claude_rejected_continuation=()
+
+        if harness_worker_continuation_argv \
+            claude_rejected_continuation claude_rejected_source \
+            >/dev/null 2>&1; then
+            fail "Claude Code continuation argv accepted ${label}."
+        fi
+    }
+    claude_rejects_continuation_argv 'a short session-name option' \
+        --session-id "${claude_session_id}" -n "${claude_session_name}"
+    claude_rejects_continuation_argv 'an inline session name' \
+        --session-id "${claude_session_id}" "--name=${claude_session_name}"
+    claude_rejects_continuation_argv 'a session name without its value' \
+        --session-id "${claude_session_id}" --name
+    claude_rejects_continuation_argv 'an inline session identifier' \
+        "--session-id=${claude_session_id}"
+    claude_rejects_continuation_argv 'an invalid session identifier' \
+        --session-id not-a-uuid --name "${claude_session_name}"
+    claude_rejects_continuation_argv 'an argv without a session' \
+        -p --model claude-opus-5-5
+    claude_rejects_continuation_argv 'two sessions' \
+        --session-id "${claude_session_id}" --session-id "${claude_session_id}"
+    for claude_resume_form in --resume -r --continue -c --fork-session \
+        "--resume=${claude_session_id}"; do
+        claude_rejects_continuation_argv "an existing ${claude_resume_form} option" \
+            --session-id "${claude_session_id}" "${claude_resume_form}"
+    done
+    if harness_worker_continuation_argv 'bad[destination]' \
+        claude_worker_arguments >/dev/null 2>&1; then
+        fail 'Claude Code continuation argv accepted an unsafe array destination.'
+    fi
+
     claude_source_home="${fixture_root}/claude-source-home"
     claude_runtime_home="${fixture_root}/claude-runtime-home"
     mkdir -m 700 -- "${claude_source_home}" "${claude_runtime_home}"
@@ -698,6 +832,26 @@ PY
         2>/dev/null; then
         fail 'Claude Code accepted an unsupported runtime-home phase.'
     fi
+    # A continuation resumes the review worker's own session, so it returns
+    # live enforcement and post-exit verification to the review runtime home
+    # even after a report-repair child prepared its own home.
+    claude_repair_phase_home="${fixture_root}/claude-repair-phase-home"
+    mkdir -m 700 -- "${claude_repair_phase_home}"
+    harness_prepare_worker_home "${claude_repair_phase_home}" max long_context \
+        report-repair ||
+        fail 'Claude Code report-repair home preparation failed.'
+    assert_equal report-repair "${CLAUDE_HOME_PHASE}" \
+        'Claude Code report-repair runtime-home phase'
+    declare -a claude_phase_continuation=()
+    harness_worker_continuation_argv \
+        claude_phase_continuation claude_worker_arguments ||
+        fail 'Claude Code continuation argv failed after report repair.'
+    assert_equal review "${CLAUDE_HOME_PHASE}" \
+        'Claude Code continuation runtime-home phase'
+    assert_equal "${claude_runtime_home}" "${CLAUDE_RUNTIME_HOME}" \
+        'Claude Code continuation runtime home'
+    harness_sanitize_runtime_home "${claude_repair_phase_home}" ||
+        fail 'Claude Code report-repair phase home cleanup failed.'
     if harness_prepare_worker_home "${claude_runtime_home}" low long_context \
         2>/dev/null; then
         fail 'Claude Code runtime home accepted a downgraded effort.'
@@ -1193,6 +1347,7 @@ phase=review
 model=''
 effort=''
 session_id=''
+resumed=0
 mcp_config=''
 previous=''
 for argument in "$@"; do
@@ -1200,12 +1355,14 @@ for argument in "$@"; do
         --model) model="${argument}" ;;
         --effort) effort="${argument}" ;;
         --session-id) session_id="${argument}" ;;
+        --resume) session_id="${argument}"; resumed=1 ;;
     esac
     [[ "${argument}" != --no-session-persistence ]] || phase=report-repair
     [[ "${argument}" != rhyolite:repo-research-worker ]] || phase=research
     [[ "${previous}" != --mcp-config ]] || mcp_config="${argument}"
     previous="${argument}"
 done
+((resumed == 0)) || phase=continuation
 capture="${RHYOLITE_CLAUDE_CAPTURE%/}/${phase}"
 mkdir -p -- "${capture}"
 printf '%s\0' "$@" > "${capture}/argv"
@@ -1293,6 +1450,26 @@ if [[ "${phase}" == research ]]; then
 fi
 [[ "$(stat -c '%a' "${CLAUDE_CONFIG_DIR}")" == 700 &&
     "$(stat -c '%a' "${CLAUDE_CONFIG_DIR}/settings.json")" == 600 ]] || exit 74
+project="${CLAUDE_CONFIG_DIR}/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
+if [[ "${phase}" == continuation ]]; then
+    printf '%s\n' "$*" >> "${RHYOLITE_CLAUDE_CAPTURE%/}/continuations"
+    printf '%s\n' "${request}" > "${capture}/request"
+    if [[ ! -f "${project}/${session_id}.jsonl" ]]; then
+        printf 'No conversation found with session ID: %s\n' "${session_id}" >&2
+        exit 1
+    fi
+    python3 -I "${RHYOLITE_MOCK_CLAUDE_CONTINUER:?}" \
+        "${project}/${session_id}.jsonl" "${capture}/request" \
+        "${RHYOLITE_MOCK_CLAUDE_REPORT:?}" "${model}" "${effort}" \
+        "${session_id}" "$(pwd)" \
+        "${RHYOLITE_MOCK_CLAUDE_CONTINUATION:-valid}"
+    exit 0
+fi
+# Like Claude Code, a new-session argv cannot reuse an existing session ID.
+if [[ -n "${session_id}" && -f "${project}/${session_id}.jsonl" ]]; then
+    printf 'Error: Session ID %s is already in use.\n' "${session_id}" >&2
+    exit 1
+fi
 mode="${RHYOLITE_MOCK_CLAUDE_MODE:-complete}"
 if [[ "${mode}" == unavailable ]]; then
     printf "There's an issue with the selected model (%s). It may not exist or you may not have access to it. Run --model to pick a different model.\n" \
@@ -1301,7 +1478,6 @@ if [[ "${mode}" == unavailable ]]; then
         "${model}" >&2
     exit 1
 fi
-project="${CLAUDE_CONFIG_DIR}/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"
 if [[ "${mode}" != no-transcript ]]; then
     python3 -I "${RHYOLITE_MOCK_CLAUDE_WRITER:?}" \
         "${mode}" "${project}/${session_id}.jsonl" "$(pwd)" \
@@ -1316,6 +1492,10 @@ case "${mode}" in
         ;;
     max-tokens)
         sed -n '/^OVERALL ASSESSMENT$/,$p' "${RHYOLITE_MOCK_CLAUDE_REPORT}"
+        ;;
+    cut)
+        awk '{ print } /^CLAIMS AND REPUTATION INTEGRITY ASSESSMENT$/ { getline; print; exit }' \
+            "${RHYOLITE_MOCK_CLAUDE_REPORT}"
         ;;
     unsafe)
         printf '%s\n' "${RHYOLITE_MOCK_CLAUDE_UNSAFE}"
@@ -1343,6 +1523,7 @@ claude_runner_environment=(
     "CLAUDE_CONFIG_DIR=${claude_runner_source_config}"
     "RHYOLITE_MOCK_CLAUDE_CREDENTIALS=${claude_runner_source_config}/.credentials.json"
     "RHYOLITE_MOCK_CLAUDE_WRITER=${claude_session_writer}"
+    "RHYOLITE_MOCK_CLAUDE_CONTINUER=${claude_session_continuer}"
     "RHYOLITE_MOCK_CLAUDE_REPORT=${claude_canonical_report}"
     "RHYOLITE_MOCK_CLAUDE_EMAIL=${claude_fixture_email}"
     ANTHROPIC_MODEL=hostile-substitute-model
@@ -1784,6 +1965,83 @@ assert_equal ReviewFailed "$(claude_state_value Status)" \
     'Claude Code failed worker state'
 assert_not_contains "${CLAUDE_RUN_REPOSITORY}/errors.txt" \
     'Harness failure stage:' 'Claude Code failed worker stage'
+
+# Same-session recovery: the reply and the session record both end inside a
+# section, so the runner resumes the worker's own session with --resume and
+# assembles the report from strictly validated pages.
+claude_run_case cut 0 --env RHYOLITE_MOCK_CLAUDE_MODE=cut
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" "${CLAUDE_RUN_PATH}/state.json" \
+    "${CLAUDE_RUN_PATH}/review-plan.json" <<'JS'
+const fs = require("fs");
+const [statePath, runPath, planPath] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+const run = JSON.parse(fs.readFileSync(runPath, "utf8"));
+const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+const recovery = state.WorkerRecovery;
+if (state.Status !== "Completed" || recovery?.Status !== "Recovered" ||
+    recovery.Trigger !== "truncated" || recovery.Available !== true ||
+    recovery.Continuations < 1 || recovery.TransientRetries !== 0 ||
+    state.ReportRepair?.Status !== "NotEligible" ||
+    plan.WorkerRecoveryPolicy?.Available !== true ||
+    run.WorkerRecoveryPolicy?.Available !== true) {
+  throw new Error(`Claude Code cut report was not recovered in the same session: ${JSON.stringify(recovery)}`);
+}
+JS
+cmp -s <(grep -v '^$' "${CLAUDE_RUN_REPOSITORY}/review.txt") \
+    <(grep -v '^$' "${claude_canonical_report}") ||
+    fail 'Claude Code same-session recovery did not reassemble the canonical report.'
+mapfile -d '' -t claude_recovered_review_argv \
+    < "${CLAUDE_RUN_ROOT}/capture/review/argv"
+claude_expected_recovery_argv=()
+claude_argv_index=0
+while ((claude_argv_index < ${#claude_recovered_review_argv[@]})); do
+    case "${claude_recovered_review_argv[claude_argv_index]}" in
+        --session-id)
+            claude_expected_recovery_argv+=(
+                --resume "${claude_recovered_review_argv[claude_argv_index + 1]}"
+            )
+            claude_argv_index=$((claude_argv_index + 2))
+            continue
+            ;;
+        --name)
+            claude_argv_index=$((claude_argv_index + 2))
+            continue
+            ;;
+    esac
+    claude_expected_recovery_argv+=(
+        "${claude_recovered_review_argv[claude_argv_index]}"
+    )
+    claude_argv_index=$((claude_argv_index + 1))
+done
+cmp -s <(printf '%s\0' "${claude_expected_recovery_argv[@]}") \
+    "${CLAUDE_RUN_ROOT}/capture/continuation/argv" ||
+    fail 'Claude Code continuation did not resume the approved worker argv with --resume and without --name.'
+[[ "$(sort -u "${CLAUDE_RUN_ROOT}/capture/continuations" | wc -l)" -eq 1 ]] ||
+    fail 'Claude Code continuations used different worker argv.'
+assert_contains "${CLAUDE_RUN_REPOSITORY}/session.md" 'RHYOLITE REPORT PAGE' \
+    'Claude Code recovered transcript includes the continuation'
+assert_not_contains "${CLAUDE_RUN_REPOSITORY}/session.md" \
+    "${claude_fixture_email}" \
+    'Claude Code recovered transcript email redaction'
+claude_assert_no_credentials "${CLAUDE_RUN_PATH}" \
+    'Claude Code recovered run output'
+
+# A continuation that records another model is rejected before any page is
+# accepted, and recovery stops instead of retrying.
+claude_run_case continuation-substituted 1 \
+    --env RHYOLITE_MOCK_CLAUDE_MODE=cut \
+    --env RHYOLITE_MOCK_CLAUDE_CONTINUATION=substituted
+claude_assert_failed_run continuation-substituted \
+    'Stage: approved model enforcement' \
+    'answered with a model other than the approved model'
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" <<'JS'
+const fs = require("fs");
+const recovery = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).WorkerRecovery;
+if (recovery?.Status !== "Failed" || recovery.Continuations !== 1 ||
+    recovery.PagesAccepted !== 0) {
+  throw new Error(`Claude Code accepted a substituted continuation: ${JSON.stringify(recovery)}`);
+}
+JS
 claude_fast_sleep_bin="${fixture_root}/claude-fast-sleep-bin"
 mkdir -p -- "${claude_fast_sleep_bin}"
 printf '#!/usr/bin/env bash\nexit 0\n' > "${claude_fast_sleep_bin}/sleep"

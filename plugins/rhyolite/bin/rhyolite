@@ -33,6 +33,18 @@ LAUNCHER_MODEL_LABELS=(
 )
 LAUNCHER_MODEL_IDS_HINT='copilot help config'
 
+sanitize_launcher_detail() {
+    printf '%s' "$1" |
+        LC_ALL=C tr -d '\000-\010\013-\037\177' |
+        sed -E \
+            -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
+            -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' \
+            -e 's/((Authorization|authorization|Proxy-Authorization|proxy-authorization):[[:space:]]*)((Bearer|bearer|Basic|basic)[[:space:]]+)?[^[:space:]]+/\1[credential omitted]/g' \
+            -e 's/(access[_-]?token|api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[credential omitted]/g' \
+            -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[credential omitted]/g' |
+        tr '\r\n' '  '
+}
+
 fail() {
     local stage="$1"
     local summary="$2"
@@ -43,17 +55,7 @@ fail() {
     local consequence="${7:-Copilot and guided repository-review setup did not start or complete.}"
     local safe_details
 
-    safe_details="$(
-        printf '%s' "${details}" |
-            LC_ALL=C tr -d '\000-\010\013-\037\177' |
-            sed -E \
-                -e 's#(https?://)[^/@[:space:]]+:[^/@[:space:]]+@#\1[credentials omitted]@#g' \
-                -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[email omitted]/g' \
-                -e 's/((Authorization|authorization|Proxy-Authorization|proxy-authorization):[[:space:]]*)((Bearer|bearer|Basic|basic)[[:space:]]+)?[^[:space:]]+/\1[credential omitted]/g' \
-                -e 's/(access[_-]?token|api[_-]?key|password|secret|token)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[credential omitted]/g' \
-                -e 's/(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/[credential omitted]/g' |
-            tr '\r\n' '  '
-    )"
+    safe_details="$(sanitize_launcher_detail "${details}")"
     [ -n "${safe_details}" ] ||
         safe_details='No additional safe detail was returned.'
 
@@ -682,6 +684,276 @@ write_launch_context() {
     } > "${context_path}"
 }
 
+# Copilot's interactive session silently switches to its default model when
+# the selected model is unavailable to the account (re-verified with Copilot
+# CLI 1.0.100: "Falling back to next option"), while non-interactive Copilot
+# rejects an unavailable model or reasoning effort before any model call.
+# Before the interactive session starts, one short non-interactive request in
+# an isolated runtime home inside this launch's private session directory
+# asks Copilot to answer with the selected model, reasoning effort, and
+# context, and the adapter's normalizer verifies that exactly that model and
+# effort answered.
+readonly LAUNCHER_ACCESS_PROMPT='Rhyolite model check. Reply with exactly: OK'
+LAUNCHER_ACCESS_RESULT=''
+LAUNCHER_ACCESS_DETAIL=''
+LAUNCHER_ACCESS_ROOT=''
+LAUNCHER_ACCESS_SEQUENCE=0
+LAUNCHER_ACCESS_MODEL=''
+LAUNCHER_ACCESS_EFFORT=''
+
+finish_copilot_model_access_check() {
+    [[ -n "${LAUNCHER_ACCESS_ROOT}" && -d "${LAUNCHER_ACCESS_ROOT}" ]] ||
+        return 0
+    rhyolite_harness_invoke harness_sanitize_runtime_home \
+        "${LAUNCHER_ACCESS_ROOT}/home" >/dev/null 2>&1 || true
+    rm -rf -- "${LAUNCHER_ACCESS_ROOT}" 2>/dev/null || true
+    LAUNCHER_ACCESS_ROOT=''
+}
+
+# Sets LAUNCHER_ACCESS_RESULT to available, model-unavailable,
+# effort-unsupported, effort-unconfigurable, or unverified, and
+# LAUNCHER_ACCESS_DETAIL to one line of Copilot's own explanation. Each check
+# creates a new model-check-<n> directory in the private, per-launch
+# check_parent directory and removes it before returning.
+check_copilot_model_access() {
+    local copilot_command="$1"
+    local model="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
+    local check_parent="$5"
+    local check_root
+    local authentication_names=''
+    local check_output=''
+    local check_status=0
+    local -a check_environment=()
+    local -a check_arguments=()
+
+    LAUNCHER_ACCESS_RESULT='unverified'
+    LAUNCHER_ACCESS_DETAIL='Rhyolite could not prepare an isolated Copilot model check.'
+    LAUNCHER_ACCESS_SEQUENCE=$((LAUNCHER_ACCESS_SEQUENCE + 1))
+    check_root="${check_parent}/model-check-${LAUNCHER_ACCESS_SEQUENCE}"
+    [[ -n "${check_parent}" && -d "${check_parent}" ]] || return 0
+    trap 'finish_copilot_model_access_check; exit 130' INT TERM HUP
+    if ! mkdir -m 700 -- "${check_root}" 2>/dev/null; then
+        trap - INT TERM HUP
+        return 0
+    fi
+    LAUNCHER_ACCESS_ROOT="${check_root}"
+    if ! mkdir -m 700 -- \
+            "${LAUNCHER_ACCESS_ROOT}/home" "${LAUNCHER_ACCESS_ROOT}/cwd" ||
+        ! rhyolite_harness_invoke harness_prepare_run >/dev/null 2>&1 ||
+        ! rhyolite_harness_invoke harness_prepare_worker_home \
+            "${LAUNCHER_ACCESS_ROOT}/home" \
+            "${reasoning_effort}" \
+            "${context_tier}" \
+            review >/dev/null 2>&1 ||
+        ! rhyolite_harness_invoke harness_worker_env check_environment \
+            >/dev/null 2>&1 ||
+        ! authentication_names="$(
+            harness_auth_secret_env_vars | paste -sd, -
+        )"; then
+        finish_copilot_model_access_check
+        trap - INT TERM HUP
+        return 0
+    fi
+    check_arguments=(
+        -C "${LAUNCHER_ACCESS_ROOT}/cwd"
+        --model "${model}"
+        --reasoning-effort "${reasoning_effort}"
+        --context "${context_tier}"
+        --no-ask-user
+        --no-color
+        --no-custom-instructions
+        --disable-builtin-mcps
+        --disallow-temp-dir
+        --no-remote-export
+        --secret-env-vars "${authentication_names}"
+        --available-tools view
+        --deny-tool write
+        --deny-tool shell
+        --stream off
+        --output-format json
+    )
+    printf '%s' "${LAUNCHER_ACCESS_PROMPT}" |
+        timeout --signal=TERM --kill-after=10s 120s \
+            env "${check_environment[@]}" \
+            "${copilot_command}" "${check_arguments[@]}" \
+            > "${LAUNCHER_ACCESS_ROOT}/stdout" \
+            2> "${LAUNCHER_ACCESS_ROOT}/stderr" ||
+        check_status=$?
+    check_output="$(
+        cat -- "${LAUNCHER_ACCESS_ROOT}/stderr" \
+            "${LAUNCHER_ACCESS_ROOT}/stdout" 2>/dev/null |
+            LC_ALL=C tr -d '\000-\010\013-\037\177' | head -c 65536
+    )" || true
+    LAUNCHER_ACCESS_DETAIL="$(
+        grep -E -m 1 -v '^[[:space:]]*(\{|$)' <<< "${check_output}" |
+            cut -c 1-300
+    )" || true
+    if grep -Eq \
+        '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*"[^"]* is not available' \
+        <<< "${check_output}"; then
+        LAUNCHER_ACCESS_RESULT='model-unavailable'
+    elif grep -Eq \
+        'Reasoning effort "[a-z]+" is not supported for model "[A-Za-z0-9][A-Za-z0-9._-]*"' \
+        <<< "${check_output}"; then
+        LAUNCHER_ACCESS_RESULT='effort-unsupported'
+    elif grep -Eq \
+        '[Mm]odel "[A-Za-z0-9][A-Za-z0-9._-]*" does not support reasoning effort configuration' \
+        <<< "${check_output}"; then
+        LAUNCHER_ACCESS_RESULT='effort-unconfigurable'
+    elif ((check_status == 0)); then
+        if rhyolite_harness_invoke harness_normalize_worker_output \
+            review \
+            "${LAUNCHER_ACCESS_ROOT}/stdout" \
+            "${model}" \
+            "${reasoning_effort}" \
+            "${LAUNCHER_ACCESS_ROOT}/normalized" \
+            "${LAUNCHER_ACCESS_ROOT}/reply" >/dev/null 2>&1; then
+            LAUNCHER_ACCESS_RESULT='available'
+        else
+            LAUNCHER_ACCESS_DETAIL="${RHYOLITE_HARNESS_ERROR_DETAIL:-The Copilot answer could not be verified.}"
+        fi
+    elif [[ -z "${LAUNCHER_ACCESS_DETAIL}" ]]; then
+        LAUNCHER_ACCESS_DETAIL="Copilot exited with status ${check_status} without an explanation."
+    fi
+    finish_copilot_model_access_check
+    trap - INT TERM HUP
+}
+
+next_lower_reasoning_effort() {
+    case "$1" in
+        max) printf '%s\n' xhigh ;;
+        xhigh) printf '%s\n' high ;;
+        *) printf '\n' ;;
+    esac
+}
+
+# Asks how to continue after Copilot rejected the selected model or effort.
+# There is no default answer, so the effort is never lowered without an
+# explicit choice; end of input quits.
+prompt_for_model_access_action() {
+    local summary="$1"
+    local next_reasoning_effort="$2"
+    local answer
+
+    while true; do
+        printf '\n%s\n' "${summary}" >&2
+        printf '%s\n' \
+            'Rhyolite stops here so that Copilot does not silently run setup on a different model or effort.' >&2
+        printf 'Model check\n' >&2
+        if [[ -n "${next_reasoning_effort}" ]]; then
+            printf '  1. Use %s, the next highest reasoning effort\n' \
+                "${next_reasoning_effort}" >&2
+            printf '  2. Choose another model\n' >&2
+            printf '  3. Quit\n' >&2
+            printf 'Select action: ' >&2
+            IFS= read -r answer || answer=3
+            case "${answer}" in
+                1) printf '%s\n' effort; return ;;
+                2) printf '%s\n' model; return ;;
+                3) printf '%s\n' quit; return ;;
+            esac
+        else
+            printf '  1. Choose another model\n' >&2
+            printf '  2. Quit\n' >&2
+            printf 'Select action: ' >&2
+            IFS= read -r answer || answer=2
+            case "${answer}" in
+                1) printf '%s\n' model; return ;;
+                2) printf '%s\n' quit; return ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+}
+
+# Checks LAUNCHER_ACCESS_MODEL at LAUNCHER_ACCESS_EFFORT until Copilot accepts
+# them or the check cannot be completed. Interactively, a rejected model or
+# effort asks for another model, the next highest effort (never below high),
+# or quit; without a terminal it stops with a launcher error. Returns 3 when
+# the user quits. check_parent is this launch's private session directory.
+ensure_copilot_model_access() {
+    local copilot_command="$1"
+    local context_tier="$2"
+    local interactive="$3"
+    local allow_unlisted_model="$4"
+    local check_parent="$5"
+    local summary next_reasoning_effort remediation action
+
+    while true; do
+        printf 'Checking that Copilot accepts %s at %s reasoning effort (one short request)...\n' \
+            "${LAUNCHER_ACCESS_MODEL}" "${LAUNCHER_ACCESS_EFFORT}" >&2
+        check_copilot_model_access \
+            "${copilot_command}" \
+            "${LAUNCHER_ACCESS_MODEL}" \
+            "${LAUNCHER_ACCESS_EFFORT}" \
+            "${context_tier}" \
+            "${check_parent}"
+        next_reasoning_effort=''
+        case "${LAUNCHER_ACCESS_RESULT}" in
+            available)
+                printf 'Copilot accepted %s at %s reasoning effort.\n' \
+                    "${LAUNCHER_ACCESS_MODEL}" "${LAUNCHER_ACCESS_EFFORT}" >&2
+                return 0
+                ;;
+            model-unavailable)
+                summary="Copilot reports that model ${LAUNCHER_ACCESS_MODEL} is not available to your account."
+                remediation='Pass --model with a model that your Copilot account can use, or run the launcher in a terminal to choose one.'
+                ;;
+            effort-unsupported)
+                summary="Copilot reports that model ${LAUNCHER_ACCESS_MODEL} does not accept ${LAUNCHER_ACCESS_EFFORT} reasoning effort."
+                next_reasoning_effort="$(
+                    next_lower_reasoning_effort "${LAUNCHER_ACCESS_EFFORT}"
+                )"
+                if [[ -n "${next_reasoning_effort}" ]]; then
+                    remediation="Pass --reasoning-effort ${next_reasoning_effort}, the next highest effort, or --model with another model, or run the launcher in a terminal to choose."
+                else
+                    remediation='Pass --model with another model that accepts high or higher reasoning effort, or run the launcher in a terminal to choose one.'
+                fi
+                ;;
+            effort-unconfigurable)
+                summary="Copilot reports that model ${LAUNCHER_ACCESS_MODEL} does not accept a reasoning-effort setting, and Rhyolite requires at least high."
+                remediation='Pass --model with another model that accepts high or higher reasoning effort, or run the launcher in a terminal to choose one.'
+                ;;
+            *)
+                printf 'Warning: Rhyolite could not verify that Copilot accepts %s at %s reasoning effort (%s). If it does not, Copilot may run the setup session on another model; the review itself still fails closed.\n' \
+                    "${LAUNCHER_ACCESS_MODEL}" \
+                    "${LAUNCHER_ACCESS_EFFORT}" \
+                    "$(sanitize_launcher_detail "${LAUNCHER_ACCESS_DETAIL:-no detail}")" >&2
+                return 0
+                ;;
+        esac
+        if [[ "${interactive}" != 1 ]]; then
+            fail \
+                'launcher model availability' \
+                "${summary}" \
+                "${LAUNCHER_ACCESS_DETAIL}" \
+                "${remediation}" \
+                2 \
+                'NONE' \
+                'Copilot and guided repository-review setup did not start; Rhyolite never lowers the reasoning effort or switches models without your choice.'
+        fi
+        action="$(
+            prompt_for_model_access_action \
+                "${summary}" "${next_reasoning_effort}"
+        )"
+        case "${action}" in
+            effort)
+                LAUNCHER_ACCESS_EFFORT="${next_reasoning_effort}"
+                ;;
+            model)
+                LAUNCHER_ACCESS_MODEL="$(
+                    prompt_for_model '' "${allow_unlisted_model}"
+                )"
+                ;;
+            *)
+                return 3
+                ;;
+        esac
+    done
+}
+
 print_help() {
     local version="$1"
 
@@ -769,6 +1041,7 @@ main() {
     local is_interactive=0
     local copilot_path
     local copilot_exit_code
+    local model_access_status
     local harness_cli
     local harness_fleet_capability
     local claude_settings
@@ -1333,6 +1606,24 @@ main() {
                     ;;
             esac
         done
+    fi
+
+    if [[ "${harness}" == copilot ]]; then
+        LAUNCHER_ACCESS_MODEL="${model}"
+        LAUNCHER_ACCESS_EFFORT="${reasoning_effort}"
+        model_access_status=0
+        ensure_copilot_model_access \
+            "${copilot_path}" \
+            "${context_tier}" \
+            "${is_interactive}" \
+            "${allow_unlisted_model}" \
+            "${session_dir}" || model_access_status=$?
+        if ((model_access_status == 3)); then
+            printf '%s\n' 'Rhyolite did not start Copilot.' >&2
+            return 0
+        fi
+        model="${LAUNCHER_ACCESS_MODEL}"
+        reasoning_effort="${LAUNCHER_ACCESS_EFFORT}"
     fi
 
     initial_prompt="$(

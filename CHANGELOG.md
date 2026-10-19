@@ -2,6 +2,88 @@
 
 ## Unreleased
 
+- A transient research failure no longer ends a scope 2 or 3 review. When
+  the dedicated research worker's own outcome is a transient model-service
+  failure or a blocked automatic model fallback, the runner relaunches the
+  research phase once with a fresh broker, runtime, session, cookie jar, and
+  network log. The failed attempt's network log and sanitized timeline,
+  errors, and transcript move under `research/attempts/1/` with an
+  `attempt.json` record, private evidence stays mode 0700/0600, and no
+  archived ledger is ever passed to a broker or reloaded.
+  `research-state.json` records `Attempts`, and the limit is approval-bound
+  as the new `WorkerRecoveryPolicy.ResearchRelaunchLimit` (1). Timeouts,
+  interruptions, substituted output, adapter or cleanup failures, and dossier
+  or transport validation failures are never relaunched.
+
+- The launcher no longer lets Copilot silently run the setup session on a
+  different model. Copilot CLI 1.0.100 still switches its interactive
+  session to its default model ("Falling back to next option") when the
+  selected model is unavailable to the account, while non-interactive
+  Copilot rejects an unavailable model or reasoning effort before any model
+  call. Before Copilot starts, the launcher now sends one fixed
+  non-interactive request from an isolated runtime home inside the launch's
+  private session directory, with no plugin,
+  agent, custom instructions, built-in MCP, write, or shell access, and
+  verifies through the adapter's normalizer that exactly the selected model
+  and effort answered. If Copilot rejects the model, it asks you to choose
+  another model or quit; if Copilot rejects only the effort, it also offers
+  the next highest effort, never below `high`, with no default answer.
+  Without a terminal it stops with a `launcher model availability` error,
+  and if the check cannot complete it warns and starts Copilot unchanged.
+- A review that fails because the approved model rejects the approved
+  reasoning effort now gets an explicit, approval-bound way forward instead
+  of a restart. `failure-analysis.json` classifies it as
+  `effort-unsupported` and adds `ReasoningEffortFallback` with the rejected
+  effort and the next highest one, never below `high`, and both
+  orchestrators then ask whether to use that effort, choose another model,
+  or stop. Either change regenerates the effective plan, which must be
+  approved again before anything runs, so Rhyolite still never lowers the
+  effort or switches models on its own.
+- Claude Code reviews now use same-session worker recovery. A live probe
+  with Claude Code 2.1.303 showed that `--resume <id>` continues an
+  adapter-built print-mode review session in the same isolated runtime home
+  with its context, appends to the same session record, and records only the
+  approved model and effort, while the original `--session-id` argv fails
+  once the session exists. The Claude Code adapter now reports
+  `worker_continuation` as `yes`, and its continuation argv replaces the
+  approved `--session-id` pair with `--resume` and drops `--name`. A cut,
+  missing, or invalid report and a transient model-service failure can
+  therefore be recovered under the approval-bound `WorkerRecoveryPolicy`
+  instead of ending the review. Because Claude Code verifies the model and
+  effort from its rendered session record, the runner now persists the
+  adapter's agent state after every worker invocation that keeps the runtime
+  home and re-runs `harness_verify_isolation` after every continuation, so a
+  continuation that records another model or effort is rejected before any
+  page is accepted, and a continuation returns live enforcement to the review
+  runtime home even after a report-repair child prepared its own.
+- Stopping a review during or after its bounded report repair no longer
+  leaves the review worker's temporary runtime home, with its ephemeral copy
+  of the harness login, in `TMPDIR`. Same-session recovery keeps that home
+  until recovery ends, and the report-repair step replaced and then cleared
+  the runner's exit cleanup, so a `stop`, a signal, or an aborted repair in
+  that window skipped it. Copilot reviews have been affected since 0.8.2, and
+  Claude Code reviews would have been once they gained recovery. The stop
+  handler and every exit cleanup in that window now remove the home, and the
+  report-repair interruption tests assert it.
+- Validation no longer leaves copies of the contributor's Copilot login in
+  `/tmp`. The two `validate-plugin.sh` fixtures that hard-kill the runner
+  could not let it remove its worker runtime homes, and those homes held the
+  ephemeral authentication bridge copied from the contributor's real Copilot
+  configuration. Both fixtures now bridge only fixture authentication and
+  keep their runtime homes inside the fixture directory. While no review is
+  running, remove runtime homes that earlier validation runs left behind with
+  `find /tmp -maxdepth 1 -user "$(id -un)" -name 'rhyolite-repo-review-copilot.*' -exec rm -rf -- {} +`.
+- The README and publishing checklist now enable extension commands with
+  `/settings experimental on`, because Copilot CLI 1.0.100 deprecates
+  `/experimental on`; earlier releases still use the old spelling.
+- Validation no longer depends on how the checkout is reached. The full
+  gate passes from a checkout reached through a symlinked parent directory,
+  and the harness contract validator now also starts the launcher through a
+  symlinked plugin path from a symlinked working directory and requires the
+  same physical `--plugin-dir` and `-C` arguments as the I1a baseline. Its
+  temporary fixture root is resolved to a physical path, so a symlinked
+  `TMPDIR` cannot cause the same mismatch.
+
 ## 0.8.3 - 2026-10-15
 
 - Fixed multi-repository launches. `rhyolite --repo A B` put only `A` in the

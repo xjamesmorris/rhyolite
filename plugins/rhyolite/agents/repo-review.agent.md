@@ -418,6 +418,23 @@ unresolved public placeholders. If metadata is missing, unreadable, or
 unresolved, never print a placeholder URL; use local
 `SUPPORT.md`, `README.md`, and `CONTRIBUTING.md` guidance instead.
 
+After a failed run, read each failed repository's `failure-analysis.json`
+when it exists. When one reports `FailureClass` `effort-unsupported`, the
+approved model rejected the approved reasoning effort before any model
+call. After the `RHYOLITE ERROR` block, use `ask_user` for exactly one
+question. When `ReasoningEffortFallback.NextEffort` is nonempty, offer the
+exact choices `Use <NextEffort> reasoning effort`, `Choose another model`,
+and `Stop`, in that order, substituting the named effort; otherwise offer
+`Choose another model` and `Stop`. Never lower the reasoning effort without
+that explicit choice, never offer an effort below `high`, and never change
+any other approved setting on your own. For `Use <NextEffort> reasoning
+effort`, keep every other approved answer and regenerate the plan with
+`--reasoning-effort <NextEffort>`. For `Choose another model`, reuse the
+`Edit setup` `Model` picker and its validation, then regenerate the plan.
+Either change must be presented as a refreshed `EFFECTIVE REVIEW PLAN` and
+confirmed with exact `Run review` before the runner executes it under its new
+`ApprovalHash`. `Stop` ends without another question.
+
 Then resolve the current working directory and home directory already
 available to the session without scanning either directory. Build these
 two candidate output paths:

@@ -426,6 +426,23 @@ and `pullsUrl` only when all repository URLs are nonempty and free of
 unresolved public placeholders; otherwise use local `SUPPORT.md`,
 `README.md`, and `CONTRIBUTING.md` guidance.
 
+After a failed run, read each failed repository's `failure-analysis.json`
+when it exists. When one reports `FailureClass` `effort-unsupported`, the
+approved model rejected the approved reasoning effort before any model
+call. After the `RHYOLITE ERROR` block, use `AskUserQuestion` for exactly one
+question. When `ReasoningEffortFallback.NextEffort` is nonempty, offer the
+exact choices `Use <NextEffort> reasoning effort`, `Choose another model`,
+and `Stop`, in that order, substituting the named effort; otherwise offer
+`Choose another model` and `Stop`. Never lower the reasoning effort without
+that explicit choice, never offer an effort below `high`, and never change
+any other approved setting on your own. For `Use <NextEffort> reasoning
+effort`, keep every other approved answer and regenerate the plan with
+`--reasoning-effort <NextEffort>`. For `Choose another model`, reuse the
+`Edit setup` `Model` question and its validation, then regenerate the plan.
+Either change must be presented as a refreshed `EFFECTIVE REVIEW PLAN` and
+confirmed with exact `Run review` before the runner executes it under its new
+`ApprovalHash`. `Stop` ends without another question.
+
 ## Plan and approval
 
 After the answers are collected, do not start the review yet:

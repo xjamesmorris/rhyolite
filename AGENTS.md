@@ -117,7 +117,15 @@ supported and must not drive new work.
   passes `--mode interactive`, and submits a trusted `-i` setup block
   without enabling allow-all mode. A request that holds only repository URLs
   is not forwarded as request text, and the orchestrators select every
-  `Source=` line without asking about sources again.
+  `Source=` line without asking about sources again. Because Copilot's
+  interactive session silently runs on its default model when the selected
+  model is unavailable, the Copilot launch first sends one fixed
+  non-interactive request from an isolated runtime home inside the launch's
+  private session directory, verifies through the
+  adapter's normalizer that exactly the selected model and effort answered,
+  and on a rejected model or effort asks for another model, the next highest
+  effort (never below `high`, with no default answer), or quit; without a
+  terminal it stops with a `launcher model availability` error.
   With `--harness claude` it starts Claude Code with `--plugin-dir`,
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
@@ -520,13 +528,19 @@ supported and must not drive new work.
   live with Copilot CLI 1.0.98-2: the same `--session-id` and runtime home
   resume a non-interactive session; the continuation argv omits `--name`,
   which only labels a brand-new session and which the CLI rejects for an
-  existing one); Claude Code reports `unverified`. Follow
+  existing one); Claude Code reports it `yes` (verified live with Claude Code
+  2.1.303: `--resume <id>` and the same runtime home continue a print-mode
+  session with its context and append to the same session record, while the
+  original `--session-id` argv fails once the session exists, so the
+  continuation argv replaces the `--session-id` pair with `--resume` and
+  omits `--name`). Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
 - Same-session worker recovery is approval-bound as `WorkerRecoveryPolicy`.
   When `worker_continuation` is `yes`, the runner may continue the review
   worker's own session, with the exact approved argv less only its
-  new-session `--name` label, and the same environment, runtime home, tools,
+  new-session `--name` label (Claude Code resumes with `--resume` in place of
+  `--session-id`), and the same environment, runtime home, tools,
   model, effort, and context and with live enforcement: after a
   transient model-service failure or an automatic model fallback that was
   blocked before it produced output (at most 2 retries), and to fetch
@@ -538,15 +552,32 @@ supported and must not drive new work.
   strict contract program, assembles the envelope in canonical order, and
   promotes only an assembled report that passes unchanged strict
   finalization. Substituted output, adapter-function failures, timeouts, and
-  interruptions are never continued. Research is never continued or
-  relaunched automatically, because the broker keeps exactly one network log
-  per repository phase.
+  interruptions are never continued. The runner persists the adapter's
+  agent state after every worker invocation that keeps the runtime home and
+  calls `harness_verify_isolation` after every continuation, so the
+  adapter's post-exit verification covers every continuation turn before its
+  reply is accepted. Research is never continued. After the research
+  worker's own transient model-service failure or blocked automatic
+  fallback, the runner relaunches research at most once, as the
+  approval-bound `WorkerRecoveryPolicy.ResearchRelaunchLimit` (1) allows,
+  with a fresh broker, runtime, session, and network log; it moves the failed
+  attempt's network log and sanitized timeline, errors, and transcript under
+  `research/attempts/<n>/` with an `attempt.json` record, records
+  `Attempts` in `research-state.json`, and never passes an archived ledger to
+  a broker. Timeouts, interruptions, substituted output, adapter or cleanup
+  failures, and dossier or transport validation failures are never
+  relaunched.
 - Every failed repository gets a deterministic, model-free initial failure
   analysis, `failure-analysis.md` and `failure-analysis.json`, that
   classifies the failure from trusted artifacts, records the evidence and the
   recovery already attempted, and lists recommended repair actions; failed
   runs also get a run-level `failure-analysis.md`. It is advisory, never
-  changes the run outcome, and `RHYOLITE ERROR` blocks list it.
+  changes the run outcome, and `RHYOLITE ERROR` blocks list it. When the
+  approved model rejected only the approved reasoning effort, its
+  `effort-unsupported` class and `ReasoningEffortFallback` name the next
+  highest effort, never below `high`, and the orchestrators ask whether to use
+  it, choose another model, or stop; either change regenerates the plan and
+  needs a fresh approval, so the effort never drops without that choice.
 - No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
   argument override every configured `subagents.agents.<name>.model` value
   (verified live: `modelSelectionSource: "explicit_override"`), so a

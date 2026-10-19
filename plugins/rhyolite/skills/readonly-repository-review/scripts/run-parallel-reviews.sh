@@ -66,11 +66,14 @@ REPORT_REPAIR_ATTEMPT_LIMIT=1
 REPORT_REPAIR_TIMEOUT_SECONDS=300
 # Same-session worker recovery, approval-bound as WorkerRecoveryPolicy. The
 # runner continues the review worker's own session only when the harness
-# adapter has verified worker_continuation.
+# adapter has verified worker_continuation. A research phase that ends with a
+# transient research-worker failure is relaunched at most this many times,
+# each time with a fresh broker, runtime, session, and network log.
 WORKER_CONTINUATION_AVAILABLE=0
 WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT=2
 WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT=2
 WORKER_RECOVERY_CONTINUATION_LIMIT=20
+WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT=1
 WORKER_RECOVERY_MINIMUM_SECONDS=120
 WORKER_RECOVERY_RETRY_DELAY_SECONDS=30
 if [[ "${RHYOLITE_WORKER_RETRY_DELAY_SECONDS-}" =~ ^[0-9]{1,3}$ ]]; then
@@ -578,13 +581,16 @@ interrupt_repository_process() {
         printf 'Runner received %s and terminated its tracked repository-review process tree.\n' \
             "${signal_name}" >> "${RHYOLITE_REPOSITORY_ERROR_PATH}"
     fi
+    # The worker tree has stopped, so its runtime home and authentication
+    # bridge can go even when a later step replaced or cleared the EXIT trap.
+    cleanup_review_runtime_home_on_exit
     exit "${interrupt_exit_code}"
 }
 
 research_private_evidence_warning() {
     if ((ENABLE_PUBLIC_RESEARCH)); then
         printf '%s' \
-            'The research network/private directory may contain sensitive tracking identifiers and hostile unsupported bytes. It is local, inert, unindexed, and not model-accessible.'
+            'The research network/private directory, and the network/private directory of any relaunched attempt under research/attempts/, may contain sensitive tracking identifiers and hostile unsupported bytes. They are local, inert, unindexed, and not model-accessible.'
     else
         printf '%s' 'Research private evidence is disabled for this scope.'
     fi
@@ -874,7 +880,7 @@ repository_failure_summary() {
 }
 
 model_availability_remediation() {
-    printf 'Select a model that your %s account can use at the approved reasoning effort, regenerate and approve the plan, and retry. Rhyolite never substitutes another model or effort.' \
+    printf 'Select a model that your %s account can use at the approved reasoning effort, or, when failure-analysis.md names a next highest reasoning effort (never below high), approve a regenerated plan with that effort; then retry. Rhyolite never substitutes another model or effort.' \
         "${HARNESS_DISPLAY_NAME}"
 }
 
@@ -938,7 +944,7 @@ repository_failure_remediation() {
                     ;;
                 'model service')
                     printf '%s' \
-                        'Check network, DNS, and model-service status, then rerun the approved review. research-errors.txt and failure-analysis.md record the exact session errors; the broker keeps one network log per phase, so research is never relaunched automatically.'
+                        'Check network, DNS, and model-service status, then rerun the approved review. research-errors.txt and failure-analysis.md record the exact session errors; research is relaunched at most once after a transient research-worker failure, with a separate network log per attempt under research/attempts/.'
                     ;;
                 *)
                     printf '%s' \
@@ -1469,21 +1475,24 @@ report_repair_policy_json() {
 }
 
 worker_recovery_policy_json() {
-    printf '{"Mode":"same-session-continuation","ProtocolVersion":1,"Available":%s,"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1","TransientRetryLimit":%s,"ResubmissionRoundLimit":%s,"ContinuationLimit":%s,"PageSectionLimit":3,"PageLineBudget":250,"PagePartLimit":4}' \
+    printf '{"Mode":"same-session-continuation","ProtocolVersion":1,"Available":%s,"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1","TransientRetryLimit":%s,"ResubmissionRoundLimit":%s,"ContinuationLimit":%s,"PageSectionLimit":3,"PageLineBudget":250,"PagePartLimit":4,"ResearchRelaunchLimit":%s}' \
         "$(json_boolean "${WORKER_CONTINUATION_AVAILABLE}")" \
         "${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT}" \
         "${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT}" \
-        "${WORKER_RECOVERY_CONTINUATION_LIMIT}"
+        "${WORKER_RECOVERY_CONTINUATION_LIMIT}" \
+        "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
 }
 
 worker_recovery_policy_text() {
     if ((WORKER_CONTINUATION_AVAILABLE)); then
-        printf 'same-session continuation; %s transient-failure retries; %s resubmission rounds of paged report delivery; %s continuations maximum; no research rerun' \
+        printf 'same-session continuation; %s transient-failure retries; %s resubmission rounds of paged report delivery; %s continuations maximum; %s fresh research relaunch after a transient research-worker failure' \
             "${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT}" \
             "${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT}" \
-            "${WORKER_RECOVERY_CONTINUATION_LIMIT}"
+            "${WORKER_RECOVERY_CONTINUATION_LIMIT}" \
+            "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
     else
-        printf 'unavailable for this harness; worker failures stay terminal'
+        printf 'same-session continuation unavailable for this harness, so review-worker failures stay terminal; %s fresh research relaunch after a transient research-worker failure' \
+            "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
     fi
 }
 
@@ -4097,12 +4106,27 @@ worker_recovery_remaining_seconds() {
         $((SESSION_TIMEOUT_MINUTES * 60 - (now_epoch - WORKER_REVIEW_STARTED_EPOCH)))
 }
 
-# Persist the worker's agent state and remove its temporary runtime home
-# exactly once. Without same-session continuation this runs immediately after
-# the worker exits; with continuation it runs after bounded recovery ends.
-finalize_review_runtime_home() {
-    ((REVIEW_RUNTIME_HOME_FINALIZED == 0)) || return 0
-    REVIEW_RUNTIME_HOME_FINALIZED=1
+# Remove the review worker's temporary runtime home, with its ephemeral
+# authentication bridge, when the repository process ends before
+# finalize_review_runtime_home ran. With same-session continuation the home
+# outlives the initial worker, through report repair and worker recovery, so
+# every EXIT trap installed in that window and the stop handler call this.
+cleanup_review_runtime_home_on_exit() {
+    [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]] || return 0
+    if rhyolite_harness_invoke harness_sanitize_runtime_home \
+        "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN}" \
+        >/dev/null 2>&1; then
+        REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
+    fi
+    return 0
+}
+
+# Persist the worker's agent state from its runtime home. The adapter also
+# records what its post-exit verification reads, such as the rendered Claude
+# Code session transcript, so this runs after every worker invocation that
+# keeps the runtime home for same-session continuation.
+persist_review_agent_state() {
+    REVIEW_AGENT_STATE_CURRENT=1
     if ((worker_started)) &&
         ! rhyolite_harness_invoke harness_persist_agent_state \
             "${runtime_harness_home}" \
@@ -4115,7 +4139,18 @@ finalize_review_runtime_home() {
             "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
             >> "${error_path}"
         post_process_failure=1
+        return 1
     fi
+}
+
+# Persist any agent state that a later invocation left stale and remove the
+# worker's temporary runtime home exactly once. Without same-session
+# continuation this runs immediately after the worker exits; with continuation
+# it runs after bounded recovery ends.
+finalize_review_runtime_home() {
+    ((REVIEW_RUNTIME_HOME_FINALIZED == 0)) || return 0
+    REVIEW_RUNTIME_HOME_FINALIZED=1
+    ((REVIEW_AGENT_STATE_CURRENT)) || persist_review_agent_state || true
     if rhyolite_harness_invoke harness_sanitize_runtime_home \
         "${runtime_harness_home}" \
         >/dev/null 2>> "${error_path}"; then
@@ -4246,6 +4281,7 @@ run_worker_continuation() {
     if [[ -f "${transcript_path}" ]]; then
         mv -- "${transcript_path}" "${transcript_path}.previous"
     fi
+    REVIEW_AGENT_STATE_CURRENT=0
     set +e
     "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
         --signal=TERM \
@@ -4305,6 +4341,29 @@ run_worker_continuation() {
             sanitize_review_text > "${reply}"
         chmod 600 -- "${reply}"
         WORKER_CONTINUATION_REPLY="${reply}"
+    fi
+    # The adapter re-records the resumed session and verifies every recorded
+    # turn, including the ones this continuation added, before its reply can
+    # be accepted. Such an adapter or enforcement failure is never continued.
+    local continuation_verified=1
+    if ! persist_review_agent_state; then
+        continuation_verified=0
+    elif ! rhyolite_harness_invoke harness_verify_isolation \
+        "${timeline_path}" \
+        >/dev/null 2>> "${error_path}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_verify_isolation" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness isolation verification failed.}" \
+            >> "${error_path}"
+        continuation_verified=0
+    fi
+    if ((continuation_verified == 0)); then
+        continuation_exit=1
+        case "${WORKER_INVOCATION_OUTCOME}" in
+            transient-failure|fallback-blocked)
+                WORKER_INVOCATION_OUTCOME='unknown'
+                ;;
+        esac
     fi
     if ((continuation_exit != 0)); then
         append_worker_session_errors "${outcome}"
@@ -5252,7 +5311,7 @@ run_report_repair() {
             >> "${error_path}"
         repair_ready=0
     fi
-    trap 'cleanup_report_repair_runtime >/dev/null 2>&1 || true' EXIT
+    trap 'cleanup_report_repair_runtime >/dev/null 2>&1 || true; cleanup_review_runtime_home_on_exit' EXIT
     repair_session_id="$(new_session_id)"
     local repair_suffix="-${RUN_ID}"
     local repair_slug_limit=$((96 - 7 - ${#repair_suffix}))
@@ -5441,7 +5500,13 @@ run_report_repair() {
         repair_candidate_valid=0
         REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair cleanup failed; canonical promotion was blocked.'
     fi
-    trap - EXIT
+    # A review runtime home kept for same-session continuation still needs
+    # its own exit cleanup after the repair child's home is gone.
+    if [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]]; then
+        trap 'cleanup_review_runtime_home_on_exit' EXIT
+    else
+        trap - EXIT
+    fi
     local repair_artifact
     for repair_artifact in \
         "${REPORT_REPAIR_INITIAL_PATH}" \
@@ -6088,6 +6153,17 @@ write_research_state() {
     "Name": "$(json_escape "${session_name}")"
   },
   "ResearchTransport": $(research_transport_json '  '),
+  "Attempts": {
+    "Count": ${research_attempt:-1},
+    "RelaunchLimit": ${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT},
+    "Archived": [$(
+        separator=''
+        for archived_attempt in "${research_archived_attempts[@]}"; do
+            printf '%s"%s"' "${separator}" "$(json_escape "${archived_attempt}")"
+            separator=', '
+        done
+    )]
+  },
   "Artifacts": {
     "Dossier": "$(json_escape "${dossier_path}")",
     "Timeline": "$(json_escape "${timeline_path}")",
@@ -6102,6 +6178,55 @@ write_research_state() {
 }
 EOF
     chmod 600 -- "${path}"
+}
+
+# Moves a failed research attempt's network log and its sanitized timeline,
+# errors, and transcript under research/attempts/<n>/ before a relaunch. Every
+# attempt keeps an auditable network log, and the relaunched broker starts
+# with a fresh network root; an archived ledger is never passed to a broker.
+archive_research_attempt() {
+    local attempt="$1"
+    local outcome="$2"
+    local exit_code="$3"
+    local session_id="$4"
+    local session_name="$5"
+    local started_at="$6"
+    local completed_at="$7"
+    local network_root="$8"
+    local attempts_root="${RESEARCH_DIRECTORY}/attempts"
+    local archive="${attempts_root}/${attempt}"
+    local name
+
+    [[ "${attempt}" =~ ^[1-9][0-9]*$ &&
+        -d "${network_root}" && ! -L "${network_root}" ]] || return 1
+    if [[ ! -d "${attempts_root}" ]]; then
+        mkdir -m 700 -- "${attempts_root}" || return 1
+    fi
+    [[ ! -L "${attempts_root}" ]] || return 1
+    mkdir -m 700 -- "${archive}" || return 1
+    mv -- "${network_root}" "${archive}/network" || return 1
+    for name in research-timeline.txt research-errors.txt research-session.md; do
+        if [[ -f "${RESEARCH_DIRECTORY}/${name}" ]]; then
+            mv -- "${RESEARCH_DIRECTORY}/${name}" "${archive}/${name}" ||
+                return 1
+        fi
+    done
+    cat > "${archive}/attempt.json" <<EOF || return 1
+{
+  "SchemaVersion": 1,
+  "Attempt": ${attempt},
+  "Outcome": "$(json_escape "${outcome}")",
+  "ExitCode": ${exit_code},
+  "StartedAt": "$(json_escape "${started_at}")",
+  "CompletedAt": "$(json_escape "${completed_at}")",
+  "Session": {
+    "Id": "$(json_escape "${session_id}")",
+    "Name": "$(json_escape "${session_name}")"
+  },
+  "NetworkLog": "$(json_escape "${archive}/network")"
+}
+EOF
+    chmod 600 -- "${archive}/attempt.json"
 }
 
 research_summary_capabilities_count() {
@@ -8315,6 +8440,7 @@ process_repository() {
     local WORKER_CONTINUATION_EXIT_CODE=1
     local WORKER_REVIEW_STARTED_EPOCH=0
     local REVIEW_RUNTIME_HOME_FINALIZED=0
+    local REVIEW_AGENT_STATE_CURRENT=0
     local worker_recovery_reason=''
     local worker_recovery_candidate=''
     local worker_initial_outcome='unknown'
@@ -8697,6 +8823,20 @@ EOF
         local research_transcript_path="${RESEARCH_DIRECTORY}/research-session.md"
         local research_request_path="${RESEARCH_DIRECTORY}/research-request.txt"
         local research_error_path="${RESEARCH_DIRECTORY}/research-errors.txt"
+        # A research phase runs once, and is relaunched at most
+        # WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT times after a transient
+        # research-worker failure. Each attempt gets a fresh broker, runtime,
+        # session, and network log; a failed attempt's network log and
+        # sanitized artifacts are archived under research/attempts/<n>/.
+        local research_attempt=1
+        local -a research_archived_attempts=()
+        local research_attempt_outcome=''
+        local research_previous_outcome=''
+        while :; do
+        research_attempt_outcome=''
+        local research_worker_exit_code=0
+        local research_adapter_failed=0
+        local research_monitor_terminated=0
         local research_network_root="${RESEARCH_DIRECTORY}/network"
         local research_runtime_root="${session_root}/research-runtime"
         local research_raw_output="${research_runtime_root}/research-output.raw"
@@ -8784,7 +8924,10 @@ EOF
             fi
         ' EXIT
         research_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        mkdir -m 700 -- "${RESEARCH_DIRECTORY}" "${research_runtime_root}"
+        if ((research_attempt == 1)); then
+            mkdir -m 700 -- "${RESEARCH_DIRECTORY}"
+        fi
+        mkdir -m 700 -- "${research_runtime_root}"
         chmod 700 -- "${RESEARCH_DIRECTORY}" "${research_runtime_root}"
         (
             umask 077
@@ -8802,6 +8945,15 @@ EOF
                 "${research_raw_error}" \
                 "${research_raw_transcript}"
         )
+        if ((research_attempt > 1)); then
+            printf 'Research relaunch %s of %s: attempt %s ended with a %s outcome, so Rhyolite relaunched research with a fresh broker, runtime, session, and network log. The earlier attempt is archived under %s.\n' \
+                "$((research_attempt - 1))" \
+                "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}" \
+                "$((research_attempt - 1))" \
+                "${research_previous_outcome}" \
+                "${research_archived_attempts[-1]}" \
+                >> "${research_raw_error}"
+        fi
         research_broker_arguments=(
             --runtime-root "${research_runtime_root}"
             --policy "${RESEARCH_POLICY_PATH}"
@@ -8980,17 +9132,19 @@ EOF
                 "${research_raw_error}"
             wait "${research_process_id}"
             research_exit_code=$?
+            research_worker_exit_code="${research_exit_code}"
             RHYOLITE_ACTIVE_CHILD_PID=""
             set -e
             if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
                 research_exit_code=1
+                research_monitor_terminated=1
             fi
             # Record the research worker's own sanitized session errors so a
-            # failed research phase never ends without its cause. The broker
-            # keeps one network log per repository phase, so research is not
-            # continued or relaunched automatically.
+            # failed research phase never ends without its cause, and keep the
+            # outcome that decides whether a fresh relaunch is allowed.
             if ((research_exit_code != 0)); then
                 local research_outcome_path="${research_runtime_root}/research-outcome.json"
+                local research_outcome_token=''
                 rm -f -- "${research_outcome_path}"
                 if rhyolite_harness_invoke harness_worker_outcome \
                     research \
@@ -9001,8 +9155,11 @@ EOF
                     "${REASONING_EFFORT}" \
                     "${research_outcome_path}" \
                     >/dev/null 2>&1 &&
-                    rhyolite_harness_validate_outcome_json \
-                        "${research_outcome_path}" research >/dev/null; then
+                    research_outcome_token="$(
+                        rhyolite_harness_validate_outcome_json \
+                            "${research_outcome_path}" research
+                    )"; then
+                    research_attempt_outcome="${research_outcome_token}"
                     append_worker_session_errors \
                         "${research_outcome_path}" "${research_raw_error}"
                 fi
@@ -9017,6 +9174,7 @@ EOF
                     "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness research session finalization failed.}" \
                     >> "${research_raw_error}"
                 research_exit_code=1
+                research_adapter_failed=1
             fi
         else
             research_exit_code=1
@@ -9189,6 +9347,50 @@ EOF
         fi
 
         research_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        # Relaunch only after the research worker's own transient
+        # model-service failure or blocked automatic fallback. Timeouts,
+        # including a forced kill after the timeout (137) but not the live
+        # monitor's own escalation to KILL, interruptions, substituted output,
+        # adapter or cleanup failures, and dossier or transport validation
+        # failures stay terminal.
+        if ((research_exit_code != 0 &&
+            research_worker_exit_code != 0 &&
+            research_worker_exit_code != 124 &&
+            (research_worker_exit_code != 137 || research_monitor_terminated) &&
+            research_adapter_failed == 0 &&
+            research_cleanup_failed == 0 &&
+            research_attempt <= WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT)) &&
+            [[ "${research_attempt_outcome}" == transient-failure ||
+                "${research_attempt_outcome}" == fallback-blocked ]]; then
+            if archive_research_attempt \
+                "${research_attempt}" \
+                "${research_attempt_outcome}" \
+                "${research_exit_code}" \
+                "${research_session_id}" \
+                "${research_session_name}" \
+                "${research_started_at}" \
+                "${research_completed_at}" \
+                "${research_network_root}" \
+                2>> "${error_path}"; then
+                research_archived_attempts+=(
+                    "${RESEARCH_DIRECTORY}/attempts/${research_attempt}"
+                )
+                research_previous_outcome="${research_attempt_outcome}"
+                review_progress \
+                    "${slug}" \
+                    'research' \
+                    "attempt ${research_attempt} ended with a ${research_attempt_outcome} outcome; relaunching research with a fresh broker and network log ($((research_attempt + 1))/$((WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT + 1)))"
+                research_attempt=$((research_attempt + 1))
+                sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
+                continue
+            fi
+            printf '%s\n' \
+                'Research relaunch was not attempted because the failed attempt could not be archived safely.' \
+                >> "${research_error_path}"
+        fi
+        break
+        done
 
         if ((research_exit_code != 0)); then
             if ((research_capability_count < 1)); then
@@ -9392,13 +9594,7 @@ EOF
                 "${TMPDIR:-/tmp}/rhyolite-repo-review-${HARNESS}.XXXXXXXX"
         )"
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN="${runtime_harness_home}"
-        trap '
-            if [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]]; then
-                rhyolite_harness_invoke harness_sanitize_runtime_home \
-                    "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN}" \
-                    >/dev/null 2>&1 || true
-            fi
-        ' EXIT
+        trap 'cleanup_review_runtime_home_on_exit' EXIT
         if ! rhyolite_harness_invoke harness_prepare_worker_home \
             "${runtime_harness_home}" \
             "${REASONING_EFFORT}" \
@@ -9484,9 +9680,13 @@ EOF
         fi
     fi
     # Without verified same-session continuation the runtime home is
-    # finalized at once; otherwise it stays available until recovery ends.
+    # finalized at once. Otherwise it stays available until recovery ends,
+    # but the adapter records the initial session now, so post-exit
+    # verification and the transcript fallback never wait for recovery.
     if ((WORKER_CONTINUATION_AVAILABLE == 0 || worker_started == 0)); then
         finalize_review_runtime_home
+    else
+        persist_review_agent_state || true
     fi
 
     # The adapter translates its CLI's raw stdout into a readable narrative and
@@ -10152,7 +10352,7 @@ EOF
         "$(html_escape_value "$([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf dedicated-worker-local-stdio-mcp || printf disabled)")"
     if ((ENABLE_PUBLIC_RESEARCH)); then
         printf '%s\n' \
-            '<p>Private research evidence exists under each repository research/network/private directory. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
+            '<p>Private research evidence exists under each repository research/network/private directory, and under research/attempts/&lt;n&gt;/network/private for a relaunched research phase. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
     fi
     printf '<p><a href="review-plan.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (text)</a> · <a href="review-plan.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (JSON)</a> · <a href="handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run handoff</a> · <a href="state.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run state</a> · <a href="manifest.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Manifest</a></p>\n'
     printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'

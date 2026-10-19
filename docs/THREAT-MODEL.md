@@ -167,6 +167,15 @@
   contains only canonical source URLs plus constrained
   fleet/model/reasoning/context/remember fields; sources
   remain untrusted data rather than prompt instructions.
+- Before a Copilot session starts, the launcher checks that the account
+  accepts the selected model, reasoning effort, and context with one
+  non-interactive request: a fixed prompt, an empty working directory, an
+  isolated mode-0700 runtime home with the same narrow authentication bridge
+  as workers, no plugin, agent, custom instructions, built-in MCP, write, or
+  shell access, and the adapter's normalizer verifying that exactly the
+  selected model and effort answered. The home is removed afterwards. A
+  rejected model or effort changes only through the user's explicit choice,
+  never below high reasoning effort; without a terminal the launcher stops.
 - `--yolo` is disabled by default and is an ephemeral per-launch
   outer-orchestrator switch. It opts the outer Copilot orchestrator into all
   permissions but is not persisted in launcher context, copied into the
@@ -458,10 +467,13 @@
 
 - Recovery continues only the review worker's own session and only when the
   adapter has verified `worker_continuation` live. A continuation reuses the
-  exact approved argv less only its new-session name label, and the same
+  exact approved argv less only its new-session name label (Claude Code
+  resumes with `--resume` in place of `--session-id`), and the same
   environment, isolated runtime home, read-only tools, model, effort, and
   context; it receives no new tool, path, or network access, and live
-  approved-plan enforcement applies to it.
+  approved-plan enforcement applies to it. The adapter's post-exit
+  verification runs again after every continuation, before its reply can be
+  accepted.
 - Continuation requests are fixed runner text plus validator diagnostics and
   section names; they never include repository content, research evidence,
   or private artifacts.
@@ -473,8 +485,15 @@
   never accepts invalid UTF-8, and promotes only an assembled report that
   passes unchanged strict finalization. Limits on retries, resubmission
   rounds, continuations, and the approved session timeout bound cost.
-- Research is never continued or relaunched automatically; the broker keeps
-  exactly one network log per repository phase.
+- Research is never continued. After the research worker's own transient
+  model-service failure or blocked automatic fallback, the runner relaunches
+  research at most once, as the approval-bound `ResearchRelaunchLimit`
+  allows, with a fresh broker, runtime, session, cookie jar, and network
+  log. The failed attempt's network log and sanitized artifacts move under
+  `research/attempts/<n>/` with private evidence still mode 0700/0600, and
+  no archived ledger is ever passed to a broker or reloaded. Timeouts,
+  interruptions, substituted output, adapter or cleanup failures, and dossier
+  or transport validation failures are never relaunched.
 - The deterministic failure analysis reads only trusted artifacts in the
   repository output directory, redacts email addresses, writes mode-0600
   files, and never changes the run outcome.
@@ -513,6 +532,11 @@
   Checked-in source and documentation remain inspectable as inert evidence.
 - A local user can intentionally override the runner or plugin
   safeguards.
+- A runner stopped with `SIGKILL` cannot remove its mode-0700 runtime homes
+  under `TMPDIR`, and a launcher stopped that way during its model check
+  cannot remove the mode-0700 `model-check-<n>` home in its private session
+  directory under launcher state, so their ephemeral authentication bridge
+  remains until the directory is deleted.
 - Public DNS classification and pinning reduce, but cannot eliminate,
   risks from a compromised DNS resolver, transparent network
   interception, or a malicious public endpoint sharing infrastructure

@@ -111,6 +111,9 @@ cleanup() {
     rm -rf -- "${fixture_root}"
 }
 trap cleanup EXIT
+# Launcher argv baselines compare physical paths, so a symlinked TMPDIR must
+# not leak its logical spelling into the expected vectors.
+fixture_root="$(cd -P -- "${fixture_root}" && pwd)"
 
 offline_curl_guard_bin="${fixture_root}/offline-curl-guard-bin"
 mkdir -p -- "${offline_curl_guard_bin}"
@@ -6131,12 +6134,20 @@ launcher_default_state="${fixture_root}/launcher-default-state"
 launcher_explicit_state="${fixture_root}/launcher-explicit-state"
 launcher_default_capture="${fixture_root}/launcher-default.capture"
 launcher_explicit_capture="${fixture_root}/launcher-explicit.capture"
+# The pre-launch model check bridges authentication from COPILOT_HOME, so the
+# launcher cases use an empty fixture home. Its runtime homes belong in the
+# launch's private session directory, so a fixture TMPDIR must stay empty.
+launcher_copilot_home="${fixture_root}/launcher-copilot-home"
+launcher_check_tmp="${fixture_root}/launcher-check-tmp"
 mkdir -p -- \
     "${launcher_mock_bin}" \
     "${launcher_caller}" \
     "${launcher_default_state}" \
-    "${launcher_explicit_state}"
-chmod 0700 -- "${launcher_default_state}" "${launcher_explicit_state}"
+    "${launcher_explicit_state}" \
+    "${launcher_copilot_home}" \
+    "${launcher_check_tmp}"
+chmod 0700 -- "${launcher_default_state}" "${launcher_explicit_state}" \
+    "${launcher_copilot_home}"
 cat > "${launcher_mock_bin}/copilot" <<'MOCK_LAUNCHER_COPILOT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -6149,6 +6160,59 @@ if [[ "${1-}" == help && "${2-}" == config ]]; then
     - "claude-fable-5.1"
   `reasoning_effort`: Reasoning effort.
 EOF
+    exit 0
+fi
+# Rhyolite's pre-launch model check: answer like non-interactive Copilot, or
+# reject the configured model or effort before any model call.
+if [[ " $* " == *' --output-format json '* ]]; then
+    check_model=''
+    check_effort=''
+    previous=''
+    for argument in "$@"; do
+        case "${previous}" in
+            --model) check_model="${argument}" ;;
+            --reasoning-effort) check_effort="${argument}" ;;
+        esac
+        previous="${argument}"
+    done
+    check_prompt="$(cat)"
+    if [[ -n "${RHYOLITE_LAUNCHER_CHECK_CAPTURE-}" ]]; then
+        {
+            printf 'HOME\0%s\0' "${COPILOT_HOME-}"
+            printf 'PROMPT\0%s\0' "${check_prompt}"
+            printf 'ARGS\0'
+            printf '%s\0' "$@"
+        } > "${RHYOLITE_LAUNCHER_CHECK_CAPTURE}"
+    fi
+    printf '%s\n' "${check_model}:${check_effort}" \
+        >> "${RHYOLITE_LAUNCHER_CHECK_LOG:-/dev/null}"
+    if [[ -n "${MOCK_LAUNCHER_REJECT_MODEL-}" &&
+        "${check_model}" == "${MOCK_LAUNCHER_REJECT_MODEL}" ]]; then
+        printf 'Error: Model "%s" from --model flag is not available.\n' \
+            "${check_model}" >&2
+        exit 1
+    fi
+    case " ${MOCK_LAUNCHER_REJECT_EFFORTS-} " in
+        *" ${check_effort} "*)
+            printf 'Error: Reasoning effort "%s" is not supported for model "%s".\n' \
+                "${check_effort}" "${check_model}" >&2
+            exit 1
+            ;;
+    esac
+    if [[ "${MOCK_LAUNCHER_CHECK_ERROR-}" == 1 ]]; then
+        printf 'Error: mock model-service failure\n' >&2
+        exit 1
+    fi
+    answer_model="${MOCK_LAUNCHER_ANSWER_MODEL:-${check_model}}"
+    printf '{"type":"model.call_start","data":{"turnId":"0","model":"%s"}}\n' \
+        "${answer_model}"
+    printf '{"type":"assistant.message","data":{"model":"%s","content":"OK","toolRequests":[]}}\n' \
+        "${answer_model}"
+    printf '{"type":"model.call_final_result","data":{"model":"%s","result":"success"}}\n' \
+        "${answer_model}"
+    printf '{"type":"session.usage_checkpoint","data":{"promptCacheBreakState":[{"conversation":"main","models":{"%s":{"model":"%s","reasoning_effort":"%s"}}}]}}\n' \
+        "${answer_model}" "${answer_model}" "${check_effort}"
+    printf '{"type":"result","exitCode":0}\n'
     exit 0
 fi
 : "${RHYOLITE_LAUNCHER_CAPTURE:?}"
@@ -6346,30 +6410,36 @@ assert_launcher_state_path_failure \
 [[ ! -e "${launcher_symlink_state_target}/rhyolite" ]] ||
     fail 'Symlinked launcher state target was modified before rejection.'
 
+launcher_default_check_capture="${fixture_root}/launcher-default.check-capture"
 (
     cd "${launcher_caller}"
     env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
         XDG_STATE_HOME="${launcher_default_state}" \
         RHYOLITE_LAUNCHER_CAPTURE="${launcher_default_capture}" \
+        RHYOLITE_LAUNCHER_CHECK_CAPTURE="${launcher_default_check_capture}" \
+        COPILOT_HOME="${launcher_copilot_home}" \
+        TMPDIR="${launcher_check_tmp}" \
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${LAUNCHER}" \
             --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
             --model gpt-5.6-sol
-)
+) 2>"${fixture_root}/launcher-default.stderr"
 (
     cd "${launcher_caller}"
     env -u RHYOLITE_LAUNCHER_HARNESS \
         RHYOLITE_HARNESS=bogus \
         XDG_STATE_HOME="${launcher_explicit_state}" \
         RHYOLITE_LAUNCHER_CAPTURE="${launcher_explicit_capture}" \
+        COPILOT_HOME="${launcher_copilot_home}" \
+        TMPDIR="${launcher_check_tmp}" \
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${LAUNCHER}" \
             --harness copilot \
             --repo https://example.com/owner/repository.git \
             --fleet-mode standard \
             --model gpt-5.6-sol
-)
+) 2>"${fixture_root}/launcher-explicit.stderr"
 
 normalize_launcher_capture() {
     local input_path="$1"
@@ -6442,6 +6512,255 @@ printf '%s\0' "${expected_launcher_args[@]}" > "${expected_launcher_vector}"
 cmp -s "${expected_launcher_vector}" "${launcher_default_vector}" ||
     fail 'Copilot outer-launcher argv changed from the I1a baseline.'
 
+# A plugin and caller reached through symlinked parent directories must not
+# leak their logical paths into the launcher argv: --plugin-dir and -C stay
+# physical, so the I1a baseline is unchanged.
+launcher_linked_parent="${fixture_root}/launcher-linked-parent"
+launcher_linked_state="${fixture_root}/launcher-linked-state"
+launcher_linked_capture="${fixture_root}/launcher-linked.capture"
+launcher_linked_vector="${fixture_root}/launcher-linked.vector"
+mkdir -p -- "${launcher_linked_parent}" "${launcher_linked_state}"
+chmod 0700 -- "${launcher_linked_state}"
+ln -s -- "${PLUGIN_ROOT}" "${launcher_linked_parent}/plugin"
+ln -s -- "${launcher_caller}" "${launcher_linked_parent}/caller"
+(
+    cd -L -- "${launcher_linked_parent}/caller"
+    [[ "$(pwd -L)" == "${launcher_linked_parent}/caller" ]] ||
+        fail 'The symlinked launcher caller lost its logical path.'
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        XDG_STATE_HOME="${launcher_linked_state}" \
+        RHYOLITE_LAUNCHER_CAPTURE="${launcher_linked_capture}" \
+        COPILOT_HOME="${launcher_copilot_home}" \
+        TMPDIR="${launcher_check_tmp}" \
+        PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+        "${launcher_linked_parent}/plugin/bin/rhyolite" \
+            --repo https://example.com/owner/repository.git \
+            --fleet-mode standard \
+            --model gpt-5.6-sol
+) 2>"${fixture_root}/launcher-linked.stderr"
+normalize_launcher_capture \
+    "${launcher_linked_capture}" \
+    "${launcher_linked_vector}"
+cmp -s "${expected_launcher_vector}" "${launcher_linked_vector}" ||
+    fail 'Copilot outer-launcher argv kept a logical symlinked path instead of the physical I1a baseline.'
+
+# The pre-launch model check sends one isolated non-interactive Copilot
+# request with the selected model, effort, and context and no plugin, agent,
+# custom instructions, built-in MCP, write, or shell access from a runtime
+# home inside the launch's private session directory, and removes that home
+# before the unchanged interactive session starts.
+mapfile -d '' -t launcher_check_fields < "${launcher_default_check_capture}"
+[[ "${launcher_check_fields[0]-}" == HOME &&
+    "${launcher_check_fields[1]-}" == \
+        "${launcher_default_state}/rhyolite/launcher/sessions/"*/model-check-1/home &&
+    "${launcher_check_fields[2]-}" == PROMPT &&
+    "${launcher_check_fields[3]-}" == \
+        'Rhyolite model check. Reply with exactly: OK' &&
+    "${launcher_check_fields[4]-}" == ARGS ]] ||
+    fail 'The pre-launch model check did not use an isolated Copilot home in the launch session directory and the fixed prompt.'
+launcher_check_root="${launcher_check_fields[1]%/home}"
+expected_check_arguments=(
+    -C "${launcher_check_root}/cwd"
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --no-ask-user
+    --no-color
+    --no-custom-instructions
+    --disable-builtin-mcps
+    --disallow-temp-dir
+    --no-remote-export
+    --secret-env-vars "${authentication_variables_csv}"
+    --available-tools view
+    --deny-tool write
+    --deny-tool shell
+    --stream off
+    --output-format json
+)
+cmp -s <(printf '%s\0' "${launcher_check_fields[@]:5}") \
+    <(printf '%s\0' "${expected_check_arguments[@]}") ||
+    fail 'The pre-launch model check argv changed from its golden vector.'
+[[ -z "$(find "${launcher_check_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+    fail 'The pre-launch model check wrote to TMPDIR.'
+[[ ! -e "${launcher_check_root}" &&
+    -z "$(find "${launcher_default_state}" -name 'model-check-*' -print -quit)" ]] ||
+    fail 'The pre-launch model check left its isolated runtime home.'
+assert_contains "${fixture_root}/launcher-default.stderr" \
+    'Copilot accepted gpt-5.6-sol at max reasoning effort.' \
+    'Pre-launch model check confirmation'
+
+# Without a terminal, a rejected model or effort stops the launcher before
+# Copilot starts, and an unverifiable check warns and launches unchanged.
+run_launcher_model_check_case() {
+    local name="$1"
+    shift
+    local -a check_environment=()
+    local -a launcher_arguments=(
+        --repo https://example.com/owner/repository.git
+        --fleet-mode standard
+        --model gpt-5.6-sol
+    )
+
+    while (($# > 0)) && [[ "$1" != -- ]]; do
+        check_environment+=("$1")
+        shift
+    done
+    (($# == 0)) || { shift; launcher_arguments+=("$@"); }
+    launcher_check_case_capture="${fixture_root}/${name}.launcher.capture"
+    launcher_check_case_stderr="${fixture_root}/${name}.launcher.stderr"
+    rm -f -- "${launcher_check_case_capture}"
+    mkdir -m 700 -p -- "${fixture_root}/${name}-state"
+    set +e
+    (
+        cd "${launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            NO_COLOR=1 \
+            XDG_STATE_HOME="${fixture_root}/${name}-state" \
+            RHYOLITE_LAUNCHER_CAPTURE="${launcher_check_case_capture}" \
+            COPILOT_HOME="${launcher_copilot_home}" \
+            TMPDIR="${launcher_check_tmp}" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "${check_environment[@]}" \
+            "${LAUNCHER}" "${launcher_arguments[@]}"
+    ) >"${fixture_root}/${name}.launcher.stdout" \
+        2>"${launcher_check_case_stderr}"
+    launcher_check_case_status=$?
+    set -e
+    [[ -z "$(find "${launcher_check_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+        fail "${name}: the pre-launch model check wrote to TMPDIR."
+    [[ -z "$(find "${fixture_root}/${name}-state" -name 'model-check-*' -print -quit)" ]] ||
+        fail "${name}: the pre-launch model check left its isolated runtime home."
+}
+
+assert_launcher_model_check_stop() {
+    local name="$1"
+    local summary="$2"
+    local detail="$3"
+    local remediation="$4"
+
+    ((launcher_check_case_status == 2)) ||
+        fail "${name}: launcher returned ${launcher_check_case_status}, expected 2."
+    assert_contains "${launcher_check_case_stderr}" \
+        'Stage: launcher model availability' "${name} stage"
+    assert_contains "${launcher_check_case_stderr}" \
+        "Summary: ${summary}" "${name} summary"
+    assert_contains "${launcher_check_case_stderr}" "${detail}" "${name} detail"
+    assert_contains "${launcher_check_case_stderr}" \
+        "Remediation: ${remediation}" "${name} remediation"
+    assert_no_terminal_controls "${launcher_check_case_stderr}" "${name}"
+    [[ ! -e "${launcher_check_case_capture}" ]] ||
+        fail "${name}: launcher started Copilot after the model check failed."
+}
+
+run_launcher_model_check_case launcher-check-model \
+    MOCK_LAUNCHER_REJECT_MODEL=gpt-5.6-sol
+assert_launcher_model_check_stop launcher-check-model \
+    'Copilot reports that model gpt-5.6-sol is not available to your account.' \
+    'Error: Model "gpt-5.6-sol" from --model flag is not available.' \
+    'Pass --model with a model that your Copilot account can use'
+run_launcher_model_check_case launcher-check-effort \
+    MOCK_LAUNCHER_REJECT_EFFORTS=max
+assert_launcher_model_check_stop launcher-check-effort \
+    'Copilot reports that model gpt-5.6-sol does not accept max reasoning effort.' \
+    'Error: Reasoning effort "max" is not supported for model "gpt-5.6-sol".' \
+    'Pass --reasoning-effort xhigh, the next highest effort'
+run_launcher_model_check_case launcher-check-high-effort \
+    MOCK_LAUNCHER_REJECT_EFFORTS=high -- --reasoning-effort high
+assert_launcher_model_check_stop launcher-check-high-effort \
+    'Copilot reports that model gpt-5.6-sol does not accept high reasoning effort.' \
+    'Error: Reasoning effort "high" is not supported for model "gpt-5.6-sol".' \
+    'Pass --model with another model that accepts high or higher reasoning effort'
+for launcher_check_unverified in \
+    'launcher-check-error:MOCK_LAUNCHER_CHECK_ERROR=1:Error: mock model-service failure' \
+    'launcher-check-substituted:MOCK_LAUNCHER_ANSWER_MODEL=claude-opus-4.8:instead of the approved model'; do
+    IFS=: read -r launcher_check_name launcher_check_setting \
+        launcher_check_detail <<< "${launcher_check_unverified}"
+    run_launcher_model_check_case "${launcher_check_name}" \
+        "${launcher_check_setting}"
+    ((launcher_check_case_status == 0)) ||
+        fail "${launcher_check_name}: an unverifiable model check stopped the launcher."
+    assert_contains "${launcher_check_case_stderr}" \
+        'Warning: Rhyolite could not verify that Copilot accepts gpt-5.6-sol at max reasoning effort' \
+        "${launcher_check_name} warning"
+    assert_contains "${launcher_check_case_stderr}" \
+        "${launcher_check_detail}" "${launcher_check_name} detail"
+    assert_not_contains "${launcher_check_case_stderr}" 'Copilot accepted' \
+        "${launcher_check_name} acceptance"
+    normalize_launcher_capture \
+        "${launcher_check_case_capture}" \
+        "${fixture_root}/${launcher_check_name}.vector"
+    cmp -s "${expected_launcher_vector}" \
+        "${fixture_root}/${launcher_check_name}.vector" ||
+        fail "${launcher_check_name}: an unverifiable model check changed the launch."
+done
+
+# Interactively, a rejected effort or model asks for the next highest effort,
+# another model, or quit. There is no default answer, the effort never drops
+# below high, and end of input quits.
+launcher_check_library="${fixture_root}/launcher-model-check.sh"
+sed '/^main "\$@"$/d' "${LAUNCHER}" > "${launcher_check_library}"
+cat >> "${launcher_check_library}" <<'SH'
+source "${1}/lib/harness/common.sh"
+rhyolite_harness_load "$1" copilot
+LAUNCHER_ACCESS_MODEL="$2"
+LAUNCHER_ACCESS_EFFORT="$3"
+launcher_check_status=0
+ensure_copilot_model_access "$(command -v copilot)" long_context 1 0 "$4" ||
+    launcher_check_status=$?
+printf '%s %s %s\n' \
+    "${launcher_check_status}" "${LAUNCHER_ACCESS_MODEL}" "${LAUNCHER_ACCESS_EFFORT}"
+SH
+assert_interactive_model_check() {
+    local name="$1"
+    local answers="$2"
+    local expected_result="$3"
+    local expected_checks="$4"
+    shift 4
+    local result
+    local check_parent="${fixture_root}/${name}-session"
+
+    rm -f -- "${fixture_root}/${name}.checks"
+    mkdir -m 700 -p -- "${check_parent}"
+    result="$(
+        env COPILOT_HOME="${launcher_copilot_home}" \
+            TMPDIR="${launcher_check_tmp}" \
+            RHYOLITE_LAUNCHER_CHECK_LOG="${fixture_root}/${name}.checks" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "$@" \
+            bash "${launcher_check_library}" "${PLUGIN_ROOT}" gpt-5.6-sol max \
+                "${check_parent}" \
+            <<< "${answers}" 2>"${fixture_root}/${name}.stderr"
+    )" || fail "${name}: the interactive model check failed."
+    assert_equal "${expected_result}" "${result}" "${name} result"
+    assert_equal "${expected_checks}" \
+        "$(tr '\n' ' ' < "${fixture_root}/${name}.checks")" "${name} checks"
+    [[ -z "$(find "${launcher_check_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+        fail "${name}: the interactive model check wrote to TMPDIR."
+    [[ -z "$(find "${check_parent}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+        fail "${name}: the interactive model check left its runtime home."
+}
+assert_interactive_model_check launcher-check-next-effort $'\n1' \
+    '0 gpt-5.6-sol xhigh' 'gpt-5.6-sol:max gpt-5.6-sol:xhigh ' \
+    MOCK_LAUNCHER_REJECT_EFFORTS=max
+assert_contains "${fixture_root}/launcher-check-next-effort.stderr" \
+    '  1. Use xhigh, the next highest reasoning effort' \
+    'Interactive effort fallback offer'
+assert_contains "${fixture_root}/launcher-check-next-effort.stderr" \
+    'Enter one of the displayed choice numbers.' \
+    'Interactive effort fallback has no default answer'
+assert_interactive_model_check launcher-check-high-floor $'1\n1\n2' \
+    '3 gpt-5.6-sol high' \
+    'gpt-5.6-sol:max gpt-5.6-sol:xhigh gpt-5.6-sol:high ' \
+    'MOCK_LAUNCHER_REJECT_EFFORTS=max xhigh high'
+assert_not_contains "${fixture_root}/launcher-check-high-floor.stderr" \
+    'Use medium' 'Interactive effort fallback stays at or above high'
+assert_interactive_model_check launcher-check-other-model $'1\n2' \
+    '0 claude-opus-5.5 max' 'gpt-5.6-sol:max claude-opus-5.5:max ' \
+    MOCK_LAUNCHER_REJECT_MODEL=gpt-5.6-sol
+assert_interactive_model_check launcher-check-end-of-input '' \
+    '3 gpt-5.6-sol max' 'gpt-5.6-sol:max ' \
+    MOCK_LAUNCHER_REJECT_MODEL=gpt-5.6-sol
+
 run_unlisted_launcher() {
     local name="$1"
     local state_path="$2"
@@ -6457,6 +6776,8 @@ run_unlisted_launcher() {
             NO_COLOR=1 \
             XDG_STATE_HOME="${state_path}" \
             RHYOLITE_LAUNCHER_CAPTURE="${launcher_unlisted_capture}" \
+            COPILOT_HOME="${launcher_copilot_home}" \
+            TMPDIR="${launcher_check_tmp}" \
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \

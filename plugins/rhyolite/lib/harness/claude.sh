@@ -3,6 +3,7 @@
 CLAUDE_AUTH_BRIDGE_INITIALIZED=0
 CLAUDE_AUTH_BRIDGE_SOURCE=''
 CLAUDE_RUNTIME_HOME=''
+CLAUDE_REVIEW_RUNTIME_HOME=''
 CLAUDE_HOME_PHASE=''
 CLAUDE_SESSION_ROOT=''
 CLAUDE_SESSION_ID=''
@@ -567,10 +568,12 @@ harness_capability() {
         fleet|subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
-        # Same-session continuation of a print-mode worker has not been
-        # verified live, so the runner never continues a Claude Code session.
+        # Verified live with Claude Code 2.1.303: a print-mode review worker
+        # started with the adapter-built argv resumed with its context under
+        # harness_worker_continuation_argv, the same runtime home, and only the
+        # approved model and effort.
         worker_continuation)
-            printf '%s\n' 'unverified'
+            printf '%s\n' 'yes'
             ;;
         *)
             printf '%s\n' 'unverified'
@@ -763,6 +766,7 @@ harness_prepare_worker_home() {
 
     CLAUDE_RUNTIME_HOME="${runtime_home}"
     CLAUDE_HOME_PHASE="${phase}"
+    [[ "${phase}" != review ]] || CLAUDE_REVIEW_RUNTIME_HOME="${runtime_home}"
     chmod 700 -- "${runtime_home}" || {
         rhyolite_harness_set_error \
             'Could not restrict the temporary Claude Code runtime home.'
@@ -1585,13 +1589,84 @@ PY
     : "${raw_output}"
 }
 
-# Same-session continuation is not yet verified live for Claude Code print
-# mode, so worker_continuation stays unverified and the runner never asks.
+# Claude Code print mode resumes an existing session with --resume <id> under
+# the same isolated runtime home. Verified live with Claude Code 2.1.303: the
+# resumed review worker kept its context, appended to the same session record,
+# and recorded only the approved model and effort, while invoking the
+# new-session argv again failed with "Session ID ... is already in use". The
+# continuation argv therefore replaces the approved --session-id pair with
+# --resume, drops the --name pair, which only labels a brand-new session, and
+# keeps every other approved argument in order.
 harness_worker_continuation_argv() {
-    claude_require_array_destination "$1" || return 1
-    rhyolite_harness_set_error \
-        'Claude Code same-session worker continuation is not verified for Rhyolite.'
-    return 1
+    local destination_name="$1"
+    local source_name="$2"
+    local claude_continuation_index=0
+    local claude_continuation_sessions=0
+    local -a claude_continuation_source_copy=()
+    local -a claude_continuation_result=()
+
+    claude_require_array_destination "${destination_name}" || return 1
+    [[ "${source_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ &&
+        "${source_name}" != "${destination_name}" &&
+        "${source_name}" != claude_continuation_* &&
+        "${destination_name}" != claude_continuation_* ]] || {
+        rhyolite_harness_set_error \
+            'The Claude Code continuation source argv name is invalid.'
+        return 1
+    }
+    local -n claude_continuation_source_ref="${source_name}"
+    local -n claude_continuation_output_ref="${destination_name}"
+    claude_continuation_source_copy=("${claude_continuation_source_ref[@]}")
+    while ((claude_continuation_index < ${#claude_continuation_source_copy[@]})); do
+        case "${claude_continuation_source_copy[claude_continuation_index]}" in
+            --session-id)
+                claude_continuation_sessions=$((claude_continuation_sessions + 1))
+                claude_valid_session_id \
+                    "${claude_continuation_source_copy[claude_continuation_index + 1]-}" || {
+                    rhyolite_harness_set_error \
+                        'The Claude Code continuation session identifier is invalid.'
+                    return 1
+                }
+                claude_continuation_result+=(
+                    --resume
+                    "${claude_continuation_source_copy[claude_continuation_index + 1]}"
+                )
+                claude_continuation_index=$((claude_continuation_index + 2))
+                continue
+                ;;
+            --name)
+                ((claude_continuation_index + 1 < ${#claude_continuation_source_copy[@]})) || {
+                    rhyolite_harness_set_error \
+                        'The Claude Code continuation session name is missing.'
+                    return 1
+                }
+                claude_continuation_index=$((claude_continuation_index + 2))
+                continue
+                ;;
+            -n|--name=*|--session-id=*|-r|--resume|--resume=*|-c|--continue|--fork-session)
+                rhyolite_harness_set_error \
+                    'The Claude Code continuation source argv must start exactly one new session in the supported form.'
+                return 1
+                ;;
+        esac
+        claude_continuation_result+=(
+            "${claude_continuation_source_copy[claude_continuation_index]}"
+        )
+        claude_continuation_index=$((claude_continuation_index + 1))
+    done
+    ((claude_continuation_sessions == 1)) || {
+        rhyolite_harness_set_error \
+            'The Claude Code continuation argv must name exactly one session.'
+        return 1
+    }
+    claude_continuation_output_ref=("${claude_continuation_result[@]}")
+    # A continuation resumes the review worker's own session, so live
+    # enforcement and post-exit verification return to the review runtime
+    # home even after a report-repair child prepared its own home.
+    if [[ -n "${CLAUDE_REVIEW_RUNTIME_HOME}" ]]; then
+        CLAUDE_RUNTIME_HOME="${CLAUDE_REVIEW_RUNTIME_HOME}"
+        CLAUDE_HOME_PHASE=review
+    fi
 }
 
 harness_render_request() {
