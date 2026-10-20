@@ -60,12 +60,15 @@ Status values:
   orchestrators expect the exact multi-line `RHYOLITE_LAUNCHER_SETUP_V1`
   block and must not start subagents of their own, so they have to tolerate
   a flattened block and conflicting instructions. The observed sessions,
-  including a 2026-10-14 run, still recognized the block.
-- **Next step:** confirm the transformation with the current Copilot CLI,
-  then decide whether the launcher should deliver the setup block another
-  way in native mode or whether the orchestrators should explicitly accept
-  the flattened form and ignore fleet dispatch instructions.
-- **Source:** the 2026-10-13 and 2026-10-14 native-fleet sessions.
+  including a 2026-10-14 run, still recognized the block. On 2026-10-20,
+  Copilot CLI 1.0.101-0 still flattened the block in native mode, and the
+  orchestrator still recognized it, kept the launcher source unchanged, and
+  started no subagents.
+- **Next step:** decide whether the launcher should deliver the setup block
+  another way in native mode or whether the orchestrators should explicitly
+  accept the flattened form and ignore fleet dispatch instructions.
+- **Source:** the 2026-10-13, 2026-10-14, and 2026-10-20 native-fleet
+  sessions.
 
 ### T16 (P2, Open): Remove runtime homes left by a hard-killed runner
 

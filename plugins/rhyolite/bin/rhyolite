@@ -383,6 +383,20 @@ repository_selection_key() {
     printf '%s' "${repository}"
 }
 
+# A canonical github.com URL with a single path segment names an account or
+# organization, never a repository, so it would only fail the anonymous
+# access check after the harness had started.
+github_account_without_repository() {
+    local path
+
+    case "$1" in
+        https://github.com/*) path="${1#https://github.com/}" ;;
+        https://www.github.com/*) path="${1#https://www.github.com/}" ;;
+        *) return 1 ;;
+    esac
+    [[ -n "${path}" && "${path}" != */* ]]
+}
+
 prompt_for_fleet_mode() {
     local remembered_mode="$1"
     local answer
@@ -999,6 +1013,9 @@ with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
 ${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
 immediately. Approved fleet/model/effort/context settings are remembered per
 repository and harness. Claude Code has no native fleet mode.
+
+Unknown options and GitHub URLs without a repository name are rejected before
+the harness starts. Put review request text that begins with a hyphen after --.
 EOF
 }
 
@@ -1263,6 +1280,24 @@ main() {
                     shift
                 done
                 ;;
+            --help|-h|--version|-v)
+                fail \
+                    'launcher argument validation' \
+                    "The $1 option must be the only argument." \
+                    "$1 was combined with other launcher arguments." \
+                    "Run rhyolite $1 without any other arguments." \
+                    2
+                ;;
+            # A mistyped option must not become review request text: it
+            # would start the default harness and spend credits.
+            -?*)
+                fail \
+                    'launcher argument validation' \
+                    'The launcher does not recognize an option.' \
+                    "Unknown option: $1" \
+                    'Check the option against rhyolite --help; options take their values as separate arguments. To start the review request with a hyphen, put the request after --.' \
+                    2
+                ;;
             *)
                 request_parts+=("$1")
                 shift
@@ -1429,6 +1464,14 @@ main() {
             break
         fi
         repository="${RHYOLITE_CANONICAL_REPOSITORY}"
+        if github_account_without_repository "${repository}"; then
+            fail \
+                'launcher source validation' \
+                'A GitHub URL names an account but no repository.' \
+                "The URL has no repository name: ${repository}" \
+                "Add the repository name, for example ${repository}/REPOSITORY, and retry." \
+                2
+        fi
         repository_key="$(repository_selection_key "${repository}")"
         duplicate=0
         for existing_repository in "${repositories[@]}"; do

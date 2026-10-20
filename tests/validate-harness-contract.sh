@@ -6332,6 +6332,32 @@ assert_launcher_pre_activity_failure \
     'The launcher accepts the harness identifier only as a separate argument.' \
     'Use --harness ID, for example --harness copilot.' \
     --harness=
+# A mistyped option fails before any state, model check, or harness start
+# instead of becoming review request text for the default harness.
+assert_launcher_pre_activity_failure \
+    launcher-unknown-option \
+    unset \
+    '' \
+    'launcher argument validation' \
+    'Unknown option: --harnes' \
+    'To start the review request with a hyphen, put the request after --.' \
+    --harnes claude --repo https://example.com/owner/repository
+assert_launcher_pre_activity_failure \
+    launcher-equals-repo \
+    unset \
+    '' \
+    'launcher argument validation' \
+    'Unknown option: --repo=https://example.com/owner/repository' \
+    'options take their values as separate arguments' \
+    --repo=https://example.com/owner/repository
+assert_launcher_pre_activity_failure \
+    launcher-late-help \
+    unset \
+    '' \
+    'launcher argument validation' \
+    '--help was combined with other launcher arguments.' \
+    'Run rhyolite --help without any other arguments.' \
+    --repo https://example.com/owner/repository --help
 assert_launcher_pre_activity_failure \
     launcher-marker-mismatch \
     set \

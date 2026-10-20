@@ -112,7 +112,9 @@ supported and must not drive new work.
   whitespace-separated `--repo` values or in the initial review request,
   into one trusted `Source=` line, syntactically canonicalizes those public
   sources without stripping a terminal `.git` endpoint, selects spellings
-  that differ only by that endpoint once, collects native
+  that differ only by that endpoint once, rejects unknown options before
+  any state or harness start and `github.com` URLs that name only an account
+  before the harness starts, collects native
   fleet/model/reasoning/context settings, preselects `rhyolite:repo-review`,
   passes `--mode interactive`, and submits a trusted `-i` setup block
   without enabling allow-all mode. A request that holds only repository URLs

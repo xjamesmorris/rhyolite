@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The launcher now rejects an unknown or mistyped option before any state,
+  model check, or harness start. Previously every unrecognized argument
+  became review request text, so `rhyolite --harnes claude` started the
+  default Copilot harness, spent a premium request on the model check, and
+  passed `--harnes claude` to the session as the request. A misplaced
+  `--help` or `--version` gets its own message. Request text that begins
+  with a hyphen still works after `--`.
+- The launcher now rejects a `github.com` URL that names only an account,
+  such as `https://github.com/owner/`, before the harness starts. Such a
+  URL can never be cloned, and the runner refused it only at its anonymous
+  access check, after the orchestrator session had already used model
+  credits.
+
 - A transient research failure no longer ends a scope 2 or 3 review. When
   the dedicated research worker's own outcome is a transient model-service
   failure or a blocked automatic model fallback, the runner relaunches the

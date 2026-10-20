@@ -4059,6 +4059,43 @@ set -e
         "${launcher_invalid_request_url_stderr}" ||
     fail 'Launcher did not reject an invalid repository URL in the initial request.'
 
+# A GitHub URL that names only an account fails before Copilot starts, while
+# an owner/repository URL and request text after -- that begins with a hyphen
+# still start normally.
+for launcher_account_url in \
+    https://github.com/owner/ \
+    'https://WWW.GitHub.com/owner.git'; do
+    rm -f -- "${launcher_stub_log}"
+    launcher_account_url_stderr="${fixture_dir}/launcher-account-url.stderr"
+    set +e
+    (
+        cd "${ROOT}"
+        XDG_STATE_HOME="${launcher_state_home}" \
+            RHYOLITE_STUB_LOG="${launcher_stub_log}" \
+            PATH="${launcher_mock_bin}:${PATH}" \
+            "${launcher_link}" \
+                --fleet-mode standard \
+                --repo "${launcher_account_url}"
+    ) </dev/null >/dev/null 2>"${launcher_account_url_stderr}"
+    launcher_account_url_status=$?
+    set -e
+    [[ "${launcher_account_url_status}" -eq 2 &&
+        ! -e "${launcher_stub_log}" ]] &&
+        grep -Fq 'Stage: launcher source validation' \
+            "${launcher_account_url_stderr}" &&
+        grep -Fq 'Summary: A GitHub URL names an account but no repository.' \
+            "${launcher_account_url_stderr}" &&
+        grep -Fq '/owner' "${launcher_account_url_stderr}" ||
+        fail "Launcher did not reject the GitHub account URL ${launcher_account_url} before starting Copilot."
+done
+assert_launcher_sources \
+    launcher-github-repository-and-hyphen-request \
+    'https://github.com/owner/repository' \
+    '-focus on parsing' \
+    --repo https://github.com/owner/repository/ \
+    -- \
+    '-focus on parsing'
+
 launcher_sources_rule='Each `Source=` line selects one repository, and together they are the complete source list: the launcher already added, validated, and de-duplicated every repository URL from its command line, including URLs in the user'"'"'s initial review request. Select every listed source without asking about sources again; the user can still change sources through `Edit setup` at plan approval.'
 for launcher_sources_agent in \
     "${AGENT}" \

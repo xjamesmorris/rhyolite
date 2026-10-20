@@ -1099,9 +1099,14 @@ Every public HTTPS URL on the command line, including a URL inside an
 initial review request, becomes one trusted source in the launcher's setup
 block, and the agent selects all of them without asking about sources again.
 Spellings that differ only by a trailing `.git` are reviewed once, and an
-invalid URL stops the launcher before the harness CLI starts. The
-`EFFECTIVE REVIEW PLAN` lists every source, and `Edit setup` can still change
-them.
+invalid URL stops the launcher before the harness CLI starts, as does a
+GitHub URL that names only an account, such as `https://github.com/owner/`.
+The `EFFECTIVE REVIEW PLAN` lists every source, and `Edit setup` can still
+change them.
+
+An unknown or mistyped option, such as `--harnes`, stops the launcher before
+anything starts instead of becoming review request text. Put request text
+that begins with a hyphen after `--`.
 
 The optional `--yolo` switch changes the outer Copilot session permissions
 for that launch:
