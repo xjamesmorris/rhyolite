@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.4 - 2026-10-20
+
 - The launcher now rejects an unknown or mistyped option before any state,
   model check, or harness start. Previously every unrecognized argument
   became review request text, so `rhyolite --harnes claude` started the
