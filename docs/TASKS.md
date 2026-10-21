@@ -31,6 +31,7 @@ Status values:
 | --- | --- | --- | --- |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
 | T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
+| T17 | P2 | Open | Implement Codex after proving a safe snapshot-read interface |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
@@ -70,6 +71,22 @@ Status values:
   `rhyolite-repo-*` runtime homes and launcher `model-check-*` homes whose
   recorded process is gone, and document the manual cleanup.
 - **Source:** 2026-10-19 validation run.
+
+### T17 (P2, Open): Implement Codex after proving a safe snapshot-read interface
+
+- **Problem:** The Codex workstream targets the official CLI, scopes 1-3,
+  the launcher, and native installation/entrypoints. Initial Codex 0.163.0
+  probes could produce a zero-tool request but no ordinary file-read/search
+  tools with shell disabled, including after a synthetic catalog advertised
+  those tools. The adapter cannot proceed under the current design by
+  granting shell access or adding an unapproved broker.
+- **Next step:** decide on an approved constrained snapshot-read interface
+  or runner-mediated input protocol, or pause Codex support. Keep production
+  registration absent until the full contract and live evidence pass.
+- **Done when:** all three scopes, native setup/package behavior,
+  enforcement, recovery, repair, isolation, and cleanup satisfy the harness
+  playbook and Fedora validation without regressing existing harnesses.
+- **Source:** [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md).
 
 ### T11 (P3, Deferred): Deferred review and platform features
 
