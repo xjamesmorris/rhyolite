@@ -29,28 +29,11 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T4 | P1 | Open | Run the interactive and remote release smoke tests for 0.8.4 |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
 | T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T4 (P1, Open): Run the interactive and remote release smoke tests for 0.8.4
-
-- **Problem:** The interactive and remote checks in
-  [PUBLISHING.md](PUBLISHING.md) are only partly recorded for 0.8.3. On
-  2026-10-19, fresh remote installs of 0.8.3 succeeded for Copilot CLI and
-  Claude Code, and scope-1 reviews completed on Copilot CLI 1.0.100 and
-  Claude Code 2.1.303. The installed package's exact `help`, `status`, and
-  `explain scopes` setup controls and the `/repo-review` shorthand were not
-  recorded. The manual update from the prior release could not be tested,
-  because neither CLI installs a marketplace at a tag and `main` already
-  held 0.8.3, so that check moves to 0.8.4 as an update from a retained
-  0.8.3 installation.
-- **Done when:** maintainer release checklist steps 6 and 9 and canonical
-  release workflow steps 10 and 11 pass for 0.8.4, with step 9's manual
-  update run from a retained 0.8.3 installation.
 
 ### T12 (P2, Open): Keep the launcher setup block intact in native fleet mode
 
