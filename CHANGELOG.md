@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Copilot reviews work again with Copilot CLI 1.0.103, which removed the
+  `--no-remote-export` option that Rhyolite passed to every Copilot child.
+  Each review, research, and report-repair worker exited before it
+  started, so every Copilot review failed closed before analysis began;
+  scopes 2 and 3 stopped at the research capability stage. The launcher's
+  pre-launch model check could only warn that it could not verify the
+  selected model. Every Copilot child and the model check now pass the
+  replacement `--sync-session=off`, which keeps Copilot account
+  session-history sync off. The value stays attached with `=` because a
+  bare `--sync-session` turns sync on.
+
 ## 0.8.4 - 2026-10-20
 
 - The launcher now rejects an unknown or mistyped option before any state,

@@ -780,7 +780,7 @@ check_copilot_model_access() {
         --no-custom-instructions
         --disable-builtin-mcps
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --secret-env-vars "${authentication_names}"
         --available-tools view
         --deny-tool write

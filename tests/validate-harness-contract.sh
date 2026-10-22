@@ -871,7 +871,7 @@ expected_worker_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools "${base_available_tools}"
     --allow-tool read
@@ -901,7 +901,7 @@ expected_research_worker_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools "${research_available_tools}"
     --allow-tool read
@@ -960,7 +960,7 @@ expected_repair_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --no-bash-env
     --no-auto-update
     --no-experimental
@@ -1084,7 +1084,7 @@ expected_copilot_research_arguments=(
     --disable-builtin-mcps
     --additional-mcp-config "@${research_mcp_config_path}"
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools 'view,glob,rg,skill,rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary'
     --allow-tool read
@@ -4058,7 +4058,7 @@ JS
         --no-custom-instructions
         --disable-builtin-mcps
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --secret-env-vars "${authentication_variables_csv}"
         --available-tools "${available_tools}"
         --allow-tool read
@@ -6595,7 +6595,7 @@ expected_check_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools view
     --deny-tool write

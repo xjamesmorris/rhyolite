@@ -609,6 +609,10 @@ harness_prepare_worker_home() {
     }
 }
 
+# Copilot CLI 1.0.103 rejects the removed --no-remote-export and names
+# --sync-session off as its replacement. Every Copilot child passes the value
+# attached, --sync-session=off: the option takes an optional value, and a
+# bare --sync-session enables account history sync.
 harness_worker_argv() {
     local -n output_arguments="$1"
     local session_root="$2"
@@ -637,7 +641,7 @@ harness_worker_argv() {
         --no-custom-instructions
         --disable-builtin-mcps
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --secret-env-vars "${authentication_variables}"
         --available-tools "${available_tools}"
         --allow-tool read
@@ -725,7 +729,7 @@ harness_report_repair_argv() {
         --no-custom-instructions
         --disable-builtin-mcps
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --no-bash-env
         --no-auto-update
         --no-experimental
@@ -859,7 +863,7 @@ harness_research_worker_argv() {
         --disable-builtin-mcps
         --additional-mcp-config "@${mcp_config_path}"
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --secret-env-vars "${authentication_variables}"
         --available-tools "view,glob,rg,skill,${runtime_tools}"
         --allow-tool read

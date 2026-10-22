@@ -7497,7 +7497,7 @@ fi
     printf '%s\n' 'END_INVOCATION'
 } >> "${MOCK_LOG}"
 grep -Fxq -- '--disallow-temp-dir' "${invocation_log}" || exit 72
-grep -Fxq -- '--no-remote-export' "${invocation_log}" || exit 73
+grep -Fxq -- '--sync-session=off' "${invocation_log}" || exit 73
 ! grep -Fq 'shell(git' "${invocation_log}" || exit 74
 grep -Fxq -- 'shell' "${invocation_log}" || exit 76
 ! grep -Fq -- '--allow-all-urls' "${invocation_log}" || exit 89
