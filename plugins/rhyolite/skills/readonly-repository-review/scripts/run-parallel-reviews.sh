@@ -12,6 +12,8 @@ RESEARCH_EVENT_INTEGER_CONTRACT="${SKILL_ROOT}/research-event-integers.json"
 OUTPUT_HELPER="${SCRIPT_DIR}/review-output.sh"
 RESEARCH_BROKER="${SCRIPT_DIR}/research-egress-broker.py"
 RESEARCH_BROKER_LAUNCHER="${SCRIPT_DIR}/launch-research-egress-broker.sh"
+SNAPSHOT_BROKER_LAUNCHER="${SCRIPT_DIR}/launch-snapshot-read-broker.sh"
+SNAPSHOT_TRANSPORT_HELPER="${SCRIPT_DIR}/snapshot-transport.sh"
 PREFERENCE_HELPER="${PLUGIN_ROOT}/scripts/launcher-preferences.sh"
 HARNESS_COMMON="${PLUGIN_ROOT}/lib/harness/common.sh"
 
@@ -28,6 +30,12 @@ if [[ ! -f "${PREFERENCE_HELPER}" ]]; then
 fi
 # shellcheck source=../../../scripts/launcher-preferences.sh
 source "${PREFERENCE_HELPER}"
+if [[ ! -f "${SNAPSHOT_TRANSPORT_HELPER}" ]]; then
+    printf '%s\n' 'Snapshot transport helper not found.' >&2
+    exit 2
+fi
+# shellcheck source=snapshot-transport.sh
+source "${SNAPSHOT_TRANSPORT_HELPER}"
 
 THROTTLE_LIMIT=2
 MAX_REPOSITORIES=5
@@ -76,9 +84,7 @@ WORKER_RECOVERY_CONTINUATION_LIMIT=20
 WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT=1
 WORKER_RECOVERY_MINIMUM_SECONDS=120
 WORKER_RECOVERY_RETRY_DELAY_SECONDS=30
-if [[ "${RHYOLITE_WORKER_RETRY_DELAY_SECONDS-}" =~ ^[0-9]{1,3}$ ]]; then
-    WORKER_RECOVERY_RETRY_DELAY_SECONDS=$((10#${RHYOLITE_WORKER_RETRY_DELAY_SECONDS}))
-fi
+WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS=300
 REPORT_MARKDOWN_TABLE_DIAGNOSTIC='Final report contains a Markdown table.'
 NON_INTERACTIVE=0
 OPEN_HTML=0
@@ -106,6 +112,10 @@ RESEARCH_WEB_PROVIDER_ID="duckduckgo-html-v1"
 RESEARCH_WEB_AVAILABLE="true"
 RESEARCH_TOOLS_JSON='[]'
 RESEARCH_TOOL_NAMES='research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary'
+SNAPSHOT_TRANSPORT_MODE='native'
+SNAPSHOT_POLICY_JSON=''
+SNAPSHOT_POLICY_DIGEST=''
+SNAPSHOT_TOOLS_JSON='[]'
 RHYOLITE_SUPPORT_TEXT='SUPPORT.md and local documentation'
 RHYOLITE_CONTRIBUTE_TEXT='CONTRIBUTING.md'
 
@@ -1425,6 +1435,10 @@ write_approval_hash_material() {
     fi
     printf 'ResearchTransport=%s\n' \
         "$(approval_hash_string "$(research_transport_json '')")"
+    if [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]]; then
+        printf 'SnapshotTransport=%s\n' \
+            "$(approval_hash_string "$(snapshot_transport_plan_json)")"
+    fi
     printf 'ReportRepairPolicy=%s\n' \
         "$(approval_hash_string "$(report_repair_policy_json)")"
     printf 'WorkerRecoveryPolicy=%s\n' \
@@ -1475,12 +1489,47 @@ report_repair_policy_json() {
 }
 
 worker_recovery_policy_json() {
-    printf '{"Mode":"same-session-continuation","ProtocolVersion":1,"Available":%s,"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1","TransientRetryLimit":%s,"ResubmissionRoundLimit":%s,"ContinuationLimit":%s,"PageSectionLimit":3,"PageLineBudget":250,"PagePartLimit":4,"ResearchRelaunchLimit":%s}' \
+    printf '{"Mode":"same-session-continuation","ProtocolVersion":1,"Available":%s,"DeliveryProtocol":"RHYOLITE_REPORT_DELIVERY_V1","TransientRetryLimit":%s,"ResubmissionRoundLimit":%s,"ContinuationLimit":%s,"PageSectionLimit":3,"PageLineBudget":250,"PagePartLimit":4,"ResearchRelaunchLimit":%s,"RetryBackoff":{"InitialDelaySeconds":%s,"Multiplier":2,"MaxDelaySeconds":%s,"Bound":"approved-session-timeout"}}' \
         "$(json_boolean "${WORKER_CONTINUATION_AVAILABLE}")" \
         "${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT}" \
         "${WORKER_RECOVERY_RESUBMISSION_ROUND_LIMIT}" \
         "${WORKER_RECOVERY_CONTINUATION_LIMIT}" \
-        "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
+        "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}" \
+        "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}" \
+        "${WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS}"
+}
+
+worker_retry_backoff_seconds() {
+    local retry_number="$1" delay="${WORKER_RECOVERY_RETRY_DELAY_SECONDS}" index
+    [[ "${retry_number}" =~ ^[1-9][0-9]?$ ]] || return 1
+    for ((index = 1; index < retry_number; index++)); do
+        delay=$((delay * 2))
+        if ((delay >= WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS)); then
+            delay="${WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS}"
+            break
+        fi
+    done
+    printf '%s' "${delay}"
+}
+
+wait_worker_retry_backoff() {
+    local retry_number="$1" phase="$2" remaining="$3" delay chunk
+    delay="$(worker_retry_backoff_seconds "${retry_number}")" || return 1
+    if ((remaining < delay + WORKER_RECOVERY_MINIMUM_SECONDS)); then
+        printf '%s\n' 'The approved session timeout has insufficient time for retry backoff and another worker turn.' >&2
+        return 1
+    fi
+    review_progress "${slug}" "${phase}" \
+        "waiting ${delay} seconds before retry ${retry_number}; keeping ${MODEL} and ${REASONING_EFFORT}"
+    while ((delay > 0)); do
+        chunk="${delay}"
+        ((chunk <= 30)) || chunk=30
+        sleep "${chunk}"
+        delay=$((delay - chunk))
+        if ((delay > 0)); then
+            review_progress "${slug}" "${phase}" "retry backoff: ${delay} seconds remaining"
+        fi
+    done
 }
 
 worker_recovery_policy_text() {
@@ -1494,6 +1543,8 @@ worker_recovery_policy_text() {
         printf 'same-session continuation unavailable for this harness, so review-worker failures stay terminal; %s fresh research relaunch after a transient research-worker failure' \
             "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
     fi
+    printf '; retry backoff %s seconds, doubling to at most %s seconds within the approved timeout' \
+        "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}" "${WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS}"
 }
 
 prior_art_window_json() {
@@ -1649,6 +1700,18 @@ research_transport_text() {
     fi
 }
 
+snapshot_transport_plan_json() {
+    printf '{"ContractVersion":9,"Policy":%s,"PolicyDigest":"%s"}' \
+        "${SNAPSHOT_POLICY_JSON}" "${SNAPSHOT_POLICY_DIGEST}"
+}
+
+# Native plans, states, and hashes retain their existing bytes. The new
+# object is present only for an adapter that explicitly needs offline MCP.
+snapshot_transport_json_member() {
+    [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]] || return 0
+    printf '%s"SnapshotTransport": %s,\n' "$1" "$(snapshot_transport_plan_json)"
+}
+
 write_review_plan_json() {
     local run_id="${1-}"
     local started_at="${2-}"
@@ -1701,7 +1764,7 @@ write_review_plan_json() {
   },
   "PriorArtWindow": $(prior_art_window_json),
   "ProvenanceWindow": $(provenance_window_json '  '),
-  "ResearchTransport": $(research_transport_json '  '),
+$(snapshot_transport_json_member '  ')  "ResearchTransport": $(research_transport_json '  '),
   "ReportRepairPolicy": $(report_repair_policy_json),
   "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "SessionTimeoutMinutes": ${SESSION_TIMEOUT_MINUTES},
@@ -1774,6 +1837,10 @@ write_review_plan_text() {
     fi
     printf '%-20s %s\n' 'Research transport:' \
         "$([[ ${ENABLE_PUBLIC_RESEARCH} -eq 1 ]] && printf dedicated-worker-local-stdio-mcp || printf disabled)"
+    if [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]]; then
+        printf '%-20s %s\n' 'Snapshot transport:' "${SNAPSHOT_TRANSPORT_MODE}"
+        printf '%-20s %s\n' 'Snapshot policy:' "${SNAPSHOT_POLICY_DIGEST}"
+    fi
     if ((ENABLE_PUBLIC_RESEARCH)); then
         printf '%-20s %s\n' 'Research provider:' "${RESEARCH_PROVIDER}"
         printf '%-20s %s\n' 'Broker version:' "${RESEARCH_BROKER_VERSION}"
@@ -1868,6 +1935,20 @@ if ((request_stop_requested)); then
     [[ -n "${request_stop_folder}" ]] || request_stop_usage_error
     request_run_stop "${request_stop_folder}" "${request_stop_harness}"
     exit $?
+fi
+
+if [[ -n "${RHYOLITE_WORKER_RETRY_DELAY_SECONDS+x}" ]]; then
+    if [[ ! "${RHYOLITE_WORKER_RETRY_DELAY_SECONDS}" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||
+        ((RHYOLITE_WORKER_RETRY_DELAY_SECONDS > WORKER_RECOVERY_RETRY_MAX_DELAY_SECONDS)); then
+        print_runner_error \
+            'The worker retry delay is invalid.' \
+            'worker retry policy' 'Worker recovery' \
+            'The initial retry delay must be a whole number from 0 through 300 seconds, without leading zeros.' \
+            'Review planning and execution did not start.' \
+            'Unset RHYOLITE_WORKER_RETRY_DELAY_SECONDS to use the default, or set a valid delay and regenerate the plan for approval.'
+        exit 2
+    fi
+    WORKER_RECOVERY_RETRY_DELAY_SECONDS="${RHYOLITE_WORKER_RETRY_DELAY_SECONDS}"
 fi
 
 while (($# > 0)); do
@@ -2826,6 +2907,63 @@ if path_contains "${WORKSPACE_ROOT}" "${OUTPUT_ROOT}" ||
         "Output: ${OUTPUT_ROOT}" >&2
     exit 2
 fi
+
+if ! rhyolite_harness_capture \
+    SNAPSHOT_TRANSPORT_MODE harness_snapshot_transport; then
+    print_runner_error \
+        'The selected harness could not report its snapshot transport.' \
+        "harness ${HARNESS} harness_snapshot_transport" "Harness ${HARNESS}" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Snapshot transport resolution failed.}" \
+        'Review planning and execution did not start.' \
+        'Restore the complete harness adapter and retry.'
+    exit 2
+fi
+case "${SNAPSHOT_TRANSPORT_MODE}" in
+    native) ;;
+    local-stdio-mcp-snapshot-read-v1)
+        [[ -f "${RESEARCH_BROKER}" && -x "${SNAPSHOT_BROKER_LAUNCHER}" ]] || {
+            printf '%s\n' 'Snapshot transport components are unavailable.' >&2
+            exit 2
+        }
+        SNAPSHOT_POLICY_JSON="$(
+            python3 -I "${RESEARCH_BROKER}" --describe-snapshot-policy
+        )" || exit 2
+        SNAPSHOT_POLICY_JSON="$(
+            python3 -I - "${SNAPSHOT_POLICY_JSON}" <<'PY'
+import hashlib
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+digest = value.pop("PolicyDigest", None)
+canonical = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+if (value.get("Mode") != "local-stdio-mcp-snapshot-read-v1"
+        or value.get("Network") != "disabled" or value.get("Resources") != "none"
+        or value.get("Prompts") != "none" or value.get("GrantSchemaVersion") != 1
+        or value.get("Tools") != ["snapshot_capabilities", "list_snapshot_paths",
+                                  "read_snapshot_text", "search_snapshot_text"]
+        or digest != hashlib.sha256(canonical.encode("utf-8")).hexdigest()):
+    raise SystemExit(1)
+print(canonical, end="")
+PY
+        )" || {
+            printf '%s\n' 'Snapshot transport policy description is invalid.' >&2
+            exit 2
+        }
+        SNAPSHOT_POLICY_DIGEST="$(printf '%s' "${SNAPSHOT_POLICY_JSON}" | sha256sum)"
+        SNAPSHOT_POLICY_DIGEST="${SNAPSHOT_POLICY_DIGEST%% *}"
+        SNAPSHOT_TOOLS_JSON='["snapshot_capabilities","list_snapshot_paths","read_snapshot_text","search_snapshot_text"]'
+        ;;
+    *)
+        print_runner_error \
+            'The selected harness returned an unsupported snapshot transport.' \
+            "harness ${HARNESS} harness_snapshot_transport" "Harness ${HARNESS}" \
+            'Snapshot transport must be native or the fixed offline MCP protocol.' \
+            'Review planning and execution did not start.' \
+            'Restore the complete harness adapter and retry.'
+        exit 2
+        ;;
+esac
 
 if ((ENABLE_PUBLIC_RESEARCH)); then
     for research_file in \
@@ -4112,6 +4250,7 @@ worker_recovery_remaining_seconds() {
 # outlives the initial worker, through report repair and worker recovery, so
 # every EXIT trap installed in that window and the stop handler call this.
 cleanup_review_runtime_home_on_exit() {
+    cleanup_snapshot_transports_on_exit
     [[ -n "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN-}" ]] || return 0
     if rhyolite_harness_invoke harness_sanitize_runtime_home \
         "${REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN}" \
@@ -4119,6 +4258,59 @@ cleanup_review_runtime_home_on_exit() {
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
     fi
     return 0
+}
+
+cleanup_snapshot_transports_on_exit() {
+    local snapshot_phase snapshot_root
+    for snapshot_phase in review research; do
+        if [[ "${snapshot_phase}" == review ]]; then
+            snapshot_root="${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN-}"
+        else
+            snapshot_root="${RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN-}"
+        fi
+        [[ -n "${snapshot_root}" ]] || continue
+        if snapshot_transport_cleanup \
+            "${snapshot_root}" "${SNAPSHOT_POLICY_DIGEST}" "${snapshot_phase}" \
+            2>> "${RHYOLITE_REPOSITORY_ERROR_PATH:-/dev/null}"; then
+            if [[ "${snapshot_phase}" == review ]]; then
+                REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
+            else
+                RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
+            fi
+        fi
+    done
+}
+
+prepare_worker_snapshot_transport() {
+    local phase="$1" argv_name="$2" runtime_home="$3" dossier="${4-}" summary="${5-}"
+    local broker_root config_path
+    local -a snapshot_broker_arguments=()
+    [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]] || return 0
+    broker_root="$(mktemp -d "${TMPDIR:-/tmp}/rhyolite-snapshot-read.XXXXXXXX")" || return 1
+    broker_root="$(canonicalize_directory_path "${broker_root}")" || return 1
+    if [[ "${phase}" == review ]]; then
+        REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN="${broker_root}"
+    else
+        RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN="${broker_root}"
+    fi
+    chmod 700 -- "${broker_root}" || return 1
+    snapshot_transport_prepare snapshot_broker_arguments \
+        "${broker_root}" "${phase}" "${review_path}" "${SNAPSHOT_POLICY_DIGEST}" \
+        "${RUN_WORKSPACE}" "${OUTPUT_ROOT}" "${runtime_home}" "${dossier}" "${summary}" || return 1
+    config_path="${broker_root}/snapshot-mcp-config"
+    if ! rhyolite_harness_invoke harness_configure_snapshot_transport \
+        "${phase}" "${argv_name}" "${runtime_home}" "${config_path}" \
+        "${SNAPSHOT_BROKER_LAUNCHER}" snapshot_broker_arguments "${SNAPSHOT_TOOLS_JSON}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_configure_snapshot_transport" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Snapshot MCP configuration failed.}" >&2
+        return 1
+    fi
+    [[ -f "${config_path}" && ! -L "${config_path}" &&
+        "$(stat -c '%u:%a:%h' -- "${config_path}")" == "$(id -u):600:1" ]] || {
+        printf '%s\n' 'Snapshot MCP configuration is missing or has unsafe permissions.' >&2
+        return 1
+    }
 }
 
 # Persist the worker's agent state from its runtime home. The adapter also
@@ -4151,12 +4343,24 @@ finalize_review_runtime_home() {
     ((REVIEW_RUNTIME_HOME_FINALIZED == 0)) || return 0
     REVIEW_RUNTIME_HOME_FINALIZED=1
     ((REVIEW_AGENT_STATE_CURRENT)) || persist_review_agent_state || true
+    if [[ -n "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN-}" ]]; then
+        if snapshot_transport_cleanup "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN}" \
+            "${SNAPSHOT_POLICY_DIGEST}" review 2>> "${error_path}"; then
+            REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
+        else
+            printf '%s\n' 'Snapshot transport cleanup failed; report promotion is blocked.' \
+                >> "${error_path}"
+            post_process_failure=1
+        fi
+    fi
     if rhyolite_harness_invoke harness_sanitize_runtime_home \
         "${runtime_harness_home}" \
         >/dev/null 2>> "${error_path}"; then
         runtime_harness_home=""
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
-        trap - EXIT
+        if [[ -z "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN-}" ]]; then
+            trap - EXIT
+        fi
     else
         printf '%s\n' \
             "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
@@ -4474,7 +4678,12 @@ EOF
         WORKER_RECOVERY_TRANSIENT_RETRIES=1
         review_progress "${slug}" 'worker recovery' \
             "${WORKER_RECOVERY_LAST_OUTCOME}; resuming the same session (1/${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT})"
-        sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
+        if ! wait_worker_retry_backoff 1 'worker recovery' \
+            "$(worker_recovery_remaining_seconds)" 2>> "${error_path}"; then
+            worker_recovery_finish TimedOut \
+                'The approved timeout could not accommodate retry backoff.'
+            return 1
+        fi
     fi
     if ! review_report_delivery assess "${candidate}" "${SCOPE}" \
         "${delivery_directory}" "${reason}" \
@@ -4568,7 +4777,13 @@ EOF
                         write_worker_recovery_state || true
                         review_progress "${slug}" 'worker recovery' \
                             "${WORKER_INVOCATION_OUTCOME}; retrying the same request in the same session (${WORKER_RECOVERY_TRANSIENT_RETRIES}/${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT})"
-                        sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
+                        if ! wait_worker_retry_backoff "${WORKER_RECOVERY_TRANSIENT_RETRIES}" \
+                            'worker recovery' "$(worker_recovery_remaining_seconds)" \
+                            2>> "${error_path}"; then
+                            worker_recovery_finish TimedOut \
+                                'The approved timeout could not accommodate retry backoff.'
+                            return 1
+                        fi
                         continue
                     fi
                     worker_recovery_finish Exhausted \
@@ -5613,7 +5828,7 @@ write_result() {
     "ProvenanceResearch": $([[ ${ENABLE_PROVENANCE_RESEARCH} -eq 1 ]] && printf true || printf false)
   },
   "ProvenanceWindow": $(provenance_window_json '  '),
-  "ResearchTransport": $(research_transport_json '  '),
+$(snapshot_transport_json_member '  ')  "ResearchTransport": $(research_transport_json '  '),
   "ReportRepair": $(report_repair_saved_json "${output_directory}"),
   "WorkerRecovery": $(worker_recovery_saved_json "${output_directory}"),
   "Research": {
@@ -5749,6 +5964,10 @@ Artifacts: ${REPORT_REPAIR_DIRECTORY:-}$(
             if worker_recovery_attempted; then
                 printf '\nWorker recovery: %s' \
                     "$(worker_recovery_summary "${output_directory}")"
+            fi
+            if [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]]; then
+                printf '\nSnapshot transport: %s\nSnapshot policy digest: %s' \
+                    "${SNAPSHOT_TRANSPORT_MODE}" "${SNAPSHOT_POLICY_DIGEST}"
             fi
         )"
     write_result \
@@ -6152,7 +6371,7 @@ write_research_state() {
     "Id": "$(json_escape "${session_id}")",
     "Name": "$(json_escape "${session_name}")"
   },
-  "ResearchTransport": $(research_transport_json '  '),
+$(snapshot_transport_json_member '  ')  "ResearchTransport": $(research_transport_json '  '),
   "Attempts": {
     "Count": ${research_attempt:-1},
     "RelaunchLimit": ${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT},
@@ -8481,6 +8700,8 @@ process_repository() {
     local RESEARCH_STATE_PATH=""
     local RHYOLITE_ACTIVE_CHILD_PID=""
     local RHYOLITE_REPOSITORY_ERROR_PATH="${error_path}"
+    local REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
+    local RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
 
     trap 'interrupt_repository_process INT' INT
     trap 'interrupt_repository_process TERM' TERM
@@ -8876,6 +9097,7 @@ EOF
         RESEARCH_NETWORK_ROOT_TO_CLEAN="${research_network_root}"
         RESEARCH_SANITIZED_REPLY_TO_CLEAN="${research_final_reply_sanitized}"
         trap '
+            cleanup_snapshot_transports_on_exit
             if [[ "${RESEARCH_RUNTIME_OUTPUTS_SANITIZED-0}" != 1 ]] &&
                 [[ -n "${RESEARCH_BROKER_RUNTIME_TO_CLEAN-}" ]]; then
                 if [[ -f "${research_raw_output-}" &&
@@ -9094,6 +9316,13 @@ EOF
             research_ready=0
         fi
 
+        if ((research_ready)) && ! prepare_worker_snapshot_transport \
+            research research_arguments "${research_runtime_home}" \
+            2>> "${research_raw_error}"; then
+            research_ready=0
+            research_adapter_failed=1
+        fi
+
         case "${SCOPE}" in
             2) research_timeout_minutes=60 ;;
             3) research_timeout_minutes=120 ;;
@@ -9272,6 +9501,14 @@ EOF
         fi
         RESEARCH_RUNTIME_OUTPUTS_SANITIZED=1
 
+        if [[ -n "${RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN}" ]]; then
+            if snapshot_transport_cleanup "${RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN}" \
+                "${SNAPSHOT_POLICY_DIGEST}" research 2>> "${research_error_path}"; then
+                RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
+            else
+                research_cleanup_failed=1
+            fi
+        fi
         if [[ -z "${research_runtime_home}" ]] ||
             rhyolite_harness_invoke harness_sanitize_runtime_home \
                 "${research_runtime_home}" \
@@ -9296,7 +9533,8 @@ EOF
             research_cleanup_failed=1
         fi
         if [[ -z "${RESEARCH_RUNTIME_HOME_TO_CLEAN}" &&
-            -z "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" ]]; then
+            -z "${RESEARCH_BROKER_RUNTIME_TO_CLEAN}" &&
+            -z "${RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN}" ]]; then
             trap - EXIT
         fi
 
@@ -9381,8 +9619,15 @@ EOF
                     "${slug}" \
                     'research' \
                     "attempt ${research_attempt} ended with a ${research_attempt_outcome} outcome; relaunching research with a fresh broker and network log ($((research_attempt + 1))/$((WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT + 1)))"
+                local research_retry_remaining=$((
+                    SESSION_TIMEOUT_MINUTES * 60 -
+                    $(date +%s) + $(date -d "${started_at}" +%s)
+                ))
+                if ! wait_worker_retry_backoff "${research_attempt}" research \
+                    "${research_retry_remaining}" 2>> "${research_error_path}"; then
+                    break
+                fi
                 research_attempt=$((research_attempt + 1))
-                sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
                 continue
             fi
             printf '%s\n' \
@@ -9615,6 +9860,13 @@ EOF
             "Harness failure stage: harness ${HARNESS} harness_worker_env" \
             "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker environment construction failed.}" \
             >> "${error_path}"
+        worker_ready=0
+    fi
+
+    if ((worker_ready)) && ! prepare_worker_snapshot_transport \
+        review worker_arguments "${runtime_harness_home}" \
+        "${research_evidence_dossier}" "${research_evidence_summary}" \
+        2>> "${error_path}"; then
         worker_ready=0
     fi
 
@@ -10197,7 +10449,7 @@ fi
     "ProvenanceResearch": $([[ ${ENABLE_PROVENANCE_RESEARCH} -eq 1 ]] && printf true || printf false)
   },
   "ProvenanceWindow": $(provenance_window_json '  '),
-  "ResearchTransport": $(research_transport_json '  '),
+$(snapshot_transport_json_member '  ')  "ResearchTransport": $(research_transport_json '  '),
   "ReportRepairPolicy": $(report_repair_policy_json),
   "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "Paths": {
@@ -10287,6 +10539,10 @@ promote_run_artifact "${mode}" "${RUN_STATE_PATH}" json || return 1
     done <<< "$(research_transport_text)"
     printf '\n'
     printf 'Read-only workspace:\n\n    %s\n\n' "${RUN_WORKSPACE}"
+    if [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]]; then
+        printf 'Snapshot transport:\n\n    %s\n\n' "${SNAPSHOT_TRANSPORT_MODE}"
+        printf 'Snapshot policy digest:\n\n    %s\n\n' "${SNAPSHOT_POLICY_DIGEST}"
+    fi
     printf 'Writable output:\n\n    %s\n\n' "${RUN_RESULTS}"
     printf '## Continue safely\n\n'
     printf '%s\n\n' "${HARNESS_RESUME_POLICY}"

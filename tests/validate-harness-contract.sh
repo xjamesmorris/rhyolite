@@ -43,6 +43,8 @@ required_contract_functions=(
     harness_resume_policy
     harness_prepare_run
     harness_prepare_worker_home
+    harness_snapshot_transport
+    harness_configure_snapshot_transport
     harness_worker_argv
     harness_worker_env
     harness_report_repair_argv
@@ -277,7 +279,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '8' \
+assert_equal '9' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 assert_equal '4' \
@@ -1466,6 +1468,10 @@ copilot_v8_stream "${copilot_v8_raw}" \
     'session.error|{"errorType":"query","message":"Model \"claude-opus-5.5\" is not available for this account (status 503)"}' \
     'result|{"exitCode":1}'
 copilot_v8_outcome "${copilot_v8_raw}" failed
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.error|{"errorType":"query","message":"rate limit exceeded: Your requests to example-approved-model have exceeded token rate limit."}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" transient-failure
 copilot_v8_stream "${copilot_v8_raw}" \
     'assistant.message|{"model":"claude-opus-4.8","content":"Report text."}' \
     'result|{"exitCode":0}'
@@ -2731,6 +2737,8 @@ copy_identity_fixture() {
         "${fixture_plugin}/scripts/launcher-preferences.sh"
     cp -- "${RUNNER}" "${fixture_scripts}/run-parallel-reviews.sh"
     cp -- "${OUTPUT_HELPER}" "${fixture_scripts}/review-output.sh"
+    cp -- "${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/snapshot-transport.sh" \
+        "${fixture_scripts}/snapshot-transport.sh"
     cp -- "${PROMPT}" "${fixture_skill}/review-prompt.txt"
     chmod +x "${fixture_scripts}/run-parallel-reviews.sh"
     printf '%s\n' "${fixture_plugin}"
@@ -3224,6 +3232,8 @@ cp -- "${RUNNER}" \
     "${function_failure_scripts}/run-parallel-reviews.sh"
 cp -- "${OUTPUT_HELPER}" \
     "${function_failure_scripts}/review-output.sh"
+cp -- "${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/snapshot-transport.sh" \
+    "${function_failure_scripts}/snapshot-transport.sh"
 cp -- "${PROMPT}" "${function_failure_skill}/review-prompt.txt"
 cat >> "${function_failure_plugin}/lib/harness/copilot.sh" <<'FAIL_REQUIRE_CLI'
 
@@ -4281,6 +4291,8 @@ cp -- "${RUNNER}" \
     "${noop_test_scripts}/run-parallel-reviews.sh"
 cp -- "${OUTPUT_HELPER}" \
     "${noop_test_scripts}/review-output.sh"
+cp -- "${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/snapshot-transport.sh" \
+    "${noop_test_scripts}/snapshot-transport.sh"
 cp -- "${PROMPT}" "${noop_test_skill}/review-prompt.txt"
 cp -- "${NOOP_WORKER_FIXTURE}" "${noop_worker_bin}/noop-worker"
 chmod +x \
@@ -5334,6 +5346,8 @@ contract_copy_fixture_plugin() {
         "${fixture_plugin}/branding/welcome-metadata.json"
     cp -- "${RUNNER}" "${fixture_scripts}/run-parallel-reviews.sh"
     cp -- "${OUTPUT_HELPER}" "${fixture_scripts}/review-output.sh"
+    cp -- "${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/snapshot-transport.sh" \
+        "${fixture_scripts}/snapshot-transport.sh"
     cp -- "${PROMPT}" "${fixture_skill}/review-prompt.txt"
     chmod +x "${fixture_scripts}/run-parallel-reviews.sh"
 
@@ -5939,6 +5953,7 @@ run_recovery_scenario() {
     env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
         COPILOT_HOME="${runner_source_home}" \
         TMPDIR="${runner_tmp_root}" \
+        RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
         PATH="${runner_mock_bin}:/usr/bin:/bin" \
         "${RUNNER}" \
         --harness copilot \
@@ -6935,5 +6950,11 @@ assert_unlisted_launcher_vector \
 
 # shellcheck source=harness-contract-claude.sh
 source "${ROOT}/tests/harness-contract-claude.sh"
+
+# shellcheck source=harness-contract-snapshot.sh
+source "${ROOT}/tests/harness-contract-snapshot.sh"
+
+# shellcheck source=harness-contract-codex.sh
+source "${ROOT}/tests/harness-contract-codex.sh"
 
 printf 'Harness contract validation passed.\n'

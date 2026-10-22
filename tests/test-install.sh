@@ -111,7 +111,11 @@ const required = [
     "commands/repo-review.md", "commands/help.md", "commands/status.md",
     "commands/version.md", "extensions/repo-review/extension.mjs",
     "lib/harness/common.sh", "lib/harness/copilot.sh", "lib/harness/claude.sh",
+    "lib/harness/codex.sh",
     "scripts/launcher-preferences.sh", ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "codex/skills/repo-review-setup/SKILL.md",
+    "codex/skills/repo-review-approval/SKILL.md",
     "claude/agents/repo-review.md", "claude/agents/repo-review-worker.md",
     "claude/agents/repo-research-worker.md", "claude/commands/start.md", "claude/commands/repo-review.md",
     "claude/commands/help.md", "claude/commands/status.md",
@@ -125,11 +129,16 @@ const required = [
 ];
 const executables = [
     "bin/rhyolite", "bin/rhyolite-summary", "scripts/show-welcome-panel.sh",
+    "scripts/run-codex-guided-stage.sh",
+    "scripts/run-codex-guided-review.sh",
     "skills/readonly-repository-review/scripts/discover-repositories.sh",
     "skills/readonly-repository-review/scripts/run-parallel-reviews.sh",
     "skills/readonly-repository-review/scripts/review-output.sh",
     "skills/readonly-repository-review/scripts/research-egress-broker.py",
     "skills/readonly-repository-review/scripts/launch-research-egress-broker.sh",
+    "skills/readonly-repository-review/scripts/launch-snapshot-read-broker.sh",
+    "skills/readonly-repository-review/scripts/stdio-broker-supervisor.sh",
+    "skills/readonly-repository-review/scripts/snapshot-transport.sh",
 ];
 for (const file of [...required, ...executables]) {
     expect(fs.existsSync(path.join(root, file)) &&

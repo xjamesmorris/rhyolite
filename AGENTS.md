@@ -73,7 +73,10 @@ Bash/PowerShell parity are out of scope unless a later explicit project
 decision restores them.
 
 The bundled Python 3 standard-library research egress broker is the one
-approved constrained exception to the Bash-first rule. Bash remains
+approved constrained exception to the Bash-first rule. The October 20, 2026
+decision also permits its separate, network-disabled snapshot-read MCP mode
+for the Codex workstream; it does not establish Codex production support.
+Bash remains
 authoritative for orchestration, planning, lifecycle, policy-path trust,
 cleanup, failure mapping, and artifact finalization. Do not add another broker
 runtime. Do not update, restore, or preserve unsupported PowerShell or
@@ -158,7 +161,15 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` and
   `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
   Production runtime support covers GitHub Copilot CLI and Claude Code.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v8 seam.
+  `plugins/rhyolite/lib/harness/codex.sh` is a complete but unregistered
+  development candidate exercised only through a test-owned fixed registry;
+  its presence does not establish Codex support or permit production loading.
+  The matching `.codex-plugin/plugin.json`, `codex/skills/`, and
+  `scripts/run-codex-guided-{stage,review}.sh` are likewise unexposed staged
+  assets. The shared launcher contains a Codex branch that is unreachable
+  through the production registry and is exercised only from a copied
+  test-owned plugin; there is no root Codex marketplace registration.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v9 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -262,6 +273,10 @@ supported and must not drive new work.
   isolation, TLS/HTTP evidence, and private unsupported-body storage.
   `scripts/launch-research-egress-broker.sh` starts it under a minimal
   `env -i` environment.
+  `scripts/stdio-broker-supervisor.sh` is the trusted Bash lifecycle shim used
+  only when a harness terminates its own MCP process group before the broker
+  can finish a clean exit record. It preserves stdio, monitors the trusted
+  runner PID plus kernel start time, and exits with the broker.
 - `run-parallel-reviews.sh` is the supported trusted boundary. It validates
   public HTTPS sources, rejects local paths before `.git` inspection or
   network access, preserves the selected canonical URL as plan, approval, and
@@ -286,6 +301,21 @@ supported and must not drive new work.
   permissions, and cleanup, then passes only the read-only sanitized
   dossier/summary to the main worker. No child receives `web_fetch` or
   `--allow-all-urls`.
+- The offline snapshot-read transport is specified in
+  `docs/SNAPSHOT-TRANSPORT.md`. Contract v9 requires
+  `harness_snapshot_transport` and `harness_configure_snapshot_transport`.
+  Native Copilot/Claude readers remain unchanged. Only an adapter that
+  explicitly selects the fixed offline MCP transport gets runner-created
+  grants for its exact read-only snapshot and, after validated research,
+  the complete sanitized dossier/summary file pair. Its policy, exact tool
+  schemas, limits, and grants are approval-bound `SnapshotTransport` data.
+  Repair gets neither snapshot MCP nor research MCP. Bash owns grant trust,
+  process identity, lifecycle, timeout, cleanup, and truthful failure state.
+  Scope 1 remains research-free; snapshot MCP is a separate offline purpose.
+- `WorkerRecoveryPolicy.RetryBackoff` discloses transient/rate-limit retry
+  delays: 30 seconds initially, doubling to at most 300 seconds, bounded by
+  the approved session timeout and existing retry limits. Retry keeps the
+  approved model, reasoning effort, context, tools, and same review session.
 - User-facing launcher, extension, agent, and runner boundaries render
   `RHYOLITE ERROR` with safe stage/source/status/exit/artifact detail,
   consequence, remediation, support, and contribution guidance. Runner
@@ -496,7 +526,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v8 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v9 is implemented. It retains plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -663,7 +693,7 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v8 requirement, negative test,
+  decision and must satisfy every Contract-v9 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with

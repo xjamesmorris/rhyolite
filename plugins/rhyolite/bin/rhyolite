@@ -1064,6 +1064,8 @@ main() {
     local claude_settings
     local claude_setup_block
     local claude_start_prompt
+    local codex_controller
+    local codex_exit_code
     local escaped_plugin_root
     local preferences_helper
     local -a request_parts=()
@@ -1071,6 +1073,7 @@ main() {
     local -a repositories=()
     local -a copilot_arguments=()
     local -a claude_arguments=()
+    local -a codex_arguments=()
 
     script_path="$(resolve_physical_path "${BASH_SOURCE[0]}")"
     script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
@@ -1387,6 +1390,53 @@ main() {
                     'Install Claude Code or add it to PATH, then retry.' \
                     127
             ;;
+        codex)
+            for required_codex_asset in \
+                .codex-plugin/plugin.json \
+                codex/skills/repo-review-setup/SKILL.md \
+                codex/skills/repo-review-approval/SKILL.md \
+                scripts/run-codex-guided-stage.sh \
+                scripts/run-codex-guided-review.sh; do
+                [ -f "${plugin_root}/${required_codex_asset}" ] ||
+                    fail \
+                        'plugin validation' \
+                        'A required staged Codex plugin asset is missing.' \
+                        "${required_codex_asset} was not found under ${plugin_root}." \
+                        'Restore the complete staged Rhyolite plugin installation and retry.' \
+                        2
+            done
+            [[ -x "${plugin_root}/scripts/run-codex-guided-stage.sh" &&
+                -x "${plugin_root}/scripts/run-codex-guided-review.sh" ]] ||
+                fail \
+                    'plugin validation' \
+                    'A staged Codex guided helper is not executable.' \
+                    'The Codex setup or review controller lost executable permission.' \
+                    'Restore the complete staged Rhyolite plugin installation and retry.' \
+                    2
+            LAUNCHER_DEFAULT_MODEL="${RHYOLITE_DEFAULT_MODEL}"
+            LAUNCHER_MODEL_IDS=(
+                "${RHYOLITE_DEFAULT_MODEL}"
+            )
+            LAUNCHER_MODEL_LABELS=(
+                'GPT-5.6 Sol (Recommended)'
+            )
+            LAUNCHER_MODEL_IDS_HINT='codex debug models --bundled'
+            copilot_path="$(command -v "${harness_cli}" || true)"
+            [ -n "${copilot_path}" ] ||
+                fail \
+                    'Codex CLI discovery' \
+                    'The OpenAI Codex CLI is not available.' \
+                    "The '${harness_cli}' executable was not found on PATH." \
+                    'Install Codex CLI 0.163.0 or add it to PATH, then retry.' \
+                    127
+            ((yolo == 0)) ||
+                fail \
+                    'launcher argument validation' \
+                    'YOLO mode is unavailable for the staged Codex flow.' \
+                    'Codex setup is question-only and Bash owns runner execution.' \
+                    'Remove --yolo and retry.' \
+                    2
+            ;;
         *)
             fail \
                 'launcher harness validation' \
@@ -1702,6 +1752,38 @@ main() {
     export RHYOLITE_LAUNCHER_MODEL="${model}"
     export RHYOLITE_LAUNCHER_REASONING_EFFORT="${reasoning_effort}"
     export RHYOLITE_LAUNCHER_CONTEXT_TIER="${context_tier}"
+
+    if [[ "${harness}" == codex ]]; then
+        codex_controller="${plugin_root}/scripts/run-codex-guided-review.sh"
+        codex_arguments=(
+            --plugin-root "${plugin_root}"
+            --working-directory "${launch_dir}"
+            --session-directory "${session_dir}"
+            --model "${model}"
+            --reasoning-effort "${reasoning_effort}"
+            --context "${context_tier}"
+        )
+        for repository in "${repositories[@]}"; do
+            codex_arguments+=(--repo "${repository}")
+        done
+        set +e
+        (
+            cd "${launch_dir}" &&
+                "${codex_controller}" "${codex_arguments[@]}"
+        )
+        codex_exit_code=$?
+        set -e
+        if ((codex_exit_code != 0)); then
+            fail \
+                'Codex guided review controller' \
+                'The staged Codex setup or Bash-owned review controller failed.' \
+                "The controller returned exit code ${codex_exit_code}." \
+                'Review the private launcher session artifacts, correct the reported setup or runner failure, and retry.' \
+                "${codex_exit_code}" \
+                "${session_dir}/launch-context.txt; ${session_dir}"
+        fi
+        return 0
+    fi
 
     if [[ "${harness}" == claude ]]; then
         escaped_plugin_root="${plugin_root//\\/\\\\}"

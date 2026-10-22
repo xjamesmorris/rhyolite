@@ -12,6 +12,7 @@ reasoning_effort=''
 context_tier=''
 transcript_path=''
 workdir=''
+snapshot_mcp_config=''
 
 while (($# > 0)); do
     case "$1" in
@@ -25,6 +26,10 @@ while (($# > 0)); do
             ;;
         --workdir)
             workdir="${2-}"
+            shift 2
+            ;;
+        --snapshot-mcp-config)
+            snapshot_mcp_config="${2-}"
             shift 2
             ;;
         --session-name)
@@ -228,6 +233,47 @@ fi
 [[ "${fixture_contract}" == 2 ]]
 grep -Fq '"Phase":"review"' "${NOOP_RUNTIME_HOME}/fixture-runtime.json"
 cat >/dev/null
+if [[ -n "${snapshot_mcp_config}" ]]; then
+    python3 -I - "${snapshot_mcp_config}" <<'PY'
+import json
+import subprocess
+import sys
+
+config = json.load(open(sys.argv[1], encoding="utf-8"))
+if set(config) != {"Command", "Arguments", "Tools"}:
+    raise SystemExit(65)
+server = subprocess.Popen(
+    [config["Command"], *config["Arguments"]],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+)
+try:
+    def call(identifier, method, params):
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier,
+                                      "method": method, "params": params}) + "\n")
+        server.stdin.flush()
+        return json.loads(server.stdout.readline())
+    tools = call(1, "tools/list", {})["result"]["tools"]
+    if [tool["name"] for tool in tools] != config["Tools"]:
+        raise SystemExit(65)
+    result = call(2, "tools/call", {"name": "snapshot_capabilities", "arguments": {}})
+    if result["result"]["structuredContent"]["Network"] != "disabled":
+        raise SystemExit(65)
+    result = call(3, "tools/call", {"name": "list_snapshot_paths",
+                                  "arguments": {"grant": "snapshot"}})
+    if result["result"]["isError"]:
+        raise SystemExit(65)
+    server.stdin.close()
+    if server.wait(timeout=10) != 0:
+        raise SystemExit(65)
+finally:
+    if server.poll() is None:
+        server.terminate()
+        server.wait(timeout=10)
+    for stream in (server.stdin, server.stdout, server.stderr):
+        if stream:
+            stream.close()
+PY
+fi
 
 mkdir -m 700 -- \
     "${NOOP_RUNTIME_HOME}/session-state" \

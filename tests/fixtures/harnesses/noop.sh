@@ -194,6 +194,15 @@ harness_prepare_worker_home() {
     NOOP_RUNTIME_HOME="${runtime_home}"
 }
 
+harness_snapshot_transport() {
+    noop_fixture_require_success harness_snapshot_transport || return 1
+    rhyolite_harness_native_snapshot_transport
+}
+
+harness_configure_snapshot_transport() {
+    rhyolite_harness_reject_snapshot_configuration
+}
+
 harness_worker_argv() {
     local -n output_arguments="$1"
     local session_name="$4"

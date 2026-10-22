@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-20
+**Last updated:** 2026-10-21
 
 ## Priorities
 
@@ -31,7 +31,7 @@ Status values:
 | --- | --- | --- | --- |
 | T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
 | T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
-| T17 | P2 | Open | Implement Codex after proving a safe snapshot-read interface |
+| T17 | P2 | Open | Complete Codex harness gates after the offline snapshot proof |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
@@ -72,7 +72,7 @@ Status values:
   recorded process is gone, and document the manual cleanup.
 - **Source:** 2026-10-19 validation run.
 
-### T17 (P2, Open): Implement Codex after proving a safe snapshot-read interface
+### T17 (P2, Open): Complete Codex harness gates after the offline snapshot proof
 
 - **Problem:** The Codex workstream targets the official CLI, scopes 1-3,
   the launcher, and native installation/entrypoints. Initial Codex 0.163.0
@@ -80,9 +80,41 @@ Status values:
   tools with shell disabled, including after a synthetic catalog advertised
   those tools. The adapter cannot proceed under the current design by
   granting shell access or adding an unapproved broker.
-- **Next step:** decide on an approved constrained snapshot-read interface
-  or runner-mediated input protocol, or pause Codex support. Keep production
-  registration absent until the full contract and live evidence pass.
+- **Progress:** the maintainer approved the existing broker's separate
+  offline snapshot MCP mode. The bounded runtime, Bash grants/lifecycle,
+  Contract-v9 seam, and negative tests are implemented on the development
+  branch; [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines the contract.
+  On 2026-10-21, credential-free Codex 0.163.0 captures proved the complete
+  seven-tool inventory and twelve scripted read/search/resource/denial
+  operations, using only exact per-tool preapprovals with global approval
+  still disabled. Additional synthetic cases proved exact final bytes,
+  native UUID history restoration, and fresh zero-tool replies, and exposed
+  model-reroute/context-evidence caveats. The earlier full Fedora validation
+  gate passed, and the current broker suite has 67 passing tests. A private
+  Git-free candidate also passed
+  existing-harness installation, prior-version update, and public-release
+  sandbox tests. A maintainer-run authenticated native smoke returned exact
+  output without reroute/rate/quota/timeout warnings. Offline catalog evidence
+  fixes the delegation-safe maximum at `max` and the long-context setting at
+  872,000 configured / 828,400 usable tokens. Native local plugin/picker,
+  combined snapshot/research MCP, and adapter-built review/snapshot lifecycle
+  probes now pass. The complete adapter remains unregistered, and these are
+  not production Rhyolite native-package or all-scope proofs.
+  The authenticated adapter-built `max`/long-context smoke now also passes:
+  exact snapshot read/reply, native session verification, zero retries, no
+  reroute/rate/quota/timeout warning, clean broker exit, and complete runtime
+  cleanup. The recommended handoff is now selected: unregistered native setup
+  and approval skills plus a strict per-stage Bash helper are implemented and
+  fixture-validated without shell or runner-control MCP authority. The
+  Bash-owned plan/approval/execution controller and an unreachable staged
+  launcher branch now also pass fixture plan-hash, edit/explain structure,
+  exact status, and verified stop-path tests. A pinned-CLI PTY probe also
+  installed the actual staged plugin and completed the real setup skill's two
+  Default-mode native pickers with only `request_user_input`.
+- **Next step:** run the native setup/approval/controller path from a private
+  staged package, then complete live research, continuation/recovery, repair,
+  all-scope, and stop/timeout gates. Keep production registration absent until
+  the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness
   playbook and Fedora validation without regressing existing harnesses.

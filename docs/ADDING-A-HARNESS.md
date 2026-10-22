@@ -1,15 +1,15 @@
 # Adding a review harness
 
-This is the implementation playbook for Rhyolite Harness Contract version 5. It is written for contributors and coding agents that must change
-the harness seam without weakening Rhyolite's read-only repository-review
-boundary.
+This is the implementation playbook for Rhyolite Harness Contract version 9.
+It is written for contributors and coding agents that must change the harness
+seam without weakening Rhyolite's read-only repository-review boundary.
 
 Read [../AGENTS.md](../AGENTS.md) and
 [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) first.
 
 ## Status and scope
 
-- The implemented production seam is Contract v8.
+- The implemented production seam is Contract v9.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
   and Claude Code (`claude`). A contract refactor does not itself add another
@@ -51,10 +51,12 @@ true:
    output or a sanitized transcript/final-message artifact.
 10. Timeout, interruption, persistence, cleanup, and post-run isolation can
     fail closed with truthful artifacts.
-11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
+11. Scope 1 remains research-free. Its only additional read transport may be
+    the approved fixed offline snapshot MCP protocol in
+    [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md). Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v8 function and every negative and
+12. The adapter can satisfy every Contract-v9 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -89,6 +91,17 @@ incremental violation detector and terminates the child on the first recorded
 model, effort, or subagent outside the approved plan. No worker receives a
 subagent tool on any harness. Do not register an adapter before
 validation understands its complete lifecycle.
+
+Contract v9 adds `harness_snapshot_transport` and
+`harness_configure_snapshot_transport`. The runner owns canonical snapshot
+and individual sanitized-file grants, phase lifecycle, cleanup, and
+approval-bound policy; an adapter translates only the fixed MCP format and
+approved worker argv. Native readers remain unchanged. The exact function
+signatures, schemas, resource limits, additive plan/state member, and
+negative tests are specified in
+[SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md). Token-rate-limit and transient
+retries use approval-bound increasing backoff while preserving the selected
+model and existing retry/timeout bounds.
 
 ## Fixed registry procedure
 
@@ -126,12 +139,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v8 boundary
+## Contract-v9 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=8
+RHYOLITE_HARNESS_CONTRACT_VERSION=9
 ```
 
 The shared loader must require all functions in this document before calling
@@ -181,7 +194,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v8 capability keys are:
+Contract-v9 capability keys (unchanged since Contract v8) are:
 
 ```text
 fleet
@@ -291,6 +304,8 @@ release artifacts.
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
 | `harness_prepare_run` | No arguments. Status only; no contract data on stdout. | Run once after approved-plan verification and protected-name validation. Prepare only run-wide ephemeral adapter context. |
+| `harness_snapshot_transport` | No arguments. Print `native` or `local-stdio-mcp-snapshot-read-v1`. | Reject every other value before plan approval; native adapters do not start an offline broker. |
+| `harness_configure_snapshot_transport` | Phase, approved worker argv array name, isolated home, new config path, fixed launcher, broker argument array name, exact tools JSON. Status only. | Follow the exact snapshot contract; research retains only its approved research server and adds snapshot, review adds only snapshot, repair never calls this function. |
 | `harness_worker_outcome` | Phase, raw worker stdout path, the worker's runtime home, session ID, approved model, approved effort, and a new outcome path. Status only. | Validate the arguments with `rhyolite_harness_validate_outcome_arguments`, then write one mode-0600 JSON object with exactly `Schema` (1), `Phase`, `Outcome`, `Retryable`, `ExitCode`, `SessionErrors`, `ModelCallFailures`, `TurnRetries`, `OutputLimitHits`, `OutputTokenLimit`, `FinalReplyAtOutputLimit`, and `FallbackModel`. Classify `substituted` whenever any recorded output or effort is outside the approved plan, `fallback-blocked` only when another model was attempted but produced no output, and `transient-failure` only for network, DNS, stream, or server failures, never for an unavailable model or authentication failure. A CLI without structured evidence may call `rhyolite_harness_worker_outcome_unknown`. The runner validates the object with `rhyolite_harness_validate_outcome_json`. |
 | `harness_worker_continuation_argv` | Destination array name and the name of the approved worker argv array. Status only. | Return the argv that resumes the same session under the identical approval-bound settings, tools, and isolation, changing only options that apply solely to a new session (Copilot rejects `--name` for an existing session; Claude Code resumes with `--resume <id>` and rejects the original `--session-id` once the session exists). Report `worker_continuation` as `yes` only after a live probe resumes a session created with the adapter-built worker argv by invoking the exact argv this function returns, and proves that the CLI keeps the session's context in non-interactive mode; otherwise report `unverified` and fail this function. |
 | `harness_render_request` | Template path, request path, repository URL, snapshot path, exact commit, review dates/windows, scope, output path, bounded metadata, research instructions, dossier path, network-summary path, and transport instructions. Status only. | Write the request file without evaluating template or repository content. |
@@ -730,7 +745,7 @@ claiming another production integration. Its adapter is
 The focused validator copies the production plugin surfaces into an isolated
 temporary tree, explicitly replaces only that copied tree's fixed registry
 helper with a two-entry `copilot`/`noop` map, and invokes the copied runner
-directly. Production `common.sh` continues to map exactly `copilot`.
+directly. Production `common.sh` continues to map exactly `copilot` and `claude`.
 
 The fixture should:
 
@@ -784,7 +799,7 @@ At minimum, add deterministic coverage for:
 - explicit CLI precedence over `RHYOLITE_HARNESS`;
 - malformed, empty, and mismatched `RHYOLITE_LAUNCHER_HARNESS`;
 - missing, unreadable, syntax-failing, wrong-ID, and incomplete adapters;
-- production rejection of `noop`, `codex`, `claude`, and other unregistered
+- production rejection of `noop`, `codex`, and other unregistered
   IDs before output, CLI discovery, Git, DNS, or network activity;
 - proof that no ID becomes a path and no fallback occurs.
 
@@ -959,7 +974,7 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v8 function inventory for the adapter;
+- the complete Contract-v9 function inventory for the adapter;
 - an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
   real runs, and their consequences;
 - a capability decision table with evidence;

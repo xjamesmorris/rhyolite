@@ -6,6 +6,7 @@ import ast
 import contextlib
 import copy
 import dataclasses
+import hashlib
 import importlib.util
 import io
 import json
@@ -16,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.parse
 from unittest import mock
@@ -53,6 +55,14 @@ BROKER_LAUNCHER = (
     PLUGIN_ROOT
     / "skills/readonly-repository-review/scripts"
     / "launch-research-egress-broker.sh"
+)
+SNAPSHOT_BROKER_LAUNCHER = (
+    PLUGIN_ROOT
+    / "skills/readonly-repository-review/scripts"
+    / "launch-snapshot-read-broker.sh"
+)
+SNAPSHOT_TRANSPORT_HELPER = (
+    PLUGIN_ROOT / "skills/readonly-repository-review/scripts/snapshot-transport.sh"
 )
 RESEARCH_PROMPT = (
     PLUGIN_ROOT
@@ -2820,6 +2830,911 @@ class BrokerTests(unittest.TestCase):
         exit_state = json.loads((runtime / "broker-exit.json").read_text())
         self.assertTrue(exit_state["CleanExit"])
         self.assertFalse((runtime / "broker.pid").exists())
+
+
+class SnapshotBrokerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temporary.name)
+        self.snapshot = self.root / "snapshot"
+        self.source = self.snapshot / "src"
+        self.approved = self.root / "approved"
+        self.runtime = self.root / "runtime"
+        self.snapshot.mkdir(mode=0o700)
+        self.source.mkdir(mode=0o700)
+        self.approved.mkdir(mode=0o700)
+        self.runtime.mkdir(mode=0o700)
+        (self.snapshot / ".hidden").write_text("hidden\n", encoding="utf-8")
+        (self.snapshot / "README.md").write_text(
+            "Alpha\nbeta needle\nGamma needle\n",
+            encoding="utf-8",
+        )
+        (self.source / "app.py").write_text(
+            "print('needle')\nNeedle = 2\n",
+            encoding="utf-8",
+        )
+        (self.source / "space name.txt").write_text(
+            "ordinary text\n",
+            encoding="utf-8",
+        )
+        (self.snapshot / "data.bin").write_bytes(b"text before\n\x00binary\n")
+        (self.snapshot / "invalid.bin").write_bytes(b"\xffinvalid\n")
+        self.dossier = self.approved / "research.txt"
+        self.summary = self.approved / "research-summary.txt"
+        self.dossier.write_text("sanitized dossier\n", encoding="utf-8")
+        self.summary.write_text("sanitized network summary\n", encoding="utf-8")
+        for path in self.snapshot.rglob("*"):
+            os.chmod(path, 0o500 if path.is_dir() else 0o400)
+        os.chmod(self.snapshot, 0o500)
+        os.chmod(self.dossier, 0o400)
+        os.chmod(self.summary, 0o400)
+        self.manifest = self.runtime / "snapshot-grants.json"
+
+    def tearDown(self) -> None:
+        for path in sorted(self.root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            try:
+                if path.is_symlink():
+                    continue
+                os.chmod(path, 0o700 if path.is_dir() else 0o600)
+            except FileNotFoundError:
+                pass
+        self.temporary.cleanup()
+
+    @staticmethod
+    def file_grant(grant_id: str, path: pathlib.Path) -> dict[str, object]:
+        payload = path.read_bytes()
+        return {
+            "Id": grant_id,
+            "Kind": "file",
+            "Path": str(path.resolve()),
+            "SizeBytes": len(payload),
+            "Sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    def write_manifest(
+        self,
+        *,
+        phase: str = "review",
+        include_files: bool = False,
+        file_paths: tuple[pathlib.Path, pathlib.Path] | None = None,
+        policy_digest: str | None = None,
+    ) -> pathlib.Path:
+        grants: list[dict[str, object]] = [
+            {
+                "Id": broker_module.SNAPSHOT_TREE_GRANT_ID,
+                "Kind": "tree",
+                "Path": str(self.snapshot.resolve()),
+            }
+        ]
+        if include_files:
+            dossier, summary = file_paths or (self.dossier, self.summary)
+            grants.extend(
+                [
+                    self.file_grant("research-dossier", dossier),
+                    self.file_grant("research-network-summary", summary),
+                ]
+            )
+        value = {
+            "SchemaVersion": broker_module.SNAPSHOT_GRANT_SCHEMA_VERSION,
+            "PolicyDigest": policy_digest or broker_module.snapshot_policy_digest(),
+            "Phase": phase,
+            "Grants": grants,
+        }
+        self.manifest.write_text(
+            json.dumps(value, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(self.manifest, 0o600)
+        return self.manifest
+
+    def load_broker(
+        self,
+        *,
+        phase: str = "review",
+        include_files: bool = False,
+    ):
+        manifest = self.write_manifest(phase=phase, include_files=include_files)
+        grant_set = broker_module.load_snapshot_grants(
+            manifest,
+            self.runtime,
+            broker_module.snapshot_policy_digest(),
+        )
+        instance = broker_module.SnapshotBroker(grant_set)
+        self.addCleanup(instance.close)
+        return instance
+
+    def test_snapshot_policy_and_tool_schemas_are_exact(self) -> None:
+        description = broker_module.snapshot_policy_description()
+        expected_digest = hashlib.sha256(
+            broker_module.canonical_json(description).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(broker_module.snapshot_policy_digest(), expected_digest)
+        self.assertEqual(description["Network"], "disabled")
+        self.assertEqual(description["Resources"], "none")
+        self.assertEqual(description["Prompts"], "none")
+        self.assertEqual(
+            description["GrantProfiles"],
+            {
+                "research": ["snapshot"],
+                "review-snapshot-only": ["snapshot"],
+                "review-with-research": [
+                    "snapshot",
+                    "research-dossier",
+                    "research-network-summary",
+                ],
+                "report-repair": [],
+            },
+        )
+        definitions = broker_module.snapshot_tool_definitions()
+        self.assertEqual(
+            [definition["name"] for definition in definitions],
+            list(broker_module.SNAPSHOT_TOOL_NAMES),
+        )
+        for definition in definitions:
+            self.assertFalse(definition["inputSchema"]["additionalProperties"])
+            self.assertNotIn("url", json.dumps(definition).lower())
+
+        described = subprocess.run(
+            [sys.executable, str(BROKER_PATH), "--describe-snapshot-policy"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        value = json.loads(described.stdout)
+        self.assertEqual(value["PolicyDigest"], expected_digest)
+        self.assertEqual(described.stderr, "")
+        nul = subprocess.run(
+            [
+                sys.executable,
+                str(BROKER_PATH),
+                "--describe-snapshot-policy",
+                "--describe-format",
+                "nul",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        fields = nul.stdout.split(b"\0")
+        self.assertEqual(fields[-1], b"")
+        self.assertEqual(len(fields[:-1]), 16)
+        self.assertEqual(fields[4].decode("ascii"), expected_digest)
+
+    def test_snapshot_grant_profiles_and_manifest_validation(self) -> None:
+        manifest = self.write_manifest(include_files=True)
+        grant_set = broker_module.load_snapshot_grants(
+            manifest,
+            self.runtime,
+            broker_module.snapshot_policy_digest(),
+        )
+        self.assertEqual(grant_set.phase, "review")
+        self.assertEqual(
+            sorted(grant_set.grants),
+            ["research-dossier", "research-network-summary", "snapshot"],
+        )
+        grant_set.close()
+
+        self.write_manifest(phase="research", include_files=True)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                broker_module.snapshot_policy_digest(),
+            )
+        self.assertEqual(context.exception.code, "invalid_snapshot_grant_manifest")
+
+        value = json.loads(self.manifest.read_text(encoding="utf-8"))
+        value["Phase"] = "review"
+        value["Grants"].pop()
+        self.manifest.write_text(json.dumps(value), encoding="utf-8")
+        os.chmod(self.manifest, 0o600)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                broker_module.snapshot_policy_digest(),
+            )
+        self.assertEqual(context.exception.code, "invalid_snapshot_grant_manifest")
+
+        self.write_manifest()
+        os.chmod(self.manifest, 0o644)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                broker_module.snapshot_policy_digest(),
+            )
+        self.assertEqual(context.exception.code, "invalid_snapshot_grant_manifest")
+        os.chmod(self.manifest, 0o600)
+
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                "0" * 64,
+            )
+        self.assertEqual(context.exception.code, "snapshot_policy_digest_mismatch")
+
+        os.chmod(self.snapshot, 0o700)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                broker_module.snapshot_policy_digest(),
+            )
+        self.assertEqual(context.exception.code, "writable_snapshot_grant")
+        os.chmod(self.snapshot, 0o500)
+
+        self.write_manifest(
+            include_files=True,
+            file_paths=(self.snapshot / "README.md", self.snapshot / ".hidden"),
+        )
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest,
+                self.runtime,
+                broker_module.snapshot_policy_digest(),
+            )
+        self.assertEqual(context.exception.code, "overlapping_snapshot_grant")
+
+    def test_snapshot_list_read_and_search_are_bounded_and_paginated(self) -> None:
+        instance = self.load_broker(include_files=True)
+        capabilities = instance.capabilities()
+        self.assertEqual(capabilities["Phase"], "review")
+        self.assertEqual(
+            [grant["Id"] for grant in capabilities["Grants"]],
+            ["research-dossier", "research-network-summary", "snapshot"],
+        )
+
+        first_page = instance.list_paths("snapshot", "", None, False, 0, 2)
+        self.assertEqual(
+            [entry["Path"] for entry in first_page["Entries"]],
+            [".hidden", "README.md"],
+        )
+        self.assertEqual(first_page["NextOffset"], 2)
+        second_page = instance.list_paths(
+            "snapshot", "", None, False, first_page["NextOffset"], 10
+        )
+        self.assertIn("data.bin", [entry["Path"] for entry in second_page["Entries"]])
+        recursive = instance.list_paths("snapshot", "", "*.py", False, 0, 10)
+        self.assertEqual(
+            [entry["Path"] for entry in recursive["Entries"]],
+            ["src/app.py"],
+        )
+
+        read = instance.read_text("snapshot", "README.md", 2, 1, 1024)
+        self.assertEqual(read["Text"], "beta needle\n")
+        self.assertEqual(read["NextLine"], 3)
+        dossier = instance.read_text("research-dossier", None, 1, 10, 1024)
+        self.assertEqual(dossier["Text"], "sanitized dossier\n")
+        self.assertTrue(dossier["Complete"])
+        repeated_dossier = instance.read_text(
+            "research-dossier", None, 1, 10, 1024
+        )
+        self.assertEqual(repeated_dossier["Text"], dossier["Text"])
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.read_text("snapshot", "README.md", 2, 1, 2)
+        self.assertEqual(context.exception.code, "snapshot_read_window_too_small")
+
+        first_matches = instance.search_text(
+            "snapshot", "needle", "", None, True, 0, 2
+        )
+        self.assertEqual(
+            [(match["Path"], match["Line"]) for match in first_matches["Matches"]],
+            [("README.md", 2), ("README.md", 3)],
+        )
+        self.assertEqual(first_matches["NextOffset"], 2)
+        self.assertEqual(first_matches["SkippedFileCount"], 2)
+        next_matches = instance.search_text(
+            "snapshot", "needle", "", None, True, 2, 2
+        )
+        self.assertEqual(
+            [(match["Path"], match["Line"]) for match in next_matches["Matches"]],
+            [("src/app.py", 1)],
+        )
+        insensitive = instance.search_text(
+            "snapshot", "needle", "src", "*.py", False, 0, 10
+        )
+        self.assertEqual(len(insensitive["Matches"]), 2)
+        for value in (first_page, read, first_matches):
+            self.assertLessEqual(
+                broker_module.snapshot_tool_result_size(value),
+                broker_module.SNAPSHOT_RESOURCE_POLICY["MaxResponseBytes"],
+            )
+
+    def test_snapshot_rejects_unsafe_entries_paths_mutation_and_budget(self) -> None:
+        instance = self.load_broker(include_files=True)
+        for path in ("../README.md", "/etc/passwd", ".git/config", "src//app.py"):
+            with self.subTest(path=path):
+                with self.assertRaises(broker_module.BrokerError):
+                    instance.read_text("snapshot", path, 1, 10, 1024)
+        with self.assertRaises(broker_module.BrokerError):
+            instance.list_paths("snapshot", "\ud800", None, True, 0, 10)
+        with self.assertRaises(broker_module.BrokerError):
+            instance.search_text("snapshot", "\ud800", "", None, True, 0, 10)
+        with self.assertRaises(broker_module.BrokerError):
+            instance.read_text("research-dossier", "README.md", 1, 10, 1024)
+
+        os.chmod(self.dossier, 0o600)
+        self.dossier.write_text("changed after grant\n", encoding="utf-8")
+        os.chmod(self.dossier, 0o400)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.read_text("research-dossier", None, 1, 10, 1024)
+        self.assertEqual(context.exception.code, "snapshot_grant_changed")
+
+        os.chmod(self.source, 0o700)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.read_text("snapshot", "src/app.py", 1, 10, 1024)
+        self.assertEqual(context.exception.code, "writable_snapshot_grant")
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.list_paths("snapshot", "", "*", True, 0, 100)
+        self.assertEqual(context.exception.code, "writable_snapshot_grant")
+        os.chmod(self.source, 0o500)
+
+        os.chmod(self.snapshot, 0o700)
+        (self.snapshot / "escape").symlink_to(self.root / "approved")
+        os.chmod(self.snapshot, 0o500)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.list_paths("snapshot", "", "*", True, 0, 100)
+        self.assertEqual(context.exception.code, "snapshot_symlink_detected")
+
+        instance.tool_calls = broker_module.SNAPSHOT_RESOURCE_POLICY["MaxToolCalls"]
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.capabilities()
+        self.assertEqual(context.exception.code, "snapshot_call_budget_exhausted")
+
+    def test_snapshot_manifest_rejects_json_type_confusion_and_duplicate_keys(self) -> None:
+        for field, invalid in (
+            ("SchemaVersion", True),
+            ("SchemaVersion", 1.0),
+            ("Phase", []),
+            ("Phase", {}),
+        ):
+            with self.subTest(field=field, invalid=invalid):
+                self.write_manifest()
+                value = json.loads(self.manifest.read_text(encoding="utf-8"))
+                value[field] = invalid
+                self.manifest.write_text(json.dumps(value), encoding="utf-8")
+                with self.assertRaises(broker_module.BrokerError):
+                    broker_module.load_snapshot_grants(
+                        self.manifest, self.runtime, broker_module.snapshot_policy_digest()
+                    )
+        for invalid in (None, [], {}, True, 5):
+            with self.subTest(grant_id=invalid):
+                self.write_manifest()
+                value = json.loads(self.manifest.read_text(encoding="utf-8"))
+                value["Grants"][0]["Id"] = invalid
+                self.manifest.write_text(json.dumps(value), encoding="utf-8")
+                with self.assertRaises(broker_module.BrokerError):
+                    broker_module.load_snapshot_grants(
+                        self.manifest, self.runtime, broker_module.snapshot_policy_digest()
+                    )
+        self.write_manifest()
+        payload = self.manifest.read_text(encoding="utf-8")
+        self.manifest.write_text(
+            payload.replace('"SchemaVersion": 1', '"SchemaVersion": 1, "SchemaVersion": 1'),
+            encoding="utf-8",
+        )
+        with self.assertRaises(broker_module.BrokerError) as context:
+            broker_module.load_snapshot_grants(
+                self.manifest, self.runtime, broker_module.snapshot_policy_digest()
+            )
+        self.assertEqual(context.exception.code, "invalid_snapshot_json")
+
+    def test_snapshot_rejects_hardlinks_and_special_files_without_blocking(self) -> None:
+        instance = self.load_broker()
+        os.chmod(self.snapshot, 0o700)
+        os.link(self.snapshot / "README.md", self.approved / "outside-hardlink.txt")
+        fifo = self.snapshot / "pipe"
+        os.mkfifo(fifo, mode=0o400)
+        os.chmod(self.snapshot, 0o500)
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.read_text("snapshot", "README.md", 1, 10, 1024)
+        self.assertEqual(context.exception.code, "snapshot_hardlink_detected")
+        # O_NONBLOCK ensures a regular-file check cannot wait for a FIFO writer.
+        with self.assertRaises(broker_module.BrokerError) as context:
+            instance.read_text("snapshot", "pipe", 1, 10, 1024)
+        self.assertEqual(context.exception.code, "invalid_snapshot_path")
+
+    def test_snapshot_mcp_rejects_malformed_and_oversized_framing(self) -> None:
+        self.write_manifest()
+        launcher = [
+            str(SNAPSHOT_BROKER_LAUNCHER), "--runtime-root", str(self.runtime.resolve()),
+            "--grant-manifest", str(self.manifest.resolve()),
+            "--expected-policy-digest", broker_module.snapshot_policy_digest(),
+        ]
+        maximum = broker_module.SNAPSHOT_RESOURCE_POLICY["MaxMcpRequestBytes"]
+        for payload in (
+            b"x" * (maximum + 1) + b"\n",
+            f"Content-Length: {maximum + 1}\n\n".encode("ascii"),
+            b"Content-Length: -1\n\n",
+            b"Content-Length: 4\nContent-Length: 4\n\nnull",
+            b'{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}\n',
+            b'{"jsonrpc":"2.0","id":NaN,"method":"ping"}\n',
+        ):
+            with self.subTest(payload_prefix=payload[:40]):
+                (self.runtime / "snapshot-broker-process.txt").unlink(missing_ok=True)
+                (self.runtime / "snapshot-broker-exit.json").unlink(missing_ok=True)
+                completed = subprocess.run(
+                    launcher, input=payload, capture_output=True, timeout=10
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stdout, b"")
+                self.assertIn(b"invalid_mcp_message", completed.stderr)
+                self.assertFalse((self.runtime / "snapshot-broker.pid").exists())
+                exit_state = json.loads(
+                    (self.runtime / "snapshot-broker-exit.json").read_text(encoding="utf-8")
+                )
+                self.assertFalse(exit_state["CleanExit"])
+
+    def test_snapshot_mcp_validates_types_before_dispatch(self) -> None:
+        instance = self.load_broker(include_files=True)
+        server = broker_module.SnapshotMcpServer(instance)
+        for params in ([], None, False, "invalid"):
+            result = server.handle(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
+            )
+            self.assertEqual(result["error"]["code"], -32600)
+        for arguments in ([], None, False, "invalid"):
+            result = server.handle(
+                {
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "snapshot_capabilities", "arguments": arguments},
+                }
+            )
+            self.assertTrue(result["result"]["isError"])
+        for path in ([], {}):
+            with self.assertRaises(broker_module.BrokerError):
+                instance.read_text("research-dossier", path, 1, 10, 1024)
+
+    def prepare_trusted_bash_transport(self, *, include_files: bool = False, phase: str = "review"):
+        workspace = self.root / "workspace"
+        output = self.root / "output"
+        harness_home = self.root / "harness-home"
+        session = workspace / "fixture-session"
+        workspace.mkdir(mode=0o700)
+        output.mkdir(mode=0o700)
+        harness_home.mkdir(mode=0o700)
+        session.mkdir(mode=0o700)
+        os.chmod(self.snapshot, 0o700)
+        self.snapshot.rename(session / "source")
+        self.snapshot = session / "source"
+        os.chmod(self.snapshot, 0o500)
+        self.source = self.snapshot / "src"
+        evidence = session / "research-evidence"
+        self.approved.rename(evidence)
+        self.approved = evidence
+        self.dossier = evidence / "research.txt"
+        self.summary = evidence / "network-summary.json"
+        (evidence / "research-summary.txt").rename(self.summary)
+        self.runtime.rename(self.root / "rhyolite-snapshot-read.fixture")
+        self.runtime = self.root / "rhyolite-snapshot-read.fixture"
+        self.manifest = self.runtime / "snapshot-grants.json"
+        arguments = [
+            str(self.runtime), phase, str(self.snapshot), broker_module.snapshot_policy_digest(),
+            str(workspace), str(output), str(harness_home),
+        ]
+        if include_files:
+            arguments += [str(self.dossier), str(self.summary)]
+        return arguments
+
+    def run_snapshot_helper(self, operation: str, *arguments: str):
+        script = '''
+set -euo pipefail
+source "$1"
+operation="$2"
+shift 2
+if [[ "${operation}" == prepare ]]; then
+    declare -a broker_arguments=()
+    snapshot_transport_prepare broker_arguments "$@"
+    printf '%s\\0' "${broker_arguments[@]}"
+else
+    snapshot_transport_cleanup "$@"
+fi
+'''
+        return subprocess.run(
+            ["bash", "-c", script, "snapshot-test", str(SNAPSHOT_TRANSPORT_HELPER), operation, *arguments],
+            capture_output=True, timeout=15,
+        )
+
+    def test_snapshot_bash_grants_only_runner_source_and_sanitized_file_pair(self) -> None:
+        arguments = self.prepare_trusted_bash_transport(include_files=True)
+        completed = self.run_snapshot_helper("prepare", *arguments)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        launcher_arguments = [item.decode() for item in completed.stdout.split(b"\0")[:-1]]
+        self.assertEqual(launcher_arguments, [
+            "--runtime-root", str(self.runtime), "--grant-manifest", str(self.manifest),
+            "--expected-policy-digest", broker_module.snapshot_policy_digest(),
+        ])
+        grants = broker_module.load_snapshot_grants(
+            self.manifest, self.runtime, broker_module.snapshot_policy_digest()
+        )
+        self.assertEqual(set(grants.grants), {"snapshot", "research-dossier", "research-network-summary"})
+        grants.close()
+        self.assertEqual(stat.S_IMODE(self.manifest.stat().st_mode), 0o600)
+        cleanup = self.run_snapshot_helper("cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review")
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr.decode())
+        self.assertFalse(self.runtime.exists())
+        self.assertEqual(self.run_snapshot_helper("cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review").returncode, 0)
+
+    def test_snapshot_bash_rejects_arbitrary_and_private_grants(self) -> None:
+        arguments = self.prepare_trusted_bash_transport(include_files=True)
+        for index, bad_value in (
+            (1, "report-repair"),
+            (1, "research"),
+            (2, str(self.root / "output")),
+            (2, str(self.root / "harness-home")),
+            (2, str(self.root)),
+            (7, str(self.root / "output" / "private-evidence.txt")),
+            (8, ""),
+        ):
+            with self.subTest(index=index, value=bad_value):
+                altered = list(arguments)
+                altered[index] = bad_value
+                completed = self.run_snapshot_helper("prepare", *altered)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertFalse(self.manifest.exists())
+        os.chmod(self.source, 0o700)
+        self.assertNotEqual(self.run_snapshot_helper("prepare", *arguments).returncode, 0)
+        os.chmod(self.source, 0o500)
+        inventory = self.runtime / ".tree-inventory"
+        inventory.unlink(missing_ok=True)
+        os.chmod(self.snapshot, 0o700)
+        (self.snapshot / ".git").mkdir(mode=0o500)
+        os.chmod(self.snapshot, 0o500)
+        self.assertNotEqual(self.run_snapshot_helper("prepare", *arguments).returncode, 0)
+
+    def test_snapshot_bash_cleanup_verifies_identity_and_graceful_exit(self) -> None:
+        arguments = self.prepare_trusted_bash_transport()
+        completed = self.run_snapshot_helper("prepare", *arguments)
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        launcher_arguments = [item.decode() for item in completed.stdout.split(b"\0")[:-1]]
+        process = subprocess.Popen(
+            [str(SNAPSHOT_BROKER_LAUNCHER), *launcher_arguments],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            assert process.stdin and process.stdout
+            process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
+            process.stdin.flush()
+            self.assertEqual(json.loads(process.stdout.readline())["result"], {})
+            identity = self.runtime / "snapshot-broker-process.txt"
+            expected = identity.read_text(encoding="ascii")
+            fields = expected.splitlines()
+            fields[1] = "0"
+            identity.write_text("\n".join(fields) + "\n", encoding="ascii")
+            failed = self.run_snapshot_helper("cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review")
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIsNone(process.poll())
+            identity.write_text(expected, encoding="ascii")
+            cleanup = self.run_snapshot_helper("cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review")
+            self.assertEqual(cleanup.returncode, 0, cleanup.stderr.decode())
+            self.assertEqual(process.wait(timeout=5), 0)
+            self.assertFalse(self.runtime.exists())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream:
+                    stream.close()
+
+    def test_snapshot_mcp_launcher_exposes_only_offline_tools_and_minimal_env(self) -> None:
+        self.write_manifest()
+        process = subprocess.Popen(
+            [
+                str(SNAPSHOT_BROKER_LAUNCHER),
+                "--runtime-root",
+                str(self.runtime.resolve()),
+                "--grant-manifest",
+                str(self.manifest.resolve()),
+                "--expected-policy-digest",
+                broker_module.snapshot_policy_digest(),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                "RHYOLITE_FAKE_CREDENTIAL": "must-not-survive",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+                "OPENAI_API_KEY": "fixture-only",
+            },
+        )
+        assert process.stdin and process.stdout
+
+        def exchange(identifier: int, method: str, params: dict | None = None):
+            process.stdin.write(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": identifier,
+                        "method": method,
+                        "params": params or {},
+                    }
+                )
+                + "\n"
+            )
+            process.stdin.flush()
+            return json.loads(process.stdout.readline())
+
+        initialized = exchange(
+            1,
+            "initialize",
+            {"protocolVersion": broker_module.MCP_PROTOCOL_VERSION},
+        )
+        self.assertEqual(
+            initialized["result"]["serverInfo"],
+            {
+                "name": broker_module.SNAPSHOT_SERVER_NAME,
+                "version": broker_module.SNAPSHOT_BROKER_VERSION,
+            },
+        )
+        tools = exchange(2, "tools/list")["result"]["tools"]
+        self.assertEqual(
+            [tool["name"] for tool in tools],
+            list(broker_module.SNAPSHOT_TOOL_NAMES),
+        )
+        self.assertEqual(exchange(3, "resources/list")["result"], {"resources": []})
+        self.assertEqual(
+            exchange(4, "resources/templates/list")["result"],
+            {"resourceTemplates": []},
+        )
+        self.assertEqual(exchange(5, "prompts/list")["result"], {"prompts": []})
+        capabilities = exchange(
+            6,
+            "tools/call",
+            {"name": "snapshot_capabilities", "arguments": {}},
+        )["result"]["structuredContent"]
+        self.assertEqual(capabilities["Network"], "disabled")
+        rejected = exchange(
+            7,
+            "tools/call",
+            {"name": "research_capabilities", "arguments": {}},
+        )["result"]
+        self.assertTrue(rejected["isError"])
+        self.assertEqual(
+            rejected["structuredContent"]["error"]["code"],
+            "unknown_tool",
+        )
+        unknown_argument = exchange(
+            8,
+            "tools/call",
+            {
+                "name": "list_snapshot_paths",
+                "arguments": {"grant": "snapshot", "url": "https://example.org"},
+            },
+        )["result"]
+        self.assertTrue(unknown_argument["isError"])
+        for identifier, path in enumerate(
+            (self.snapshot / "README.md", self.dossier),
+            start=9,
+        ):
+            rejected_resource = exchange(
+                identifier,
+                "resources/read",
+                {"uri": path.as_uri()},
+            )
+            self.assertEqual(rejected_resource["error"]["code"], -32601)
+            self.assertNotIn(str(path), json.dumps(rejected_resource))
+
+        environ = pathlib.Path(f"/proc/{process.pid}/environ").read_bytes().split(b"\0")
+        environment_names = {
+            entry.split(b"=", 1)[0].decode("ascii")
+            for entry in environ
+            if entry
+        }
+        self.assertEqual(
+            environment_names,
+            {
+                "HOME",
+                "LANG",
+                "LC_ALL",
+                "PATH",
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONHASHSEED",
+                "PYTHONNOUSERSITE",
+                "PYTHONSAFEPATH",
+                "TMPDIR",
+                "XDG_CACHE_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_STATE_HOME",
+            },
+        )
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=10), 0)
+        stderr = process.stderr.read() if process.stderr else ""
+        self.assertEqual(stderr, "")
+        process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+        exit_state = json.loads(
+            (self.runtime / "snapshot-broker-exit.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(exit_state["CleanExit"])
+        self.assertEqual(exit_state["Phase"], "review")
+        self.assertFalse((self.runtime / "snapshot-broker.pid").exists())
+        self.assertFalse(any(path.name == "events.jsonl" for path in self.root.rglob("*")))
+
+        rejected_launcher = subprocess.run(
+            [str(SNAPSHOT_BROKER_LAUNCHER), "--cookies", "ephemeral"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(rejected_launcher.returncode, 2)
+        self.assertIn("unknown argument", rejected_launcher.stderr)
+
+    def test_snapshot_supervisor_survives_client_group_shutdown(self) -> None:
+        supervised_runtime = self.root / "rhyolite-snapshot-read.supervised"
+        self.runtime.rename(supervised_runtime)
+        self.runtime = supervised_runtime
+        self.manifest = self.runtime / "snapshot-grants.json"
+        self.write_manifest()
+        stat_line = pathlib.Path(f"/proc/{os.getpid()}/stat").read_text(encoding="ascii")
+        owner_start_time = stat_line.rsplit(") ", 1)[1].split()[19]
+        process = subprocess.Popen(
+            [
+                str(SNAPSHOT_BROKER_LAUNCHER),
+                "--runtime-root",
+                str(self.runtime.resolve()),
+                "--grant-manifest",
+                str(self.manifest.resolve()),
+                "--expected-policy-digest",
+                broker_module.snapshot_policy_digest(),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env={
+                **os.environ,
+                "RHYOLITE_BROKER_OWNER_PID": str(os.getpid()),
+                "RHYOLITE_BROKER_OWNER_START_TIME": owner_start_time,
+            },
+        )
+        try:
+            assert process.stdin and process.stdout
+            process.stdin.write(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"protocolVersion": broker_module.MCP_PROTOCOL_VERSION},
+                    }
+                )
+                + "\n"
+            )
+            process.stdin.flush()
+            self.assertEqual(
+                json.loads(process.stdout.readline())["result"]["serverInfo"]["name"],
+                broker_module.SNAPSHOT_SERVER_NAME,
+            )
+            broker_pid = int(
+                (self.runtime / "snapshot-broker.pid").read_text(encoding="ascii")
+            )
+            self.assertNotEqual(broker_pid, process.pid)
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=5)
+            process.stdin.close()
+            deadline = time.monotonic() + 10
+            exit_path = self.runtime / "snapshot-broker-exit.json"
+            while time.monotonic() < deadline and not exit_path.exists():
+                time.sleep(0.05)
+            self.assertTrue(exit_path.exists())
+            self.assertTrue(
+                json.loads(exit_path.read_text(encoding="utf-8"))["CleanExit"]
+            )
+            with self.assertRaises(ProcessLookupError):
+                os.kill(broker_pid, 0)
+            cleanup = self.run_snapshot_helper(
+                "cleanup",
+                str(self.runtime),
+                broker_module.snapshot_policy_digest(),
+                "review",
+            )
+            self.assertEqual(cleanup.returncode, 0, cleanup.stderr.decode())
+            self.assertFalse(self.runtime.exists())
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream and not stream.closed:
+                    stream.close()
+
+    def test_snapshot_bash_cleanup_rejects_another_broker_path(self) -> None:
+        arguments = self.prepare_trusted_bash_transport()
+        prepared = self.run_snapshot_helper("prepare", *arguments)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr.decode())
+        other_directory = self.root / "other-broker"
+        other_directory.mkdir(mode=0o700)
+        other_broker = other_directory / BROKER_PATH.name
+        other_broker.write_bytes(BROKER_PATH.read_bytes())
+        process = subprocess.Popen(
+            [
+                "/usr/bin/python3", str(other_broker), "--snapshot-mode",
+                "--runtime-root", str(self.runtime),
+                "--snapshot-grant-manifest", str(self.manifest),
+                "--expected-snapshot-policy-digest", broker_module.snapshot_policy_digest(),
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        try:
+            assert process.stdin and process.stdout
+            process.stdin.write(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n"
+            )
+            process.stdin.flush()
+            self.assertEqual(json.loads(process.stdout.readline())["result"], {})
+            rejected = self.run_snapshot_helper(
+                "cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review"
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("unverified broker process", rejected.stderr.decode())
+            self.assertIsNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream:
+                    stream.close()
+        cleanup = self.run_snapshot_helper(
+            "cleanup", str(self.runtime), broker_module.snapshot_policy_digest(), "review"
+        )
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr.decode())
+        self.assertFalse(self.runtime.exists())
+
+    def test_snapshot_sigterm_records_clean_lifecycle_exit(self) -> None:
+        self.write_manifest(phase="research")
+        process = subprocess.Popen(
+            [
+                str(SNAPSHOT_BROKER_LAUNCHER),
+                "--runtime-root",
+                str(self.runtime.resolve()),
+                "--grant-manifest",
+                str(self.manifest.resolve()),
+                "--expected-policy-digest",
+                broker_module.snapshot_policy_digest(),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert process.stdin and process.stdout
+        process.stdin.write(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": broker_module.MCP_PROTOCOL_VERSION},
+                }
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        self.assertEqual(
+            json.loads(process.stdout.readline())["result"]["serverInfo"]["name"],
+            broker_module.SNAPSHOT_SERVER_NAME,
+        )
+        process.send_signal(signal.SIGTERM)
+        self.assertEqual(process.wait(timeout=10), 0)
+        self.assertEqual(process.stderr.read() if process.stderr else "", "")
+        process.stdin.close()
+        process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+        exit_state = json.loads(
+            (self.runtime / "snapshot-broker-exit.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(exit_state["CleanExit"])
+        self.assertEqual(exit_state["Phase"], "research")
 
 
 class ResearchSelfValidationTests(unittest.TestCase):

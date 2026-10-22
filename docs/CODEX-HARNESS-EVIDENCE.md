@@ -5,11 +5,23 @@
 Codex is not a supported production Rhyolite harness. No Codex adapter or
 production registry entry has been added.
 
-Initial discovery found a prerequisite that the planned adapter cannot
-currently satisfy: the tested shell-free Codex configuration exposes no
-ordinary snapshot file-read or search tools. Advertising those tools in a
-local model catalog did not add them. An explicit snapshot-interface design
-decision is required before adapter implementation.
+Initial discovery found no ordinary snapshot file-read or search tools in
+the tested shell-free Codex configuration. Advertising those tools in a
+local model catalog did not add them. On October 20, 2026 the maintainer
+approved a separate offline snapshot-read MCP mode in the existing bundled
+Python broker. Its runtime, bounded grants, negative tests, and shared
+Contract-v9 seam are implemented on the development branch. On October 21,
+credential-free probes captured the complete Codex inventory with that
+transport and exercised its read/search and denial boundaries. The
+same day's additional synthetic probes verified exact final-message bytes,
+explicit-thread history restoration, and a fresh zero-tool session. These
+are bounded interface proofs, not completed review/recovery/repair protocols.
+A single maintainer-run authenticated call then returned the exact expected
+reply without a timeout, rate limit, quota error, or reroute warning. An
+unregistered adapter candidate now implements the Contract-v9 functions and
+passes focused fixture validation plus an exact pinned-CLI snapshot integration.
+The remaining live eligibility and product-integration gates are still
+unverified.
 
 This record describes Codex CLI 0.163.0 only. It does not establish the
 behavior of another release, an internally configured provider, or a
@@ -26,16 +38,23 @@ completed Rhyolite review.
   checked against the pinned Git tree and Git blob hashes.
 - Every execution used fresh synthetic `HOME` and `CODEX_HOME` directories,
   an explicit clean environment, and a local non-Git fixture directory.
-- No credentials, real model service, target tool calls, or target code were
-  used. Raw diagnostic files remain private; only normalized observations
-  are recorded here.
+- No credentials, real model service, or target-code execution were used.
+  Scripted tool calls reached only synthetic fixtures through the bundled
+  snapshot broker. Raw diagnostic files remain private; only normalized
+  observations are recorded here.
+- The one authenticated probe was executed separately by the maintainer from
+  an already authenticated shell. Its saved summary contains no endpoint,
+  credential, account, or raw provider error.
 
 ## Probe method
 
 A fixed loopback HTTP fixture captured the CLI's outgoing Responses request.
-It supplied no model generation or tool calls and returned HTTP 503 after
-capture. Consequently, CLI exit status 1 was expected: capture success does
-not mean that a model invocation or review completed.
+Inventory-only probes supplied no model generation or tool calls. A later
+scripted probe supplied synthetic Responses events to exercise actual CLI
+tool routing, without invoking a model. Both methods deliberately returned
+HTTP 503 after capture. Consequently, CLI exit status 1 was expected:
+successful probe assertions do not mean that a model invocation or review
+completed.
 
 The invocation used `codex exec` with `--ignore-user-config`,
 `--strict-config`, `--ignore-rules`, JSON output, the read-only sandbox, and
@@ -43,12 +62,29 @@ The invocation used `codex exec` with `--ignore-user-config`,
 agents, plugins, skill discovery, web search, plan updates, and questions
 were disabled. The provider and model were synthetic fixture values.
 
-The final two cases additionally disabled `features.goals` and
-`features.view_image`. The catalog case loaded a synthetic model with
+The utility-exclusion, catalog, and snapshot cases additionally disabled
+`features.goals` and `features.view_image`. The catalog case loaded a synthetic model with
 `shell_type="disabled"`, no patch tool, and
 `experimental_supported_tools` containing `read_file`, `grep_files`, and
 `list_dir`. A unique instruction marker verified that the catalog was
 actually loaded rather than silently ignored.
+
+Snapshot probes configured only the fixed bundled stdio launcher, the four
+exact broker tools, and runner-created grants for one read-only fixture
+snapshot. Native `approval_mode="approve"` was set separately for each of
+those four tools; global `approval_policy="never"` and the read-only sandbox
+remained unchanged. Neither a server-wide nor a blanket approval grant was
+used. The earlier per-tool value `auto` was accepted as configuration but
+still denied these unannotated tools with an approval-required error.
+
+The scripted probe made twelve calls: the four snapshot tools, resource
+and resource-template listings, two resource-read denials, and four denied
+reads covering traversal, an absolute private-fixture path, an unavailable
+research grant, and an oversized byte limit. Every outgoing request retained
+the same complete tool inventory and synthetic model/effort settings.
+The snapshot instruction marker and private-fixture contents did not reach
+the captured model context. The trusted Bash cleanup helper verified the
+broker lifecycle and removed its transient runtime.
 
 ## Results
 
@@ -59,6 +95,28 @@ actually loaded rather than silently ignored.
 | Shell-free inventory before utility-tool exclusions | `create_goal`, `get_goal`, `update_goal`, and `view_image`. | Shell tools were absent from this request, but the request was not tool-less and had no ordinary file-read/search tools. |
 | Utility exclusions applied | Empty `tools` array; requested effort `xhigh`. | A zero-tool request can be constructed. This is not yet proof of the complete repair protocol or actual service-side model/effort identity. |
 | Read-tool metadata alternative | Catalog marker present, but the `tools` array was still empty. | Catalog advertising did not provide a native snapshot reader. It is not a workaround for the missing interface. |
+| Complete snapshot MCP inventory | Four functions in namespace `mcp__rhyolite_snapshot`, plus `list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource`. | The complete inventory is seven tools, not only the four configured MCP functions. No shell, write, patch, agent, direct-web, or ordinary filesystem tool appeared. |
+| Exact native tool grants | Per-tool `auto` denied invocation; per-tool `approve` allowed the four explicitly listed snapshot tools while global approval remained `never`. | Native preapproval must name each allowed tool; accepting a configuration value alone does not prove that the tool is usable. |
+| Scripted snapshot operations | Capabilities, listing, reading, and literal search returned the expected synthetic fixture data. | The pinned CLI can route usable shell-free snapshot operations through the approved transport. |
+| Resource-helper boundaries | Both listings were empty; reading a private fixture URI through the snapshot server returned method-not-found, and an unregistered server was rejected. | The automatic resource helpers did not provide an alternate filesystem reader in this configuration. |
+| Denied snapshot arguments | Traversal and absolute paths, the absent research grant, and `maxBytes=262145` were rejected without revealing the private marker. | Broker runtime enforcement remains effective after Codex schema translation. |
+| Model-facing schema translation | Codex omitted numeric bounds and string-length constraints from the outgoing tool schemas. | Do not claim byte-for-byte schema passthrough. The broker retains and enforces the approval-bound schemas and limits. |
+| Exact final response | `--output-last-message` and the last JSON `agent_message` preserved the scripted UTF-8 text, indentation, numbering, table/fence text, trailing spaces, and absence of a final newline. An earlier commentary message was distinct. | Deterministic final-message interfaces exist; rendered stdout must not replace them. |
+| Explicit native continuation | An exact UUID resumed with the same thread ID, retained the earlier fixture reply in the next request, and kept zero tools, requested model/effort, and read-only settings. | Native continuation is possible. Adapter-owned thread mapping, isolation verification, and live recovery remain required. |
+| Fresh tool-less session | A separate synthetic home/thread exposed zero tools and did not inherit the earlier fixture context. | A fresh tool-less interface exists; the bounded confidence-edit protocol and live repair are not yet proven. |
+| Hostile synthetic discovery | A synthetic user config selected another model, broad sandbox, and an extra MCP command; parent/current-directory instruction markers were also planted. Ignored configuration plus explicit restrictions retained the requested model, read-only sandbox, zero tools, and marker-free requests. | This covers those fixture paths only, not every plugin, hook, rule, memory, or managed-configuration surface. |
+| Header-reported substitution | A different `OpenAI-Model` response header produced a native JSON error-item warning beginning `model rerouted:`, but the CLI still returned the reply and exit 0. The native turn context retained the requested model. | The adapter must reject this warning during live monitoring and post-exit validation; matching turn context or exit 0 is insufficient. |
+| Body-only model difference | With no model header, a different response-body `model` produced no reroute warning in the tested native JSON/journal records, and the CLI returned the reply and exit 0. | Actual provider/model verification is still open. Do not infer backend identity from requested settings or a successful response. |
+| Context override without model metadata | The neutral fixture model used fallback metadata; requesting a 1,000,000-token context still produced native token records reporting 258,400. | A configured context limit is not proof of the effective window or a backend's capacity. Verify model metadata and actual provider behavior independently. |
+| Authenticated native smoke | Codex 0.163.0 exited 0, returned the exact requested reply, recorded the requested `gpt-5.6-sol` and `xhigh`, exposed no model-visible tool call, used zero client retries, emitted no reroute/rate/quota/timeout warning, and removed its temporary runtime. | Basic authenticated provider operation is proven. The summary explicitly does not claim backend identity, and this was not a review or maximum-settings test. |
+| Bundled offline catalog | `codex debug models --bundled` lists `gpt-5.6-sol` with a 272,000-token default, an 872,000-token maximum override, 95% usable headroom, and efforts through `ultra`. | The CLI has an offline machine-readable catalog. The effective default/maximum usable windows are 258,400/828,400. |
+| Delegation-safe maximum effort | With multi-agent disabled, requesting `ultra` produced wire effort `max`; requesting `max` preserved `max`, zero tools, known-model metadata, and an 828,400-token recorded usable window. | `max` is the strongest enforceable Rhyolite effort. The adapter rejects `ultra` because that catalog choice is coupled to automatic delegation. |
+| Native local plugin and picker | A private local marketplace installed, listed, and removed an inert namespaced plugin. Its exact skill reached the model; with worktrees/daemon disabled, the normal Default-mode request exposed only `request_user_input`, rendered a finite native picker, returned the recommended answer, and exited cleanly. One separate zero-tool title request occurred. | Codex-native installation and structured normal-mode questions have viable interfaces. The production Rhyolite package/entrypoint is not yet implemented or tested. |
+| Combined research inventory | Snapshot plus research configuration exposed exactly four snapshot functions, five research functions, and the three automatic resource helpers. Fourteen scripted calls exercised every function, both servers' resource-read denial, and an unknown server; invalid/disabled arguments caused no public retrieval. | The dedicated research worker can be constrained to the approved two-server inventory. A live successful public response and accepted dossier remain separate gates. |
+| Adapter-built review integration | The unregistered adapter generated the isolated config, shell-free direct-MCP model catalog, argv, environment, snapshot grants, and exact per-tool approvals used by pinned Codex 0.163.0. The request exposed only the four snapshot functions plus three resource helpers, used `gpt-5.6-sol`/`max`, recorded 828,400 usable context, returned exact bytes, verified the session record, and removed the runtime. | Core review translation is implemented and tested without production registration or a real model call. |
+| Authenticated adapter maximum-settings smoke | The maintainer ran the exact repository adapter from the authenticated shell. It used `gpt-5.6-sol`, `max`, 872,000 configured / 828,400 recorded usable context, read one synthetic snapshot file through the supervised broker, returned the exact expected reply, verified the native session, used zero client retries, emitted no reroute/rate/quota/timeout warning, and removed both runtime and private work tree. | Provider eligibility for the approved model, strongest delegation-safe effort, long-context configuration, snapshot routing, exact output, and graceful cleanup is proven for this bounded call. The summary still makes no independent backend-identity claim. |
+| Supervised stdio lifecycle | Pinned source shows Codex terminates its MCP process group and escalates after two seconds. A direct child could be killed during the broker's atomic clean-exit write. The bundled Bash supervisor moves only the broker into a separate process group, preserves stdio, monitors the trusted runner PID/start time, and exits with the broker; a regression simulates client-group termination. | Normal Codex shutdown now permits exact clean-exit verification without allowing a detached broker to survive loss of its trusted runner owner. |
+| Staged native setup/approval and controller | An unregistered Codex manifest contains only two setup skills. The setup skill collects output/scope/provenance/cookie choices through `request_user_input`; the approval skill returns only run/edit/explain/cancel. One Bash helper installs those assets into a private per-stage Codex home, validates the exact native session record and strict JSON result, then destroys the home. A pinned-CLI PTY probe installed the actual staged plugin, loaded the real setup skill, rendered two native pickers in Default mode with only `request_user_input`, selected output and scope, and verified the final setup JSON/session. A second Bash controller generates the authoritative plan, displays it, preserves setup across edit or date/hash rollover, owns execution, accepts exact `/rhyolite:status`, `stop`, and `cancel`, and uses only the runner's verified `--request-stop` path after the run folder exists. The shared launcher's Codex branch is tested only in a copied plugin whose fixed registry is modified for that fixture. | The recommended two-stage native setup plus Bash-owned execution design is implemented without shell/MCP runner authority. No root Codex marketplace manifest or production registry entry exists, so the branch remains unreachable in production. |
 
 Confidence is **High** for these captured request inventories and
 configuration results: they came from the pinned executable, not a mock CLI
@@ -76,25 +134,52 @@ At the pinned commit:
   `read_file`, `grep_files`, or `list_dir` names.
 - `codex-rs/core/src/tools/handlers/mod.rs:1-37` lists the core handlers and
   has no ordinary file-read/search handler corresponding to those names.
+- `codex-rs/core/src/mcp_tool_call.rs` applies the native per-tool approval
+  policy before dispatching an MCP call.
+- `codex-rs/core/src/tools/handlers/mcp_resource.rs` and its
+  `read_mcp_resource.rs` child route resource operations through configured
+  MCP servers rather than reading local filesystem URIs directly.
+- `codex-rs/rmcp-client/src/stdio_server_launcher.rs` sends `SIGTERM` to the
+  owned MCP process group and escalates to a kill after two seconds.
 
 Official source references:
 
 - `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/spec_plan.rs`
 - `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mod.rs`
+- `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/mcp_tool_call.rs`
+- `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mcp_resource/read_mcp_resource.rs`
+- `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rmcp-client/src/stdio_server_launcher.rs`
 
-## Required decision and remaining gates
+## Approved snapshot transport and remaining gates
 
 Do not enable shell commands as a substitute for snapshot reads, introduce
 an unapproved broker/runtime, or register a partial harness.
 
-Choose whether to design a constrained, trusted snapshot-read interface,
-design a bounded runner-mediated tool-less input protocol, or retain the
-current contract and pause Codex support. Installation and authentication
-alone do not resolve the observed interface gap.
+The selected interface is specified in
+[SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md). It reuses the bundled broker
+in a distinct offline mode with bounded listing, reading, and literal
+search, no resource/prompt/network authority, and runner-owned phase grants
+and cleanup. Scope 1 remains research-free and repair remains zero-tool.
+Automated tests cover traversal/symlink/hard-link/special-file rejection,
+malformed and oversized MCP framing, strict manifests, private grant
+boundaries, pagination/budgets, minimal environment, and verified process
+cleanup. Copilot and Claude Code retain native reads.
 
-Live model/effort/context verification, filesystem/instruction isolation,
-dedicated research, exact output, continuation, tool-less repair completion,
-native guided setup, installation/update, and lifecycle cleanup all remain
-unverified. Production enablement still requires the complete
+The complete model-visible snapshot inventory, including automatic
+MCP-resource helpers, and the scripted boundaries above have been captured
+offline. This resolves the initial shell-free snapshot-access prerequisite
+for the pinned CLI and tested configuration only. It does not prove
+research-phase integration, broader hostile-configuration isolation, native
+installation/setup, live provider operation, or actual model/effort/context.
+
+Exact bytes, native UUID continuation, a fresh zero-tool reply, native local
+plugin/picker behavior, combined MCP boundaries, and the adapter-built review
+path are proven with synthetic events. Both a basic native call and the exact
+adapter-built `max`/long-context snapshot smoke passed under authentication.
+Complete hostile configuration isolation, a successful public research
+response and accepted dossier, adapter-built live continuation/recovery and
+repair, a real staged native setup/approval/controller run, all-scope reviews,
+and stop/timeout lifecycle remain unverified. Production enablement still
+requires the complete
 [harness playbook](ADDING-A-HARNESS.md), automated coverage, real-run
 evidence, and Fedora validation.

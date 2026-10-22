@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=8
+RHYOLITE_HARNESS_CONTRACT_VERSION=9
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -44,6 +44,8 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
     harness_resume_policy
     harness_prepare_run
     harness_prepare_worker_home
+    harness_snapshot_transport
+    harness_configure_snapshot_transport
     harness_worker_argv
     harness_worker_env
     harness_report_repair_argv
@@ -76,6 +78,19 @@ rhyolite_harness_set_error() {
 
 rhyolite_harness_valid_id() {
     [[ "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]]
+}
+
+# Native adapters keep their existing read tools and argv. An adapter that
+# needs the constrained reader must explicitly select its fixed transport;
+# the runner owns grants and lifecycle, and the adapter only translates MCP
+# configuration plus the already approved worker argv.
+rhyolite_harness_native_snapshot_transport() {
+    printf '%s\n' native
+}
+
+rhyolite_harness_reject_snapshot_configuration() {
+    rhyolite_harness_set_error \
+        'This adapter uses native snapshot reads and does not accept snapshot MCP configuration.'
 }
 
 # Every adapter translates its CLI's raw worker stdout into a readable

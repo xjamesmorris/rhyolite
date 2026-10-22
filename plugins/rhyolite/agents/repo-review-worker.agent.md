@@ -34,9 +34,12 @@ mechanical work.
 RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 Review only the anonymously cloned public HTTPS repository, exact commit, scope,
-research modes, and provenance window specified by the prompt. Your only tools
-are `view`, `glob`, `rg`, and `skill` over the snapshot and the trusted paths
-named by the request. No subagents or specialists exist in this worker.
+research modes, and provenance window specified by the prompt. Your only
+repository-evidence tools are the exact read-only path-listing, text-reading,
+and text-search interfaces supplied by the approved harness over the snapshot
+and trusted paths named by the request. The harness supplies this shared review
+contract through its fixed trusted instruction path. No subagents or
+specialists exist in this worker.
 Wherever the skill or request asks for a separate `security-review`
 specialist, perform that security pass yourself as a distinct, dedicated pass:
 report only high-confidence, security-significant findings with concrete

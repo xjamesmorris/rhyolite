@@ -1,10 +1,14 @@
 # Harness architecture
 
-**Contract version:** 5
+**Contract version:** 9
 
 **Initial implementation:** I1a
 
 **Supported harnesses:** `copilot` (default) and `claude`
+
+The source tree also contains an unregistered `codex` adapter candidate under
+focused development. It is not discoverable or selectable through the
+production registry.
 
 ## Purpose
 
@@ -16,7 +20,7 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v8 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v9 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
@@ -55,8 +59,20 @@ blocked automatic fallback, the runner relaunches research at most once
 session, and network log, archives the failed attempt under
 `research/attempts/<n>/`, and never passes an archived ledger to a broker.
 
+Contract v9 adds explicit snapshot transport selection/configuration without
+changing the native Copilot or Claude Code worker tools. The fixed offline
+MCP mode reuses the approved bundled Python broker, with Bash owning bounded
+snapshot grants and lifecycle. Its policy, exact tools/schemas, limits, and
+phase grant profiles are approval-bound `SnapshotTransport` data.
+[SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines the complete interface.
+The Codex workstream remains unregistered until all eligibility gates pass.
+Transient and token-rate-limit retries use approval-bound increasing
+backoff in `WorkerRecoveryPolicy.RetryBackoff`: 30 seconds initially,
+doubling to at most 300 seconds within the approved session timeout and
+unchanged retry limits, preserving model, effort, context, tools, and session.
+
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v8 and any future production adapter.
+playbook for Contract v9 and any future production adapter.
 
 ## I1a invariants
 
@@ -140,7 +156,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v8 function exists.
+6. Assert every required Contract-v9 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -177,7 +193,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v8 functions
+## Contract-v9 functions
 
 Every mapped adapter must define all functions below.
 
@@ -204,6 +220,8 @@ Every mapped adapter must define all functions below.
 | `harness_resume_policy` | Return the safe adapter-specific continuation policy stored under the generic session `ResumePolicy`. |
 | `harness_prepare_run` | Prepare run-wide adapter context exactly once, including any ephemeral authentication bridge metadata. |
 | `harness_prepare_worker_home` | Create and secure an isolated runtime home containing only adapter-approved settings and ephemeral authentication bridge data. |
+| `harness_snapshot_transport` | Return exactly `native` or the fixed `local-stdio-mcp-snapshot-read-v1` mode; the runner validates it before approval. |
+| `harness_configure_snapshot_transport` | Translate the runner's phase, approved argv array, isolated home, new config path, fixed launcher, broker argument array, and exact tools into phase-specific MCP configuration. Native adapters reject it; repair never receives it. |
 | `harness_worker_argv` | Build the ordered worker argument vector. |
 | `harness_worker_env` | Build the ordered worker environment/unset vector. |
 | `harness_report_repair_argv` | Build the ordered argv for one fresh, tool-less report-repair session in an empty trusted working directory. |
@@ -764,8 +782,8 @@ A future adapter is a separate implementation phase. It must be added without
 weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
-2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v8 function; do not inherit missing behavior from
+2. Add the adapter file without a production registry entry.
+3. Implement every Contract-v9 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.
@@ -783,6 +801,8 @@ weakening the fail-closed boundary:
 10. Add golden contract tests, default/explicit vector comparisons,
     context-mismatch tests, failure-stage tests, and schema/hash
     non-regression coverage before adding the map entry.
+11. Only after the complete eligibility evidence and validation pass, add
+    one explicit ID-to-file entry to the fixed production registry.
 
 An adapter that cannot satisfy any required function remains unavailable. The
 correct failure mode is a sanitized nonzero error, not Copilot fallback or a
@@ -790,7 +810,7 @@ partially initialized run.
 
 ## Validation
 
-The focused contract-v5 validator is:
+The focused Contract-v9 validator is:
 
 ```bash
 bash ./tests/validate-harness-contract.sh
@@ -831,8 +851,9 @@ transcript output, and trusted Git metadata. It verifies the bytes and secrets
 never reach terminal output or user-facing artifacts while visible safe text
 survives in the timeline, session transcript, and rendered request.
 
-The I1a fail-fast suite entrypoint runs the focused contract validator first,
-then the existing plugin validator:
+The fail-fast suite entrypoint runs the paged report-delivery regressions,
+focused harness contract validator, confidence-edit regressions, and existing
+plugin validator, in that order:
 
 ```bash
 bash ./tests/validate-all.sh
@@ -840,6 +861,6 @@ bash ./tests/validate-all.sh
 
 This is the standard Fedora Linux 44 development and release gate. Public
 release export and preflight invoke the same `tests/validate-all.sh` entrypoint.
-`tests/validate-plugin.sh` remains the legacy monolithic second stage and is
+`tests/validate-plugin.sh` remains the legacy monolithic final stage and is
 not the authoritative full-gate command by itself. No hosted CI is added or
 required.

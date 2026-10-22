@@ -20,6 +20,9 @@ RESEARCH_POLICY="${SKILL_ROOT}/research-policy.json"
 RESEARCH_EVENT_INTEGER_CONTRACT="${SKILL_ROOT}/research-event-integers.json"
 RESEARCH_BROKER="${SKILL_ROOT}/scripts/research-egress-broker.py"
 RESEARCH_BROKER_LAUNCHER="${SKILL_ROOT}/scripts/launch-research-egress-broker.sh"
+SNAPSHOT_BROKER_LAUNCHER="${SKILL_ROOT}/scripts/launch-snapshot-read-broker.sh"
+BROKER_PROCESS_SUPERVISOR="${SKILL_ROOT}/scripts/stdio-broker-supervisor.sh"
+SNAPSHOT_TRANSPORT_HELPER="${SKILL_ROOT}/scripts/snapshot-transport.sh"
 SKILL="${SKILL_ROOT}/SKILL.md"
 AGENT="${PLUGIN_ROOT}/agents/repo-review.agent.md"
 WORKER_AGENT="${PLUGIN_ROOT}/agents/repo-review-worker.agent.md"
@@ -182,6 +185,9 @@ required_files=(
     "${RESEARCH_EVENT_INTEGER_CONTRACT}"
     "${RESEARCH_BROKER}"
     "${RESEARCH_BROKER_LAUNCHER}"
+    "${SNAPSHOT_BROKER_LAUNCHER}"
+    "${BROKER_PROCESS_SUPERVISOR}"
+    "${SNAPSHOT_TRANSPORT_HELPER}"
     "${RESEARCH_BROKER_TEST}"
     "${REPOSITORY_DISCOVERY_CURL_FIXTURE}"
     "${RUNNER}"
@@ -279,7 +285,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v8' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v9' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -1129,7 +1135,11 @@ remembered="$3"
 eval "$(sed -n "/^readonly RHYOLITE_DEFAULT_MODEL=/,/^readonly RHYOLITE_CLAUDE_ALTERNATE_MODEL=/p" "${launcher}")"
 eval "$(sed -n "/^LAUNCHER_MODEL_IDS=(/,/^)/p; /^LAUNCHER_MODEL_LABELS=(/,/^)/p" "${launcher}")"
 if [[ "${harness}" == claude ]]; then
-    eval "$(sed -n "/^            LAUNCHER_MODEL_IDS=(/,/^            )/p; /^            LAUNCHER_MODEL_LABELS=(/,/^            )/p" "${launcher}")"
+    branch="$(sed -n "/^        claude)/,/^        codex)/p" "${launcher}")"
+    eval "$(sed -n "/^            LAUNCHER_MODEL_IDS=(/,/^            )/p; /^            LAUNCHER_MODEL_LABELS=(/,/^            )/p" <<< "${branch}")"
+elif [[ "${harness}" == codex ]]; then
+    branch="$(sed -n "/^        codex)/,/^        \\*)/p" "${launcher}")"
+    eval "$(sed -n "/^            LAUNCHER_MODEL_IDS=(/,/^            )/p; /^            LAUNCHER_MODEL_LABELS=(/,/^            )/p" <<< "${branch}")"
 fi
 eval "$(sed -n "/^prompt_for_model() {/,/^}/p" "${launcher}")"
 launcher_model_accepted() { return 0; }
@@ -1209,6 +1219,12 @@ assert_launcher_menu claude-alternate claude '' '2' claude-opus-5 \
     "${claude_launcher_menu}"
 assert_launcher_menu claude-other claude '' $'4\nclaude-sonnet-5' \
     claude-sonnet-5 "${claude_launcher_menu}"
+codex_launcher_menu='Review model
+  1. GPT-5.6 Sol (Recommended) - gpt-5.6-sol
+  2. List available model IDs
+  3. Enter another frontier model ID'
+assert_launcher_menu codex-default codex '' '' gpt-5.6-sol \
+    "${codex_launcher_menu}"
 
 grep -Fq 'agent: rhyolite:repo-review.agent' "${COMMAND_START}" ||
     fail '/rhyolite:start does not route to its command agent.'
@@ -2446,8 +2462,13 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=8' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 8.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=9' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 9.'
+grep -Fxq '    harness_snapshot_transport' "${HARNESS_COMMON}" &&
+    grep -Fxq '    harness_configure_snapshot_transport' "${HARNESS_COMMON}" &&
+    grep -Fq 'SnapshotTransport=%s' "${RUNNER}" &&
+    grep -Fq '"RetryBackoff"' "${RUNNER}" ||
+    fail 'Harness snapshot transport or bounded retry backoff is missing.'
 grep -Fxq '    harness_worker_outcome' "${HARNESS_COMMON}" &&
     grep -Fxq '    harness_worker_continuation_argv' "${HARNESS_COMMON}" &&
     grep -Fq 'worker_continuation; do' "${HARNESS_COMMON}" ||
@@ -2671,6 +2692,16 @@ grep -Fq 'exec env -i' "${RESEARCH_BROKER_LAUNCHER}" &&
     'COPILOT_GITHUB_TOKEN|GH_TOKEN|GITHUB_TOKEN|AUTHORIZATION|http_proxy|https_proxy|NETRC|SSH_AUTH_SOCK' \
     "${RESEARCH_BROKER_LAUNCHER}" ||
     fail 'Research broker launcher imports a forbidden credential or proxy input.'
+grep -Fq 'exec env -i' "${SNAPSHOT_BROKER_LAUNCHER}" &&
+    grep -Fq 'PYTHONNOUSERSITE=1' "${SNAPSHOT_BROKER_LAUNCHER}" &&
+    grep -Fq 'PYTHONSAFEPATH=1' "${SNAPSHOT_BROKER_LAUNCHER}" &&
+    grep -Fq '/usr/bin/python3 "${BROKER}"' "${SNAPSHOT_BROKER_LAUNCHER}" &&
+    grep -Fq -- '--snapshot-mode' "${SNAPSHOT_BROKER_LAUNCHER}" ||
+    fail 'Snapshot broker launcher does not use its fixed minimal offline boundary.'
+! grep -Eqi \
+    'OPENAI_API_KEY|ANTHROPIC_API_KEY|COPILOT_GITHUB_TOKEN|GH_TOKEN|GITHUB_TOKEN|AUTHORIZATION|http_proxy|https_proxy|NETRC|SSH_AUTH_SOCK' \
+    "${SNAPSHOT_BROKER_LAUNCHER}" ||
+    fail 'Snapshot broker launcher imports a forbidden credential or proxy input.'
 node - "${RESEARCH_POLICY}" <<'JS'
 const fs = require("fs");
 const policy = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -2758,6 +2789,9 @@ done
 
 bash -n "${RUNNER}"
 bash -n "${RESEARCH_BROKER_LAUNCHER}"
+bash -n "${SNAPSHOT_BROKER_LAUNCHER}"
+bash -n "${BROKER_PROCESS_SUPERVISOR}"
+bash -n "${SNAPSHOT_TRANSPORT_HELPER}"
 bash -n "${DISCOVERY}"
 bash -n "${WELCOME_HELPER_BASH}"
 bash -n "${LAUNCHER_PREFERENCES_BASH}"
@@ -2796,6 +2830,10 @@ bash "${SUMMARY_TEST}" >/dev/null
     fail 'Research egress broker is not executable.'
 [[ -x "${RESEARCH_BROKER_LAUNCHER}" ]] ||
     fail 'Research broker launcher is not executable.'
+[[ -x "${SNAPSHOT_BROKER_LAUNCHER}" ]] ||
+    fail 'Snapshot broker launcher is not executable.'
+[[ -x "${BROKER_PROCESS_SUPERVISOR}" ]] ||
+    fail 'Broker process supervisor is not executable.'
 [[ -x "${RESEARCH_BROKER_TEST}" ]] ||
     fail 'Research broker test is not executable.'
 grep -Fq 'plugins/rhyolite/bin/rhyolite' "${ROOT_LAUNCHER}" &&
@@ -6298,14 +6336,25 @@ function assertCommonPlan(
     "ProtocolVersion",
     "ResearchRelaunchLimit",
     "ResubmissionRoundLimit",
+    "RetryBackoff",
     "TransientRetryLimit",
   ], `${label} worker-recovery policy`);
+  assertKeys(plan.WorkerRecoveryPolicy.RetryBackoff, [
+    "Bound",
+    "InitialDelaySeconds",
+    "MaxDelaySeconds",
+    "Multiplier",
+  ], `${label} worker-recovery retry backoff`);
   if (plan.WorkerRecoveryPolicy.Mode !== "same-session-continuation" ||
       plan.WorkerRecoveryPolicy.DeliveryProtocol !== "RHYOLITE_REPORT_DELIVERY_V1" ||
       plan.WorkerRecoveryPolicy.TransientRetryLimit !== 2 ||
       plan.WorkerRecoveryPolicy.ResubmissionRoundLimit !== 2 ||
       plan.WorkerRecoveryPolicy.ContinuationLimit !== 20 ||
       plan.WorkerRecoveryPolicy.ResearchRelaunchLimit !== 1 ||
+      plan.WorkerRecoveryPolicy.RetryBackoff.InitialDelaySeconds !== 30 ||
+      plan.WorkerRecoveryPolicy.RetryBackoff.Multiplier !== 2 ||
+      plan.WorkerRecoveryPolicy.RetryBackoff.MaxDelaySeconds !== 300 ||
+      plan.WorkerRecoveryPolicy.RetryBackoff.Bound !== "approved-session-timeout" ||
       typeof plan.WorkerRecoveryPolicy.Available !== "boolean") {
     throw new Error(`${label} worker-recovery policy changed`);
   }
@@ -12213,6 +12262,7 @@ for research_relaunch_case in recovered exhausted; do
         printf 'always\n' > "${research_relaunch_marker}"
     fi
     PATH="${mock_bin}:${PATH}" \
+        RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
         "${RUNNER}" \
             --repo https://github.com/octocat/Hello-World \
             --scope 2 \

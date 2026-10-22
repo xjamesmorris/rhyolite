@@ -6,6 +6,8 @@
 
 **Claude Code production harness approved:** October 7, 2026
 
+**Offline snapshot-read broker mode approved:** October 20, 2026
+
 ## Decision
 
 Rhyolite is a **Linux-only, Bash-first** product for this release, with
@@ -18,7 +20,10 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
 - Bash is the canonical launcher, helper, runner, and validation
   implementation.
 - The bundled Python 3 standard-library research egress broker is the one
-  approved constrained exception. Bash remains authoritative for
+  approved constrained exception. Its separate offline snapshot-read MCP
+  mode is approved for the Codex workstream, using the same Python runtime
+  with no network/auth authority. This does not enable Codex production
+  support. Bash remains authoritative for
   orchestration, planning, lifecycle, policy trust, cleanup, failure mapping,
   and artifact finalization.
 - Validation is local only. Hosted continuous integration is not part of
@@ -28,7 +33,10 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
 - GitHub Copilot CLI and Claude Code are the supported production review
   harnesses. Claude Code was approved after the evidence recorded in
   [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md). The fixed harness
-  seam does not advertise or imply support for other CLIs.
+  registry remains limited to those two IDs. The Codex workstream now has an
+  unregistered Contract-v9 adapter candidate and focused synthetic integration
+  evidence; that does not change production support or launcher choices.
+  The Contract-v9 seam does not advertise or imply support for other CLIs.
 
 Contributions and test reports for other Linux flavors can help establish
 compatibility evidence, but do not replace the Fedora Linux 44 release gate.
@@ -57,9 +65,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v8 seam.
+  Contract-v9 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v8 and any future production adapter.
+  playbook for Contract v9 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -98,6 +106,15 @@ decision; compatibility must not be preserved speculatively.
   assembled report passes unchanged strict finalization. Every failed
   repository gets a deterministic `failure-analysis.md` and
   `failure-analysis.json`.
+- Contract v9 adds the explicit `harness_snapshot_transport` and
+  `harness_configure_snapshot_transport` seam, keeping native Copilot/Claude
+  readers and introducing approval-bound `SnapshotTransport` only for the
+  fixed offline MCP protocol. [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md)
+  specifies exact tools/schemas, bounded grants, phase separation, and Bash
+  lifecycle. Codex remains unregistered until all harness gates pass.
+- `WorkerRecoveryPolicy.RetryBackoff` binds increasing transient/rate-limit
+  delays to approval: 30 seconds initially, doubling to at most 300 seconds
+  within the approved session timeout and unchanged retry limits.
 - Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved

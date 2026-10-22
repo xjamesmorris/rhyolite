@@ -609,6 +609,14 @@ harness_prepare_worker_home() {
     }
 }
 
+harness_snapshot_transport() {
+    rhyolite_harness_native_snapshot_transport
+}
+
+harness_configure_snapshot_transport() {
+    rhyolite_harness_reject_snapshot_configuration
+}
+
 harness_worker_argv() {
     local -n output_arguments="$1"
     local session_root="$2"
