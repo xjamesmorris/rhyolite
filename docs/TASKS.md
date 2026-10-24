@@ -30,6 +30,7 @@ Status values:
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
 | T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
+| T18 | P2 | Verify | Confirm in a live run that scope 1 runs the same security pass as scope 3 |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
@@ -51,6 +52,29 @@ Status values:
   `rhyolite-repo-*` runtime homes and launcher `model-check-*` homes whose
   recorded process is gone, and document the manual cleanup.
 - **Source:** 2026-10-19 validation run.
+
+### T18 (P2, Verify): Confirm in a live run that scope 1 runs the same security pass as scope 3
+
+- **Problem:** Scope 1 could run a lighter dedicated security pass than
+  scope 3. Its default session timeout was 60 minutes instead of 240, the
+  worker request named scope 3 "Full review" with no rule about security
+  depth, and nothing required covering every security-relevant file, while
+  scope 3's whole-repository provenance work made its worker read more of
+  the tree.
+- **State:** Every scope now defaults to a 240-minute session timeout. The
+  review prompt, shared skill, and both worker agents carry one rule that
+  the security pass is identical in every scope and inspects every
+  security-relevant tracked file instead of sampling. Validation checks that
+  the rendered security instructions are byte-identical in scope 1 and
+  scope 3 requests. No live scope 1 review has run since the change.
+- **Next step:** review one public repository at one exact commit in
+  scope 1 and in scope 3 with the same model, reasoning effort, and context.
+  The direct runner's `--commit` option pins the commit. Compare the two
+  reports' security findings.
+- **Done when:** both reports cover the same security-relevant areas and
+  report the same critical and high security findings, or each difference is
+  traced to model variance rather than to a scope-dependent input.
+- **Source:** 2026-10-24 maintainer request.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 
