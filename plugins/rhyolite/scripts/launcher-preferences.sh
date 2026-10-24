@@ -427,14 +427,13 @@ rhyolite_read_preference() {
     local schema
     local stored_repository
     local stored_harness
-    local fleet_mode
+    local legacy_fleet_mode
     local model
     local reasoning_effort
     local context_tier
 
     RHYOLITE_PREFERENCE_STATUS='missing'
     RHYOLITE_PREFERENCE_HARNESS=''
-    RHYOLITE_PREFERENCE_FLEET_MODE=''
     RHYOLITE_PREFERENCE_MODEL=''
     RHYOLITE_PREFERENCE_REASONING_EFFORT=''
     RHYOLITE_PREFERENCE_CONTEXT_TIER=''
@@ -613,6 +612,58 @@ rhyolite_read_preference() {
                 rhyolite_read_json_string "${preference_path}" contextTier
             )" || context_tier=''
             ;;
+        4)
+            awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function starts_with(value, prefix) {
+                return substr(value, 1, length(prefix)) == prefix
+            }
+            function ends_with(value, suffix) {
+                return substr(value, length(value) - length(suffix) + 1) == suffix
+            }
+            NF {
+                count++
+                lines[count] = trim($0)
+            }
+            END {
+                if (count != 9 ||
+                    lines[1] != "{" ||
+                    lines[2] !~ /^"schemaVersion":[[:space:]]*4,$/ ||
+                    !starts_with(lines[3], "\"canonicalRepository\": \"") ||
+                    !ends_with(lines[3], "\",") ||
+                    !starts_with(lines[4], "\"harness\": \"") ||
+                    !ends_with(lines[4], "\",") ||
+                    !starts_with(lines[5], "\"model\": \"") ||
+                    !ends_with(lines[5], "\",") ||
+                    !starts_with(lines[6], "\"reasoningEffort\": \"") ||
+                    !ends_with(lines[6], "\",") ||
+                    !starts_with(lines[7], "\"contextTier\": \"") ||
+                    !ends_with(lines[7], "\",") ||
+                    !starts_with(lines[8], "\"updatedAt\": \"") ||
+                    !ends_with(lines[8], "\"") ||
+                    lines[9] != "}") {
+                    exit 1
+                }
+            }
+        ' "${preference_path}" || {
+                RHYOLITE_PREFERENCE_STATUS='invalid'
+                return 1
+            }
+            stored_harness="$(
+                rhyolite_read_json_string "${preference_path}" harness
+            )" || stored_harness=''
+            reasoning_effort="$(
+                rhyolite_read_json_string \
+                    "${preference_path}" reasoningEffort
+            )" || reasoning_effort=''
+            context_tier="$(
+                rhyolite_read_json_string "${preference_path}" contextTier
+            )" || context_tier=''
+            ;;
         *)
             RHYOLITE_PREFERENCE_STATUS='invalid'
             return 1
@@ -622,16 +673,20 @@ rhyolite_read_preference() {
     stored_repository="$(
         rhyolite_read_json_string "${preference_path}" canonicalRepository
     )" || stored_repository=''
-    fleet_mode="$(
+    # Schemas 1-3 still carry the retired fleetMode field; it is validated
+    # as part of their format and otherwise ignored.
+    legacy_fleet_mode="$(
         rhyolite_read_json_string "${preference_path}" fleetMode
-    )" || fleet_mode=''
+    )" || legacy_fleet_mode=''
     model="$(
         rhyolite_read_json_string "${preference_path}" model
     )" || model=''
 
     if [[ "${stored_repository}" != "${canonical_repository}" ]] ||
         ! rhyolite_valid_harness_id "${stored_harness}" ||
-        [[ "${fleet_mode}" != native && "${fleet_mode}" != standard ]] ||
+        [[ "${schema}" != 4 &&
+            "${legacy_fleet_mode}" != native &&
+            "${legacy_fleet_mode}" != standard ]] ||
         ! rhyolite_valid_model_id "${model}" ||
         ! rhyolite_valid_reasoning_effort "${reasoning_effort}" ||
         ! rhyolite_valid_context_tier "${context_tier}"; then
@@ -645,7 +700,6 @@ rhyolite_read_preference() {
 
     RHYOLITE_PREFERENCE_STATUS='valid'
     RHYOLITE_PREFERENCE_HARNESS="${stored_harness}"
-    RHYOLITE_PREFERENCE_FLEET_MODE="${fleet_mode}"
     RHYOLITE_PREFERENCE_MODEL="${model}"
     RHYOLITE_PREFERENCE_REASONING_EFFORT="${reasoning_effort}"
     RHYOLITE_PREFERENCE_CONTEXT_TIER="${context_tier}"
@@ -655,11 +709,10 @@ rhyolite_read_preference() {
 rhyolite_write_preference() {
     local canonical_repository="$1"
     local harness="$2"
-    local fleet_mode="$3"
-    local model="$4"
-    local reasoning_effort="$5"
-    local context_tier="$6"
-    local launcher_home="${7:-$(rhyolite_launcher_home)}"
+    local model="$3"
+    local reasoning_effort="$4"
+    local context_tier="$5"
+    local launcher_home="${6:-$(rhyolite_launcher_home)}"
     local preference_anchor
     local preference_path
     local preference_dir
@@ -667,8 +720,6 @@ rhyolite_write_preference() {
     local updated_at
 
     rhyolite_valid_harness_id "${harness}" || return 1
-    [[ "${fleet_mode}" == native || "${fleet_mode}" == standard ]] ||
-        return 1
     rhyolite_valid_model_id "${model}" || return 1
     rhyolite_valid_reasoning_effort "${reasoning_effort}" || return 1
     rhyolite_valid_context_tier "${context_tier}" || return 1
@@ -697,10 +748,9 @@ rhyolite_write_preference() {
         umask 077
         cat <<EOF
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "canonicalRepository": "$(rhyolite_json_escape "${canonical_repository}")",
   "harness": "$(rhyolite_json_escape "${harness}")",
-  "fleetMode": "$(rhyolite_json_escape "${fleet_mode}")",
   "model": "$(rhyolite_json_escape "${model}")",
   "reasoningEffort": "$(rhyolite_json_escape "${reasoning_effort}")",
   "contextTier": "$(rhyolite_json_escape "${context_tier}")",

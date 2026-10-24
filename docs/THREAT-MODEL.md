@@ -27,7 +27,7 @@
 - Repository URLs supplied to the runner.
 - User-selected trusted research policy files and advanced provider/cookie
   settings.
-- User-local launcher fleet/model/reasoning/context preference files.
+- User-local launcher model/reasoning/context preference files.
 - User-selected output workspace paths and generated artifact paths.
 
 ## Primary threats
@@ -65,8 +65,8 @@
     contract rejects it.
 19. The onboarding hook inspects credentials, mutates local state, or
     hijacks unrelated sessions before the user invokes the review agent.
-20. A tampered or mismatched launcher preference silently changes fleet
-    mode or model, leaks a selected source, or bypasses review approval.
+20. A tampered or mismatched launcher preference silently changes the
+    model, leaks a selected source, or bypasses review approval.
 21. An explicit `--yolo` launch broadens the outer Copilot orchestrator
     to all permissions for that launch, or allow-all state is incorrectly
     coupled to report opening instead of requiring explicit `--open-html`.
@@ -162,10 +162,10 @@
   continuations, launcher prompts, and unrelated text. Neither hook
   performs network access, Git commands, writes, prompt mutation, or
   environment/auth inspection.
-- Native fleet mode and the outer model, reasoning effort, and context tier
+- The outer model, reasoning effort, and context tier
   are selected before Copilot starts. The trusted launcher setup block
   contains only canonical source URLs plus constrained
-  fleet/model/reasoning/context/remember fields; sources
+  model/reasoning/context/remember fields; sources
   remain untrusted data rather than prompt instructions.
 - Before a Copilot session starts, the launcher checks that the account
   accepts the selected model, reasoning effort, and context with one
@@ -206,13 +206,13 @@
   artifacts. Workers start under util-linux `setpriv --pdeathsig TERM` when
   available, so a SIGKILL of the runner cannot leave a worker running with
   its credentials and network access after the run has stopped.
-- Per-repository fleet/model/reasoning/context preferences are keyed by a
+- Per-repository model/reasoning/context preferences are keyed by a
   SHA-256 hash of the selected canonical public URL, including its terminal
   `.git` endpoint when present, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
   mismatched preferences are ignored rather than silently applied.
 - Preferences are written atomically only after effective-plan approval.
-  Fleet mode, model, and remember state are included in `ApprovalHash`;
+  The model and remember state are included in `ApprovalHash`;
   preferences never grant source access or bypass runner validation.
 - Launcher context and logs do not persist the selected source or
   arbitrary initial request.

@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-20
+**Last updated:** 2026-10-24
 
 ## Priorities
 
@@ -29,29 +29,10 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
 | T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T12 (P2, Open): Keep the launcher setup block intact in native fleet mode
-
-- **Problem:** With `--fleet-mode native`, Copilot CLI delivered the
-  launcher's first turn as a single line prefixed with `Fleet deployed:` and
-  added fleet instructions to dispatch subagents and track todos. The
-  orchestrators expect the exact multi-line `RHYOLITE_LAUNCHER_SETUP_V1`
-  block and must not start subagents of their own, so they have to tolerate
-  a flattened block and conflicting instructions. The observed sessions,
-  including a 2026-10-14 run, still recognized the block. On 2026-10-20,
-  Copilot CLI 1.0.101-0 still flattened the block in native mode, and the
-  orchestrator still recognized it, kept the launcher source unchanged, and
-  started no subagents.
-- **Next step:** decide whether the launcher should deliver the setup block
-  another way in native mode or whether the orchestrators should explicitly
-  accept the flattened form and ignore fleet dispatch instructions.
-- **Source:** the 2026-10-13, 2026-10-14, and 2026-10-20 native-fleet
-  sessions.
 
 ### T16 (P2, Open): Remove runtime homes left by a hard-killed runner
 

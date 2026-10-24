@@ -12,6 +12,22 @@
   replacement `--sync-session=off`, which keeps Copilot account
   session-history sync off. The value stays attached with `=` because a
   bare `--sync-session` turns sync on.
+- Retired native fleet mode. It never made a review faster: Copilot's
+  `--fleet` changed only the outer setup session, whose orchestrator never
+  starts subagents and runs every review through the trusted runner. The
+  runner already reviews up to two repositories at a time by default
+  (`--throttle`), and review workers never receive subagents, so the
+  approved model stays enforced. In native mode Copilot also flattened the
+  launcher's setup block and added conflicting instructions to dispatch
+  subagents. The launcher no longer asks for an execution mode or passes
+  `--fleet`; the orchestrators no longer ask about fleet mode or show it in
+  `help` or `status`; and the effective plan and its approval hash no longer
+  include `FleetMode`, which plan schema 5 now omits. The launcher and the
+  direct runner reject `--fleet-mode native` with an explanation and still
+  accept `--fleet-mode standard` with no effect. Launcher preferences move to
+  schema 4 without `fleetMode`; schemas 1-3 stay readable, and their saved
+  model, effort, and context are still reused. The `fleet` harness
+  capability is retired. State schema 6 is unchanged.
 
 ## 0.8.4 - 2026-10-20
 

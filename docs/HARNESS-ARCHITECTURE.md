@@ -252,7 +252,6 @@ Contract v5 retains these capability keys:
 
 | Capability | Copilot | Claude Code |
 | --- | --- | --- |
-| `fleet` | `yes` | `no` |
 | `structured_questions` | `yes` | `yes` |
 | `subagents` | `no` | `no` |
 | `builtin_security_specialist` | `no` | `no` |
@@ -552,8 +551,7 @@ The outer launcher starts Claude Code from a clean non-Git directory with
 `--effort`, `--strict-mcp-config`, a permission rule that pre-approves only
 `bash <runner> ...`, `--permission-mode default`, and the trusted
 `RHYOLITE_LAUNCHER_SETUP_V1` block in `--append-system-prompt`. `--yolo` adds
-`--dangerously-skip-permissions`; native fleet mode is rejected because
-`fleet` is `no`.
+`--dangerously-skip-permissions`.
 
 ## Lifecycle
 

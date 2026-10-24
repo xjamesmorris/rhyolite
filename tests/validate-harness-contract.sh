@@ -508,7 +508,6 @@ assert_adapter_model_status 1 example-unlisted-model '' 1 \
     'Copilot model-catalog discovery failed during model validation.'
 
 declare -A expected_capabilities=(
-    [fleet]=yes
     [structured_questions]=yes
     [subagents]=no
     [builtin_security_specialist]=no
@@ -590,7 +589,6 @@ preference_contract_repository='https://github.com/octocat/Hello-World.git'
 rhyolite_write_preference \
     "${preference_contract_repository}" \
     copilot \
-    native \
     gpt-5.6-sol \
     max \
     long_context \
@@ -612,7 +610,6 @@ preference_contract_peer_path="$(
 rhyolite_write_preference \
     "${preference_contract_peer}" \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -628,24 +625,22 @@ if set(preference) != {
     "schemaVersion",
     "canonicalRepository",
     "harness",
-    "fleetMode",
     "model",
     "reasoningEffort",
     "contextTier",
     "updatedAt",
 }:
-    raise SystemExit("preference schema 3 keys are invalid")
+    raise SystemExit("preference schema 4 keys are invalid")
 if (
-    preference["schemaVersion"] != 3
+    preference["schemaVersion"] != 4
     or preference["canonicalRepository"] !=
         "https://github.com/octocat/Hello-World.git"
     or preference["harness"] != "copilot"
-    or preference["fleetMode"] != "native"
     or preference["model"] != "gpt-5.6-sol"
     or preference["reasoningEffort"] != "max"
     or preference["contextTier"] != "long_context"
 ):
-    raise SystemExit("preference schema 3 values are invalid")
+    raise SystemExit("preference schema 4 values are invalid")
 PY
 rhyolite_read_preference \
     "${preference_contract_repository}" \
@@ -653,7 +648,6 @@ rhyolite_read_preference \
     "${preference_contract_root}" ||
     fail 'Contract-v4 preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
-    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == max &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == long_context ]] ||
@@ -663,8 +657,7 @@ rhyolite_read_preference \
     copilot \
     "${preference_contract_root}" ||
     fail 'Contract-v4 non-.git peer preference read failed.'
-[[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == standard &&
-    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
+[[ "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == xhigh &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == default ]] ||
     fail 'Contract-v4 .git and non-.git preferences were not independent.'
@@ -4376,7 +4369,6 @@ done
         fail 'No-op model choices are not deterministic.'
 
     declare -A noop_expected_capabilities=(
-        [fleet]=no
         [structured_questions]=no
         [subagents]=no
         [builtin_security_specialist]=no
@@ -6394,7 +6386,6 @@ assert_launcher_state_path_failure() {
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \
-                --fleet-mode standard \
                 --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
@@ -6437,6 +6428,8 @@ assert_launcher_state_path_failure \
     fail 'Symlinked launcher state target was modified before rejection.'
 
 launcher_default_check_capture="${fixture_root}/launcher-default.check-capture"
+# The retired --fleet-mode standard spelling stays accepted with no effect:
+# this launch must still match the golden outer-launcher vector exactly.
 (
     cd "${launcher_caller}"
     env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
@@ -6463,7 +6456,6 @@ launcher_default_check_capture="${fixture_root}/launcher-default.check-capture"
         "${LAUNCHER}" \
             --harness copilot \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) 2>"${fixture_root}/launcher-explicit.stderr"
 
@@ -6511,7 +6503,6 @@ expected_prompt="$(
 RHYOLITE_START_COMMAND_V1
 RHYOLITE_LAUNCHER_SETUP_V1
 Source=https://example.com/owner/repository.git
-FleetMode=standard
 Model=gpt-5.6-sol
 ReasoningEffort=max
 ContextTier=long_context
@@ -6561,7 +6552,6 @@ ln -s -- "${launcher_caller}" "${launcher_linked_parent}/caller"
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${launcher_linked_parent}/plugin/bin/rhyolite" \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) 2>"${fixture_root}/launcher-linked.stderr"
 normalize_launcher_capture \
@@ -6623,7 +6613,6 @@ run_launcher_model_check_case() {
     local -a check_environment=()
     local -a launcher_arguments=(
         --repo https://example.com/owner/repository.git
-        --fleet-mode standard
         --model gpt-5.6-sol
     )
 
@@ -6807,7 +6796,6 @@ run_unlisted_launcher() {
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \
-                --fleet-mode standard \
                 "$@"
     ) >"${fixture_root}/${name}.launcher.stdout" \
         2>"${launcher_unlisted_stderr}"
@@ -6831,7 +6819,6 @@ assert_unlisted_launcher_vector() {
     prompt="RHYOLITE_START_COMMAND_V1"$'\n'
     prompt+="RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
     prompt+="Source=https://example.com/owner/repository.git"$'\n'
-    prompt+="FleetMode=standard"$'\n'
     prompt+="Model=${expected_model}"$'\n'
     if [[ -n "${expected_allow_line}" ]]; then
         prompt+="${expected_allow_line}"$'\n'
@@ -6907,7 +6894,6 @@ chmod 0700 -- "${launcher_unlisted_preference_state}"
 rhyolite_write_preference \
     https://example.com/owner/repository.git \
     copilot \
-    standard \
     example-unlisted-model \
     max \
     long_context \

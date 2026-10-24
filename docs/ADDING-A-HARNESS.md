@@ -184,7 +184,6 @@ Use the existing guarded boundaries:
 Contract-v8 capability keys are:
 
 ```text
-fleet
 structured_questions
 subagents
 builtin_security_specialist
@@ -204,8 +203,9 @@ Capabilities describe proven adapter behavior; they do not relax runner
 policy. `unverified` is not `yes`. A production adapter must report
 `shell_denial=yes`. Scope 2/3 must fail closed unless the capabilities needed
 for the dedicated research worker and its exact local tools are `yes`.
-Native fleet mode must fail or remain unavailable when `fleet` is not `yes`;
-it must not be silently translated into another mode.
+The former `fleet` key is retired with native fleet mode. The launcher and
+runner never query it, and they reject `--fleet-mode native` for every
+harness.
 
 ### Models and effort
 
@@ -582,7 +582,6 @@ Before implementation, record a table for every capability with:
 
 Do not use capability values as decorative metadata. They must gate behavior:
 
-- `fleet`: whether native process-level fleet mode can be selected.
 - `structured_questions`: whether the outer guided experience can use the
   required structured picker behavior.
 - `subagents`: whether the worker may delegate to bundled specialists. Both
@@ -699,16 +698,18 @@ Requirements:
 
 ## Preference implications
 
-Current launcher preference schema 3 stores a canonical repository, harness,
-fleet mode, model, reasoning effort, context tier, and update time. Schemas 1
-and 2 remain readable with `max`/`long_context` defaults; saved values are
-reused only when the stored harness matches and the model remains available.
+Current launcher preference schema 4 stores a canonical repository, harness,
+model, reasoning effort, context tier, and update time. Schemas 1, 2, and 3
+remain readable; schemas 1 and 2 use `max`/`long_context` defaults, and the
+retired `fleetMode` field in schemas 1-3 is validated but ignored. Saved
+values are reused only when the stored harness matches and the model remains
+available.
 
 Before any second production harness can remember settings:
 
 - keep preference identity harness-aware or disable remembering for that
   harness;
-- never reuse a Copilot model/fleet preference for another harness;
+- never reuse a Copilot model preference for another harness;
 - preserve the canonical harness ID in the stored and validated record;
 - bump the preference schema again if its on-disk meaning or fields change;
 - define migration or rejection behavior for old files;

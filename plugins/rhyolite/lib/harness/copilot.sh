@@ -284,7 +284,7 @@ harness_require_cli() {
 
 harness_capability() {
     case "$1" in
-        fleet|structured_questions|builtin_research_specialist|web_research|shell_denial)
+        structured_questions|builtin_research_specialist|web_research|shell_denial)
             printf '%s\n' 'yes'
             ;;
         # Re-invoking a non-interactive JSON worker with the same

@@ -64,7 +64,7 @@ creates the runtime home.
 | --- | --- | --- | --- |
 | `shell_denial` | `yes` | P4 | Golden argv/settings; mock run inventory. |
 | `structured_questions` | `yes` | P10 | Phase 2 orchestrator. |
-| `fleet` | `no` | No process-level fleet mode. | Launcher rejects native fleet (Phase 2). |
+| `fleet` | retired | Native fleet mode was retired for every harness; the adapter no longer reports this key. Claude Code has no process-level fleet mode. | The launcher and runner reject `--fleet-mode native`. |
 | `subagents` | `no` | `Agent` is removed and denied; sidechain turns fail verification. | `subagent` transcript case. |
 | `builtin_security_specialist` | `no` | No bundled specialist; the worker agent performs a dedicated security pass. | Worker agent text. |
 | `builtin_research_specialist` | `yes` | Contract v5 research seam with `claude/agents/repo-research-worker.md`; real staged scope-2 run R5. | Scope 2/3 plan cases; research worker run fails closed with cleanup when research stops before the broker. |

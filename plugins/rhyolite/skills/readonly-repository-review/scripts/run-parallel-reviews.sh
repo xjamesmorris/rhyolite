@@ -52,7 +52,7 @@ HARNESS_RESUME_POLICY=""
 MODEL_FROM_HARNESS=0
 ALLOW_UNLISTED_MODEL=0
 MODEL_CATALOG_MEMBERSHIP="listed"
-FLEET_MODE="standard"
+RETIRED_FLEET_MODE=""
 REMEMBER_PREFERENCES=0
 ENABLE_PUBLIC_RESEARCH=0
 ENABLE_PROVENANCE_RESEARCH=0
@@ -144,8 +144,8 @@ Options:
                                    verifies availability when the review runs
   --reasoning-effort LEVEL         high, xhigh, or max (default: max)
   --context TIER                   default or long_context (default: long_context)
-  --fleet-mode MODE                Outer launcher mode: native or standard
-  --remember-preferences           Save fleet/model per repository after approval
+  --remember-preferences           Save approved model/effort/context per repository
+  --fleet-mode standard            Retired; accepted with no effect for compatibility
   --enable-public-research         Legacy alias for --scope 2; never combine with --scope
   --enable-provenance-research     Legacy alias for --scope 3 with
                                    --enable-public-research; never combine with --scope
@@ -1435,7 +1435,6 @@ write_approval_hash_material() {
     printf 'Model=%s\n' "$(approval_hash_string "${MODEL}")"
     printf 'ModelCatalogMembership=%s\n' \
         "$(approval_hash_string "${MODEL_CATALOG_MEMBERSHIP}")"
-    printf 'FleetMode=%s\n' "$(approval_hash_string "${FLEET_MODE}")"
     printf 'RememberPreferences=%s\n' \
         "$(json_boolean "${REMEMBER_PREFERENCES}")"
     printf 'OpenHtmlPolicy=%s\n' \
@@ -1709,7 +1708,6 @@ write_review_plan_json() {
   "MaxRepositories": ${MAX_REPOSITORIES},
   "Model": "$(json_escape "${MODEL}")",
   "ModelCatalogMembership": "$(json_escape "${MODEL_CATALOG_MEMBERSHIP}")",
-  "FleetMode": "$(json_escape "${FLEET_MODE}")",
   "RememberPreferences": $(json_boolean "${REMEMBER_PREFERENCES}"),
   "OpenHtmlPolicy": "$(json_escape "$(review_plan_open_html_policy)")"
 }
@@ -1804,7 +1802,6 @@ write_review_plan_text() {
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
     printf '%-20s %s\n' 'Model catalog:' "$(model_catalog_membership_text)"
-    printf '%-20s %s\n' 'Fleet mode:' "${FLEET_MODE}"
     printf '%-20s %s\n' 'Remember settings:' \
         "$(status_word "${REMEMBER_PREFERENCES}")"
     printf '%-20s %s\n' 'Open HTML policy:' "$(review_plan_open_html_policy)"
@@ -1950,7 +1947,7 @@ while (($# > 0)); do
             ;;
         --fleet-mode)
             require_value "$1" "${2-}"
-            FLEET_MODE="$2"
+            RETIRED_FLEET_MODE="$2"
             shift 2
             ;;
         --remember-preferences)
@@ -2372,11 +2369,20 @@ if ! rhyolite_harness_invoke \
         'Select default or long_context and retry.'
     exit 2
 fi
-case "${FLEET_MODE}" in
-    native|standard) ;;
+# Native fleet mode is retired: Copilot fleet mode only changed the outer
+# setup session, which never starts subagents. The standard value stays
+# accepted, with no effect, for existing callers.
+case "${RETIRED_FLEET_MODE}" in
+    ''|standard) ;;
+    native)
+        printf '%s\n' \
+            'Native fleet mode has been retired: Copilot fleet mode only changed the outer setup session, which never starts subagents. --throttle sets how many repositories this runner reviews in parallel.' \
+            'Remove --fleet-mode native and retry.' >&2
+        exit 2
+        ;;
     *)
-        printf 'Fleet mode must be native or standard: %s\n' \
-            "${FLEET_MODE}" >&2
+        printf 'Fleet mode is retired; --fleet-mode accepts only standard, which has no effect: %s\n' \
+            "${RETIRED_FLEET_MODE}" >&2
         exit 2
         ;;
 esac
@@ -3464,7 +3470,6 @@ if ((VALIDATE_ONLY)); then
         "$(provider_forwarded_env_var_names_text)"
     printf 'Model:                %s\n' "${MODEL}"
     printf 'Model catalog:        %s\n' "$(model_catalog_membership_text)"
-    printf 'Fleet mode:           %s\n' "${FLEET_MODE}"
     printf 'Remember settings:    %s\n' "${REMEMBER_PREFERENCES}"
     exit 0
 fi
@@ -3507,7 +3512,6 @@ if ((REMEMBER_PREFERENCES)); then
         rhyolite_write_preference \
             "${repository}" \
             "${HARNESS}" \
-            "${FLEET_MODE}" \
             "${MODEL}" \
             "${REASONING_EFFORT}" \
             "${CONTEXT_TIER}" \
@@ -3520,7 +3524,7 @@ if ((REMEMBER_PREFERENCES)); then
                 exit 2
             }
     done
-    printf 'Remembered approved fleet/model/effort/context settings for %s repositories.\n' \
+    printf 'Remembered approved model/effort/context settings for %s repositories.\n' \
         "${#canonical_urls[@]}"
 fi
 

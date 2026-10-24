@@ -565,7 +565,7 @@ harness_capability() {
         shell_denial|structured_questions|web_research|builtin_research_specialist)
             printf '%s\n' 'yes'
             ;;
-        fleet|subagents|builtin_security_specialist|final_message_file)
+        subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
         # Verified live with Claude Code 2.1.303: a print-mode review worker

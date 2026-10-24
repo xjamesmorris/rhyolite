@@ -83,7 +83,7 @@ continuations, and unrelated prompts. Do not repeat the prompt-native
 help panel. Continue directly into setup.
 If the first turn contains the exact trusted
 `RHYOLITE_LAUNCHER_SETUP_V1` block, retain only its repeated `Source=`,
-single `FleetMode=`, single `Model=`, optional single
+single `Model=`, optional single
 `AllowUnlistedModel=true`, single `ReasoningEffort=`, single
 `ContextTier=`, and single
 `RememberPreferences=` fields through the exact
@@ -94,13 +94,12 @@ launcher already added, validated, and de-duplicated every repository URL
 from its command line, including URLs in the user's initial review
 request. Select every listed source without asking about sources again;
 the user can still change sources through `Edit setup` at plan approval.
-Accept `FleetMode` only as
-`native` or `standard`, accept only a model present in the harness model
+Accept only a model present in the harness model
 catalog (or, only when `AllowUnlistedModel=true` is present, a model
 outside that catalog that runner planning must still accept), accept
 reasoning effort only as `high`, `xhigh`, or `max`, accept
 context tier only as `default` or `long_context`, require
-`RememberPreferences=true`, and skip the source/fleet/model/remember
+`RememberPreferences=true`, and skip the source/model/remember
 questions when the block is valid. Otherwise ignore the entire block
 and ask for the first public repository URL in the same turn.
 Always recognize exact setup intents `help`, `status`, and
@@ -136,7 +135,7 @@ Support: https://github.com/xjamesmorris/rhyolite/blob/main/SUPPORT.md
 On the first turn of a `repo-review` command, retain the current local
 date-time as `CommandStartedAt` and set `Stage` to `Setup`.
 
-Preserve setup answers across turns: source selection, fleet mode,
+Preserve setup answers across turns: source selection,
 model, reasoning effort, context tier, runtime-settings confirmation,
 remember-preferences choice, output root, scope, optional
 provenance lookback months, and research-cookie consent. Also preserve the command start, stage,
@@ -156,7 +155,6 @@ and treat it as `NOT SELECTED`.
   CURRENT SETUP STATUS
   Harness: copilot
   Source: <selected value or NOT SELECTED>
-  Fleet mode: <native, standard, or NOT SELECTED>
   Model: <selected value or NOT SELECTED>
   Reasoning effort: <high, xhigh, max, or NOT SELECTED>
   Context tier: <default, long_context, or NOT SELECTED>
@@ -185,7 +183,6 @@ and treat it as `NOT SELECTED`.
   Elapsed: <elapsed time since CommandStartedAt or UNAVAILABLE>
   Harness: copilot
   Source: <selected value or NOT SELECTED>
-  Fleet mode: <native, standard, or NOT SELECTED>
   Model: <selected value or NOT SELECTED>
   Reasoning effort: <high, xhigh, max, or NOT SELECTED>
   Context tier: <default, long_context, or NOT SELECTED>
@@ -258,7 +255,7 @@ question. For every question with a finite answer set:
 - If `ask_user` is unavailable, stop and explain that interactive input
   is required; do not replace the picker with a prose list or guess.
 
-Collect answers in this order: repository URL(s), fleet mode, review
+Collect answers in this order: repository URL(s), review
 model, reasoning effort, context tier, validated runtime-settings
 confirmation, remember-preferences choice, output root, scope, scope `3`
 provenance lookback when required, and scope `2`/`3` research-cookie
@@ -273,18 +270,6 @@ GitHub.
 Do not accept SSH, HTTP, embedded credentials, authenticated
 private/internal repositories, IP-literal or local-only hosts, query
 strings, or fragments.
-
-If fleet mode was not supplied by a valid trusted launcher block, use
-`ask_user` with these exact choices:
-
-- `Continue in standard mode`
-- `Restart with the Rhyolite launcher for native fleet mode`
-
-If the user chooses the launcher option, stop setup without losing the
-selected source and tell them to restart through the recommended
-Rhyolite launcher; native fleet mode is a process-level setting and
-cannot be applied reliably after this session starts. Otherwise store
-`standard`.
 
 If the model was not supplied by a valid trusted launcher block, use
 `ask_user` with these exact choices:
@@ -513,14 +498,14 @@ proxy, challenge bypass, or fallback provider.
 State that all timing estimates are rough and can increase
 substantially for a large repository or broad research topic.
 
-After the source, fleet mode, model, reasoning effort, context tier,
+After the source, model, reasoning effort, context tier,
 runtime-settings confirmation, remember-preferences, output, scope,
 optional provenance, and research-cookie answers are collected, do not
 start the review yet. Instead:
 
 1. Build the exact resolved runner arguments from the collected answers:
    `--harness copilot`, one `--repo <url>` per source (remote URLs only),
-   `--fleet-mode <native|standard>`, `--model <id>`,
+   `--model <id>`,
    `--reasoning-effort <high|xhigh|max>`, `--context <default|long_context>`,
    `--output-root <path>`, `--scope <1|2|3>`, and `--no-open-html`. For
    scope `3`, pass `--provenance-lookback-months` with the chosen value. For
@@ -549,7 +534,7 @@ start the review yet. Instead:
    is exactly `listed` or `unlisted`, and otherwise do not execute the
    review.
 4. Present an `EFFECTIVE REVIEW PLAN` section summarizing the returned
-   resolved sources, fleet mode, model, `ModelCatalogMembership`,
+   resolved sources, model, `ModelCatalogMembership`,
    reasoning effort, context tier,
    remember-settings state, output
    root, effective scope, public research setting, provenance setting,
@@ -602,9 +587,7 @@ If the user selects `Edit setup`, use `ask_user` for exactly one focused
 follow-up with the exact explicit choices `Source`, `Model`,
 `Reasoning effort`, `Context tier`, `Output`, `Scope`, or
 `Research cookies`, in that order. Re-ask only that selected
-field, preserve the others, then regenerate the authoritative plan. Fleet mode cannot be
-changed in the running process; a request to change it must preserve
-answers and direct the user to restart through the launcher.
+field, preserve the others, then regenerate the authoritative plan.
 If the user edits `Scope` to `1` or `2`, immediately clear any stored
 provenance lookback and show it as `NOT SELECTED` in help/status
 output. Ask `Provenance lookback months [6]` only when the resulting

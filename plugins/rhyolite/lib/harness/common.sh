@@ -483,7 +483,6 @@ rhyolite_harness_load() {
     fi
 
     for capability in \
-        fleet \
         structured_questions \
         subagents \
         builtin_security_specialist \

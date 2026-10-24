@@ -397,38 +397,6 @@ github_account_without_repository() {
     [[ -n "${path}" && "${path}" != */* ]]
 }
 
-prompt_for_fleet_mode() {
-    local remembered_mode="$1"
-    local answer
-
-    while true; do
-        printf '\nRhyolite execution mode\n' >&2
-        if [[ -n "${remembered_mode}" ]]; then
-            printf '  1. Keep previously used (%s)\n' \
-                "${remembered_mode}" >&2
-            printf '  2. Native Copilot fleet mode\n' >&2
-            printf '  3. Standard Copilot mode\n' >&2
-            printf 'Select mode [1]: ' >&2
-            IFS= read -r answer
-            case "${answer:-1}" in
-                1) printf '%s\n' "${remembered_mode}"; return ;;
-                2) printf '%s\n' native; return ;;
-                3) printf '%s\n' standard; return ;;
-            esac
-        else
-            printf '  1. Standard Copilot mode\n' >&2
-            printf '  2. Native Copilot fleet mode\n' >&2
-            printf 'Select mode [1]: ' >&2
-            IFS= read -r answer
-            case "${answer:-1}" in
-                1) printf '%s\n' standard; return ;;
-                2) printf '%s\n' native; return ;;
-            esac
-        fi
-        printf 'Enter one of the displayed choice numbers.\n' >&2
-    done
-}
-
 launcher_model_accepted() {
     local candidate_model="$1"
     local allow_unlisted_model="$2"
@@ -616,19 +584,17 @@ prompt_to_confirm_runtime_settings() {
 }
 
 build_launcher_setup_block() {
-    local fleet_mode="$1"
-    local model="$2"
-    local reasoning_effort="$3"
-    local context_tier="$4"
-    local allow_unlisted_model="$5"
-    shift 5
+    local model="$1"
+    local reasoning_effort="$2"
+    local context_tier="$3"
+    local allow_unlisted_model="$4"
+    shift 4
     local repository
 
     printf '%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
     for repository in "$@"; do
         printf 'Source=%s\n' "${repository}"
     done
-    printf 'FleetMode=%s\n' "${fleet_mode}"
     printf 'Model=%s\n' "${model}"
     if [[ "${allow_unlisted_model}" == 1 ]]; then
         printf 'AllowUnlistedModel=true\n'
@@ -651,16 +617,14 @@ build_start_request() {
 
 build_initial_prompt() {
     local initial_request="$1"
-    local fleet_mode="$2"
-    local model="$3"
-    local reasoning_effort="$4"
-    local context_tier="$5"
-    local allow_unlisted_model="$6"
-    shift 6
+    local model="$2"
+    local reasoning_effort="$3"
+    local context_tier="$4"
+    local allow_unlisted_model="$5"
+    shift 5
 
     printf '%s\n' "${RHYOLITE_START_MARKER}"
     build_launcher_setup_block \
-        "${fleet_mode}" \
         "${model}" \
         "${reasoning_effort}" \
         "${context_tier}" \
@@ -675,11 +639,10 @@ write_launch_context() {
     local original_dir="$3"
     local launch_dir="$4"
     local plugin_root="$5"
-    local fleet_mode="$6"
-    local model="$7"
-    local reasoning_effort="$8"
-    local context_tier="$9"
-    local allow_unlisted_model="${10}"
+    local model="$6"
+    local reasoning_effort="$7"
+    local context_tier="$8"
+    local allow_unlisted_model="$9"
 
     {
         printf 'StartedAtUtc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -687,7 +650,6 @@ write_launch_context() {
         printf 'OriginalWorkingDirectory=%s\n' "${original_dir}"
         printf 'LaunchDirectory=%s\n' "${launch_dir}"
         printf 'PluginRoot=%s\n' "${plugin_root}"
-        printf 'FleetMode=%s\n' "${fleet_mode}"
         printf 'Model=%s\n' "${model}"
         if [[ "${allow_unlisted_model}" == 1 ]]; then
             printf 'AllowUnlistedModel=true\n'
@@ -977,8 +939,8 @@ Rhyolite v${version} Beta
 Usage:
   rhyolite [--help]
   rhyolite [--version]
-  rhyolite [--repo URL]... [--harness ID] [--fleet-mode native|standard]
-           [--model MODEL] [--allow-unlisted-model]
+  rhyolite [--repo URL]... [--harness ID] [--model MODEL]
+           [--allow-unlisted-model]
            [--reasoning-effort high|xhigh|max]
            [--context default|long_context] [--yolo]
            [--] [URL...] [initial review request...]
@@ -1011,8 +973,8 @@ $(rhyolite_harness_list_registered | sed 's/^/  - /')
 Starts Copilot (or Claude Code with --harness claude) outside Git worktrees
 with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
 ${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
-immediately. Approved fleet/model/effort/context settings are remembered per
-repository and harness. Claude Code has no native fleet mode.
+immediately. Approved model/effort/context settings are remembered per
+repository and harness.
 
 Unknown options and GitHub URLs without a repository name are rejected before
 the harness starts. Put review request text that begins with a hyphen after --.
@@ -1035,13 +997,11 @@ main() {
     local initial_prompt
     local requested_harness=''
     local harness
-    local fleet_mode=''
     local model=''
     local reasoning_effort=''
     local context_tier=''
     local allow_unlisted_model=0
     local yolo=0
-    local remembered_fleet_mode=''
     local remembered_model=''
     local remembered_reasoning_effort=''
     local remembered_context_tier=''
@@ -1060,7 +1020,6 @@ main() {
     local copilot_exit_code
     local model_access_status
     local harness_cli
-    local harness_fleet_capability
     local claude_settings
     local claude_setup_block
     local claude_start_prompt
@@ -1183,21 +1142,32 @@ main() {
                 shift 2
                 ;;
             --fleet-mode)
+                # Retired: Copilot fleet mode only changed the outer setup
+                # session, which never starts subagents. The standard value
+                # stays accepted, with no effect, for existing scripts.
                 [ "$#" -ge 2 ] ||
                     fail \
                         'launcher argument validation' \
                         'A fleet mode argument is missing.' \
-                        '--fleet-mode requires native or standard.' \
-                        'Pass --fleet-mode native or --fleet-mode standard.' \
+                        '--fleet-mode is retired and accepts only standard, which has no effect.' \
+                        'Remove --fleet-mode and retry.' \
                         2
                 case "$2" in
-                    native|standard) fleet_mode="$2" ;;
+                    standard) ;;
+                    native)
+                        fail \
+                            'launcher argument validation' \
+                            'Native fleet mode has been retired.' \
+                            'Copilot fleet mode only changed the outer setup session, which never starts subagents; the trusted runner already reviews selected repositories in parallel.' \
+                            'Remove --fleet-mode native and retry.' \
+                            2
+                        ;;
                     *)
                         fail \
                             'launcher argument validation' \
                             'The requested fleet mode is invalid.' \
                             "Unsupported fleet mode: $2" \
-                            'Pass --fleet-mode native or --fleet-mode standard.' \
+                            'Remove --fleet-mode and retry.' \
                             2
                         ;;
                 esac
@@ -1331,9 +1301,7 @@ main() {
 
     if ! rhyolite_harness_capture \
         LAUNCHER_HARNESS_DISPLAY harness_display_name ||
-        ! rhyolite_harness_capture harness_cli harness_cli_name ||
-        ! rhyolite_harness_capture \
-            harness_fleet_capability harness_capability fleet; then
+        ! rhyolite_harness_capture harness_cli harness_cli_name; then
         fail \
             'launcher harness validation' \
             'The requested launcher harness metadata is unavailable.' \
@@ -1396,16 +1364,6 @@ main() {
                 2
             ;;
     esac
-    if [[ "${harness_fleet_capability}" != yes ]]; then
-        [[ "${fleet_mode}" != native ]] ||
-            fail \
-                'launcher argument validation' \
-                'Native fleet mode is unavailable for the selected harness.' \
-                "${LAUNCHER_HARNESS_DISPLAY} has no native process-level fleet mode." \
-                'Omit --fleet-mode or pass --fleet-mode standard, then retry.' \
-                2
-        fleet_mode='standard'
-    fi
 
     original_dir="$(pwd -P)"
     assert_control_free_path "${original_dir}"
@@ -1494,13 +1452,11 @@ main() {
     for repository in "${repositories[@]}"; do
         if rhyolite_read_preference \
             "${repository}" "${harness}" "${launcher_home}"; then
-            if [[ -z "${remembered_fleet_mode}" ]]; then
-                remembered_fleet_mode="${RHYOLITE_PREFERENCE_FLEET_MODE}"
+            if [[ -z "${remembered_model}" ]]; then
                 remembered_model="${RHYOLITE_PREFERENCE_MODEL}"
                 remembered_reasoning_effort="${RHYOLITE_PREFERENCE_REASONING_EFFORT}"
                 remembered_context_tier="${RHYOLITE_PREFERENCE_CONTEXT_TIER}"
-            elif [[ "${remembered_fleet_mode}" != "${RHYOLITE_PREFERENCE_FLEET_MODE}" ||
-                "${remembered_model}" != "${RHYOLITE_PREFERENCE_MODEL}" ||
+            elif [[ "${remembered_model}" != "${RHYOLITE_PREFERENCE_MODEL}" ||
                 "${remembered_reasoning_effort}" != "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" ||
                 "${remembered_context_tier}" != "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" ]]; then
                 remembered_consistent=0
@@ -1515,7 +1471,6 @@ main() {
         fi
     done
     if ((remembered_consistent == 0)); then
-        remembered_fleet_mode=''
         remembered_model=''
         remembered_reasoning_effort=''
         remembered_context_tier=''
@@ -1531,7 +1486,6 @@ main() {
             printf 'Rhyolite launcher ignored saved settings because model %s is no longer available.\n' \
                 "${remembered_model}" >&2
         fi
-        remembered_fleet_mode=''
         remembered_model=''
         remembered_reasoning_effort=''
         remembered_context_tier=''
@@ -1554,15 +1508,6 @@ main() {
             2
     fi
 
-    if [[ -z "${fleet_mode}" ]]; then
-        if ((is_interactive)) && [[ "${harness_fleet_capability}" == yes ]]; then
-            fleet_mode="$(
-                prompt_for_fleet_mode "${remembered_fleet_mode}"
-            )"
-        else
-            fleet_mode="${remembered_fleet_mode:-standard}"
-        fi
-    fi
     if [[ -z "${model}" ]]; then
         if ((is_interactive)); then
             model="$(
@@ -1672,7 +1617,6 @@ main() {
     initial_prompt="$(
         build_initial_prompt \
             "${initial_request}" \
-            "${fleet_mode}" \
             "${model}" \
             "${reasoning_effort}" \
             "${context_tier}" \
@@ -1685,7 +1629,6 @@ main() {
         "${original_dir}" \
         "${launch_dir}" \
         "${plugin_root}" \
-        "${fleet_mode}" \
         "${model}" \
         "${reasoning_effort}" \
         "${context_tier}" \
@@ -1698,7 +1641,6 @@ main() {
     export RHYOLITE_LAUNCHER_SESSION_DIR="${session_dir}"
     export RHYOLITE_LAUNCHER_VERSION="${version}"
     export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"
-    export RHYOLITE_LAUNCHER_FLEET_MODE="${fleet_mode}"
     export RHYOLITE_LAUNCHER_MODEL="${model}"
     export RHYOLITE_LAUNCHER_REASONING_EFFORT="${reasoning_effort}"
     export RHYOLITE_LAUNCHER_CONTEXT_TIER="${context_tier}"
@@ -1715,7 +1657,6 @@ main() {
         # the visible prompt stays two lines long.
         claude_setup_block="$(
             build_launcher_setup_block \
-                "${fleet_mode}" \
                 "${model}" \
                 "${reasoning_effort}" \
                 "${context_tier}" \
@@ -1775,9 +1716,6 @@ main() {
     )
     if ((yolo)); then
         copilot_arguments=(--yolo "${copilot_arguments[@]}")
-    fi
-    if [[ "${fleet_mode}" == native ]]; then
-        copilot_arguments=(--fleet "${copilot_arguments[@]}")
     fi
     set +e
     "${copilot_path}" "${copilot_arguments[@]}"

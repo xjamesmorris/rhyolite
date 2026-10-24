@@ -789,8 +789,6 @@ grep -Fq 'CURRENT SETUP STATUS' "${AGENT}" ||
     fail 'Agent help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing Source.'
-grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${AGENT}" ||
-    fail 'Agent help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing model.'
 grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${AGENT}" ||
@@ -895,9 +893,6 @@ grep -Fq 'exact explicit choices `Source`, `Model`,' "${AGENT}" &&
     grep -Fq '`Research cookies`, in that order.' "${AGENT}" ||
     fail 'Agent Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
-    grep -Fq '`Continue in standard mode`' "${AGENT}" &&
-    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
-        "${AGENT}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${AGENT}" &&
     grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${AGENT}" &&
     grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${AGENT}" &&
@@ -907,7 +902,17 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Confirm runtime settings`' "${AGENT}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${AGENT}" ||
-    fail 'Agent fleet/model preference setup contract is incomplete.'
+    fail 'Agent model preference setup contract is incomplete.'
+# Native fleet mode is retired: no orchestrator surface asks about it, shows
+# it, accepts it from the launcher block, or passes it to the runner.
+for retired_fleet_surface in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" \
+    "${COMMAND_STATUS}"; do
+    ! grep -Fqi 'fleet' "${retired_fleet_surface}" ||
+        fail "Orchestrator surface still mentions retired fleet mode: ${retired_fleet_surface}"
+done
 for unlisted_contract_file in "${AGENT}" "${SKILL}"; do
     grep -Fq '`AllowUnlistedModel=true`' "${unlisted_contract_file}" &&
         grep -Fq '`--allow-unlisted-model`' "${unlisted_contract_file}" &&
@@ -979,9 +984,10 @@ grep -Fq 'PriorArtWindow.StartDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.StartDate.'
 grep -Fq 'PriorArtWindow.EndDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.EndDate.'
-grep -Fq 'FleetMode=' "${RUNNER}" &&
-    grep -Fq 'RememberPreferences=' "${RUNNER}" ||
-    fail 'Bash approval hash material does not include fleet/preferences.'
+grep -Fq 'RememberPreferences=' "${RUNNER}" ||
+    fail 'Bash approval hash material does not include preferences.'
+! grep -Fq 'FleetMode' "${RUNNER}" ||
+    fail 'Bash runner still emits the retired FleetMode plan field.'
 grep -Fq -- '--expected-plan-hash SHA256' "${RUNNER}" ||
     fail 'Bash runner usage does not document --expected-plan-hash.'
 grep -Fq 'ApprovalHash' "${RUNNER}" ||
@@ -1233,7 +1239,7 @@ grep -Fq 'allowed-tools: ["agent"]' "${COMMAND_STATUS}" &&
         "${COMMAND_STATUS}" ||
     fail '/rhyolite:status is not restricted to task/subagent introspection.'
 for status_field in \
-    'Command:' 'Stage:' 'Elapsed:' 'Fleet mode:' 'Model:' \
+    'Command:' 'Stage:' 'Elapsed:' 'Model:' \
     'Remember settings:' 'Output:' 'Tasks:' 'Subagents:'; do
     grep -Fq "${status_field}" "${COMMAND_STATUS}" ||
         fail "/rhyolite:status is missing ${status_field}"
@@ -1489,8 +1495,6 @@ grep -Fq 'CURRENT SETUP STATUS' "${SKILL}" ||
     fail 'Skill help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing Source.'
-grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${SKILL}" ||
-    fail 'Skill help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing model.'
 grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${SKILL}" ||
@@ -1595,9 +1599,6 @@ grep -Fq 'exact explicit choices `Source`, `Model`,' "${SKILL}" &&
         "${SKILL}" ||
     fail 'Skill Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
-    grep -Fq '`Continue in standard mode`' "${SKILL}" &&
-    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
-        "${SKILL}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${SKILL}" &&
     grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${SKILL}" &&
     grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${SKILL}" &&
@@ -1607,7 +1608,7 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
     grep -Fq '`Confirm runtime settings`' "${SKILL}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${SKILL}" ||
-    fail 'Skill fleet/model preference setup contract is incomplete.'
+    fail 'Skill model preference setup contract is incomplete.'
 grep -Fq 'clear provenance immediately when the' "${SKILL}" &&
     grep -Fq 'resulting scope is not `3`' "${SKILL}" ||
     fail 'Skill does not clear provenance when editing scope away from 3.'
@@ -1751,9 +1752,9 @@ grep -Fq 'numbered picker for' "${README}" &&
     grep -Fq '`Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks' \
         "${README}" ||
     fail 'README does not describe Edit setup follow-up choices.'
-grep -Fq 'process-level `--fleet` flag' "${README}" &&
+grep -Fq '`--fleet-mode native` option is rejected' "${README}" &&
     grep -Fq 'canonical repository URL' "${README}" ||
-    fail 'README does not describe native fleet and per-repository preferences.'
+    fail 'README does not describe retired fleet mode and per-repository preferences.'
 grep -Fq 'numbered `ask_user` picker' "${README}" ||
     fail 'README does not describe native numbered setup choices.'
 grep -Fq 'final `Other` custom-answer option' "${README}" ||
@@ -2837,7 +2838,7 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
         "${RHYOLITE_LAUNCHER}" &&
     ! grep -Fq -- 'copilot_arguments=(--autopilot' \
         "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq -- 'copilot_arguments=(--fleet "${copilot_arguments[@]}")' \
+    ! grep -Fq -- 'copilot_arguments=(--fleet' \
         "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '-i "${initial_prompt}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq 'export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"' \
@@ -2856,14 +2857,14 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
 grep -Fq 'RHYOLITE_LAUNCHER_IMMEDIATE_START' "${WELCOME_HELPER_BASH}" ||
     fail 'Welcome helpers do not use the trusted launcher-start marker.'
 grep -Fq 'rhyolite_write_preference' "${LAUNCHER_PREFERENCES_BASH}" &&
-    grep -Fq -- '--remember-preferences' "${RUNNER}" &&
-    grep -Fq -- '--fleet-mode' "${RUNNER}" ||
-    fail 'Linux fleet/model preference persistence contract is incomplete.'
-grep -Fq "printf '\\nRhyolite execution mode\\n' >&2" \
-    "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq "printf '\\nReview model\\n' >&2" \
-        "${RHYOLITE_LAUNCHER}" ||
-    fail 'Unix launcher picker text can contaminate captured fleet/model values.'
+    grep -Fq -- '--remember-preferences' "${RUNNER}" ||
+    fail 'Linux model preference persistence contract is incomplete.'
+grep -Fq "printf '\\nReview model\\n' >&2" \
+    "${RHYOLITE_LAUNCHER}" ||
+    fail 'Unix launcher picker text can contaminate captured model values.'
+! grep -Eq 'FleetMode|RHYOLITE_LAUNCHER_FLEET_MODE|prompt_for_fleet_mode|harness_capability fleet|Rhyolite execution mode' \
+    "${RHYOLITE_LAUNCHER}" ||
+    fail 'Unix launcher still selects or forwards retired fleet mode.'
 
 grep -Fq 'name: "repo-review"' "${RHYOLITE_EXTENSION}" ||
     fail 'Rhyolite extension does not register /repo-review.'
@@ -2961,7 +2962,6 @@ preference_helper_root="${fixture_dir}/preference-helper-state"
 rhyolite_write_preference \
     'https://github.com/octocat/Hello-World' \
     copilot \
-    native \
     gpt-5.6-sol \
     max \
     long_context \
@@ -2983,7 +2983,6 @@ preference_helper_path="$(
 rhyolite_write_preference \
     "${git_preference_repository}" \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -2994,7 +2993,6 @@ const fs = require("fs");
 const preference = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const expectedKeys = [
   "canonicalRepository",
-  "fleetMode",
   "harness",
   "model",
   "reasoningEffort",
@@ -3003,13 +3001,12 @@ const expectedKeys = [
   "updatedAt",
 ].sort().join(",");
 if (Object.keys(preference).sort().join(",") !== expectedKeys ||
-    preference.schemaVersion !== 3 ||
+    preference.schemaVersion !== 4 ||
     preference.harness !== "copilot" ||
-    preference.fleetMode !== "native" ||
     preference.model !== "gpt-5.6-sol" ||
     preference.reasoningEffort !== "max" ||
     preference.contextTier !== "long_context") {
-  throw new Error("launcher preference schema 3 is invalid");
+  throw new Error("launcher preference schema 4 is invalid");
 }
 JS
 if ! rhyolite_read_preference \
@@ -3017,14 +3014,13 @@ if ! rhyolite_read_preference \
     copilot \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_HARNESS}" != copilot ]]; then
-    fail 'Bash preference helper could not read schema 3 for Copilot.'
+    fail 'Bash preference helper could not read schema 4 for Copilot.'
 fi
 if ! rhyolite_read_preference \
     "${git_preference_repository}" \
     copilot \
     "${preference_helper_root}" ||
-    [[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" != standard ||
-        "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
+    [[ "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
         "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" != xhigh ||
         "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" != default ]]; then
     fail 'Bash preference helper did not preserve the distinct .git preference.'
@@ -3034,7 +3030,47 @@ if rhyolite_read_preference \
     codex \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
-    fail 'Bash preference helper reused schema 3 across harnesses.'
+    fail 'Bash preference helper reused schema 4 across harnesses.'
+fi
+
+# Schema 3 files written before fleet mode was retired keep their saved
+# model, effort, and context; their fleetMode value is validated but ignored.
+schema_three_preference_repository='https://github.com/octocat/schema-three'
+schema_three_preference_path="$(
+    rhyolite_preference_path \
+        "${schema_three_preference_repository}" \
+        "${preference_helper_root}"
+)"
+cat > "${schema_three_preference_path}" <<'EOF'
+{
+  "schemaVersion": 3,
+  "canonicalRepository": "https://github.com/octocat/schema-three",
+  "harness": "copilot",
+  "fleetMode": "native",
+  "model": "gpt-6-sol",
+  "reasoningEffort": "xhigh",
+  "contextTier": "default",
+  "updatedAt": "2026-10-20T12:00:00Z"
+}
+EOF
+chmod 600 -- "${schema_three_preference_path}"
+if ! rhyolite_read_preference \
+    "${schema_three_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
+        "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" != xhigh ||
+        "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" != default ]]; then
+    fail 'Bash preference helper did not reuse a schema 3 preference saved with native fleet mode.'
+fi
+sed -i 's/"fleetMode": "native"/"fleetMode": "turbo"/' \
+    "${schema_three_preference_path}"
+if rhyolite_read_preference \
+    "${schema_three_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+    fail 'Bash preference helper accepted a schema 3 preference with an unknown fleetMode.'
 fi
 
 legacy_preference_repository='https://github.com/octocat/legacy-preference'
@@ -3096,7 +3132,6 @@ mkdir -p -- "${directory_preference_path}"
 if rhyolite_write_preference \
     "${directory_preference_repository}" \
     copilot \
-    standard \
     gpt-5.6-sol \
     max \
     long_context \
@@ -3612,7 +3647,6 @@ fi
     printf 'SESSION\0%s\0' "${RHYOLITE_LAUNCHER_SESSION_DIR-}"
     printf 'VERSION\0%s\0' "${RHYOLITE_LAUNCHER_VERSION-}"
     printf 'IMMEDIATE\0%s\0' "${RHYOLITE_LAUNCHER_IMMEDIATE_START-}"
-    printf 'FLEET\0%s\0' "${RHYOLITE_LAUNCHER_FLEET_MODE-}"
     printf 'MODEL\0%s\0' "${RHYOLITE_LAUNCHER_MODEL-}"
     printf 'ARGS\0'
     printf '%s\0' "$@"
@@ -3765,7 +3799,6 @@ assert_unsafe_launcher_state_rejected() {
             PATH="${launcher_mock_bin}:${PATH}" \
             "${launcher_link}" \
                 --repo https://example.com/owner/repository \
-                --fleet-mode standard \
                 --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
@@ -3809,7 +3842,6 @@ assert_unsafe_launcher_state_rejected \
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode native \
             --model claude-fable-5.1 \
             --yolo \
             --yolo \
@@ -3859,7 +3891,6 @@ const expectedPrompt =
   "RHYOLITE_START_COMMAND_V1\n" +
   "RHYOLITE_LAUNCHER_SETUP_V1\n" +
   "Source=https://example.com/owner/repository.git\n" +
-  "FleetMode=native\n" +
   "Model=claude-fable-5.1\n" +
   "ReasoningEffort=max\n" +
   "ContextTier=long_context\n" +
@@ -3875,13 +3906,13 @@ if (fs.realpathSync(pluginRoot) !== fs.realpathSync(expectedPlugin) ||
 if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
-if (!args.includes("--fleet") ||
+if (args.includes("--fleet") ||
     valueAfter("--mode") !== "interactive" ||
     valueAfter("--model") !== "claude-fable-5.1" ||
     valueAfter("--reasoning-effort") !== "max" ||
     valueAfter("--context") !== "long_context") {
   throw new Error(
-    "launcher did not apply fleet/model/reasoning/context selections",
+    "launcher did not apply model/reasoning/context selections without fleet mode",
   );
 }
 if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 0) {
@@ -3900,7 +3931,6 @@ if (fs.realpathSync(values.get("CALLER")) !== fs.realpathSync(root) ||
       fs.realpathSync(launchDirectory) ||
     values.get("VERSION") !== expectedVersion ||
     values.get("IMMEDIATE") !== "RHYOLITE_LAUNCHER_IMMEDIATE_START_V1" ||
-    values.get("FLEET") !== "native" ||
     values.get("MODEL") !== "claude-fable-5.1") {
   throw new Error("launcher environment context is inconsistent");
 }
@@ -3927,7 +3957,7 @@ const context = fs.readFileSync(
 if (context.includes("InitialRequest=") ||
     context.includes(expectedRequest) ||
     context.includes("https://example.com/owner/repository") ||
-    !context.includes("FleetMode=native") ||
+    context.includes("FleetMode") ||
     !context.includes("Model=claude-fable-5.1") ||
     !context.includes("ReasoningEffort=max") ||
     !context.includes("ContextTier=long_context") ||
@@ -3944,7 +3974,6 @@ rm -f -- "${launcher_stub_log}"
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/custom-model \
-            --fleet-mode standard \
             --model gpt-6-sol \
             --reasoning-effort xhigh \
             --context default
@@ -3961,7 +3990,7 @@ if (valueAfter("--model") !== "gpt-6-sol" ||
     valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
       "Source=https://example.com/owner/custom-model\n" +
-      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "Model=gpt-6-sol\n" +
       "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
   throw new Error("runtime selections did not round-trip through launcher setup");
@@ -3983,7 +4012,7 @@ assert_launcher_sources() {
         XDG_STATE_HOME="${launcher_state_home}" \
             RHYOLITE_STUB_LOG="${launcher_stub_log}" \
             PATH="${launcher_mock_bin}:${PATH}" \
-            "${launcher_link}" --fleet-mode standard "$@"
+            "${launcher_link}" "$@"
     ) </dev/null >/dev/null 2>&1 ||
         fail "${name}: launcher did not start."
     node - \
@@ -4047,7 +4076,6 @@ set +e
         RHYOLITE_STUB_LOG="${launcher_stub_log}" \
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
-            --fleet-mode standard \
             --repo https://example.com/owner/multi-one \
             'https://example.com/owner/multi-two?tab=readme'
 ) </dev/null >/dev/null 2>"${launcher_invalid_request_url_stderr}"
@@ -4074,7 +4102,6 @@ for launcher_account_url in \
             RHYOLITE_STUB_LOG="${launcher_stub_log}" \
             PATH="${launcher_mock_bin}:${PATH}" \
             "${launcher_link}" \
-                --fleet-mode standard \
                 --repo "${launcher_account_url}"
     ) </dev/null >/dev/null 2>"${launcher_account_url_stderr}"
     launcher_account_url_status=$?
@@ -4110,7 +4137,7 @@ done
 # flag exists in the runner's --help, so neither has to read the runner or
 # its --help to rediscover the CLI before planning.
 for plan_flag in \
-    --repo --harness --fleet-mode --model --reasoning-effort --context \
+    --repo --harness --model --reasoning-effort --context \
     --output-root --scope --provenance-lookback-months --research-cookies \
     --remember-preferences --allow-unlisted-model --no-open-html \
     --plan-only --non-interactive --expected-plan-hash; do
@@ -4133,7 +4160,6 @@ launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
 rhyolite_write_preference \
     'https://example.com/owner/custom-preference' \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -4159,7 +4185,8 @@ if (valueAfter("--model") !== "gpt-6-sol" ||
     valueAfter("--reasoning-effort") !== "xhigh" ||
     valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
-      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "Source=https://example.com/owner/custom-preference\n" +
+      "Model=gpt-6-sol\n" +
       "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
   throw new Error("stored runtime settings did not round-trip through launcher");
@@ -4169,7 +4196,6 @@ JS
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
     copilot \
-    native \
     claude-fable-5.1 \
     max \
     long_context \
@@ -4194,9 +4220,11 @@ const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--yolo") || args.includes("--autopilot")) {
   throw new Error("launcher enabled yolo/autopilot without explicit flags");
 }
-if (!args.includes("--fleet") ||
+if (args.includes("--fleet") ||
     valueAfter("--model") !== "claude-fable-5.1" ||
-    !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5.1\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=claude-fable-5.1\n",
+    )) {
   throw new Error("launcher did not reuse the saved repository preference");
 }
 JS
@@ -4204,7 +4232,6 @@ JS
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
     codex \
-    native \
     claude-fable-5.1 \
     max \
     long_context \
@@ -4234,7 +4261,9 @@ const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
     valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=gpt-5.6-sol\n",
+    )) {
   throw new Error("launcher reused a preference for a different harness");
 }
 JS
@@ -4278,7 +4307,9 @@ const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
     valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=gpt-5.6-sol\n",
+    )) {
   throw new Error("launcher did not ignore the invalid repository preference");
 }
 JS
@@ -4295,7 +4326,6 @@ set +e
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/repository \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) >"${launcher_failure_stdout}" 2>"${launcher_failure_stderr}"
 launcher_failure_exit=$?
@@ -5884,22 +5914,55 @@ plan_scope_one_padded_git_stderr="${fixture_dir}/plan-scope-1-padded-git.stderr"
 [[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
     fail 'Bash zero-padded default-port plan-only created workspace or output roots.'
 
-plan_scope_one_fleet_json="${fixture_dir}/plan-scope-1-fleet.json"
-plan_scope_one_fleet_stderr="${fixture_dir}/plan-scope-1-fleet.stderr"
+plan_scope_one_remember_json="${fixture_dir}/plan-scope-1-remember.json"
+plan_scope_one_remember_stderr="${fixture_dir}/plan-scope-1-remember.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --remember-preferences \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_remember_json}" \
+    2>"${plan_scope_one_remember_stderr}"
+[[ ! -s "${plan_scope_one_remember_stderr}" ]] ||
+    fail 'Bash scope 1 remember-preferences plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash scope 1 remember-preferences plan-only created workspace or output roots.'
+
+# The retired --fleet-mode option still accepts standard, which changes
+# nothing, and rejects native before planning.
+plan_scope_one_retired_fleet_json="${fixture_dir}/plan-scope-1-retired-fleet.json"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --fleet-mode standard \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_retired_fleet_json}" ||
+    fail 'Bash runner rejected the retired --fleet-mode standard compatibility spelling.'
+retired_native_fleet_stdout="${fixture_dir}/plan-scope-1-native-fleet.stdout"
+retired_native_fleet_stderr="${fixture_dir}/plan-scope-1-native-fleet.stderr"
+set +e
 "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World \
     --scope 1 \
     --workspace-root "${plan_scope_one_workspace}" \
     --output-root "${plan_scope_one_output}" \
     --fleet-mode native \
-    --remember-preferences \
     --non-interactive \
-    --plan-only >"${plan_scope_one_fleet_json}" \
-    2>"${plan_scope_one_fleet_stderr}"
-[[ ! -s "${plan_scope_one_fleet_stderr}" ]] ||
-    fail 'Bash scope 1 fleet plan-only wrote unexpected stderr.'
-[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
-    fail 'Bash scope 1 fleet plan-only created workspace or output roots.'
+    --plan-only >"${retired_native_fleet_stdout}" \
+    2>"${retired_native_fleet_stderr}"
+retired_native_fleet_status=$?
+set -e
+[[ "${retired_native_fleet_status}" -eq 2 &&
+    ! -s "${retired_native_fleet_stdout}" &&
+    ! -e "${plan_scope_one_workspace}" &&
+    ! -e "${plan_scope_one_output}" ]] &&
+    grep -Fq 'Native fleet mode has been retired' \
+        "${retired_native_fleet_stderr}" ||
+    fail 'Bash runner did not reject retired native fleet mode before planning.'
 
 plan_scope_two_workspace="${fixture_dir}/plan workspace scope 2"
 plan_scope_two_output="${fixture_dir}/plan output scope 2"
@@ -6100,7 +6163,8 @@ node - \
     "${plan_scope_one_canonical_json}" \
     "${plan_scope_one_git_json}" \
     "${plan_scope_one_padded_git_json}" \
-    "${plan_scope_one_fleet_json}" \
+    "${plan_scope_one_remember_json}" \
+    "${plan_scope_one_retired_fleet_json}" \
     "${plan_scope_two_json}" \
     "${plan_scope_two_none_json}" \
     "${plan_scope_two_cookie_json}" \
@@ -6127,7 +6191,8 @@ const [
   scopeOneCanonicalPath,
   scopeOneGitPath,
   scopeOnePaddedGitPath,
-  scopeOneFleetPath,
+  scopeOneRememberPath,
+  scopeOneRetiredFleetPath,
   scopeTwoPath,
   scopeTwoNonePath,
   scopeTwoCookiePath,
@@ -6189,7 +6254,6 @@ function assertCommonPlan(
   assertKeys(plan, [
     "ApprovalHash",
     "ContextTier",
-    "FleetMode",
     "GeneratedAt",
     "Harness",
     "MaxRepositories",
@@ -6246,7 +6310,6 @@ function assertCommonPlan(
       ]) ||
       plan.Model !== "gpt-5.6-sol" ||
       plan.ModelCatalogMembership !== "listed" ||
-      plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
       plan.OpenHtmlPolicy !== expectedOpenHtmlPolicy ||
       plan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||
@@ -6561,11 +6624,16 @@ if (scopeOnePaddedGit.Sources[0].RemoteUrl !==
   throw new Error("zero-padded default HTTPS port changed the .git plan");
 }
 
-const scopeOneFleet = parsePlan(scopeOneFleetPath);
-if (scopeOneFleet.FleetMode !== "native" ||
-    scopeOneFleet.RememberPreferences !== true ||
-    scopeOneFleet.ApprovalHash === scopeOne.ApprovalHash) {
-  throw new Error("fleet/preference settings did not change the approval hash");
+const scopeOneRemember = parsePlan(scopeOneRememberPath);
+if (scopeOneRemember.RememberPreferences !== true ||
+    scopeOneRemember.ApprovalHash === scopeOne.ApprovalHash) {
+  throw new Error("remember-preferences setting did not change the approval hash");
+}
+
+const scopeOneRetiredFleet = parsePlan(scopeOneRetiredFleetPath);
+if (Object.hasOwn(scopeOneRetiredFleet, "FleetMode") ||
+    scopeOneRetiredFleet.ApprovalHash !== scopeOne.ApprovalHash) {
+  throw new Error("retired --fleet-mode standard changed the effective plan");
 }
 
 const scopeTwo = parsePlan(scopeTwoPath);
@@ -10023,7 +10091,6 @@ if ! MOCK_LOG="${mock_log}" \
         --research-cookies ephemeral \
         --output-root "${fixture_dir}/mock&output" \
         --workspace-root "${fixture_dir}/mock&workspace" \
-        --fleet-mode native \
         --remember-preferences \
         --non-interactive \
         --plan-only >"${mock_plan_json}" 2>"${mock_plan_stderr}"; then
@@ -10071,7 +10138,6 @@ if ! MOCK_LOG="${mock_log}" \
         --output-root "${mock_output}" \
         --workspace-root "${mock_workspace}" \
         --expected-plan-hash "${mock_expected_hash}" \
-        --fleet-mode native \
         --remember-preferences \
         --non-interactive >"${mock_run_output}" 2>"${mock_run_stderr}"; then
     cat "${mock_run_stderr}" >&2
@@ -10177,7 +10243,7 @@ mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
 [[ -n "${mock_run}" ]] || fail 'Mock Bash run did not create an output bundle.'
 grep -Fq 'EFFECTIVE REVIEW PLAN' "${mock_run_output}" ||
     fail 'Mock Bash run did not print the effective review plan.'
-grep -Fq 'Remembered approved fleet/model/effort/context settings for 1 repositories.' \
+grep -Fq 'Remembered approved model/effort/context settings for 1 repositories.' \
     "${mock_run_output}" ||
     fail 'Mock Bash run did not report saved launcher preferences.'
 if ! rhyolite_read_preference \
@@ -10187,7 +10253,6 @@ if ! rhyolite_read_preference \
     fail 'Mock Bash run did not persist readable launcher preferences.'
 fi
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
-    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
     fail 'Mock Bash run persisted incorrect launcher preferences.'
 grep -Fxq \
@@ -10385,7 +10450,6 @@ if (expectedPriorArtStartDate === expectedProvenanceStartDate) {
 assertKeys(reviewPlan, [
   "ApprovalHash",
   "ContextTier",
-  "FleetMode",
   "GeneratedAt",
   "Harness",
   "MaxRepositories",
@@ -10456,7 +10520,6 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ThrottleLimit !== 2 ||
     reviewPlan.MaxRepositories !== 5 ||
     reviewPlan.Model !== "gpt-5.6-sol" ||
-    reviewPlan.FleetMode !== "native" ||
     reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
     reviewPlan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||

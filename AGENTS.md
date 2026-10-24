@@ -114,10 +114,12 @@ supported and must not drive new work.
   sources without stripping a terminal `.git` endpoint, selects spellings
   that differ only by that endpoint once, rejects unknown options before
   any state or harness start and `github.com` URLs that name only an account
-  before the harness starts, collects native
-  fleet/model/reasoning/context settings, preselects `rhyolite:repo-review`,
-  passes `--mode interactive`, and submits a trusted `-i` setup block
-  without enabling allow-all mode. A request that holds only repository URLs
+  before the harness starts, collects model/reasoning/context settings,
+  preselects `rhyolite:repo-review`, passes `--mode interactive`, and
+  submits a trusted `-i` setup block without enabling allow-all mode. It
+  never passes Copilot's `--fleet`: native fleet mode is retired,
+  `--fleet-mode native` is rejected, and `--fleet-mode standard` is accepted
+  with no effect. A request that holds only repository URLs
   is not forwarded as request text, and the orchestrators select every
   `Source=` line without asking about sources again. Because Copilot's
   interactive session silently runs on its default model when the selected
@@ -131,7 +133,7 @@ supported and must not drive new work.
   With `--harness claude` it starts Claude Code with `--plugin-dir`,
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
-  to the system prompt. Claude Code has no native fleet mode.
+  to the system prompt.
 - `plugins/rhyolite/bin/rhyolite-summary` is the standalone, read-only saved
   output inventory utility. It performs a bounded top-level scan, uses JSON as
   its canonical in-memory representation, renders JSON/Markdown/text/inert
@@ -148,7 +150,7 @@ supported and must not drive new work.
   incidental compatibility does not make macOS or BSD a supported platform.
   It creates user-only launcher state and does not persist the initial review
   request or source in launch context.
-- The trusted runner saves approved harness/fleet/model/reasoning/context
+- The trusted runner saves approved harness/model/reasoning/context
   preferences per canonical repository under user-only launcher state.
   `/rhyolite:start` remains the
   in-session compatibility path.
@@ -168,7 +170,7 @@ supported and must not drive new work.
   orchestrator for the initial/default module. It reserves its embedded
   prompt-native panel for exact
   `help`, follows that panel with a live `CURRENT SETUP STATUS` block,
-  consumes trusted launcher source/fleet/model/reasoning/context selections
+  consumes trusted launcher source/model/reasoning/context selections
   or asks through
   guided setup, then asks for output and scope through numbered `ask_user`
   pickers. It surfaces exact `help`, `status`, and `explain scopes` setup
@@ -474,7 +476,7 @@ supported and must not drive new work.
 - The effective-plan confirmation flow uses the exact choices `Run review`,
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
-- Plan-only output includes `ApprovalHash`, `FleetMode`, `Model`,
+- Plan-only output includes `ApprovalHash`, `Model`,
   `ModelCatalogMembership`, `RememberPreferences`, and `ResearchTransport`.
   Preserve approved settings,
   pass the hash unchanged to execution with `--expected-plan-hash`, and never

@@ -43,8 +43,8 @@ other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
    To review several repositories in one run, list every URL, for example
    `./rhyolite --repo https://github.com/owner/one https://github.com/owner/two`.
 
-3. Press Enter at each launcher prompt to accept the default execution
-   mode, model, reasoning effort, and context. Copilot CLI then opens with
+3. Press Enter at each launcher prompt to accept the default model,
+   reasoning effort, and context. Copilot CLI then opens with
    the `repo-review` agent selected and starts guided setup, as in the
    screenshot above.
 4. Answer the numbered setup questions for the output location and review
@@ -79,8 +79,8 @@ The current plugin combines:
   are available.
 - Claude Code agents, commands, and display-only hooks registered by
   `plugins/rhyolite/.claude-plugin/plugin.json`.
-- A Linux Bash launcher that collects public sources, native fleet mode
-  (Copilot CLI only), and the review model before selecting the restricted
+- A Linux Bash launcher that collects public sources and the review model
+  before selecting the restricted
   agent from a clean non-Git orchestration directory.
 - The `readonly-repository-review` skill.
 - A private `research-source-assessment` skill that maps fresh,
@@ -202,8 +202,7 @@ non-Git directory. It passes `--plugin-dir`, selects the
 `rhyolite:repo-review` agent, uses `--strict-mcp-config`, and adds a
 permission rule that allows only the bundled runner. The outer session keeps
 Claude Code's normal permission prompts; `--yolo` maps to
-`--dangerously-skip-permissions` for that launch only. Claude Code has no
-native fleet mode, so `--fleet-mode native` is rejected.
+`--dangerously-skip-permissions` for that launch only.
 
 The guided setup, effective plan, approval, scopes 1-3, research questions,
 progress, and completion summary match the Copilot experience. The setup
@@ -341,10 +340,9 @@ if that fails, run `copilot login` from a clean non-Git directory,
 complete sign-in, and retry.
 
 Launcher-guided setup collects one or more anonymously readable public
-HTTPS Git repository URLs, fleet mode, and model before Copilot starts.
-Manual in-session setup asks for the same source and model information;
-because native fleet mode is process-level, choosing it from a manual
-session requires restarting through the launcher. Rhyolite does not
+HTTPS Git repository URLs and the model before Copilot starts.
+Manual in-session setup asks for the same source and model information.
+Rhyolite does not
 discover local repositories, inspect local origins, or offer filesystem
 paths as review sources. If the orchestration directory is inside a Git
 worktree, the runner stops and requires a clean restart before planning
@@ -355,7 +353,7 @@ stage without resetting collected answers:
 
 - `help` **without a leading slash** reruns the full static panel, then
   immediately shows a
-  `CURRENT SETUP STATUS` block with live `Source`, `Fleet mode`,
+  `CURRENT SETUP STATUS` block with live `Source`,
   `Model`, `Remember settings`, `Output`, `Scope`, and
   `Provenance lookback months` and `Research cookies` values or
   `NOT SELECTED`.
@@ -381,23 +379,21 @@ analysis.
 The agent asks one question at a time:
 
 1. Which source to review.
-2. Whether to continue in standard mode or restart through the launcher
-   for native fleet mode when setup did not come from the launcher.
-3. Which available review model to use, with an option to list model IDs from
+2. Which available review model to use, with an option to list model IDs from
    Copilot's offline catalog.
-4. Which reasoning effort to use.
-5. Which context tier to use.
-6. Whether to confirm the validated harness/model/effort/context settings or
+3. Which reasoning effort to use.
+4. Which context tier to use.
+5. Whether to confirm the validated harness/model/effort/context settings or
    modify one of them.
-7. Whether to remember fleet/model/effort/context settings for the selected
+6. Whether to remember model/effort/context settings for the selected
    repositories after plan approval.
-8. Whether the output parent is the current directory, home directory,
+7. Whether the output parent is the current directory, home directory,
    or a custom location.
-9. Which review scope to use.
-10. For scope `3`, which provenance lookback to use.
-11. For scope `2` or `3`, whether research cookie replay remains off or
+8. Which review scope to use.
+9. For scope `3`, which provenance lookback to use.
+10. For scope `2` or `3`, whether research cookie replay remains off or
    uses a fresh per-repository ephemeral jar.
-12. After those answers are collected, the agent requests the runner's
+11. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
 
@@ -650,7 +646,7 @@ The plan JSON also supplies an `ApprovalHash`, which the agent must
 retain and pass back unchanged to the actual runner with
 `--expected-plan-hash`. The actual review must reuse
 the same resolved inputs that were accepted in the `EFFECTIVE REVIEW
-PLAN`. Fleet mode, model, whether settings will be remembered, and
+PLAN`. The model, whether settings will be remembered, and
 `OpenHtmlPolicy` are part of the plan and approval hash. Guided plan-only and
 execution calls both pass `--no-open-html`, so that policy remains `never`
 without changing between approval and execution. The `EFFECTIVE REVIEW PLAN` summary
@@ -664,8 +660,7 @@ for other scopes, provenance window is shown as disabled. If the user
 selects `Edit setup`, the agent uses another numbered picker for
 `Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks
 only that field, preserves the others, clears provenance when scope is
-not `3`, clears cookies for scope `1`, and regenerates the plan. Fleet
-mode cannot change in an already-running process.
+not `3`, clears cookies for scope `1`, and regenerates the plan.
 Exact `Change scope` is still accepted as a shortcut into editing `Scope`.
 
 Scope 2/3 plans also surface and hash `ResearchTransport`:
@@ -1157,7 +1152,7 @@ outside every Git worktree, pass `--plugin-dir`, preselect
 preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
-endpoint, ask whether to use native Copilot fleet mode, and confirm the
+endpoint and confirm the
 validated review runtime. Known model choices are `gpt-5.6-sol`
 (recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
 list the model IDs in Copilot's offline catalog, as reported by
@@ -1182,9 +1177,13 @@ unchanged.
 Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
 context is selectable as `long_context` (recommended) or `default`. The
 launcher displays harness, model, effort, and context together and asks the
-user to confirm or modify them. Native mode adds the process-level `--fleet` flag,
-and every launch passes the selected `--model`, `--reasoning-effort`,
-and `--context`. Because setup starts immediately,
+user to confirm or modify them. Every launch passes the selected `--model`,
+`--reasoning-effort`, and `--context`. Rhyolite does not use Copilot's
+`--fleet` mode: the orchestrator never starts subagents, the trusted runner
+already reviews up to two repositories at a time by default (its `--throttle`
+limit), and review workers never receive subagents. The retired
+`--fleet-mode native` option is rejected, and `--fleet-mode standard` is
+still accepted with no effect. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
 (`Rhyolite v... Beta loaded — type /rhyolite:start to start.`) and show
 automatic-guided-mode copy that tells the user to wait for the first
@@ -1198,7 +1197,7 @@ context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
 with user-only permissions and does not persist the initial review
 request or selected source in its context file.
 After the user approves the effective plan, the runner atomically saves
-only the canonical repository URL, fleet mode, model, reasoning effort,
+only the canonical repository URL, model, reasoning effort,
 context tier, and update time
 in a user-only hashed preference file below the same launcher state
 root. Future launcher runs reuse a preference only when every selected

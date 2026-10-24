@@ -445,7 +445,6 @@ claude_clear_auth_environment=(
     assert_equal claude "$(harness_cli_name)" 'Claude Code CLI name'
     assert_equal claude-opus-5-5 "$(harness_default_model)" 'Claude Code default model'
     declare -A claude_capabilities=(
-        [fleet]=no
         [structured_questions]=yes
         [subagents]=no
         [builtin_security_specialist]=no
@@ -2611,7 +2610,6 @@ claude_expected_launch_block() {
     printf '%s\n' \
         RHYOLITE_LAUNCHER_SETUP_V1 \
         Source=https://example.com/owner/repository.git \
-        FleetMode=standard \
         "Model=${model}"
     if [[ -n "${unlisted_line}" ]]; then
         printf '%s\n' "${unlisted_line}"
@@ -2707,7 +2705,7 @@ claude_launch_rejected() {
         fail "Claude Code launcher ${label} started a session."
 }
 claude_launch_rejected native-fleet 'launcher argument validation' \
-    'has no native process-level fleet mode' \
+    'Native fleet mode has been retired.' \
     "${LAUNCHER}" --harness claude --fleet-mode native \
     --repo https://example.com/owner/repository.git
 [[ -z "$(find "${CLAUDE_LAUNCH_STATE}" -name launch-context.txt -print -quit)" ]] ||
@@ -2751,7 +2749,7 @@ mkdir -p -- "${claude_preference_state}"
 chmod 0700 -- "${claude_preference_state}"
 rhyolite_write_preference \
     https://example.com/owner/repository.git \
-    copilot standard gpt-5.6-sol max long_context \
+    copilot gpt-5.6-sol max long_context \
     "${claude_preference_state}/rhyolite/launcher" ||
     fail 'Could not seed a Copilot launcher preference.'
 CLAUDE_LAUNCH_STATE="${claude_preference_state}"
@@ -2771,7 +2769,7 @@ CLAUDE_LAUNCH_STDERR="${fixture_root}/claude-launcher-copilot-preference.stderr"
 claude_assert_launch_vector copilot-preference claude-opus-5-5 ''
 rhyolite_write_preference \
     https://example.com/owner/repository.git \
-    claude standard claude-sonnet-5-5 xhigh long_context \
+    claude claude-sonnet-5-5 xhigh long_context \
     "${claude_preference_state}/rhyolite/launcher" ||
     fail 'Could not seed a Claude Code launcher preference.'
 CLAUDE_LAUNCH_CAPTURE="${fixture_root}/claude-launcher-claude-preference.capture"

@@ -23,7 +23,6 @@ Stage: <current stage or NOT STARTED>
 Elapsed: <elapsed time since the current Rhyolite command started, or UNAVAILABLE>
 Harness: copilot
 Source: <selected value or NOT SELECTED>
-Fleet mode: <native, standard, or NOT SELECTED>
 Model: <selected value or NOT SELECTED>
 Remember settings: <YES, NO, or NOT SELECTED>
 Output: <effective output directory or NOT SELECTED>
