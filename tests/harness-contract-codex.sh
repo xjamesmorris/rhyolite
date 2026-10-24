@@ -104,12 +104,20 @@ if [[ "${1-}" == plugin ]]; then
     printf '%s\n' '{}'
     exit 0
 fi
+if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
+    [[ -t 0 && -t 1 ]] || {
+        printf '%s\n' 'Native Codex stage lost its terminal.' >&2
+        exit 2
+    }
+fi
 prompt="${!#}"
 case "${prompt}" in
     *'$rhyolite:repo-review-setup'*)
+        native_stage=setup
         final='{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":1,"ProvenanceLookbackMonths":null,"ResearchCookies":null}'
         ;;
     *'$rhyolite:repo-review-approval'*)
+        native_stage=approval
         approval_hash="$(
             grep -Eo '[0-9a-f]{64}' <<< "${prompt}" | head -n 1
         )"
@@ -120,6 +128,9 @@ case "${prompt}" in
         exit 2
         ;;
 esac
+if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
+    printf 'RHYOLITE_CODEX_NATIVE_UI %s\n' "${native_stage}"
+fi
 escaped_final="${final//\\/\\\\}"
 escaped_final="${escaped_final//\"/\\\"}"
 session_id='00000000-0000-4000-8000-000000000044'
@@ -739,6 +750,94 @@ assert_contains "${fixture_root}/codex-controller-stop.stdout" \
     'RHYOLITE STATUS' 'Codex controller status command'
 assert_contains "${fixture_root}/codex-controller-stop.stderr" \
     'Rhyolite review stopped.' 'Codex controller stopped state'
+
+cp -- "${CODEX_GUIDED_STAGE}" \
+    "${codex_controller_plugin}/scripts/run-codex-guided-stage.sh"
+mkdir -p -- "${codex_controller_plugin}/lib/harness"
+cp -- "${HARNESS_COMMON}" "${CODEX_HARNESS}" \
+    "${codex_controller_plugin}/lib/harness/"
+cp -a -- "${PLUGIN_ROOT}/.codex-plugin" "${PLUGIN_ROOT}/codex" \
+    "${codex_controller_plugin}/"
+python3 -I - "${codex_controller_plugin}" "${fixture_root}" <<'PY'
+import errno
+import os
+import pathlib
+import pty
+import signal
+import subprocess
+import sys
+
+plugin = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+session = root / "codex-controller-terminal-session"
+capture = root / "codex-controller-terminal-capture"
+temporary = session / "tmp"
+for path in (session, capture, temporary):
+    path.mkdir(mode=0o700)
+environment = dict(
+    os.environ,
+    RHYOLITE_CODEX_REQUIRE_TTY="1",
+    RHYOLITE_CODEX_CONTROLLER_SESSION=str(session),
+    RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
+    TMPDIR=str(temporary),
+)
+master, slave = pty.openpty()
+process = subprocess.Popen(
+    [
+        str(plugin / "scripts/run-codex-guided-review.sh"),
+        "--plugin-root", str(plugin),
+        "--working-directory", str(root / "codex-controller-work"),
+        "--session-directory", str(session),
+        "--model", "gpt-5.6-sol",
+        "--reasoning-effort", "max",
+        "--context", "long_context",
+        "--repo", "https://github.com/octocat/Hello-World",
+    ],
+    env=environment,
+    stdin=slave,
+    stdout=subprocess.PIPE,
+    stderr=slave,
+    start_new_session=True,
+)
+try:
+    stdout, _ = process.communicate(timeout=30)
+finally:
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+    os.close(slave)
+terminal = bytearray()
+try:
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            break
+        if not chunk:
+            break
+        terminal.extend(chunk)
+finally:
+    os.close(master)
+assert process.returncode == 0, terminal.decode("utf-8", errors="replace")
+for stage in ("setup", "approval"):
+    marker = f"RHYOLITE_CODEX_NATIVE_UI {stage}".encode()
+    assert marker in terminal, f"{stage} UI did not reach the terminal"
+    assert marker not in stdout, f"{stage} UI contaminated controller stdout"
+assert b"EFFECTIVE REVIEW PLAN" in stdout
+assert b"/tmp/rhyolite-controller-run" in stdout
+assert b"codex-setup-1.json" not in stdout
+assert b"codex-approval-1.json" not in stdout
+assert (session / "codex-setup-1.json").is_file()
+assert (session / "codex-approval-1.json").is_file()
+assert len(list(capture.glob("call-*.nul"))) == 2
+assert not list(temporary.iterdir()), "guided-stage runtime was not removed"
+PY
 
 codex_launcher_plugin="${fixture_root}/codex-launcher-plugin"
 codex_launcher_caller="${fixture_root}/codex-launcher-caller"

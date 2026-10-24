@@ -1,0 +1,3 @@
+- specify branch / tag
+- need fleet mode?
+- scope 1 security is lowest credit? should be full

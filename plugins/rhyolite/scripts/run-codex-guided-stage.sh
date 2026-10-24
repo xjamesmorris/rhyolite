@@ -169,6 +169,7 @@ prompt="$(
 printf '%s\n' \
     'Complete the native Rhyolite questions. After the one-line JSON result appears, press Ctrl-D to return to the launcher.' >&2
 set +e
+# Keep the native UI on the terminal when the controller discards result stdout.
 env "${stage_environment[@]}" \
     "${codex_bin}" \
     --no-daemon \
@@ -186,7 +187,7 @@ env "${stage_environment[@]}" \
     --ask-for-approval never \
     --cd "${working_directory}" \
     --model "${model}" \
-    "${prompt}"
+    "${prompt}" >&2
 codex_status=$?
 set -e
 ((codex_status == 0)) || fail_stage session

@@ -2,8 +2,8 @@
 
 ## Status
 
-Codex is not a supported production Rhyolite harness. No Codex adapter or
-production registry entry has been added.
+Codex is not a supported production Rhyolite harness. Its adapter candidate
+remains unregistered, with no production registry or root marketplace entry.
 
 Initial discovery found no ordinary snapshot file-read or search tools in
 the tested shell-free Codex configuration. Advertising those tools in a
@@ -117,11 +117,14 @@ broker lifecycle and removed its transient runtime.
 | Authenticated adapter maximum-settings smoke | The maintainer ran the exact repository adapter from the authenticated shell. It used `gpt-5.6-sol`, `max`, 872,000 configured / 828,400 recorded usable context, read one synthetic snapshot file through the supervised broker, returned the exact expected reply, verified the native session, used zero client retries, emitted no reroute/rate/quota/timeout warning, and removed both runtime and private work tree. | Provider eligibility for the approved model, strongest delegation-safe effort, long-context configuration, snapshot routing, exact output, and graceful cleanup is proven for this bounded call. The summary still makes no independent backend-identity claim. |
 | Supervised stdio lifecycle | Pinned source shows Codex terminates its MCP process group and escalates after two seconds. A direct child could be killed during the broker's atomic clean-exit write. The bundled Bash supervisor moves only the broker into a separate process group, preserves stdio, monitors the trusted runner PID/start time, and exits with the broker; a regression simulates client-group termination. | Normal Codex shutdown now permits exact clean-exit verification without allowing a detached broker to survive loss of its trusted runner owner. |
 | Staged native setup/approval and controller | An unregistered Codex manifest contains only two setup skills. The setup skill collects output/scope/provenance/cookie choices through `request_user_input`; the approval skill returns only run/edit/explain/cancel. One Bash helper installs those assets into a private per-stage Codex home, validates the exact native session record and strict JSON result, then destroys the home. A pinned-CLI PTY probe installed the actual staged plugin, loaded the real setup skill, rendered two native pickers in Default mode with only `request_user_input`, selected output and scope, and verified the final setup JSON/session. A second Bash controller generates the authoritative plan, displays it, preserves setup across edit or date/hash rollover, owns execution, accepts exact `/rhyolite:status`, `stop`, and `cancel`, and uses only the runner's verified `--request-stop` path after the run folder exists. The shared launcher's Codex branch is tested only in a copied plugin whose fixed registry is modified for that fixture. | The recommended two-stage native setup plus Bash-owned execution design is implemented without shell/MCP runner authority. No root Codex marketplace manifest or production registry entry exists, so the branch remains unreachable in production. |
+| Staged controller terminal handoff | On October 22, a connected controller/stage-helper PTY regression reproduced setup failure when the controller discarded helper stdout: the native CLI no longer had terminal stdout. The stage helper now routes native UI stdout to its terminal stderr, reserving helper stdout for the validated result path. A terminal-checking fixture CLI exercises both setup and approval, plan-hash execution, and per-stage runtime removal with controller stdout captured separately. | This closes the deterministic terminal-descriptor handoff regression. The fixture is not a real Codex CLI or an authenticated staged controller review. |
+| Current native API-key readiness | On October 23 (UTC), the installed 0.163.0 CLI was verified and the supplied credential was compared locally with its saved API-key-only login without displaying either value. A fresh owner-only runtime with only that API-key credential passed native login-status inspection, recorded the requested `gpt-5.6-sol`/`max` and 828,400-token usable context, and made no tool calls, but the actual model request returned HTTP 401 from the native default OpenAI endpoint. Local effective-config inspection found no selected custom provider or Azure endpoint. A subsequent metadata-only capture from the working terminal confirmed the same native-default provider and no API-key environment variables or routing overrides. Transient credentials and raw output were removed. | Local credential loading is proven; current backend authorization is not. This does not invalidate the earlier explicitly configured-provider smoke, establish a bad key, or justify guessing another endpoint. Establish the intended provider and successful backend authorization before another live gate; another context capture is not required. |
 
-Confidence is **High** for these captured request inventories and
-configuration results: they came from the pinned executable, not a mock CLI
-or a model's description of its tools. No conclusion is claimed for untested
-versions or live provider behavior.
+Confidence is **High** for the captured pinned-CLI request inventories and
+configuration results: they came from the pinned executable, not a model's
+description of its tools. Adapter fixture validation and the terminal-handoff
+regression are separately labeled and do not establish live CLI behavior.
+No conclusion is claimed for untested versions or unrecorded provider behavior.
 
 ## Source cross-check
 
@@ -179,7 +182,14 @@ adapter-built `max`/long-context snapshot smoke passed under authentication.
 Complete hostile configuration isolation, a successful public research
 response and accepted dossier, adapter-built live continuation/recovery and
 repair, a real staged native setup/approval/controller run, all-scope reviews,
-and stop/timeout lifecycle remain unverified. Production enablement still
-requires the complete
+and stop/timeout lifecycle remain unverified. The October 22 connected PTY
+regression covers terminal handoff only; the live staged gate remains next.
+The current native-default API-key attempt is blocked on HTTP 401, not CLI
+installation or access to the supplied credential. The working-terminal
+capture confirms the same native-default OpenAI provider with no endpoint
+override, so missing context is no longer the blocker. Successful backend
+authorization for the intended provider is required before another live
+attempt; do not substitute an endpoint or authentication method.
+Production enablement still requires the complete
 [harness playbook](ADDING-A-HARNESS.md), automated coverage, real-run
 evidence, and Fedora validation.

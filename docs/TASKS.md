@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-21
+**Last updated:** 2026-10-23 (UTC)
 
 ## Priorities
 
@@ -111,7 +111,24 @@ Status values:
   exact status, and verified stop-path tests. A pinned-CLI PTY probe also
   installed the actual staged plugin and completed the real setup skill's two
   Default-mode native pickers with only `request_user_input`.
-- **Next step:** run the native setup/approval/controller path from a private
+  On 2026-10-22, a connected controller/stage-helper PTY regression reproduced
+  and fixed discarded native UI stdout: setup and approval now retain their
+  terminal while result paths stay off controller stdout. This is fixture
+  evidence, not a live staged run. The CLI is now installed and verified at
+  0.163.0. On 2026-10-23 (UTC), local comparison confirmed that the supplied
+  credential matches the native API-key login, and a fresh API-key-only
+  runtime passed native login-status inspection, but its actual zero-tool
+  model request returned HTTP 401 from the native default OpenAI endpoint.
+  No custom provider or Azure endpoint was selected in this environment.
+  A subsequent metadata-only capture from the working terminal confirmed
+  the same native-default OpenAI provider, no explicit Azure endpoint, and
+  no API-key environment variables or routing overrides. Installation,
+  key-file access, and context capture are no longer blockers; backend
+  authorization for the intended provider remains unresolved. No credential
+  values were added to repository artifacts or documentation.
+- **Next step:** establish the intended provider and obtain a successful
+  API-key-authenticated isolated model response, then run the native
+  setup/approval/controller path from a private
   staged package, then complete live research, continuation/recovery, repair,
   all-scope, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
