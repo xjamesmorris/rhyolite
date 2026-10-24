@@ -242,6 +242,18 @@ shell and Git commands are unavailable. Use source viewing/search plus the
 wrapper-collected untrusted Git metadata above. Do not inspect `.git` directly.
 Explain conclusions that cannot be verified because execution is prohibited.
 
+The dedicated security pass is identical for every scope. Scopes 2 and 3 only
+add research, corroboration, prior-art, and provenance work around the core
+review; scope never narrows the security pass's coverage, depth, evidence
+standard, or reasoning effort, and Core and Full in scope names do not
+describe security depth. In every scope, including scope 1, map the
+snapshot's trust boundaries, privilege transitions, externally reachable
+entry points, and untrusted-input parsers, then inspect every
+security-relevant tracked file instead of sampling, starting with privileged
+and externally reachable code and including build, install, packaging, CI,
+configuration, and dependency files. Record any security-relevant area that
+the pass could not cover as a limitation.
+
 Perform the security pass yourself as a distinct, dedicated pass within this
 session. No subagent or specialist exists in a Rhyolite review worker: never
 attempt to start one, and never select, name, or request a model, reasoning

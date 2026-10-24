@@ -1032,9 +1032,14 @@ for guided_file in "${AGENT}" "${SKILL}"; do
         "${guided_file}" ||
         fail "Final review decision is not an ask_user choice picker: ${guided_file}"
 done
-for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
+for scope_ui_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${UI_VALIDATOR_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" \
+    "${README}"; do
     grep -Fq \
-        'Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.' \
+        'Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.' \
         "${scope_ui_file}" ||
         fail "Scope 1 UI wording drifted: ${scope_ui_file}"
     grep -Fq \
@@ -1042,13 +1047,23 @@ for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         "${scope_ui_file}" ||
         fail "Scope 2 UI wording drifted: ${scope_ui_file}"
     grep -Fq \
-        'Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.' \
+        'Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.' \
         "${scope_ui_file}" ||
         fail "Scope 3 UI wording drifted: ${scope_ui_file}"
+    grep -Fq \
+        'Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.' \
+        "${scope_ui_file}" ||
+        fail "Scope security-pass invariance note drifted: ${scope_ui_file}"
     grep -Fq \
         'All timing ranges are rough and can increase substantially for large repositories or broad topics.' \
         "${scope_ui_file}" ||
         fail "Scope timing note drifted: ${scope_ui_file}"
+done
+for scope_ui_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${UI_VALIDATOR_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
     grep -Fq \
         'Scope 1 - Core repository review (Recommended) - 15-45 minutes' \
         "${scope_ui_file}" ||
@@ -1061,6 +1076,30 @@ for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         'Scope 3 - Full + generated-code provenance review - 60-120+ minutes' \
         "${scope_ui_file}" ||
         fail "Scope 3 picker mapping drifted: ${scope_ui_file}"
+done
+# The dedicated security pass is identical for every scope: each worker
+# contract surface carries the same scope-invariance rule, and each
+# orchestrator states it when explaining scopes.
+security_pass_invariance_rule='The dedicated security pass is identical for every scope. Scopes 2 and 3 only add research, corroboration, prior-art, and provenance work around the core review; scope never narrows the security pass'"'"'s coverage, depth, evidence standard, or reasoning effort, and Core and Full in scope names do not describe security depth. In every scope, including scope 1, map the snapshot'"'"'s trust boundaries, privilege transitions, externally reachable entry points, and untrusted-input parsers, then inspect every security-relevant tracked file instead of sampling, starting with privileged and externally reachable code and including build, install, packaging, CI, configuration, and dependency files. Record any security-relevant area that the pass could not cover as a limitation.'
+for security_contract_file in \
+    "${PROMPT}" \
+    "${SKILL}" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    tr '\r\n\t' '   ' < "${security_contract_file}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${security_pass_invariance_rule}" ||
+        fail "Worker contract does not make the security pass scope-invariant: ${security_contract_file}"
+done
+security_pass_explanation_rule='every scope, including scope `1`, runs the same full dedicated security pass with the same approved model, reasoning effort, context tier, and session time limit; scope adds only research and provenance work.'
+for scope_explanation_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
+    tr '\r\n\t' '   ' < "${scope_explanation_file}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${security_pass_explanation_rule}" ||
+        fail "Scope explanation does not state the scope-invariant security pass: ${scope_explanation_file}"
 done
 for output_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
     grep -Fq \
@@ -6498,7 +6537,7 @@ if (scopeOne.Scope.Number !== 1 ||
     typeof scopeOne.Scope.ProvenanceResearch !== "boolean" ||
     scopeOne.Scope.ProvenanceResearch !== false ||
     scopeOne.ProvenanceWindow !== null ||
-    scopeOne.SessionTimeoutMinutes !== 60 ||
+    scopeOne.SessionTimeoutMinutes !== 240 ||
     scopeOne.Sources[0].Kind !== "RemoteUrl" ||
     scopeOne.Sources[0].LocalPath !== null ||
     scopeOne.Sources[0].RemoteUrl !== "https://github.com/octocat/Hello-World" ||
@@ -6646,7 +6685,7 @@ if (scopeTwo.Scope.Number !== 2 ||
     scopeTwo.Scope.PublicResearch !== true ||
     scopeTwo.Scope.ProvenanceResearch !== false ||
     scopeTwo.ProvenanceWindow !== null ||
-    scopeTwo.SessionTimeoutMinutes !== 120 ||
+    scopeTwo.SessionTimeoutMinutes !== 240 ||
     scopeTwo.Sources[0].Kind !== "RemoteUrl" ||
     scopeTwo.Sources[0].LocalPath !== null ||
     scopeTwo.Sources[0].RemoteUrl !== "https://github.com/octocat/Hello-World" ||
@@ -10206,6 +10245,7 @@ grep -Fq \
         "Use the dossier's COMMUNITY HEALTH EVIDENCE, CLAIM VERIFICATION EVIDENCE, and" \
         "${mock_log}.review-request" ||
     fail 'Main review request lost the scope 3 lineage or dossier evidence contract.'
+cp -- "${mock_log}.review-request" "${fixture_dir}/scope-3-review-request.txt"
 grep -Fq \
     'Record code and architecture lineage, license and attribution, and chronology' \
     "${mock_log}.research-request" ||
@@ -13321,6 +13361,21 @@ grep -Fq \
         'Do not emit the CODE AND ARCHITECTURE PROVENANCE ASSESSMENT or' \
         "${mock_log}.review-request" ||
     fail 'Scope 1 review request lost the local claims/community or no-lineage contract.'
+# The rendered security pass, from its scope-invariance rule through the
+# remediation rule, is byte-identical in the scope 1 and scope 3 requests.
+extract_security_pass_block() {
+    sed -n '/^The dedicated security pass is identical for every scope\./,/^Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`\.$/p' \
+        "$1"
+}
+scope_one_security_block="$(
+    extract_security_pass_block "${mock_log}.review-request"
+)"
+scope_three_security_block="$(
+    extract_security_pass_block "${fixture_dir}/scope-3-review-request.txt"
+)"
+[[ "${scope_one_security_block}" == *'END SECURITY PASS RETURN SELF-CHECK'* &&
+    "${scope_one_security_block}" == "${scope_three_security_block}" ]] ||
+    fail 'Scope 1 and scope 3 review requests do not carry the same security pass.'
 
 production_repair_confidence='High for counts and Medium for adoption interpretation.'
 for repair_scope in 1 2 3; do

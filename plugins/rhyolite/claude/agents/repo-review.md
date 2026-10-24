@@ -217,7 +217,10 @@ reset or advance setup state when handling these exact setup intents:
   requires human review before sharing). Include the published rough planning
   ranges. State that every scope assesses claims and reputation integrity and
   community health, scopes `2`/`3` add prior art and originality, and scope
-  `3` adds code and architecture provenance. Scopes `2` and `3` first run a
+  `3` adds code and architecture provenance. State that every scope, including
+  scope `1`, runs the same full dedicated security pass with the same approved
+  model, reasoning effort, context tier, and session time limit; scope adds
+  only research and provenance work. Scopes `2` and `3` first run a
   separate, write-disabled Claude Code research worker whose only network
   access is Rhyolite's local research broker.
 
@@ -308,13 +311,14 @@ The free-text answer accepts another absolute path or different
 instructions. The output root must not be inside any Git worktree or overlap
 the checkout workspace; the runner enforces this.
 
-Immediately before the scope question, output these four sentences exactly,
+Immediately before the scope question, output these five sentences exactly,
 one sentence per line, with no bullets, table, or extra scope prose:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
-Scope 3 adds whole-repository provenance evidence gathering, uses the most model/network resources, and requires human review before sharing.
+Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.
+Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.
 ```
 

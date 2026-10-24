@@ -36,6 +36,18 @@ Never include or relay the phrases `Fix highest severity issues`,
 Never offer to fix, edit, implement, open or create a pull request, or commit.
 Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`.
 
+The dedicated security pass is identical for every scope. Scopes 2 and 3 only
+add research, corroboration, prior-art, and provenance work around the core
+review; scope never narrows the security pass's coverage, depth, evidence
+standard, or reasoning effort, and Core and Full in scope names do not
+describe security depth. In every scope, including scope 1, map the
+snapshot's trust boundaries, privilege transitions, externally reachable
+entry points, and untrusted-input parsers, then inspect every
+security-relevant tracked file instead of sampling, starting with privileged
+and externally reachable code and including build, install, packaging, CI,
+configuration, and dependency files. Record any security-relevant area that
+the pass could not cover as a limitation.
+
 Apply the complete SECURITY PASS RETURN SELF-CHECK block below to that
 dedicated pass before integrating any result into the report.
 

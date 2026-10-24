@@ -435,9 +435,10 @@ subdirectories.
 The scope UI first prints these as separate lines:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
-Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
+Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.
+Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.
 ```
 
@@ -530,6 +531,16 @@ paywalls, authentication, robots restrictions, removals, or network
 policy. Inaccessible resources and ranked retrieval priorities stay in
 the report; completion does not ask the user to retrieve, copy, or re-fetch
 them.
+
+Every scope runs the same full, dedicated security pass in the review
+worker, with the same approved model, reasoning effort, context tier, and
+session time limit. The pass maps trust boundaries, privilege transitions,
+externally reachable entry points, and untrusted-input parsers, then inspects
+every security-relevant tracked file instead of sampling, and records any
+area it could not cover as a limitation. Scopes `2` and `3` add research and
+provenance work around it; they never deepen or shorten it. Scope `1`
+therefore suits reviews that need the complete security pass and core review
+without public research or provenance analysis.
 
 Every scope includes an exact
 `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`. It covers prompt
@@ -731,8 +742,9 @@ acting on it.
 ```
 
 For one exact commit, add `--commit <full-sha>`. Session timeouts
-default by scope to 60, 120, and 240 minutes respectively;
-`--timeout-minutes` overrides the default up to 720 minutes.
+default to 240 minutes for every scope, so scope never shortens the review
+or its security pass; `--timeout-minutes` overrides the default up to 720
+minutes.
 
 Repository-list files must contain only public HTTPS URLs, one per line.
 Local paths are rejected explicitly. The global commit option is valid

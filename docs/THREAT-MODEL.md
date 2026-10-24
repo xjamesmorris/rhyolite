@@ -345,7 +345,8 @@
   revalidated before child sessions start.
 - Bash containment checks walk filesystem identities, including on
   case-insensitive mounted filesystems.
-- Scope-based default timeouts match the published planning ranges.
+- The default per-session timeout is the same for every scope, so scope
+  never shortens the core review or its dedicated security pass.
 - Reports require exact source references and evidence/confidence
   separation.
 - A malformed confidence field can trigger only the approval-bound, single

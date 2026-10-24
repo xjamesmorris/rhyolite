@@ -319,6 +319,14 @@ supported and must not drive new work.
   remediation priorities, and overall conclusions carry High/Medium/Low
   confidence with an evidence basis. Completeness, clarity, and correctness
   take priority over speed.
+- The dedicated security pass is scope-invariant. Every scope, including
+  scope 1, runs the same complete pass inside the review worker under the
+  same approved model, reasoning effort, context tier, and default session
+  timeout (240 minutes); scopes 2 and 3 only add research, corroboration,
+  prior-art, and provenance work. The review prompt, shared skill, and both
+  worker agents carry the same scope-invariance paragraph. Never make
+  security coverage, depth, instructions, or time depend on scope, and never
+  describe a scope as using a different or cheaper model.
 - Scope 3 keeps direct model/effort/harness attribution direct-evidence-only.
   Heuristic model candidates are separate non-attribution about repository
   assets, never people. Prefer family-level identification, cite

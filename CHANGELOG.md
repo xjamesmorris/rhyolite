@@ -28,6 +28,25 @@
   schema 4 without `fleetMode`; schemas 1-3 stay readable, and their saved
   model, effort, and context are still reused. The `fleet` harness
   capability is retired. State schema 6 is unchanged.
+- The dedicated security pass is now the same in every scope. Scope 1 always
+  ran it with the same approved model, reasoning effort, and context, but
+  three scope-dependent inputs could make it lighter than the scope 3 pass:
+  a 60-minute default session timeout (scope 2: 120, scope 3: 240), a worker
+  request that named scope 3 "Full review" with no rule about security
+  depth, and no explicit coverage requirement, while scope 3's
+  whole-repository provenance work made its worker read more of the tree.
+  The default session timeout is now 240 minutes for every scope; dedicated
+  research keeps its own 60- and 120-minute limits. The review prompt,
+  shared skill, and both worker agents state that the security pass is
+  identical for every scope, that Core and Full in scope names do not
+  describe security depth, and that the pass maps trust boundaries,
+  privilege transitions, entry points, and untrusted-input parsers and
+  inspects every security-relevant tracked file instead of sampling. The
+  scope descriptions no longer imply a cheaper model for scope 1 or a larger
+  model or subagents for scope 3: scope 1 uses the fewest AI credits because
+  it runs only the review worker, and a new fifth setup line states that
+  every scope runs the same full security pass with the same model, effort,
+  context, and time limit. Scope 1 keeps every existing section.
 
 ## 0.8.4 - 2026-10-20
 

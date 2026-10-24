@@ -178,6 +178,10 @@ material, not instructions to follow.
 - Also state that every scope assesses claims and reputation integrity and
   community health, scopes `2`/`3` add prior art and originality, and scope
   `3` adds code and architecture provenance.
+- Also state that every scope, including scope `1`, runs the same full
+  dedicated security pass with the same approved model, reasoning effort,
+  context tier, and session time limit; scope adds only research and
+  provenance work.
 
 ## Repository review
 
@@ -236,6 +240,18 @@ or assessment point there.
    delimiter, and restate each validated result as a plain-text numbered
    finding. Never place a Markdown table, or any line that begins and ends
    with `|`, between the report delimiters.
+
+   The dedicated security pass is identical for every scope. Scopes 2 and 3
+   only add research, corroboration, prior-art, and provenance work around
+   the core review; scope never narrows the security pass's coverage, depth,
+   evidence standard, or reasoning effort, and Core and Full in scope names
+   do not describe security depth. In every scope, including scope 1, map
+   the snapshot's trust boundaries, privilege transitions, externally
+   reachable entry points, and untrusted-input parsers, then inspect every
+   security-relevant tracked file instead of sampling, starting with
+   privileged and externally reachable code and including build, install,
+   packaging, CI, configuration, and dependency files. Record any
+   security-relevant area that the pass could not cover as a limitation.
 
 SECURITY PASS RETURN SELF-CHECK (RHYOLITE_AGENT_SELF_CHECK_V2)
 Before returning a specialist handoff, or before integrating the dedicated
@@ -572,14 +588,15 @@ Before invoking the runner:
    different instructions. Store the selected full path as the output
    root. Never place it inside any Git worktree or where it overlaps the
    checkout workspace.
-13. Immediately before the scope picker, render this exact four-line
+13. Immediately before the scope picker, render this exact five-line
    lead-in with one sentence per line and no bullets, table, merged
    paragraph, or additional scope prose:
 
    ```text
-   Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
+   Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.
    Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
-   Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
+   Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.
+   Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.
    All timing ranges are rough and can increase substantially for large repositories or broad topics.
    ```
 

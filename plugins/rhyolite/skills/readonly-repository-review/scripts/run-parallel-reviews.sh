@@ -128,7 +128,7 @@ Options:
   --repo-file FILE                 Public HTTPS Git repository URLs, one per line
   --throttle N                     Parallel session limit (default: 2)
   --max-repositories N             Maximum repositories per run (default: 5)
-  --timeout-minutes N              Per-session timeout (default: scope-based)
+  --timeout-minutes N              Per-session timeout (default: 240 for every scope)
   --workspace-root PATH            Clone workspace root
   --output-root PATH               Writable artifact root outside the checkout
   --result-root PATH               Deprecated alias for --output-root
@@ -2512,8 +2512,8 @@ if ((!SCOPE_SPECIFIED)); then
         cat <<'EOF'
 Select review scope:
   1. Core review (recommended for a first run): source, history,
-     architecture, quality, and a dedicated security pass. Roughly 15-45
-     minutes per repository; lowest AI-credit and network use.
+     architecture, quality, and the full dedicated security pass. Roughly
+     15-45 minutes per repository; fewest AI credits and network requests.
   2. Core + public prior-art/community research: adds a dedicated research
      worker and constrained local broker requests. Roughly 30-90+ minutes per
      repository and materially higher AI-credit/network use.
@@ -2521,6 +2521,8 @@ Select review scope:
      agentically generated code: broadest scope, roughly 60-120+ minutes
      per repository, highest resource use, and mandatory human review before
      sharing.
+Every scope runs the same full security pass with the same approved model,
+reasoning effort, context tier, and session time limit.
 Estimates are planning ranges and can increase substantially for large
 repositories or broad research topics.
 EOF
@@ -2540,7 +2542,7 @@ fi
 case "${SCOPE}" in
     1)
         SCOPE_NAME='1 - Core repository review'
-        SCOPE_ESTIMATE='Roughly 15-45 minutes per repository; lowest resource use.'
+        SCOPE_ESTIMATE='Roughly 15-45 minutes per repository; full security pass; fewest AI credits and network requests.'
         ENABLE_PUBLIC_RESEARCH=0
         ENABLE_PROVENANCE_RESEARCH=0
         ;;
@@ -2552,7 +2554,7 @@ case "${SCOPE}" in
         ;;
     3)
         SCOPE_NAME='3 - Full review plus whole-repository exact-commit evidence-based provenance of agentically generated code'
-        SCOPE_ESTIMATE='Roughly 60-120+ minutes per repository; highest model, subagent, and network use; human review required.'
+        SCOPE_ESTIMATE='Roughly 60-120+ minutes per repository; most AI credits and network requests; human review required.'
         ENABLE_PUBLIC_RESEARCH=1
         ENABLE_PROVENANCE_RESEARCH=1
         ;;
@@ -2604,12 +2606,11 @@ EOF
     esac
 fi
 
+# Scope never shortens the review worker's time limit: the core review and
+# its dedicated security pass get the same budget in every scope. The
+# dedicated research worker keeps its own scope-based limit.
 if ((SESSION_TIMEOUT_MINUTES == 0)); then
-    case "${SCOPE}" in
-        1) SESSION_TIMEOUT_MINUTES=60 ;;
-        2) SESSION_TIMEOUT_MINUTES=120 ;;
-        3) SESSION_TIMEOUT_MINUTES=240 ;;
-    esac
+    SESSION_TIMEOUT_MINUTES=240
 fi
 if ((10#${SESSION_TIMEOUT_MINUTES} * 60 < REPORT_REPAIR_TIMEOUT_SECONDS)); then
     REPORT_REPAIR_TIMEOUT_SECONDS=$((10#${SESSION_TIMEOUT_MINUTES} * 60))

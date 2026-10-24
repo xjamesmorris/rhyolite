@@ -216,6 +216,10 @@ and treat it as `NOT SELECTED`.
   Also state that every scope assesses claims and reputation integrity and
   community health, scopes `2`/`3` add prior art and originality, and scope
   `3` adds code and architecture provenance.
+  Also state that every scope, including scope `1`, runs the same full
+  dedicated security pass with the same approved model, reasoning effort,
+  context tier, and session time limit; scope adds only research and
+  provenance work.
 
 The active Copilot CLI session is the initial Copilot authentication
 check. Do not run heuristic credential probes or require a separate
@@ -438,14 +442,15 @@ different instructions. Store the selected full path as the output
 root. It must not be inside any Git worktree or overlap the checkout
 workspace.
 
-Immediately before the scope picker, output these four sentences exactly,
+Immediately before the scope picker, output these five sentences exactly,
 one sentence per line, with no bullets, table, wrapping into a paragraph,
 or extra scope prose:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
-Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
+Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.
+Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.
 ```
 
