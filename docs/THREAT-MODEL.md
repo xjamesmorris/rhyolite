@@ -27,7 +27,10 @@
 - Repository URLs supplied to the runner.
 - User-selected trusted research policy files and advanced provider/cookie
   settings.
-- User-local launcher model/reasoning/context preference files.
+- User-local launcher model/reasoning/context and security scan preference
+  files.
+- Security scan reports, which models produced from untrusted repository
+  content.
 - User-selected output workspace paths and generated artifact paths.
 
 ## Primary threats
@@ -108,6 +111,10 @@
     Claude Code worker.
 34. A Claude Code worker reply that reached the output token limit and was
     resumed is promoted as a partial or spliced report.
+35. A poisoned or hallucinated security scan report steers the consolidation
+    review, one scan reads another scan's work, a consolidation report
+    silently drops scan findings, or a failed scan is misreported as the
+    consolidation model's failure.
 
 ## Controls
 
@@ -499,6 +506,41 @@
   repository output directory, redacts email addresses, writes mode-0600
   files, and never changes the run outcome.
 
+### Multi-model security scans
+
+- Every security scan is a separate review-worker session with its own
+  mode-0700 runtime home and lock, the approved scan model and effort, the
+  review worker's read-only tools, and live and post-exit approved-model
+  enforcement. Scans run before any research, so no research evidence
+  exists under the session root while they run, and the runner keeps each
+  scan's artifacts in its own directory outside the session root. Scan
+  requests are identical, contain no model names, and are never searched
+  for placeholders after rendering, because untrusted Git metadata in them
+  may contain braces.
+- The runner validates every scan report against its fixed contract, bounds
+  it to 60 findings, and copies it read-only (mode 0400 in a mode-0500
+  directory) under the session root only after every scan has stopped and
+  any research phase has finished, right before the consolidation review
+  starts, so neither another scan nor the network-enabled research worker
+  can read scan findings or send them to a public endpoint. The
+  consolidation request names scans only by letter and treats their reports
+  as untrusted evidence that the consolidation review must verify against
+  the snapshot.
+- The consolidation ledger must classify every scan finding ID exactly once
+  before the report delimiters. A missing or invalid ledger gets one fixed
+  same-session request that contains only runner text, the validator
+  diagnostic, and the scan finding IDs; a report whose ledger still fails is
+  kept only as non-canonical evidence.
+- A scan is relaunched at most once, with a fresh session and runtime home,
+  only after a transient model-service failure or a blocked automatic
+  fallback, and never after substituted output, a timeout, or a failed
+  adapter function other than the monitor and normalizer failures that a
+  blocked fallback itself causes. Scan failures reach the repository errors
+  only as fixed
+  paraphrases, so failure analysis never attributes them to the
+  consolidation model. A stop request signals every scan's process tree,
+  records each scan as `Interrupted`, and removes every scan runtime home.
+
 ## Residual risks
 
 - Copilot, Claude Code's model provider, and public search services process
@@ -511,7 +553,10 @@
   home. Whether that can invalidate the user's original login is unproven.
   Exporting `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` avoids the
   copy.
-- Read-only analysis can still be inaccurate or incomplete.
+- Read-only analysis can still be inaccurate or incomplete. Multi-model
+  security scans reduce, but cannot eliminate, findings that every selected
+  model misses, and a consolidation review can still reject a valid scan
+  finding with a stated reason.
 - Claims, reputation, community, prior-art, and provenance indicators can be
   false positives or miss context. They are advisory, never verdicts about
   people, and require human review before they are shared or acted on.

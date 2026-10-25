@@ -252,7 +252,13 @@ entry points, and untrusted-input parsers, then inspect every
 security-relevant tracked file instead of sampling, starting with privileged
 and externally reachable code and including build, install, packaging, CI,
 configuration, and dependency files. Record any security-relevant area that
-the pass could not cover as a limitation.
+the pass could not cover as a limitation. Within that pass, check arithmetic
+on untrusted lengths, counts, offsets, and indices; bounds of every access
+through an untrusted index or range; ownership and privilege checks on every
+path that reaches a privileged operation, including update paths that bypass
+checks applied at install; time-of-check to time-of-use gaps; error paths
+that leave privileged state behind; and parser behavior on malformed,
+truncated, and oversized input.
 
 Perform the security pass yourself as a distinct, dedicated pass within this
 session. No subagent or specialist exists in a Rhyolite review worker: never

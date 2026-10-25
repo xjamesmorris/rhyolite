@@ -28,6 +28,7 @@ Remember settings: <YES, NO, or NOT SELECTED>
 Output: <effective output directory or NOT SELECTED>
 Scope: <selected value or NOT SELECTED>
 Provenance lookback months: <selected value or NOT SELECTED>
+Security scans: <count with scan and consolidation models, or NOT SELECTED>
 Review run: <run id and status, NOT STARTED, or UNAVAILABLE>
 Tasks: <concise current/completed/failed counts and names, or NONE>
 Subagents: <concise running/idle/completed/failed counts and names, or NONE>

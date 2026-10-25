@@ -1637,40 +1637,31 @@ for path_isolation_fragment in \
         "${path_isolation_fragment}" \
         'Report-repair runtime path isolation'
 done
+# Each fragment is located inside run_report_repair itself, so the same
+# calls elsewhere in the runner cannot satisfy or break this ordering check.
+repair_fragment_line() {
+    REPAIR_FRAGMENT="$1" awk '
+        /^run_report_repair\(\) \{$/ { inside = 1 }
+        inside && index($0, ENVIRON["REPAIR_FRAGMENT"]) { print NR; exit }
+        inside && /^\}$/ { exit }
+    ' "${RUNNER}"
+}
 repair_path_validation_line="$(
-    grep -nF \
-        'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line \
+        'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"'
 )"
 repair_home_preparation_line="$(
-    grep -nF \
-        '! rhyolite_harness_invoke harness_prepare_worker_home \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line \
+        '! rhyolite_harness_invoke harness_prepare_worker_home \'
 )"
 repair_environment_application_line="$(
-    grep -nF \
-        'env "${repair_environment[@]}" \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line 'env "${repair_environment[@]}" \'
 )"
 repair_timeout_invocation_line="$(
-    grep -nF \
-        'timeout --signal=TERM --kill-after=30s \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line 'timeout --signal=TERM --kill-after=30s \'
 )"
 repair_worker_invocation_line="$(
-    grep -nF \
-        '"${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line '"${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \'
 )"
 [[ "${repair_path_validation_line}" =~ ^[0-9]+$ &&
     "${repair_home_preparation_line}" =~ ^[0-9]+$ &&
@@ -2967,9 +2958,14 @@ if listed != listed_with_flag:
     raise SystemExit("The opt-in flag changed a listed-model plan")
 if unlisted["ApprovalHash"] == listed["ApprovalHash"]:
     raise SystemExit("ModelCatalogMembership is not approval-hash material")
+# Security scan A runs on the review model and discloses the same membership.
+if [plan["SecurityScans"]["Scans"][0]["ModelCatalogMembership"]
+        for plan in (unlisted, listed)] != ["unlisted", "listed"]:
+    raise SystemExit("Security scan A did not disclose the review model's membership")
 for plan in (unlisted, listed):
     del plan["ApprovalHash"]
     del plan["ModelCatalogMembership"]
+    del plan["SecurityScans"]["Scans"][0]["ModelCatalogMembership"]
 if unlisted != listed:
     raise SystemExit("Plans differ beyond catalog membership and approval hash")
 PY
@@ -7010,6 +7006,240 @@ assert_unlisted_launcher_vector \
     launcher-unlisted-preference-flag \
     example-unlisted-model \
     'AllowUnlistedModel=true'
+
+# Multi-model security scans on the launcher command line: every selection
+# can be explicit or default, --auto-defaults resolves every unspecified
+# selection without a prompt, and the setup block carries the result. Each
+# scan and consolidation model gets its own pre-launch model check.
+run_scan_launcher() {
+    local name="$1"
+    local state_path="$2"
+    shift 2
+
+    launcher_scan_capture="${fixture_root}/${name}.launcher.capture"
+    launcher_scan_stderr="${fixture_root}/${name}.launcher.stderr"
+    launcher_scan_checks="${fixture_root}/${name}.checks"
+    rm -f -- "${launcher_scan_capture}" "${launcher_scan_checks}"
+    set +e
+    (
+        cd "${launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            NO_COLOR=1 \
+            XDG_STATE_HOME="${state_path}" \
+            RHYOLITE_LAUNCHER_CAPTURE="${launcher_scan_capture}" \
+            RHYOLITE_LAUNCHER_CHECK_LOG="${launcher_scan_checks}" \
+            COPILOT_HOME="${launcher_copilot_home}" \
+            TMPDIR="${launcher_check_tmp}" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "${LAUNCHER}" \
+                --repo https://example.com/owner/repository.git \
+                "$@"
+    ) >"${fixture_root}/${name}.launcher.stdout" \
+        2>"${launcher_scan_stderr}"
+    launcher_scan_status=$?
+    set -e
+}
+
+assert_scan_launcher_block() {
+    local name="$1"
+    local expected_checks="$2"
+    shift 2
+    local -a fields=()
+    local index prompt='' expected
+
+    ((launcher_scan_status == 0)) ||
+        fail "${name}: launcher returned ${launcher_scan_status}, expected 0."
+    mapfile -d '' -t fields < "${launcher_scan_capture}"
+    for ((index = 0; index + 1 < ${#fields[@]}; index++)); do
+        [[ "${fields[index]}" == -i ]] && prompt="${fields[index + 1]}"
+    done
+    expected="RHYOLITE_START_COMMAND_V1"$'\n'
+    expected+="RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    expected+="Source=https://example.com/owner/repository.git"$'\n'
+    expected+="Model=gpt-5.6-sol"$'\n'
+    expected+="ReasoningEffort=max"$'\n'
+    expected+="ContextTier=long_context"$'\n'
+    for index in "$@"; do
+        expected+="${index}"$'\n'
+    done
+    expected+="RememberPreferences=true"$'\n'
+    expected+="END_RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    expected+="Begin Rhyolite's guided repository-review setup now."
+    assert_equal "${expected}" "${prompt}" "${name} setup block"
+    assert_equal "${expected_checks}" \
+        "$(tr '\n' ' ' < "${launcher_scan_checks}")" "${name} model checks"
+}
+
+assert_scan_launcher_rejected() {
+    local name="$1"
+    local summary="$2"
+
+    ((launcher_scan_status == 2)) ||
+        fail "${name}: launcher returned ${launcher_scan_status}, expected 2."
+    assert_contains "${launcher_scan_stderr}" "${summary}" "${name}"
+    [[ ! -e "${launcher_scan_capture}" ]] ||
+        fail "${name}: the launcher started Copilot after rejecting its scan options."
+}
+
+launcher_scan_state="${fixture_root}/launcher-scan-state"
+mkdir -p -- "${launcher_scan_state}"
+chmod 0700 -- "${launcher_scan_state}"
+run_scan_launcher launcher-scan-auto "${launcher_scan_state}" --auto-defaults
+assert_scan_launcher_block launcher-scan-auto \
+    'gpt-5.6-sol:max claude-opus-5.5:max ' \
+    SecurityScans=2 \
+    ScanModel=claude-opus-5.5:max \
+    ConsolidationModel=gpt-5.6-sol:max \
+    AutoDefaults=true
+assert_contains "${launcher_scan_stderr}" \
+    'Security scans: 2 (scan A gpt-5.6-sol:max; claude-opus-5.5:max); consolidation gpt-5.6-sol:max.' \
+    'Launcher auto-default security scans'
+grep -R -F -x -q 'SecurityScans=2' \
+    --include=launch-context.txt "${launcher_scan_state}" ||
+    fail 'Launcher context did not record the security scan count.'
+
+# A default scan model never takes the model requested for a later scan.
+run_scan_launcher launcher-scan-explicit "${launcher_scan_state}" \
+    --model gpt-5.6-sol --security-scans 3 \
+    --scan-model default --scan-model claude-opus-5.5:high \
+    --consolidation-model claude-fable-5.1
+assert_scan_launcher_block launcher-scan-explicit \
+    'gpt-5.6-sol:max claude-fable-5.1:max claude-opus-5.5:high ' \
+    SecurityScans=3 \
+    ScanModel=claude-fable-5.1:max \
+    ScanModel=claude-opus-5.5:high \
+    ConsolidationModel=claude-fable-5.1:max
+run_scan_launcher launcher-scan-single "${launcher_scan_state}" \
+    --security-scans 1 --consolidation-model default
+assert_scan_launcher_block launcher-scan-single 'gpt-5.6-sol:max ' \
+    SecurityScans=1
+
+run_scan_launcher launcher-scan-count "${launcher_scan_state}" \
+    --security-scans 4
+assert_scan_launcher_rejected launcher-scan-count \
+    'The requested security scan count is invalid.'
+run_scan_launcher launcher-scan-duplicate "${launcher_scan_state}" \
+    --scan-model gpt-5.6-sol:high
+assert_scan_launcher_rejected launcher-scan-duplicate \
+    'Every security scan must use a different model.'
+run_scan_launcher launcher-scan-single-consolidation "${launcher_scan_state}" \
+    --security-scans 1 --consolidation-model claude-opus-5.5
+assert_scan_launcher_rejected launcher-scan-single-consolidation \
+    'A consolidation model requires multiple security scans.'
+run_scan_launcher launcher-scan-too-many "${launcher_scan_state}" \
+    --scan-model claude-opus-5.5 --scan-model claude-fable-5.1 \
+    --scan-model gpt-6-sol
+assert_scan_launcher_rejected launcher-scan-too-many \
+    'Too many security scan models were requested.'
+run_scan_launcher launcher-scan-low-effort "${launcher_scan_state}" \
+    --scan-model claude-opus-5.5:low
+assert_scan_launcher_rejected launcher-scan-low-effort \
+    'The requested security scan model is invalid.'
+run_scan_launcher launcher-scan-unlisted "${launcher_scan_state}" \
+    --scan-model example-unlisted-model
+assert_scan_launcher_rejected launcher-scan-unlisted \
+    'The model for security scan B is not available.'
+
+# Remembered scan choices come first, and an explicit option still wins.
+launcher_scan_remembered_state="${fixture_root}/launcher-scan-remembered-state"
+mkdir -p -- "${launcher_scan_remembered_state}"
+chmod 0700 -- "${launcher_scan_remembered_state}"
+rhyolite_write_security_scan_preference \
+    https://example.com/owner/repository.git \
+    copilot \
+    3 \
+    claude-opus-5.5:max \
+    "${launcher_scan_remembered_state}/rhyolite/launcher" \
+    claude-fable-5.1:high \
+    gpt-6-sol:xhigh ||
+    fail 'Could not seed a security scan launcher preference.'
+run_scan_launcher launcher-scan-remembered \
+    "${launcher_scan_remembered_state}" --auto-defaults
+assert_scan_launcher_block launcher-scan-remembered \
+    'gpt-5.6-sol:max claude-fable-5.1:high gpt-6-sol:xhigh claude-opus-5.5:max ' \
+    SecurityScans=3 \
+    ScanModel=claude-fable-5.1:high \
+    ScanModel=gpt-6-sol:xhigh \
+    ConsolidationModel=claude-opus-5.5:max \
+    AutoDefaults=true
+run_scan_launcher launcher-scan-remembered-override \
+    "${launcher_scan_remembered_state}" --auto-defaults --security-scans 2 \
+    --consolidation-model default
+assert_scan_launcher_block launcher-scan-remembered-override \
+    'gpt-5.6-sol:max claude-fable-5.1:high claude-opus-5.5:max ' \
+    SecurityScans=2 \
+    ScanModel=claude-fable-5.1:high \
+    ConsolidationModel=claude-opus-5.5:max \
+    AutoDefaults=true
+
+# The interactive pickers offer remembered choices first, otherwise suggest
+# models from other vendors or families, and reject a model already used.
+launcher_prompt_library="${fixture_root}/launcher-scan-prompts.sh"
+sed '/^main "\$@"$/d' "${LAUNCHER}" > "${launcher_prompt_library}"
+cat >> "${launcher_prompt_library}" <<'SH'
+source "${1}/lib/harness/common.sh"
+source "${1}/scripts/launcher-preferences.sh"
+rhyolite_harness_load "$1" copilot
+shift
+"$@"
+SH
+assert_scan_prompt() {
+    local name="$1"
+    local answers="$2"
+    local expected="$3"
+    shift 3
+    local result
+
+    result="$(
+        env PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            bash "${launcher_prompt_library}" "${PLUGIN_ROOT}" "$@" \
+            <<< "${answers}" 2>"${fixture_root}/${name}.stderr"
+    )" || fail "${name}: the security scan picker failed."
+    assert_equal "${expected}" "${result}" "${name} result"
+}
+assert_scan_prompt launcher-scan-count-fresh '' 2 \
+    prompt_for_security_scan_count '' gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-count-fresh.stderr" \
+    '  1. Two scans (Recommended) - 2' 'Fresh scan count picker'
+assert_scan_prompt launcher-scan-count-remembered '' 3 \
+    prompt_for_security_scan_count 3 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-count-remembered.stderr" \
+    '  1. Keep previously used (3)' 'Remembered scan count picker'
+assert_scan_prompt launcher-scan-model-fresh '' claude-opus-5.5 \
+    prompt_for_scan_model 'Security scan B model' '' 0 1 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    '  1. claude-opus-5.5 (Recommended) - vendor anthropic' \
+    'Fresh scan model picker'
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    '  2. claude-fable-5.1 - vendor anthropic' \
+    'Fresh scan model picker family suggestion'
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    'Models from different vendors or families give the most independent results.' \
+    'Fresh scan model picker guidance'
+assert_scan_prompt launcher-scan-model-remembered '' claude-fable-5.1:high \
+    prompt_for_scan_model 'Security scan B model' claude-fable-5.1:high 0 1 \
+    gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-remembered.stderr" \
+    '  1. Keep previously used (claude-fable-5.1:high)' \
+    'Remembered scan model picker'
+assert_scan_prompt launcher-scan-model-duplicate $'4\ngpt-5.6-sol\n2' \
+    claude-fable-5.1 \
+    prompt_for_scan_model 'Security scan B model' '' 0 1 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-duplicate.stderr" \
+    'Model gpt-5.6-sol is already used by another scan; choose a different model.' \
+    'Scan model picker duplicate rejection'
+if env PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+    bash "${launcher_prompt_library}" "${PLUGIN_ROOT}" \
+        prompt_for_scan_model 'Security scan C model' '' 0 1 \
+        gpt-6-sol gpt-5.6-sol claude-opus-5.5 claude-fable-5.1 \
+    </dev/null >/dev/null 2>&1; then
+    fail 'The scan model picker selected a model at end of input with none to offer.'
+fi
+assert_scan_prompt launcher-scan-consolidation '' gpt-5.6-sol:max \
+    prompt_for_consolidation_model gpt-5.6-sol:max '' 0
+assert_contains "${fixture_root}/launcher-scan-consolidation.stderr" \
+    '  1. Same as the review model (Recommended) - gpt-5.6-sol:max' \
+    'Consolidation model picker'
 
 # shellcheck source=harness-contract-claude.sh
 source "${ROOT}/tests/harness-contract-claude.sh"

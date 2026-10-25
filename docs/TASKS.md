@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-24
+**Last updated:** 2026-10-25
 
 ## Priorities
 
@@ -29,33 +29,46 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T18 | P2 | Verify | Confirm in a live run that scope 1 runs the same security pass as scope 3 |
+| T19 | P2 | Verify | Verify multi-model security scans in a live run |
+| T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
 
-### T18 (P2, Verify): Confirm in a live run that scope 1 runs the same security pass as scope 3
+### T19 (P2, Verify): Verify multi-model security scans in a live run
 
-- **Problem:** Scope 1 could run a lighter dedicated security pass than
-  scope 3. Its default session timeout was 60 minutes instead of 240, the
-  worker request named scope 3 "Full review" with no rule about security
-  depth, and nothing required covering every security-relevant file, while
-  scope 3's whole-repository provenance work made its worker read more of
-  the tree.
-- **State:** Every scope now defaults to a 240-minute session timeout. The
-  review prompt, shared skill, and both worker agents carry one rule that
-  the security pass is identical in every scope and inspects every
-  security-relevant tracked file instead of sampling. Validation checks that
-  the rendered security instructions are byte-identical in scope 1 and
-  scope 3 requests. No live scope 1 review has run since the change.
-- **Next step:** review one public repository at one exact commit in
-  scope 1 and in scope 3 with the same model, reasoning effort, and context.
-  The direct runner's `--commit` option pins the commit. Compare the two
-  reports' security findings.
-- **Done when:** both reports cover the same security-relevant areas and
-  report the same critical and high security findings, or each difference is
-  traced to model variance rather than to a scope-dependent input.
+- **Problem:** Independent runs of different models on the same commit
+  report materially different security defects. In the T18 comparison of
+  OpenSBI commit `131bda944704293fa75295060aec96061cdb3749`, both scope 3
+  reviews reported a High DBTR update-path privilege-check defect that the
+  scope 1 review missed, although its worker read the whole file; the
+  scope-invariant inputs matched, so the difference was model variance.
+- **State:** Up to three isolated, parallel security scans per repository
+  with consolidation and a validated ledger are implemented and covered by
+  mocked validation. The security pass now also names update paths that
+  skip install-time checks. No live multi-model review has run.
+- **Next step:** from a clean directory, run
+  `./rhyolite --repo https://github.com/riscv-software-src/opensbi --auto-defaults`
+  and approve the plan; with the direct runner, pin the commit above with
+  `--commit`. Check that every scan completes, the ledger validates, and
+  the consolidated report covers the DBTR update-path defect or records an
+  evidence-based rejection.
+- **Done when:** a live two- or three-scan review completes with a
+  validated ledger, and its wall time and model-session count are recorded
+  here.
 - **Source:** 2026-10-24 maintainer request.
+
+### T20 (P3, Open): Report security-relevant files that the security pass did not open
+
+- **Problem:** In the T18 comparison neither review opened every
+  security-relevant file, and neither report listed the unopened files as a
+  limitation, although the security pass requires both.
+- **Next step:** decide whether the runner can derive a trusted list of
+  opened files from the worker session record and compare it with a
+  deterministic list of security-relevant tracked files.
+- **Done when:** a review discloses security-relevant files that its
+  security pass did not open, or the project records why it cannot.
+- **Source:** 2026-10-25 T18 comparison.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 

@@ -590,6 +590,7 @@ build_launcher_setup_block() {
     local allow_unlisted_model="$4"
     shift 4
     local repository
+    local spec
 
     printf '%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
     for repository in "$@"; do
@@ -601,6 +602,18 @@ build_launcher_setup_block() {
     fi
     printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
     printf 'ContextTier=%s\n' "${context_tier}"
+    if [[ -n "${LAUNCHER_SECURITY_SCAN_COUNT}" ]]; then
+        printf 'SecurityScans=%s\n' "${LAUNCHER_SECURITY_SCAN_COUNT}"
+        for spec in "${LAUNCHER_SCAN_SPECS[@]}"; do
+            printf 'ScanModel=%s\n' "${spec}"
+        done
+        if [[ -n "${LAUNCHER_CONSOLIDATION_SPEC}" ]]; then
+            printf 'ConsolidationModel=%s\n' "${LAUNCHER_CONSOLIDATION_SPEC}"
+        fi
+    fi
+    if ((LAUNCHER_AUTO_DEFAULTS)); then
+        printf 'AutoDefaults=true\n'
+    fi
     printf 'RememberPreferences=true\n'
     printf 'END_%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
 }
@@ -656,6 +669,9 @@ write_launch_context() {
         fi
         printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
         printf 'ContextTier=%s\n' "${context_tier}"
+        if [[ -n "${LAUNCHER_SECURITY_SCAN_COUNT}" ]]; then
+            printf 'SecurityScans=%s\n' "${LAUNCHER_SECURITY_SCAN_COUNT}"
+        fi
         printf 'RememberPreferences=true\n'
     } > "${context_path}"
 }
@@ -944,6 +960,222 @@ ensure_copilot_model_access() {
     done
 }
 
+LAUNCHER_SECURITY_SCAN_COUNT=''
+LAUNCHER_SCAN_SPECS=()
+LAUNCHER_CONSOLIDATION_SPEC=''
+LAUNCHER_AUTO_DEFAULTS=0
+LAUNCHER_SCAN_CATALOG=''
+LAUNCHER_SCAN_CATALOG_LOADED=0
+
+launcher_scan_catalog() {
+    if ((LAUNCHER_SCAN_CATALOG_LOADED == 0)); then
+        LAUNCHER_SCAN_CATALOG="$(
+            rhyolite_harness_invoke harness_list_models 2>/dev/null
+        )" || LAUNCHER_SCAN_CATALOG=''
+        LAUNCHER_SCAN_CATALOG_LOADED=1
+    fi
+    printf '%s\n' "${LAUNCHER_SCAN_CATALOG}"
+}
+
+# A scan model specification is MODEL or MODEL:EFFORT; without an effort a
+# scan uses the review reasoning effort.
+launcher_scan_spec_accepted() {
+    local spec="$1"
+    local allow_unlisted_model="$2"
+
+    rhyolite_valid_security_scan_model_spec "${spec}" || {
+        RHYOLITE_HARNESS_ERROR_DETAIL="Use MODEL or MODEL:EFFORT with high, xhigh, or max: ${spec}"
+        return 1
+    }
+    launcher_model_accepted "${spec%%:*}" "${allow_unlisted_model}"
+}
+
+launcher_scan_spec_with_effort() {
+    case "$1" in
+        *:*) printf '%s\n' "$1" ;;
+        *) printf '%s:%s\n' "$1" "$2" ;;
+    esac
+}
+
+# Print up to three catalog models that add vendor or family diversity to
+# the models already selected for this review.
+launcher_scan_suggestions() {
+    local catalog candidate
+    local -a selected=("$@")
+    local count=0
+
+    catalog="$(launcher_scan_catalog)"
+    while ((count < 3)) && candidate="$(
+        rhyolite_select_diverse_model \
+            "${LAUNCHER_HARNESS}" "${catalog}" "${selected[@]}"
+    )"; do
+        printf '%s\n' "${candidate}"
+        selected+=("${candidate}")
+        count=$((count + 1))
+    done
+}
+
+prompt_for_security_scan_count() {
+    local remembered_count="$1"
+    local review_model="$2"
+    local answer
+
+    while true; do
+        printf '\nIndependent security scans\n' >&2
+        printf 'Scan A uses the review model (%s). Each extra scan runs in parallel, isolated, with an identical prompt on a different model; a consolidation pass then verifies and merges their findings.\n' \
+            "${review_model}" >&2
+        if [[ -n "${remembered_count}" ]]; then
+            printf '  1. Keep previously used (%s)\n' "${remembered_count}" >&2
+            printf '  2. Two scans (Recommended) - 2\n' >&2
+            printf '  3. Three scans - 3\n' >&2
+            printf '  4. One integrated security pass - 1\n' >&2
+            printf 'Select security scans [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_count}"; return ;;
+                2) printf '%s\n' 2; return ;;
+                3) printf '%s\n' 3; return ;;
+                4) printf '%s\n' 1; return ;;
+            esac
+        else
+            printf '  1. Two scans (Recommended) - 2\n' >&2
+            printf '  2. Three scans - 3\n' >&2
+            printf '  3. One integrated security pass - 1\n' >&2
+            printf 'Select security scans [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' 2; return ;;
+                2) printf '%s\n' 3; return ;;
+                3) printf '%s\n' 1; return ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+}
+
+# prompt_for_scan_model <title> <remembered-spec> <allow-unlisted>
+#     <require-distinct> [selected-model ...]
+prompt_for_scan_model() {
+    local title="$1"
+    local remembered_spec="$2"
+    local allow_unlisted_model="$3"
+    local require_distinct="$4"
+    shift 4
+    local -a selected=("$@")
+    local -a choices=()
+    local answer candidate suggestion selected_model list_choice other_choice
+    local duplicate first_suggestion recommended
+
+    while true; do
+        printf '\n%s\n' "${title}" >&2
+        if [[ "${require_distinct}" == 1 ]]; then
+            printf 'Models from different vendors or families give the most independent results.\n' >&2
+        fi
+        choices=()
+        if [[ -n "${remembered_spec}" ]]; then
+            printf '  1. Keep previously used (%s)\n' "${remembered_spec}" >&2
+            choices+=("${remembered_spec}")
+        fi
+        first_suggestion=1
+        while IFS= read -r suggestion; do
+            [[ -n "${suggestion}" &&
+                "${suggestion}" != "${remembered_spec%%:*}" ]] || continue
+            recommended=''
+            if ((first_suggestion)) && [[ -z "${remembered_spec}" ]]; then
+                recommended=' (Recommended)'
+            fi
+            first_suggestion=0
+            printf '  %d. %s%s - vendor %s\n' \
+                "$((${#choices[@]} + 1))" "${suggestion}" "${recommended}" \
+                "$(rhyolite_model_vendor "${suggestion}")" >&2
+            choices+=("${suggestion}")
+        done < <(launcher_scan_suggestions "${selected[@]}")
+        list_choice=$((${#choices[@]} + 1))
+        other_choice=$((list_choice + 1))
+        printf '  %d. List available model IDs\n' "${list_choice}" >&2
+        printf '  %d. Enter another model ID (MODEL or MODEL:EFFORT)\n' \
+            "${other_choice}" >&2
+        printf 'Select model [1]: ' >&2
+        if ! IFS= read -r answer; then
+            # End of input selects the first listed model, and quits when
+            # there is none to select.
+            ((${#choices[@]} > 0)) || return 1
+            answer=1
+        fi
+        answer="${answer:-1}"
+        if [[ "${answer}" =~ ^[1-9][0-9]*$ ]] &&
+            ((answer <= ${#choices[@]})); then
+            candidate="${choices[answer - 1]}"
+        elif [[ "${answer}" == "${list_choice}" ]]; then
+            print_available_models
+            continue
+        elif [[ "${answer}" == "${other_choice}" ]]; then
+            printf 'Model ID: ' >&2
+            IFS= read -r candidate
+        else
+            printf 'Enter one of the displayed choice numbers.\n' >&2
+            continue
+        fi
+        if ! launcher_scan_spec_accepted \
+            "${candidate}" "${allow_unlisted_model}"; then
+            printf 'Model selection rejected: %s\n' \
+                "${RHYOLITE_HARNESS_ERROR_DETAIL:-not available to this ${LAUNCHER_HARNESS_DISPLAY} CLI installation}" >&2
+            continue
+        fi
+        duplicate=0
+        if [[ "${require_distinct}" == 1 ]]; then
+            for selected_model in "${selected[@]}"; do
+                [[ "${selected_model}" == "${candidate%%:*}" ]] && duplicate=1
+            done
+        fi
+        if ((duplicate)); then
+            printf 'Model %s is already used by another scan; choose a different model.\n' \
+                "${candidate%%:*}" >&2
+            continue
+        fi
+        printf '%s\n' "${candidate}"
+        return
+    done
+}
+
+prompt_for_consolidation_model() {
+    local review_spec="$1"
+    local remembered_spec="$2"
+    local allow_unlisted_model="$3"
+    local answer
+
+    while true; do
+        printf '\nConsolidation model\n' >&2
+        printf 'This model verifies every scan finding against the source, merges them, and writes the final report.\n' >&2
+        if [[ -n "${remembered_spec}" && "${remembered_spec}" != "${review_spec}" ]]; then
+            printf '  1. Keep previously used (%s)\n' "${remembered_spec}" >&2
+            printf '  2. Same as the review model (Recommended) - %s\n' \
+                "${review_spec}" >&2
+            printf '  3. Choose another model\n' >&2
+            printf 'Select consolidation model [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${remembered_spec}"; return ;;
+                2) printf '%s\n' "${review_spec}"; return ;;
+                3) break ;;
+            esac
+        else
+            printf '  1. Same as the review model (Recommended) - %s\n' \
+                "${review_spec}" >&2
+            printf '  2. Choose another model\n' >&2
+            printf 'Select consolidation model [1]: ' >&2
+            IFS= read -r answer
+            case "${answer:-1}" in
+                1) printf '%s\n' "${review_spec}"; return ;;
+                2) break ;;
+            esac
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+    done
+    prompt_for_scan_model \
+        'Consolidation model' '' "${allow_unlisted_model}" 0
+}
+
 print_help() {
     local version="$1"
 
@@ -955,8 +1187,12 @@ Usage:
   rhyolite [--version]
   rhyolite [--repo URL]... [--harness ID] [--model MODEL]
            [--allow-unlisted-model]
-           [--reasoning-effort high|xhigh|max]
-           [--context default|long_context] [--yolo]
+           [--reasoning-effort high|xhigh|max|default]
+           [--context default|long_context]
+           [--security-scans 1|2|3|default]
+           [--scan-model MODEL[:EFFORT]|default]...
+           [--consolidation-model MODEL[:EFFORT]|default]
+           [--auto-defaults] [--yolo]
            [--] [URL...] [initial review request...]
 
 Options:
@@ -972,12 +1208,35 @@ Options:
                       With --harness claude, select from Rhyolite's Claude
                       Code catalog (default: claude-opus-5-5; alternate:
                       claude-opus-5).
+                      --model default selects the remembered model, or the
+                      default model, without asking.
   --allow-unlisted-model
                       Also accept a safe model ID that is missing from that
                       catalog; Copilot verifies availability when the review
                       runs, and the review never substitutes another model.
-  --reasoning-effort  Select high, xhigh, or max (recommended).
-  --context TIER      Select default or long_context (recommended).
+  --reasoning-effort  Select high, xhigh, or max (recommended); default
+                      selects the remembered or recommended effort.
+  --context TIER      Select default or long_context (recommended). Here
+                      default names the harness's default context window.
+  --security-scans N  Run N independent security scans per repository
+                      (1-3). Scan A uses the review model; each extra scan
+                      runs in parallel, isolated, with an identical prompt
+                      on a different model, and a consolidation pass
+                      verifies and merges their findings. 1 keeps the
+                      integrated security pass. default uses the remembered
+                      count, or 2.
+  --scan-model SPEC   Model for the next extra scan (B, then C), as MODEL or
+                      MODEL:EFFORT; repeat for scan C. default uses the
+                      remembered model, or a suggested model from another
+                      vendor or family.
+  --consolidation-model SPEC
+                      Model that consolidates the scans and writes the
+                      report; default uses the remembered choice, or the
+                      review model.
+  --auto-defaults     Use the remembered or default value for every setting
+                      that is not on the command line, here and in guided
+                      setup (output, scope, cookies, and lookback), so the
+                      only remaining question is the final plan approval.
   --yolo         Start Copilot in YOLO mode for this launch (Claude Code:
                  skip permission prompts).
 
@@ -987,8 +1246,8 @@ $(rhyolite_harness_list_registered | sed 's/^/  - /')
 Starts Copilot (or Claude Code with --harness claude) outside Git worktrees
 with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
 ${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
-immediately. Approved model/effort/context settings are remembered per
-repository and harness.
+immediately. Approved model, effort, context, and security scan settings
+are remembered per repository and harness.
 
 Unknown options and GitHub URLs without a repository name are rejected before
 the harness starts. Put review request text that begins with a hyphen after --.
@@ -1015,6 +1274,25 @@ main() {
     local reasoning_effort=''
     local context_tier=''
     local allow_unlisted_model=0
+    local model_use_default=0
+    local effort_use_default=0
+    local security_scans_input=''
+    local consolidation_model_input=''
+    local scan_index
+    local scan_spec
+    local scan_label
+    local review_spec
+    local remembered_scan_count=''
+    local remembered_scan_consistent=1
+    local remembered_consolidation_spec=''
+    local -a remembered_scan_specs=()
+    local -a scan_model_inputs=()
+    local -a selected_scan_models=()
+    local -a explicit_scan_models=()
+    local -a access_specs=()
+    local remembered_spec
+    local selected_model
+    local spec_index
     local yolo=0
     local remembered_model=''
     local remembered_reasoning_effort=''
@@ -1207,14 +1485,20 @@ main() {
                     2
                 ;;
             --model)
-                [ "$#" -ge 2 ] && rhyolite_valid_model_id "$2" ||
+                [ "$#" -ge 2 ] &&
+                    { [[ "$2" == default ]] || rhyolite_valid_model_id "$2"; } ||
                     fail \
                         'launcher argument validation' \
                         'The requested model identifier is invalid.' \
-                        '--model requires a safe Copilot model identifier.' \
+                        '--model requires a safe Copilot model identifier or default.' \
                         'Use letters, numbers, dots, underscores, and hyphens only.' \
                         2
-                model="$2"
+                if [[ "$2" == default ]]; then
+                    model=''
+                    model_use_default=1
+                else
+                    model="$2"
+                fi
                 shift 2
                 ;;
             --allow-unlisted-model)
@@ -1223,14 +1507,20 @@ main() {
                 ;;
             --reasoning-effort)
                 [ "$#" -ge 2 ] &&
-                    rhyolite_valid_reasoning_effort "$2" ||
+                    { [[ "$2" == default ]] ||
+                        rhyolite_valid_reasoning_effort "$2"; } ||
                     fail \
                         'launcher argument validation' \
                         'The requested reasoning effort is invalid.' \
-                        '--reasoning-effort requires high, xhigh, or max.' \
+                        '--reasoning-effort requires high, xhigh, max, or default.' \
                         'Use --reasoning-effort max unless a lower supported tier is intentional.' \
                         2
-                reasoning_effort="$2"
+                if [[ "$2" == default ]]; then
+                    reasoning_effort=''
+                    effort_use_default=1
+                else
+                    reasoning_effort="$2"
+                fi
                 shift 2
                 ;;
             --context)
@@ -1244,6 +1534,55 @@ main() {
                         2
                 context_tier="$2"
                 shift 2
+                ;;
+            --security-scans)
+                [ "$#" -ge 2 ] &&
+                    [[ "$2" == 1 || "$2" == 2 || "$2" == 3 || "$2" == default ]] ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested security scan count is invalid.' \
+                        '--security-scans requires 1, 2, 3, or default.' \
+                        'Use --security-scans 2 for one additional model, 3 for two, or 1 for the integrated security pass.' \
+                        2
+                security_scans_input="$2"
+                shift 2
+                ;;
+            --scan-model)
+                [ "$#" -ge 2 ] &&
+                    { [[ "$2" == default ]] ||
+                        rhyolite_valid_security_scan_model_spec "$2"; } ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested security scan model is invalid.' \
+                        '--scan-model requires MODEL, MODEL:EFFORT, or default.' \
+                        'Use a safe model ID, optionally followed by :high, :xhigh, or :max, or default.' \
+                        2
+                ((${#scan_model_inputs[@]} < 2)) ||
+                    fail \
+                        'launcher argument validation' \
+                        'Too many security scan models were requested.' \
+                        'Scan A always uses --model, so at most two --scan-model values are accepted.' \
+                        'Pass --scan-model at most twice.' \
+                        2
+                scan_model_inputs+=("$2")
+                shift 2
+                ;;
+            --consolidation-model)
+                [ "$#" -ge 2 ] &&
+                    { [[ "$2" == default ]] ||
+                        rhyolite_valid_security_scan_model_spec "$2"; } ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested consolidation model is invalid.' \
+                        '--consolidation-model requires MODEL, MODEL:EFFORT, or default.' \
+                        'Use a safe model ID, optionally followed by :high, :xhigh, or :max, or default.' \
+                        2
+                consolidation_model_input="$2"
+                shift 2
+                ;;
+            --auto-defaults)
+                LAUNCHER_AUTO_DEFAULTS=1
+                shift
                 ;;
             --yolo)
                 yolo=1
@@ -1485,6 +1824,31 @@ main() {
             remembered_consistent=0
         fi
     done
+    for repository in "${repositories[@]}"; do
+        if rhyolite_read_security_scan_preference \
+            "${repository}" "${harness}" "${launcher_home}"; then
+            if [[ -z "${remembered_scan_count}" ]]; then
+                remembered_scan_count="${RHYOLITE_SCAN_PREFERENCE_COUNT}"
+                remembered_scan_specs=("${RHYOLITE_SCAN_PREFERENCE_MODELS[@]}")
+                remembered_consolidation_spec="${RHYOLITE_SCAN_PREFERENCE_CONSOLIDATION}"
+            elif [[ "${remembered_scan_count}" != "${RHYOLITE_SCAN_PREFERENCE_COUNT}" ||
+                "${remembered_scan_specs[*]}" != "${RHYOLITE_SCAN_PREFERENCE_MODELS[*]}" ||
+                "${remembered_consolidation_spec}" != "${RHYOLITE_SCAN_PREFERENCE_CONSOLIDATION}" ]]; then
+                remembered_scan_consistent=0
+            fi
+        else
+            if [[ "${RHYOLITE_SCAN_PREFERENCE_STATUS}" == invalid ]]; then
+                printf 'Rhyolite launcher ignored an invalid saved security scan preference for %s.\n' \
+                    "${repository}" >&2
+            fi
+            remembered_scan_consistent=0
+        fi
+    done
+    if ((remembered_scan_consistent == 0)); then
+        remembered_scan_count=''
+        remembered_scan_specs=()
+        remembered_consolidation_spec=''
+    fi
     if ((remembered_consistent == 0)); then
         remembered_model=''
         remembered_reasoning_effort=''
@@ -1524,7 +1888,7 @@ main() {
     fi
 
     if [[ -z "${model}" ]]; then
-        if ((is_interactive)); then
+        if ((is_interactive && !model_use_default && !LAUNCHER_AUTO_DEFAULTS)); then
             model="$(
                 prompt_for_model \
                     "${remembered_model}" "${allow_unlisted_model}"
@@ -1542,7 +1906,7 @@ main() {
             2
     fi
     if [[ -z "${reasoning_effort}" ]]; then
-        if ((is_interactive)); then
+        if ((is_interactive && !effort_use_default && !LAUNCHER_AUTO_DEFAULTS)); then
             reasoning_effort="$(
                 prompt_for_reasoning_effort \
                     "${remembered_reasoning_effort}"
@@ -1561,7 +1925,7 @@ main() {
             'Choose high, xhigh, or max and retry.' \
             2
     if [[ -z "${context_tier}" ]]; then
-        if ((is_interactive)); then
+        if ((is_interactive && !LAUNCHER_AUTO_DEFAULTS)); then
             context_tier="$(
                 prompt_for_context_tier "${remembered_context_tier}"
             )"
@@ -1578,7 +1942,7 @@ main() {
             'Choose default or long_context and retry.' \
             2
 
-    if ((is_interactive)); then
+    if ((is_interactive && !LAUNCHER_AUTO_DEFAULTS)); then
         while true; do
             confirmation_action="$(
                 prompt_to_confirm_runtime_settings \
@@ -1627,6 +1991,230 @@ main() {
         fi
         model="${LAUNCHER_ACCESS_MODEL}"
         reasoning_effort="${LAUNCHER_ACCESS_EFFORT}"
+    fi
+
+    # Multi-model security scans are resolved when the user is present, when
+    # any scan option is given, or under --auto-defaults; otherwise guided
+    # setup asks for them.
+    if ((is_interactive || LAUNCHER_AUTO_DEFAULTS)) ||
+        [[ -n "${security_scans_input}" || -n "${consolidation_model_input}" ]] ||
+        ((${#scan_model_inputs[@]} > 0)); then
+        if [[ "${security_scans_input}" =~ ^[123]$ ]]; then
+            LAUNCHER_SECURITY_SCAN_COUNT="${security_scans_input}"
+        elif [[ -z "${security_scans_input}" ]] &&
+            ((${#scan_model_inputs[@]} > 0)); then
+            LAUNCHER_SECURITY_SCAN_COUNT=$((1 + ${#scan_model_inputs[@]}))
+        elif [[ "${security_scans_input}" == default ]] ||
+            ((LAUNCHER_AUTO_DEFAULTS || !is_interactive)); then
+            LAUNCHER_SECURITY_SCAN_COUNT="${remembered_scan_count:-2}"
+        else
+            LAUNCHER_SECURITY_SCAN_COUNT="$(
+                prompt_for_security_scan_count \
+                    "${remembered_scan_count}" "${model}"
+            )"
+        fi
+        ((${#scan_model_inputs[@]} <= LAUNCHER_SECURITY_SCAN_COUNT - 1)) ||
+            fail \
+                'launcher argument validation' \
+                'Too many security scan models were requested.' \
+                "${#scan_model_inputs[@]} --scan-model values for ${LAUNCHER_SECURITY_SCAN_COUNT} security scans; scan A always uses the review model." \
+                'Pass at most --security-scans minus one --scan-model values.' \
+                2
+        if ((LAUNCHER_SECURITY_SCAN_COUNT == 1)) &&
+            [[ -n "${consolidation_model_input}" &&
+                "${consolidation_model_input}" != default ]]; then
+            fail \
+                'launcher argument validation' \
+                'A consolidation model requires multiple security scans.' \
+                'With one security scan the review worker performs the integrated security pass and nothing is consolidated.' \
+                'Pass --security-scans 2 or 3, or remove --consolidation-model.' \
+                2
+        fi
+        selected_scan_models=("${model}")
+        # A default or remembered scan model never takes a model requested
+        # for a later scan.
+        explicit_scan_models=()
+        for scan_spec in "${scan_model_inputs[@]}"; do
+            [[ "${scan_spec}" == default ]] ||
+                explicit_scan_models+=("${scan_spec%%:*}")
+        done
+        LAUNCHER_SCAN_SPECS=()
+        for ((scan_index = 1; scan_index < LAUNCHER_SECURITY_SCAN_COUNT; scan_index++)); do
+            scan_label="$(printf '%s' ABC | cut -c "$((scan_index + 1))")"
+            scan_spec="${scan_model_inputs[scan_index - 1]-}"
+            if [[ -n "${scan_spec}" && "${scan_spec}" != default ]]; then
+                launcher_scan_spec_accepted \
+                    "${scan_spec}" "${allow_unlisted_model}" ||
+                    fail \
+                        'launcher model validation' \
+                        "The model for security scan ${scan_label} is not available." \
+                        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the ${LAUNCHER_HARNESS_DISPLAY} model catalog.}" \
+                        "Pass --scan-model with one of the IDs shown by ${LAUNCHER_MODEL_IDS_HINT}, or default." \
+                        2
+            else
+                remembered_spec="${remembered_scan_specs[scan_index - 1]-}"
+                if [[ -n "${remembered_spec}" ]]; then
+                    for selected_model in \
+                        "${selected_scan_models[@]}" "${explicit_scan_models[@]}"; do
+                        [[ "${selected_model}" == "${remembered_spec%%:*}" ]] &&
+                            remembered_spec=''
+                    done
+                fi
+                if [[ -n "${remembered_spec}" ]] &&
+                    ! launcher_scan_spec_accepted \
+                        "${remembered_spec}" "${allow_unlisted_model}"; then
+                    remembered_spec=''
+                fi
+                if [[ "${scan_spec}" == default ]] ||
+                    ((LAUNCHER_AUTO_DEFAULTS || !is_interactive)); then
+                    scan_spec="${remembered_spec}"
+                    if [[ -z "${scan_spec}" ]]; then
+                        scan_spec="$(
+                            rhyolite_select_diverse_model \
+                                "${harness}" \
+                                "$(launcher_scan_catalog)" \
+                                "${selected_scan_models[@]}" \
+                                "${explicit_scan_models[@]}"
+                        )" ||
+                            fail \
+                                'launcher model validation' \
+                                "No default model is available for security scan ${scan_label}." \
+                                "The ${LAUNCHER_HARNESS_DISPLAY} model catalog lists no suggested model that differs from the models already selected." \
+                                'Pass --scan-model with an exact model ID, or request fewer security scans.' \
+                                2
+                    fi
+                else
+                    scan_spec="$(
+                        prompt_for_scan_model \
+                            "Security scan ${scan_label} model (scan A uses ${model})" \
+                            "${remembered_spec}" \
+                            "${allow_unlisted_model}" \
+                            1 \
+                            "${selected_scan_models[@]}" \
+                            "${explicit_scan_models[@]}"
+                    )" ||
+                        fail \
+                            'launcher guided setup' \
+                            "No model was selected for security scan ${scan_label}." \
+                            'Input ended before a model was chosen.' \
+                            'Rerun the launcher and choose a model, or pass --scan-model MODEL[:EFFORT] or --scan-model default.' \
+                            2
+                fi
+            fi
+            for selected_model in "${selected_scan_models[@]}"; do
+                [[ "${selected_model}" != "${scan_spec%%:*}" ]] ||
+                    fail \
+                        'launcher argument validation' \
+                        'Every security scan must use a different model.' \
+                        "Model ${selected_model} was selected for more than one scan." \
+                        'Choose a distinct model, preferably from another vendor or family, for each scan.' \
+                        2
+            done
+            scan_spec="$(
+                launcher_scan_spec_with_effort \
+                    "${scan_spec}" "${reasoning_effort}"
+            )"
+            LAUNCHER_SCAN_SPECS+=("${scan_spec}")
+            selected_scan_models+=("${scan_spec%%:*}")
+        done
+        review_spec="${model}:${reasoning_effort}"
+        LAUNCHER_CONSOLIDATION_SPEC=''
+        if ((LAUNCHER_SECURITY_SCAN_COUNT > 1)); then
+            if [[ -n "${consolidation_model_input}" &&
+                "${consolidation_model_input}" != default ]]; then
+                launcher_scan_spec_accepted \
+                    "${consolidation_model_input}" "${allow_unlisted_model}" ||
+                    fail \
+                        'launcher model validation' \
+                        'The consolidation model is not available.' \
+                        "${RHYOLITE_HARNESS_ERROR_DETAIL:-The selected model was not present in the ${LAUNCHER_HARNESS_DISPLAY} model catalog.}" \
+                        "Pass --consolidation-model with one of the IDs shown by ${LAUNCHER_MODEL_IDS_HINT}, or default." \
+                        2
+                LAUNCHER_CONSOLIDATION_SPEC="${consolidation_model_input}"
+            else
+                remembered_spec="${remembered_consolidation_spec:-${review_spec}}"
+                launcher_scan_spec_accepted \
+                    "${remembered_spec}" "${allow_unlisted_model}" ||
+                    remembered_spec="${review_spec}"
+                if [[ "${consolidation_model_input}" == default ]] ||
+                    ((LAUNCHER_AUTO_DEFAULTS || !is_interactive)); then
+                    LAUNCHER_CONSOLIDATION_SPEC="${remembered_spec}"
+                else
+                    LAUNCHER_CONSOLIDATION_SPEC="$(
+                        prompt_for_consolidation_model \
+                            "${review_spec}" \
+                            "${remembered_spec}" \
+                            "${allow_unlisted_model}"
+                    )" ||
+                        fail \
+                            'launcher guided setup' \
+                            'No consolidation model was selected.' \
+                            'Input ended before a model was chosen.' \
+                            'Rerun the launcher and choose a model, or pass --consolidation-model MODEL[:EFFORT] or --consolidation-model default.' \
+                            2
+                fi
+            fi
+            LAUNCHER_CONSOLIDATION_SPEC="$(
+                launcher_scan_spec_with_effort \
+                    "${LAUNCHER_CONSOLIDATION_SPEC}" "${reasoning_effort}"
+            )"
+        fi
+
+        if [[ "${harness}" == copilot ]]; then
+            access_specs=("${LAUNCHER_SCAN_SPECS[@]}")
+            if [[ -n "${LAUNCHER_CONSOLIDATION_SPEC}" &&
+                "${LAUNCHER_CONSOLIDATION_SPEC}" != "${review_spec}" &&
+                " ${LAUNCHER_SCAN_SPECS[*]} " != *" ${LAUNCHER_CONSOLIDATION_SPEC} "* ]]; then
+                access_specs+=("${LAUNCHER_CONSOLIDATION_SPEC}")
+            fi
+            for scan_index in "${!access_specs[@]}"; do
+                scan_spec="${access_specs[scan_index]}"
+                LAUNCHER_ACCESS_MODEL="${scan_spec%%:*}"
+                LAUNCHER_ACCESS_EFFORT="${scan_spec#*:}"
+                model_access_status=0
+                ensure_copilot_model_access \
+                    "${copilot_path}" \
+                    "${context_tier}" \
+                    "${is_interactive}" \
+                    "${allow_unlisted_model}" \
+                    "${session_dir}" || model_access_status=$?
+                if ((model_access_status == 3)); then
+                    printf '%s\n' 'Rhyolite did not start Copilot.' >&2
+                    return 0
+                fi
+                access_specs[scan_index]="${LAUNCHER_ACCESS_MODEL}:${LAUNCHER_ACCESS_EFFORT}"
+                if [[ "${access_specs[scan_index]}" != "${scan_spec}" ]]; then
+                    for spec_index in "${!LAUNCHER_SCAN_SPECS[@]}"; do
+                        if [[ "${LAUNCHER_SCAN_SPECS[spec_index]}" == "${scan_spec}" ]]; then
+                            LAUNCHER_SCAN_SPECS[spec_index]="${access_specs[scan_index]}"
+                        fi
+                    done
+                    if [[ "${LAUNCHER_CONSOLIDATION_SPEC}" == "${scan_spec}" ]]; then
+                        LAUNCHER_CONSOLIDATION_SPEC="${access_specs[scan_index]}"
+                    fi
+                fi
+            done
+            # The access check may have replaced a scan model; every scan
+            # must still use a different model.
+            if [[ -n "$(
+                printf '%s\n' "${model}" "${LAUNCHER_SCAN_SPECS[@]%%:*}" |
+                    sort | uniq -d
+            )" ]]; then
+                fail \
+                    'launcher argument validation' \
+                    'Every security scan must use a different model.' \
+                    'A model chosen during the model check is already used by another scan.' \
+                    'Restart the launcher and choose a distinct model, preferably from another vendor or family, for each scan.' \
+                    2
+            fi
+        fi
+        if ((LAUNCHER_SECURITY_SCAN_COUNT > 1)); then
+            printf 'Security scans: %s (scan A %s; %s); consolidation %s.\n' \
+                "${LAUNCHER_SECURITY_SCAN_COUNT}" \
+                "${review_spec}" \
+                "$(IFS=,; printf '%s' "${LAUNCHER_SCAN_SPECS[*]}" | sed 's/,/, /g')" \
+                "${LAUNCHER_CONSOLIDATION_SPEC}" >&2
+        fi
     fi
 
     initial_prompt="$(

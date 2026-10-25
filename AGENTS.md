@@ -130,6 +130,21 @@ supported and must not drive new work.
   and on a rejected model or effort asks for another model, the next highest
   effort (never below `high`, with no default answer), or quit; without a
   terminal it stops with a `launcher model availability` error.
+  It also resolves multi-model security scans: `--security-scans
+  1|2|3|default`, up to two `--scan-model MODEL[:EFFORT]|default` values for
+  scans B and C, and `--consolidation-model MODEL[:EFFORT]|default`. Its
+  pickers offer the remembered choice first and otherwise suggest models
+  from another vendor or family; `default` selects without a prompt, never
+  repeats a model already selected or requested for a later scan, and
+  `--model default` and `--reasoning-effort default` do the same for the
+  review runtime. With Copilot, every additional scan or consolidation model
+  gets the same pre-launch model check. `--auto-defaults` accepts the
+  default for every launcher choice not given on the command line and adds
+  `AutoDefaults=true` to the setup block, which makes the orchestrators skip
+  every setup question, using home output and scope 1, while still requiring
+  explicit approval of the effective plan. Without a terminal, scans are
+  resolved only when a scan option or `--auto-defaults` is given; otherwise
+  guided setup asks.
   With `--harness claude` it starts Claude Code with `--plugin-dir`,
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
@@ -151,7 +166,10 @@ supported and must not drive new work.
   It creates user-only launcher state and does not persist the initial review
   request or source in launch context.
 - The trusted runner saves approved harness/model/reasoning/context
-  preferences per canonical repository under user-only launcher state.
+  preferences per canonical repository under user-only launcher state, and
+  the approved security scan count, scan models, and any consolidation model
+  other than the review model in a schema-1
+  `<preference>.security-scans.json` companion file.
   `/rhyolite:start` remains the
   in-session compatibility path.
 - `plugins/rhyolite/lib/harness/common.sh` owns safe harness selection,
@@ -332,7 +350,43 @@ supported and must not drive new work.
   prior-art, and provenance work. The review prompt, shared skill, and both
   worker agents carry the same scope-invariance paragraph. Never make
   security coverage, depth, instructions, or time depend on scope, and never
-  describe a scope as using a different or cheaper model.
+  describe a scope as using a different or cheaper model. The same defect
+  checklist (untrusted arithmetic and bounds, privilege checks including
+  update paths that bypass install-time checks, time-of-check to
+  time-of-use gaps, privileged error paths, and malformed input) ends that
+  paragraph and the security scan prompt.
+- Multi-model security scans are approval-bound plan data as
+  `SecurityScans`. With two or three scans, the runner starts them right
+  after the read-only snapshot and before any research, in parallel, each
+  in its own session and runtime home with the identical
+  `RHYOLITE_SECURITY_SCAN_V1` request rendered from
+  `security-scan-prompt.txt` and the review worker's read-only tools: scan A
+  on the approved review model and scans B and C on other approved models.
+  A scan is relaunched at most once (`ScanRelaunchLimit`) with a fresh
+  session after a transient model-service failure or a blocked automatic
+  fallback, classified from the adapter's worker outcome in the same order
+  as same-session recovery; every other scan failure is final, and live and
+  post-exit approved-model enforcement apply to every scan. The runner validates each
+  `REPOSITORY SECURITY SCAN REVIEW REPORT`, relabels its findings as `A-1`,
+  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: every scan)
+  before consolidation, and keeps the relabelled reports outside the session
+  root until any research phase has finished, so the network-enabled
+  research worker never sees scan findings; only then does it copy them
+  read-only under the session root. The review worker then runs on the
+  approved consolidation model
+  with the `consolidation-prompt.txt` addendum
+  (`RHYOLITE_SECURITY_CONSOLIDATION_V1`), performs its own complete security
+  pass and review, verifies every scan finding, and returns a
+  `RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1` ledger before the report that
+  classifies every scan finding ID exactly once. Scan models stay anonymous
+  to the consolidator. When the ledger is missing or invalid, the runner
+  asks the same session once for only the ledger (a counted continuation);
+  a report whose ledger still fails is kept only as
+  `security-scans/consolidation-report-unverified.txt` and the repository
+  fails. Scan failures reach the repository errors only as paraphrases, so
+  failure analysis never attributes them to the consolidation model.
+  Artifacts live under `<repository>/security-scans/`. One scan, the
+  direct-runner default, keeps the integrated security pass.
 - Scope 3 keeps direct model/effort/harness attribution direct-evidence-only.
   Heuristic model candidates are separate non-attribution about repository
   assets, never people. Prefer family-level identification, cite
@@ -491,7 +545,8 @@ supported and must not drive new work.
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
 - Plan-only output includes `ApprovalHash`, `Model`,
-  `ModelCatalogMembership`, `RememberPreferences`, and `ResearchTransport`.
+  `ModelCatalogMembership`, `RememberPreferences`, `ResearchTransport`, and
+  `SecurityScans`.
   Preserve approved settings,
   pass the hash unchanged to execution with `--expected-plan-hash`, and never
   execute without a valid hash.

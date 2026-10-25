@@ -1469,6 +1469,41 @@ if [[ -n "${session_id}" && -f "${project}/${session_id}.jsonl" ]]; then
     printf 'Error: Session ID %s is already in use.\n' "${session_id}" >&2
     exit 1
 fi
+# A multi-model security scan answers with one scan report. Scans finish
+# before research starts, so no scan can see research evidence.
+if grep -Fxq 'RHYOLITE_SECURITY_SCAN_V1' <<< "${request}"; then
+    [[ ! -e research-evidence ]] || exit 86
+    scan_report="${capture}/scan-report-${model}"
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
+        'SCAN CONTEXT' \
+        'Repository: https://github.com/octocat/Hello-World' \
+        '' \
+        'SECURITY FINDINGS' \
+        'Finding 1: Length arithmetic overflows before the bounds check' \
+        'Severity: Medium' \
+        'Confidence: High' \
+        'Location: README.md:1' \
+        'Behavior: A 32-bit length sum wraps before it is compared.' \
+        'Exploit path: A crafted record passes the wrapped check.' \
+        'Impact: Out-of-bounds read of adjacent memory.' \
+        'Remediation: Check the sum for overflow before comparing.' \
+        '' \
+        'COVERAGE' \
+        'README.md.' \
+        '' \
+        'LIMITATIONS' \
+        'Fixture scan; no code was executed.' \
+        '================================================================================' \
+        > "${scan_report}"
+    python3 -I "${RHYOLITE_MOCK_CLAUDE_WRITER:?}" \
+        complete "${project}/${session_id}.jsonl" "$(pwd)" \
+        "${model}" "${effort}" "${session_id}" \
+        "${scan_report}" "${RHYOLITE_MOCK_CLAUDE_EMAIL:?}" ''
+    cat -- "${scan_report}"
+    exit 0
+fi
 mode="${RHYOLITE_MOCK_CLAUDE_MODE:-complete}"
 if [[ "${mode}" == unavailable ]]; then
     printf "There's an issue with the selected model (%s). It may not exist or you may not have access to it. Run --model to pick a different model.\n" \
@@ -1506,6 +1541,15 @@ case "${mode}" in
         exit 3
         ;;
     *)
+        # A consolidation review places its ledger before the report.
+        if grep -Fxq 'RHYOLITE_SECURITY_CONSOLIDATION_V1' <<< "${request}"; then
+            printf '%s\n' 'RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+            printf '%s\n' "${request}" | awk '
+                found && /^[A-C]-[0-9]+$/ { print $0 " | merged | Finding 1 in FINDINGS" }
+                $0 == "Scan finding IDs to classify:" { found = 1 }
+            '
+            printf '%s\n' 'END_RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+        fi
         cat -- "${RHYOLITE_MOCK_CLAUDE_REPORT}"
         ;;
 esac
@@ -2335,6 +2379,32 @@ while IFS= read -r -d '' output_file; do
         'Claude Code environment authentication disclosure'
 done < <(find "${CLAUDE_RUN_PATH}" -type f -print0)
 
+# Multi-model security scans through the real Claude Code adapter: each scan
+# is a fresh isolated session on its own approved model, the default extra
+# scan uses another model family, and the consolidation review returns a
+# ledger that the runner validates. claude_run_case also checks that every
+# scan runtime home was removed.
+claude_run_case security-scans 0 --security-scans 2
+node - "${CLAUDE_RUN_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "security-scans.json"), "utf8"));
+if (state.Status !== "Completed" || state.Model !== "claude-opus-5-5" ||
+    summary.SuccessfulScans !== 2 ||
+    JSON.stringify(summary.Scans.map((scan) => scan.Model)) !==
+      JSON.stringify(["claude-opus-5-5", "claude-fable-5-1"]) ||
+    summary.Ledger.Status !== "Validated" ||
+    summary.Ledger.Counts.merged !== 2) {
+  throw new Error(`unexpected Claude Code security scan result: ${JSON.stringify(summary)}`);
+}
+JS
+[[ -f "${CLAUDE_RUN_ROOT}/capture/review/scan-report-claude-opus-5-5" &&
+    -f "${CLAUDE_RUN_ROOT}/capture/review/scan-report-claude-fable-5-1" ]] ||
+    fail 'Claude Code security scans did not run on both approved models.'
+
 if "${claude_runner_environment[@]}" \
     RHYOLITE_LAUNCHER_HARNESS=copilot \
     RHYOLITE_CLAUDE_CAPTURE="${fixture_root}/claude-marker-capture" \
@@ -2606,6 +2676,7 @@ claude_launch() {
 claude_expected_launch_block() {
     local model="$1"
     local unlisted_line="$2"
+    shift 2
 
     printf '%s\n' \
         RHYOLITE_LAUNCHER_SETUP_V1 \
@@ -2617,6 +2688,7 @@ claude_expected_launch_block() {
     printf '%s\n' \
         ReasoningEffort=max \
         ContextTier=long_context \
+        "$@" \
         RememberPreferences=true
     printf '%s' END_RHYOLITE_LAUNCHER_SETUP_V1
 }
@@ -2625,6 +2697,7 @@ claude_assert_launch_vector() {
     local label="$1"
     local model="$2"
     local unlisted_line="$3"
+    shift 3
     local -a fields=()
     local -a expected=()
     local settings_json
@@ -2649,7 +2722,7 @@ claude_assert_launch_vector() {
         --strict-mcp-config
         --settings "${settings_json}"
         --permission-mode default
-        --append-system-prompt "$(claude_expected_launch_block "${model}" "${unlisted_line}")"
+        --append-system-prompt "$(claude_expected_launch_block "${model}" "${unlisted_line}" "$@")"
         --
         "$(printf '%s\n%s' RHYOLITE_START_COMMAND_V1 "Begin Rhyolite's guided repository-review setup now.")"
     )
@@ -2681,6 +2754,15 @@ claude_launch unlisted-flag "${LAUNCHER}" --harness claude \
     --repo https://example.com/owner/repository.git \
     --model claude-opus-9 --allow-unlisted-model
 claude_assert_launch_vector unlisted-flag claude-opus-9 'AllowUnlistedModel=true'
+# Every Claude model shares one vendor, so the default extra security scan
+# uses another model family.
+claude_launch auto-defaults "${LAUNCHER}" --harness claude --auto-defaults \
+    --repo https://example.com/owner/repository.git
+claude_assert_launch_vector auto-defaults claude-opus-5-5 '' \
+    SecurityScans=2 \
+    ScanModel=claude-fable-5-1:max \
+    ConsolidationModel=claude-opus-5-5:max \
+    AutoDefaults=true
 claude_launch yolo "${LAUNCHER}" --harness claude --yolo \
     --repo https://example.com/owner/repository.git
 ((CLAUDE_LAUNCH_STATUS == 0)) || fail 'Claude Code launcher --yolo failed.'

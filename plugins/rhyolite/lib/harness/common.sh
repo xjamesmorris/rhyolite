@@ -597,3 +597,103 @@ rhyolite_sweep_stale_runtime_homes() {
     )
     return 0
 }
+
+# Ranked, Rhyolite-owned suggestions of current frontier reasoning models for
+# additional security scans. A suggestion is only used when the harness's
+# offline model catalog lists it, so the adapter still owns model validity.
+rhyolite_security_scan_model_suggestions() {
+    case "$1" in
+        copilot)
+            printf '%s\n' \
+                claude-opus-5.5 \
+                gemini-4-argon \
+                gpt-5.6-sol \
+                gpt-6-astra \
+                claude-fable-5.1 \
+                grok-4.7 \
+                gpt-6.1-sol
+            ;;
+        claude)
+            printf '%s\n' \
+                claude-opus-5-5 \
+                claude-fable-5-1 \
+                claude-opus-5 \
+                claude-fable-5
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+rhyolite_model_vendor() {
+    case "$1" in
+        claude-*) printf '%s\n' anthropic ;;
+        gpt-* | o[0-9]* | codex-*) printf '%s\n' openai ;;
+        gemini-*) printf '%s\n' google ;;
+        grok-*) printf '%s\n' xai ;;
+        mai-*) printf '%s\n' microsoft ;;
+        kimi-*) printf '%s\n' moonshot ;;
+        *) printf '%s\n' "${1%%-*}" ;;
+    esac
+}
+
+# The model family is the ID without its version tokens, for example
+# claude-opus-5.5 -> claude-opus and gpt-5.6-sol -> gpt-sol.
+rhyolite_model_family() {
+    local token
+    local family=''
+    local -a tokens=()
+
+    IFS=- read -r -a tokens <<< "$1"
+    for token in "${tokens[@]}"; do
+        [[ "${token}" =~ ^[0-9] ]] && continue
+        family="${family:+${family}-}${token}"
+    done
+    printf '%s\n' "${family:-$1}"
+}
+
+# Print the first suggestion that the catalog lists and that adds the most
+# diversity to the selected models: a new vendor first, then a new model
+# family, then any model not yet selected.
+#   rhyolite_select_diverse_model <harness> <catalog> [selected-model ...]
+rhyolite_select_diverse_model() {
+    local harness="$1"
+    local catalog="$2"
+    shift 2
+    local suggestions candidate selected pass listed
+    local -A selected_models=()
+    local -A selected_vendors=()
+    local -A selected_families=()
+
+    suggestions="$(rhyolite_security_scan_model_suggestions "${harness}")" ||
+        return 1
+    for selected in "$@"; do
+        [[ -n "${selected}" ]] || continue
+        selected_models["${selected}"]=1
+        selected_vendors["$(rhyolite_model_vendor "${selected}")"]=1
+        selected_families["$(rhyolite_model_family "${selected}")"]=1
+    done
+    for pass in vendor family model; do
+        while IFS= read -r candidate; do
+            [[ -n "${candidate}" && -z "${selected_models[${candidate}]-}" ]] ||
+                continue
+            listed=0
+            while IFS= read -r selected; do
+                [[ "${selected}" == "${candidate}" ]] && listed=1 && break
+            done <<< "${catalog}"
+            ((listed)) || continue
+            case "${pass}" in
+                vendor)
+                    [[ -z "${selected_vendors[$(rhyolite_model_vendor "${candidate}")]-}" ]] ||
+                        continue
+                    ;;
+                family)
+                    [[ -z "${selected_families[$(rhyolite_model_family "${candidate}")]-}" ]] ||
+                        continue
+                    ;;
+            esac
+            printf '%s\n' "${candidate}"
+            return 0
+        done <<< "${suggestions}"
+    done
+    return 1
+}

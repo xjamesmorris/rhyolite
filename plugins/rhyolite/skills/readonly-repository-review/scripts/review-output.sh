@@ -4379,6 +4379,71 @@ def _():
                 ["Compare the rejected options with the installed harness CLI's --help, fix the adapter argv builder, re-verify it live with the adapter-built argv, and make the mocked CLI reproduce the rejection."])
 
 
+security_scans = read_json(directory / "security-scans" / "security-scans.json")
+
+
+@rule("security-scans")
+def _():
+    if stage != "security scans":
+        return None
+    failed = [scan for scan in security_scans.get("Scans", [])
+              if isinstance(scan, dict) and scan.get("Status") != "Completed"]
+    details = []
+    actions = []
+    for scan in failed:
+        label = str(scan.get("Label", "?"))
+        model_name = str(scan.get("Model", "?"))
+        effort = str(scan.get("ReasoningEffort", "?"))
+        details.append(f"scan {label} ({model_name} at {effort}): "
+                       f"{scan.get('Diagnostic') or scan.get('Status', 'unknown')}")
+        failure_class = scan.get("FailureClass")
+        if failure_class == "effort-unsupported":
+            following = ""
+            if effort in EFFORT_LEVELS and EFFORT_LEVELS.index(effort) + 1 < len(EFFORT_LEVELS):
+                following = EFFORT_LEVELS[EFFORT_LEVELS.index(effort) + 1]
+            if following:
+                actions.append(f"Approve a new plan with --scan-model {model_name}:{following}, the next highest effort for scan {label}, or choose another scan model; Rhyolite never runs below high.")
+            else:
+                actions.append(f"Choose another model for scan {label} in a new approved plan; Rhyolite never runs below high.")
+        elif failure_class == "model-unavailable":
+            actions.append(f"Choose another model for scan {label}, preferably from another vendor, that your account can use, in a new approved plan.")
+        elif failure_class in ("model-service", "fallback-blocked"):
+            actions.append(f"Rerun the approved review; scan {label} was already relaunched once with a fresh session after its transient failure.")
+        elif failure_class in ("missing-report", "invalid-report"):
+            actions.append(f"Rerun the approved review; read security-scans/scan-{label.lower()}/analysis-timeline.txt and errors.txt for the scan report problem.")
+        elif failure_class == "approved-model-enforcement":
+            actions.append(f"Choose another model for scan {label} in a new approved plan; its session recorded a model, effort, or subagent outside the approved plan.")
+        elif failure_class == "timeout":
+            actions.append(f"Rerun with a longer --timeout-minutes value in a new approved plan; scan {label} exceeded the approved session timeout.")
+        elif failure_class != "interrupted":
+            actions.append(f"Read security-scans/scan-{label.lower()}/errors.txt and analysis-timeline.txt, resolve the reported problem, then rerun the approved review.")
+    actions.append(
+        "Approve a plan with a lower --min-successful-scans (now "
+        f"{security_scans.get('MinimumSuccessfulScans', '?')}) only if fewer independent scans are acceptable.")
+    return ("Too few independent security scans completed for the approved plan.",
+            f"{security_scans.get('SuccessfulScans', 0)} of {security_scans.get('Count', '?')} scans completed, "
+            f"and the approved plan requires {security_scans.get('MinimumSuccessfulScans', '?')}: "
+            + ("; ".join(details) or "no scan detail was recorded") + ".",
+            actions,
+            ["Inspect security-scans/scan-*/errors.txt, analysis-timeline.txt, and scan-state.json for the failed scans."])
+
+
+@rule("security-consolidation")
+def _():
+    if stage != "security consolidation":
+        return None
+    ledger = security_scans.get("Ledger") if isinstance(security_scans.get("Ledger"), dict) else {}
+    diagnostic = str(ledger.get("Diagnostic") or "no ledger diagnostic was recorded")
+    return ("The consolidation pass did not account for every security scan finding.",
+            "The consolidation worker's report passed strict validation, but its "
+            "RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1 ledger was missing or invalid "
+            f"({diagnostic}); same-session ledger request: {ledger.get('Request', 'not attempted')}. "
+            "Rhyolite kept that report only as non-canonical evidence.",
+            ["Rerun the approved review.",
+             "Treat security-scans/consolidation-report-unverified.txt as evidence only, never as a consolidated review."],
+            ["Compare the consolidation reply with the ledger contract in consolidation-prompt.txt and add a regression for the observed reply."])
+
+
 @rule("effort-unsupported")
 def _():
     if effort_fallback is None:
@@ -4515,7 +4580,8 @@ artifacts = sorted(
     for path in (
         [directory / "errors.txt", directory / "analysis-timeline.txt", directory / "state.json"]
         + [recovery_directory / "state.json", recovery_directory / "delivery" / "delivery.json",
-           directory / "report-repair" / "state.json", directory / "research" / "research-errors.txt"]
+           directory / "report-repair" / "state.json", directory / "research" / "research-errors.txt",
+           directory / "security-scans" / "security-scans.json"]
     )
     if path.is_file()
 )

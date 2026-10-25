@@ -233,6 +233,16 @@ behavior. The runner calls the five research functions only for scope 2/3,
 and only when the adapter reports `web_research=yes`; otherwise scope 2/3
 fails at stage `harness <id> harness_capability` before any broker or worker
 activity.
+Multi-model security scans add no adapter function or phase. Each scan is a
+fresh normal review-worker invocation, phase `review`, that the runner builds
+with `harness_worker_argv`, `harness_prepare_worker_home`,
+`harness_worker_env`, `harness_detect_worker_violation`,
+`harness_worker_outcome`, `harness_normalize_worker_output`,
+`harness_verify_isolation`, `harness_persist_agent_state`, and
+`harness_sanitize_runtime_home`, on that scan's approved model and effort in
+its own runtime home, and with `harness_render_request` for the scan
+request. The ledger request after consolidation is an ordinary counted
+review-worker continuation.
 Array-producing functions receive the destination array name first.
 
 ## Capabilities

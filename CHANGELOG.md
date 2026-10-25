@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Added multi-model security scans. Different models reviewing the same
+  commit report materially different security defects, and one run can
+  confidently clear an area that another run shows to be broken. With
+  `--security-scans 2` or `3`, each repository now gets up to three
+  independent security-only scans right after its read-only snapshot and
+  before any research: scan A on the review model and scans B and C on
+  other models, run in parallel in separate isolated sessions and runtime
+  homes with an identical request. Their findings reach the reviewer's
+  working directory only after research, so the network-enabled research
+  worker never sees them. The review worker then runs on the
+  consolidation model (by default the review model), performs its own
+  complete security pass, verifies every scan finding at its cited line,
+  merges duplicates, and returns a ledger that classifies every scan finding
+  as confirmed, merged, refined, or rejected. The runner validates the scan
+  reports and the ledger, relaunches a scan once after a transient
+  model-service failure or blocked model fallback, asks the same session
+  once for a missing ledger, and fails the review when fewer than the
+  approved minimum of scans succeed or the ledger stays invalid. The scan
+  count, every scan and consolidation model and effort, and the minimum are
+  part of the approved plan as `SecurityScans`; artifacts are saved under
+  `<repository>/security-scans/`. One scan, the direct-runner default, keeps
+  the integrated security pass.
+- The launcher asks for the security scan count, each extra scan model, and
+  the consolidation model. It offers the choices approved last time for the
+  same repositories first, saved in a new companion preference file, and
+  otherwise suggests models from another vendor or model family. The new
+  `--security-scans`, `--scan-model`, and `--consolidation-model` options set
+  them on the command line, where `default` selects the remembered or
+  suggested value without a prompt, as `--model default` and
+  `--reasoning-effort default` now do for the review runtime. With Copilot,
+  each additional model gets the same one-request pre-launch model check.
+  The new `--auto-defaults` option accepts the default for every choice not
+  given on the command line, in the launcher and in guided setup (home
+  output and scope 1), so the only remaining step is approving the
+  effective plan. The direct runner adds `--min-successful-scans` and
+  `--suggest-scan-models`.
+- The dedicated security pass now names the defect classes it must check:
+  arithmetic and bounds on untrusted lengths, counts, offsets, and indices;
+  ownership and privilege checks on every path to a privileged operation,
+  including update paths that skip checks applied at install;
+  time-of-check to time-of-use gaps; error paths that leave privileged state
+  behind; and parser behavior on malformed, truncated, and oversized input.
+  A scope 1 review of the same commit missed an update-path privilege check
+  that both scope 3 reviews reported, and the scan prompt uses the same
+  checklist.
 - A hard-killed runner or launcher no longer leaves its runtime homes, with
   their ephemeral authentication bridge, behind indefinitely. A runner
   stopped with `SIGKILL` cannot run its cleanup, so its review, research, and

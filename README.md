@@ -44,7 +44,9 @@ other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
    `./rhyolite --repo https://github.com/owner/one https://github.com/owner/two`.
 
 3. Press Enter at each launcher prompt to accept the default model,
-   reasoning effort, and context. Copilot CLI then opens with
+   reasoning effort, context, and
+   [security scans](#multi-model-security-scans), or add `--auto-defaults`
+   to accept every default without a prompt. Copilot CLI then opens with
    the `repo-review` agent selected and starts guided setup, as in the
    screenshot above.
 4. Answer the numbered setup questions for the output location and review
@@ -354,7 +356,7 @@ stage without resetting collected answers:
 - `help` **without a leading slash** reruns the full static panel, then
   immediately shows a
   `CURRENT SETUP STATUS` block with live `Source`,
-  `Model`, `Remember settings`, `Output`, `Scope`, and
+  `Model`, `Security scans`, `Remember settings`, `Output`, `Scope`, and
   `Provenance lookback months` and `Research cookies` values or
   `NOT SELECTED`.
 - `status` **without a leading slash** shows the same live
@@ -385,17 +387,23 @@ The agent asks one question at a time:
 4. Which context tier to use.
 5. Whether to confirm the validated harness/model/effort/context settings or
    modify one of them.
-6. Whether to remember model/effort/context settings for the selected
-   repositories after plan approval.
-7. Whether the output parent is the current directory, home directory,
+6. How many [security scans](#multi-model-security-scans) to run, which
+   model each extra scan uses, and which model consolidates them.
+7. Whether to remember model/effort/context and security scan settings for
+   the selected repositories after plan approval.
+8. Whether the output parent is the current directory, home directory,
    or a custom location.
-8. Which review scope to use.
-9. For scope `3`, which provenance lookback to use.
-10. For scope `2` or `3`, whether research cookie replay remains off or
+9. Which review scope to use.
+10. For scope `3`, which provenance lookback to use.
+11. For scope `2` or `3`, whether research cookie replay remains off or
    uses a fresh per-repository ephemeral jar.
-11. After those answers are collected, the agent requests the runner's
+12. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
+
+The launcher answers the runtime and security scan questions before Copilot
+starts, and `--auto-defaults` answers every question that the command line
+left open, so guided setup goes straight to the `EFFECTIVE REVIEW PLAN`.
 
 Every finite setup or confirmation decision uses Copilot CLI's native
 numbered `ask_user` picker rather than a prose list. The CLI adds the
@@ -716,6 +724,90 @@ For programmatic invocation, installed plugin agents are namespaced:
 copilot --agent rhyolite:repo-review --prompt "..."
 ```
 
+## Multi-model security scans
+
+Different models reviewing the same commit report materially different
+security defects, and one run can confidently clear an area that another
+run shows to be broken. Rhyolite can therefore run up to three independent
+security scans of each repository, each on a different model, and
+consolidate them into the one canonical report.
+
+- Scan A always uses the review model, reasoning effort, and context.
+  Scans B and C use other models, preferably from another vendor or model
+  family. The scans run in parallel, each in its own isolated session and
+  runtime home, with the identical security-only request and the same
+  read-only tools; no scan sees another scan's work.
+- Scans run right after the read-only snapshot is prepared and before any
+  research, so they never see research evidence, and their request is the
+  same in every scope. Their findings reach the reviewer's working directory
+  only when the consolidation review starts, so the research worker, the
+  only session with public network access, never sees them.
+- The consolidation review then runs on the consolidation model, by
+  default the review model. It performs its own complete security pass and
+  the normal review, verifies every scan finding at its cited `path:line`,
+  merges duplicates, decides severity disagreements from the evidence, and
+  treats one scan's clearance of an area as unverified when another scan
+  reports a finding there. Scans are labelled only A, B, and C, never by
+  model.
+- The runner requires a consolidation ledger that classifies every scan
+  finding exactly once as `confirmed`, `merged`, `refined`, or `rejected`.
+  If the reply has no valid ledger, the runner asks the same session once
+  for only the ledger. A report whose ledger still fails is kept only as
+  `security-scans/consolidation-report-unverified.txt`, and the review
+  fails.
+- A scan that ends with a transient model-service failure or a blocked
+  automatic model fallback is relaunched once with a fresh session. The
+  review fails before consolidation when fewer than the approved minimum
+  of scans succeed; by default every scan must succeed.
+- Each repository uses one model session per scan plus the consolidation
+  review, so two scans use about three times the model sessions of a single
+  integrated security pass. With Copilot CLI, the launcher also checks each
+  additional model with one short request (one premium request each).
+
+The scan count, every scan model and effort, the consolidation model, and
+the minimum successful scans are part of the approved
+`EFFECTIVE REVIEW PLAN`, so changing any of them requires a new approval.
+
+### Choose scan models
+
+After you confirm the review runtime, the interactive launcher asks for the
+scan count (two by default), each extra scan model, and the consolidation
+model. It first offers the choices approved last time for the same
+repositories; otherwise it suggests models from another vendor or model
+family. Every choice can also be given on the command line:
+
+```text
+--security-scans 1|2|3|default         Number of scans; 1 keeps the
+                                       single integrated security pass.
+--scan-model MODEL[:EFFORT]|default    Model for scan B; repeat for scan C.
+--consolidation-model MODEL[:EFFORT]|default
+--model default                        Review model without a prompt.
+--reasoning-effort default             Review effort without a prompt.
+--auto-defaults                        Accept the default for every choice
+                                       not given on the command line.
+```
+
+`default` selects without a prompt: the remembered choice when one exists,
+otherwise a suggested model from another vendor or family for a scan and
+the review model for consolidation. A model without `:EFFORT` uses the
+review reasoning effort. `--context` has no such keyword, because `default`
+is itself a context tier. `--auto-defaults` also answers the guided-setup
+questions with their defaults (output `~/rhyolite-output/repo-review` and
+scope `1`), so the only remaining step is approving the
+`EFFECTIVE REVIEW PLAN`:
+
+```bash
+./rhyolite --repo https://github.com/owner/repository --auto-defaults
+```
+
+Without a terminal and without `--auto-defaults` or a scan option, the
+launcher leaves the scan questions to guided setup. The direct runner
+accepts the same `--security-scans`, `--scan-model`, and
+`--consolidation-model` options, defaults to one scan plus one per
+`--scan-model`, and adds `--min-successful-scans N|default`.
+`run-parallel-reviews.sh --harness copilot --suggest-scan-models --model
+<review model>` prints up to three suggested `MODEL VENDOR` lines.
+
 ## Conference and CFP review triage
 
 Program committees and other reviewers can use Rhyolite to triage projects
@@ -878,6 +970,19 @@ Each repository output directory creates:
   - mode-0700 `network/private/` with mode-0600 `cookies.jsonl`,
     `body-manifest.jsonl`, and content-addressed
     `bodies/<sha256>.bin`.
+- `security-scans/`, only with two or three
+  [security scans](#multi-model-security-scans):
+  - `security-scans.json`: every scan's model, effort, status, attempts,
+    finding count, and failure class, plus the consolidation ledger status.
+  - `scan-a/`, `scan-b/`, and `scan-c/`: the scan report, sanitized
+    timeline, transcript, errors, `scan-state.json`, agent state, and any
+    relaunched attempt under `attempts/1/`.
+  - `evidence/`: each completed scan report with its findings relabelled
+    `A-1`, `B-2`, and so on, exactly as the consolidation review read it.
+  - `request.txt`, the identical scan request; `finding-ids.txt`; the
+    rendered `consolidation-addendum.txt`; `consolidation-ledger.json`; and,
+    when the ledger failed, the non-canonical
+    `consolidation-report-unverified.txt`.
 - `review-plan.json` and companion review-plan artifacts, when produced
   by the installed runner's plan-only mode, containing the authoritative
   pre-run plan shown as `EFFECTIVE REVIEW PLAN`.
@@ -1221,9 +1326,12 @@ After the user approves the effective plan, the runner atomically saves
 only the canonical repository URL, model, reasoning effort,
 context tier, and update time
 in a user-only hashed preference file below the same launcher state
-root. Future launcher runs reuse a preference only when every selected
-repository has the same valid setting; mixed, missing, or malformed
-preferences are never chosen silently.
+root, plus the security scan count, the scan models and efforts, and any
+consolidation model other than the review model in a companion
+`<preference>.security-scans.json` file. Future launcher runs reuse a
+preference only when every selected repository has the same valid setting;
+mixed, missing, or malformed preferences are never chosen silently, and a
+remembered scan model that now equals another selected model is skipped.
 
 To inspect or install the checkout manually:
 
