@@ -11,7 +11,7 @@
   and each review execution start and launcher start removes the current
   user's exact-name homes whose lock is free and whose whole tree has not
   changed for 60 minutes. The age limit also protects homes that an older,
-  lock-unaware Rhyolite may still be using. Without `flock`, nothing is
+  lock-unaware Rhyolite is still actively writing. Without `flock`, nothing is
   locked or removed.
 
 - Copilot reviews work again with Copilot CLI 1.0.103, which removed the

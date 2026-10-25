@@ -691,16 +691,11 @@ finish_copilot_model_access_check() {
 
 # A launcher killed during its model check cannot remove that check's
 # runtime home, with its authentication bridge, from its session directory.
+# Session directories are never pruned, so one find(1) lists the model-check
+# homes of every session instead of one search per session.
 sweep_stale_model_check_homes() {
-    local sessions_dir="$1"
-    local session
-
-    for session in "${sessions_dir}"/*; do
-        [[ -d "${session}" && ! -L "${session}" && -O "${session}" ]] ||
-            continue
-        rhyolite_sweep_stale_runtime_homes \
-            "${session}" "${RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN}"
-    done
+    rhyolite_sweep_stale_runtime_homes \
+        "$1" "${RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN}" 2
 }
 
 # Sets LAUNCHER_ACCESS_RESULT to available, model-unavailable,

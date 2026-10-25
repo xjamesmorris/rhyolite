@@ -6786,11 +6786,20 @@ chmod 700 -- \
 printf 'bridge\n' > "${sweep_launcher_session}/model-check-1/home/config.json"
 printf 'context\n' > "${sweep_launcher_session}/launch-context.txt"
 find "${sweep_launcher_session}" -exec touch -h -d '-2 hours' {} +
+# A model-check home reachable only through a symbolic link stays.
+sweep_launcher_outside="${fixture_root}/launcher-check-sweep-outside"
+mkdir -m 700 -p -- "${sweep_launcher_outside}/model-check-1/home"
+printf 'bridge\n' > "${sweep_launcher_outside}/model-check-1/home/config.json"
+find "${sweep_launcher_outside}" -exec touch -h -d '-2 hours' {} +
+ln -s -- "${sweep_launcher_outside}" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions/20260101T000000Z-2"
 run_launcher_model_check_case launcher-check-sweep
 ((launcher_check_case_status == 0)) ||
     fail 'launcher-check-sweep: the launcher did not start.'
 [[ -f "${sweep_launcher_session}/launch-context.txt" ]] ||
     fail 'launcher-check-sweep: the sweep removed an earlier session file.'
+[[ -f "${sweep_launcher_outside}/model-check-1/home/config.json" ]] ||
+    fail 'launcher-check-sweep: the sweep followed a symlinked session directory.'
 
 # Interactively, a rejected effort or model asks for the next highest effort,
 # another model, or quit. There is no default answer, the effort never drops

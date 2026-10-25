@@ -517,7 +517,7 @@ rhyolite_harness_load() {
 # inherits the descriptor keeps holding, and a later start removes a matching
 # home only when that lock is free and nothing in the home changed within
 # RHYOLITE_STALE_RUNTIME_HOME_MINUTES. The age check also keeps any home that
-# an older, lock-unaware Rhyolite may still be using.
+# an older, lock-unaware Rhyolite is still actively writing.
 RHYOLITE_STALE_RUNTIME_HOME_MINUTES=60
 RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN='^rhyolite-((repo-review|repo-research|report-repair)-[a-z][a-z0-9-]{0,31}|report-repair)\.[A-Za-z0-9]{8}$'
 RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN='^model-check-[0-9]+$'
@@ -557,18 +557,23 @@ rhyolite_unlock_runtime_home() {
 }
 
 # Usage: rhyolite_sweep_stale_runtime_homes <parent_directory> <name_pattern>
-# Best effort: removes only the current user's real directories directly under
-# the parent whose names match the pattern, whose lock is free, and whose
-# whole tree is older than the stale age. It never fails its caller.
+#     [depth]
+# Best effort: removes only the current user's real directories exactly
+# <depth> levels (1 by default, at most 2) below the parent, reached without
+# following a symbolic link, whose names match the pattern, whose lock is
+# free, and whose whole tree is older than the stale age. One find(1) lists
+# every candidate. It never fails its caller.
 rhyolite_sweep_stale_runtime_homes() {
     local parent="$1"
     local pattern="$2"
+    local depth="${3:-1}"
     local candidate
     local name
     local recent
     local descriptor
 
     rhyolite_runtime_home_locking_available || return 0
+    [[ "${depth}" == 1 || "${depth}" == 2 ]] || return 0
     [[ -n "${parent}" && -d "${parent}" && ! -L "${parent}" ]] || return 0
     while IFS= read -r -d '' candidate; do
         name="${candidate##*/}"
@@ -587,7 +592,7 @@ rhyolite_sweep_stale_runtime_homes() {
         fi
         exec {descriptor}<&-
     done < <(
-        find "${parent}" -mindepth 1 -maxdepth 1 -type d \
+        find "${parent}" -mindepth "${depth}" -maxdepth "${depth}" -type d \
             -user "$(id -u)" -print0 2>/dev/null
     )
     return 0
