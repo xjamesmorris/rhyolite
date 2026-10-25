@@ -6709,6 +6709,89 @@ for launcher_check_unverified in \
         fail "${launcher_check_name}: an unverifiable model check changed the launch."
 done
 
+# Stale runtime homes: a sweep removes only the current user's real
+# directories with an exact runtime-home name whose lock is free and whose
+# whole tree is older than the stale age. A home that a live process holds
+# locked, a recently changed home, an unrelated name, and a symlink stay.
+sweep_root="${fixture_root}/runtime-home-sweep"
+mkdir -m 700 -p -- "${sweep_root}/tmp" "${sweep_root}/target"
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000001 \
+    rhyolite-repo-research-claude.Aa000002 \
+    rhyolite-report-repair-copilot.Aa000003 \
+    rhyolite-report-repair.Aa000004 \
+    rhyolite-repo-review-copilot.Aa000005 \
+    rhyolite-repo-review-copilot.Aa000006 \
+    rhyolite-repo-review-copilot.too-long-suffix \
+    rhyolite-other.Aa000007; do
+    mkdir -m 700 -- "${sweep_root}/tmp/${sweep_name}"
+    printf 'bridge\n' > "${sweep_root}/tmp/${sweep_name}/config.json"
+done
+printf 'target\n' > "${sweep_root}/target/config.json"
+ln -s -- "${sweep_root}/target" \
+    "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000008"
+find "${sweep_root}" -exec touch -h -d '-2 hours' {} +
+touch -- "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000006/config.json"
+sweep_ready="${sweep_root}/locked"
+(
+    # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
+    source "${HARNESS_COMMON}"
+    rhyolite_lock_runtime_home \
+        "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000005" sweep_lock
+    [[ "${sweep_lock}" =~ ^[0-9]+$ ]] || exit 1
+    # The lock passes to a child that outlives the owner.
+    sleep 30 >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "${sweep_ready}"
+) || fail 'A runtime home could not be locked.'
+[[ -s "${sweep_ready}" ]] || fail 'The runtime-home lock fixture did not start.'
+(
+    # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
+    source "${HARNESS_COMMON}"
+    rhyolite_sweep_stale_runtime_homes \
+        "${sweep_root}/tmp" "${RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN}"
+    printf 'stderr-still-open\n' >&2
+) 2> "${sweep_root}/sweep.stderr" || fail 'The runtime-home sweep failed.'
+kill "$(cat -- "${sweep_ready}")" 2>/dev/null || true
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000001 \
+    rhyolite-repo-research-claude.Aa000002 \
+    rhyolite-report-repair-copilot.Aa000003 \
+    rhyolite-report-repair.Aa000004; do
+    [[ ! -e "${sweep_root}/tmp/${sweep_name}" ]] ||
+        fail "The runtime-home sweep kept the stale home ${sweep_name}."
+done
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000005 \
+    rhyolite-repo-review-copilot.Aa000006 \
+    rhyolite-repo-review-copilot.too-long-suffix \
+    rhyolite-other.Aa000007; do
+    [[ -f "${sweep_root}/tmp/${sweep_name}/config.json" ]] ||
+        fail "The runtime-home sweep removed the protected entry ${sweep_name}."
+done
+[[ -L "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000008" &&
+    -f "${sweep_root}/target/config.json" ]] ||
+    fail 'The runtime-home sweep followed or removed a symlink.'
+[[ "$(cat -- "${sweep_root}/sweep.stderr")" == 'stderr-still-open' ]] ||
+    fail 'The runtime-home sweep changed or wrote to standard error.'
+
+# The next launch removes a model-check home that a killed launcher left in
+# an earlier session directory and keeps that session's other files.
+sweep_launcher_session="${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions/20260101T000000Z-1"
+mkdir -m 700 -p -- "${sweep_launcher_session}/model-check-1/home"
+chmod 700 -- \
+    "${fixture_root}/launcher-check-sweep-state" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions"
+printf 'bridge\n' > "${sweep_launcher_session}/model-check-1/home/config.json"
+printf 'context\n' > "${sweep_launcher_session}/launch-context.txt"
+find "${sweep_launcher_session}" -exec touch -h -d '-2 hours' {} +
+run_launcher_model_check_case launcher-check-sweep
+((launcher_check_case_status == 0)) ||
+    fail 'launcher-check-sweep: the launcher did not start.'
+[[ -f "${sweep_launcher_session}/launch-context.txt" ]] ||
+    fail 'launcher-check-sweep: the sweep removed an earlier session file.'
+
 # Interactively, a rejected effort or model asks for the next highest effort,
 # another model, or quit. There is no default answer, the effort never drops
 # below high, and end of input quits.

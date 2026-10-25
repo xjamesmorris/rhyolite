@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A hard-killed runner or launcher no longer leaves its runtime homes, with
+  their ephemeral authentication bridge, behind indefinitely. A runner
+  stopped with `SIGKILL` cannot run its cleanup, so its review, research, and
+  report-repair homes under `TMPDIR` stayed until deleted by hand, as did a
+  launcher's `model-check-<n>` home in its session directory. Each owner now
+  holds a util-linux `flock` lock on its home, which its children inherit,
+  and each review execution start and launcher start removes the current
+  user's exact-name homes whose lock is free and whose whole tree has not
+  changed for 60 minutes. The age limit also protects homes that an older,
+  lock-unaware Rhyolite may still be using. Without `flock`, nothing is
+  locked or removed.
+
 - Copilot reviews work again with Copilot CLI 1.0.103, which removed the
   `--no-remote-export` option that Rhyolite passed to every Copilot child.
   Each review, research, and report-repair worker exited before it

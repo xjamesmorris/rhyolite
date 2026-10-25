@@ -29,29 +29,10 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
 | T18 | P2 | Verify | Confirm in a live run that scope 1 runs the same security pass as scope 3 |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T16 (P2, Open): Remove runtime homes left by a hard-killed runner
-
-- **Problem:** A runner stopped with `SIGKILL` cannot run its exit trap, so
-  each isolated harness runtime home under `TMPDIR` keeps its ephemeral
-  authentication bridge, for Copilot a copy of the login token entries from
-  `config.json`, until something removes the directory. The homes are mode
-  0700, so only the same user can read them. Until 2026-10-19 the validation
-  suite's hard-kill fixtures also left such homes, with the contributor's
-  real Copilot token entries, in `/tmp`; they now use fixture authentication
-  and a fixture `TMPDIR`. A launcher stopped the same way during its
-  pre-launch model check leaves its `model-check-<n>` home, with the same
-  bridge, in that launch's session directory under launcher state.
-- **Next step:** design a safe sweep, for example at the next runner or
-  launcher start, that removes only the current user's stale
-  `rhyolite-repo-*` runtime homes and launcher `model-check-*` homes whose
-  recorded process is gone, and document the manual cleanup.
-- **Source:** 2026-10-19 validation run.
 
 ### T18 (P2, Verify): Confirm in a live run that scope 1 runs the same security pass as scope 3
 

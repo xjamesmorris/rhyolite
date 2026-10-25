@@ -15984,6 +15984,49 @@ fi
     "RHYOLITE STOP | not-running | Interrupted; ${hard_kill_run}" ]] ||
     fail 'Request-stop did not treat the record of a killed runner as not running.'
 
+# The hard kill left both review runtime homes with their authentication
+# bridges. Once no process holds their locks and they are older than the stale
+# age, the next runner start removes them and leaves unrelated entries.
+mapfile -t hard_kill_homes < <(
+    find "${hard_kill_root}/tmp" -mindepth 1 -maxdepth 1 -type d \
+        -name 'rhyolite-repo-review-copilot.*' | sort
+)
+((${#hard_kill_homes[@]} == 2)) ||
+    fail 'The hard-kill fixture did not leave its two review runtime homes.'
+for hard_kill_home in "${hard_kill_homes[@]}"; do
+    for attempt in $(seq 1 50); do
+        flock -n -x "${hard_kill_home}" -c true && break
+        sleep 0.1
+    done
+done
+mkdir -m 700 -- "${hard_kill_root}/tmp/unrelated-directory"
+find "${hard_kill_root}/tmp" -exec touch -h -d '-2 hours' {} +
+MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${hard_kill_root}/tmp" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${hard_kill_root}/sweep-output" \
+        --workspace-root "${hard_kill_root}/sweep-workspace" \
+        --non-interactive \
+        --no-open-html >"${hard_kill_root}/sweep.stdout" 2>&1 ||
+    {
+        cat -- "${hard_kill_root}/sweep.stdout" >&2
+        fail 'The runner after a hard kill did not complete its review.'
+    }
+for hard_kill_home in "${hard_kill_homes[@]}"; do
+    [[ ! -e "${hard_kill_home}" ]] ||
+        fail "The next runner start left the hard-killed runtime home ${hard_kill_home}."
+done
+[[ -d "${hard_kill_root}/tmp/unrelated-directory" ]] ||
+    fail 'The stale runtime-home sweep removed an unrelated directory.'
+
 # Parent death: a SIGKILL of the whole runner process group, as a harness
 # shell kill may send, must not orphan a review worker. Workers run under
 # `timeout` in their own process group, which that kill does not reach.

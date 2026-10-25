@@ -510,3 +510,85 @@ rhyolite_harness_load() {
     RHYOLITE_HARNESS_LOADED_ID="${selected_harness}"
     RHYOLITE_HARNESS_LOADED_PATH="${adapter_path}"
 }
+
+# A hard-killed runner or launcher cannot run its exit trap, so a runtime home
+# it created keeps its ephemeral authentication bridge. Every owner therefore
+# holds an exclusive flock(1) lock on its runtime home, which every child that
+# inherits the descriptor keeps holding, and a later start removes a matching
+# home only when that lock is free and nothing in the home changed within
+# RHYOLITE_STALE_RUNTIME_HOME_MINUTES. The age check also keeps any home that
+# an older, lock-unaware Rhyolite may still be using.
+RHYOLITE_STALE_RUNTIME_HOME_MINUTES=60
+RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN='^rhyolite-((repo-review|repo-research|report-repair)-[a-z][a-z0-9-]{0,31}|report-repair)\.[A-Za-z0-9]{8}$'
+RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN='^model-check-[0-9]+$'
+
+rhyolite_runtime_home_locking_available() {
+    ((BASH_VERSINFO[0] > 4 ||
+        (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 1))) &&
+        command -v flock >/dev/null 2>&1
+}
+
+# Usage: rhyolite_lock_runtime_home <directory> <descriptor_variable>
+# Sets the variable to the open locked descriptor, or to empty when locking is
+# unavailable, in which case no sweep removes anything either.
+rhyolite_lock_runtime_home() {
+    local directory="$1"
+    local descriptor_name="$2"
+    local descriptor
+
+    [[ "${descriptor_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+    printf -v "${descriptor_name}" '%s' ''
+    rhyolite_runtime_home_locking_available || return 0
+    [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    exec {descriptor}<"${directory}" || return 1
+    if ! flock -n -x "${descriptor}"; then
+        exec {descriptor}<&-
+        return 1
+    fi
+    printf -v "${descriptor_name}" '%s' "${descriptor}"
+}
+
+# Usage: rhyolite_unlock_runtime_home <descriptor>
+rhyolite_unlock_runtime_home() {
+    local descriptor="${1-}"
+
+    [[ "${descriptor}" =~ ^[0-9]+$ ]] || return 0
+    exec {descriptor}<&-
+}
+
+# Usage: rhyolite_sweep_stale_runtime_homes <parent_directory> <name_pattern>
+# Best effort: removes only the current user's real directories directly under
+# the parent whose names match the pattern, whose lock is free, and whose
+# whole tree is older than the stale age. It never fails its caller.
+rhyolite_sweep_stale_runtime_homes() {
+    local parent="$1"
+    local pattern="$2"
+    local candidate
+    local name
+    local recent
+    local descriptor
+
+    rhyolite_runtime_home_locking_available || return 0
+    [[ -n "${parent}" && -d "${parent}" && ! -L "${parent}" ]] || return 0
+    while IFS= read -r -d '' candidate; do
+        name="${candidate##*/}"
+        [[ "${name}" =~ ${pattern} ]] || continue
+        [[ -d "${candidate}" && ! -L "${candidate}" && -O "${candidate}" ]] ||
+            continue
+        recent="$(
+            find "${candidate}" \
+                -mmin "-${RHYOLITE_STALE_RUNTIME_HOME_MINUTES}" \
+                -print -quit 2>/dev/null
+        )" || continue
+        [[ -z "${recent}" ]] || continue
+        { exec {descriptor}<"${candidate}"; } 2>/dev/null || continue
+        if flock -n -x "${descriptor}"; then
+            rm -rf --one-file-system -- "${candidate}" 2>/dev/null || true
+        fi
+        exec {descriptor}<&-
+    done < <(
+        find "${parent}" -mindepth 1 -maxdepth 1 -type d \
+            -user "$(id -u)" -print0 2>/dev/null
+    )
+    return 0
+}

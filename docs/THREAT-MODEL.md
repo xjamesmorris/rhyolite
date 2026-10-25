@@ -537,7 +537,11 @@
   under `TMPDIR`, and a launcher stopped that way during its model check
   cannot remove the mode-0700 `model-check-<n>` home in its private session
   directory under launcher state, so their ephemeral authentication bridge
-  remains until the directory is deleted.
+  remains until the directory is deleted. Each owner holds a util-linux
+  `flock` lock on its home, which every child that inherits it keeps, and
+  the next runner or launcher start removes the current user's matching
+  homes whose lock is free and whose whole tree is unchanged for 60 minutes.
+  Without `flock`, nothing is locked or removed.
 - Public DNS classification and pinning reduce, but cannot eliminate,
   risks from a compromised DNS resolver, transparent network
   interception, or a malicious public endpoint sharing infrastructure

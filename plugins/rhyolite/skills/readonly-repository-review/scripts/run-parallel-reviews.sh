@@ -3540,6 +3540,11 @@ if ! rhyolite_harness_invoke harness_prepare_run 2>/dev/null; then
     exit 2
 fi
 
+# Remove runtime homes, with their authentication bridges, that an earlier
+# hard-killed runner could not clean up.
+rhyolite_sweep_stale_runtime_homes \
+    "${TMPDIR:-/tmp}" "${RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN}"
+
 git_version="$(git --version 2>/dev/null)" || {
     printf 'Could not determine the installed Git version.\n' >&2
     exit 2
@@ -4161,6 +4166,8 @@ finalize_review_runtime_home() {
         >/dev/null 2>> "${error_path}"; then
         runtime_harness_home=""
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN=""
+        rhyolite_unlock_runtime_home "${REVIEW_RUNTIME_HOME_LOCK-}"
+        REVIEW_RUNTIME_HOME_LOCK=''
         trap - EXIT
     else
         printf '%s\n' \
@@ -4713,6 +4720,8 @@ cleanup_report_repair_runtime() {
             "${report_repair_runtime_home}" \
             >/dev/null 2>> "${error_path}"; then
             report_repair_runtime_home=""
+            rhyolite_unlock_runtime_home "${REPORT_REPAIR_RUNTIME_HOME_LOCK-}"
+            REPORT_REPAIR_RUNTIME_HOME_LOCK=''
         else
             printf '%s\n' \
                 "Harness failure stage: harness ${HARNESS} harness_sanitize_runtime_home" \
@@ -4724,6 +4733,8 @@ cleanup_report_repair_runtime() {
         if [[ ! -e "${report_repair_workdir}" ]] ||
             rmdir -- "${report_repair_workdir}" 2>> "${error_path}"; then
             report_repair_workdir=""
+            rhyolite_unlock_runtime_home "${REPORT_REPAIR_WORKDIR_LOCK-}"
+            REPORT_REPAIR_WORKDIR_LOCK=''
         else
             printf '%s\n' \
                 'Report repair work directory cleanup failed.' \
@@ -5287,7 +5298,11 @@ run_report_repair() {
         report_repair_runtime_home="$(
             canonicalize_directory_path "${report_repair_runtime_home}"
         )" &&
-        chmod 700 -- "${report_repair_workdir}" "${report_repair_runtime_home}"
+        chmod 700 -- "${report_repair_workdir}" "${report_repair_runtime_home}" &&
+        rhyolite_lock_runtime_home \
+            "${report_repair_workdir}" REPORT_REPAIR_WORKDIR_LOCK &&
+        rhyolite_lock_runtime_home \
+            "${report_repair_runtime_home}" REPORT_REPAIR_RUNTIME_HOME_LOCK
     } 2>> "${error_path}"; then
         printf '%s\n' 'Report repair could not create isolated runtime directories.' \
             >> "${error_path}"
@@ -9074,6 +9089,14 @@ EOF
                 mktemp -d "${TMPDIR:-/tmp}/rhyolite-repo-research-${HARNESS}.XXXXXXXX"
             )"
             RESEARCH_RUNTIME_HOME_TO_CLEAN="${research_runtime_home}"
+            if ! rhyolite_lock_runtime_home \
+                "${research_runtime_home}" RESEARCH_RUNTIME_HOME_LOCK \
+                2>> "${research_raw_error}"; then
+                printf '%s\n' \
+                    'Could not lock the temporary research runtime home.' \
+                    >> "${research_raw_error}"
+                research_ready=0
+            fi
         fi
         if ((research_ready)) &&
             ! rhyolite_harness_invoke harness_prepare_worker_home \
@@ -9283,6 +9306,8 @@ EOF
                 >/dev/null 2>/dev/null; then
             research_runtime_home=""
             RESEARCH_RUNTIME_HOME_TO_CLEAN=""
+            rhyolite_unlock_runtime_home "${RESEARCH_RUNTIME_HOME_LOCK-}"
+            RESEARCH_RUNTIME_HOME_LOCK=''
         else
             printf '%s\n' \
                 "Could not remove the temporary research ${HARNESS_DISPLAY_NAME} runtime home after three attempts: ${research_runtime_home}" \
@@ -9600,7 +9625,14 @@ EOF
         )"
         REPO_REVIEWER_RUNTIME_HOME_TO_CLEAN="${runtime_harness_home}"
         trap 'cleanup_review_runtime_home_on_exit' EXIT
-        if ! rhyolite_harness_invoke harness_prepare_worker_home \
+        if ! rhyolite_lock_runtime_home \
+            "${runtime_harness_home}" REVIEW_RUNTIME_HOME_LOCK \
+            2>> "${error_path}"; then
+            printf '%s\n' \
+                'Could not lock the temporary harness runtime home.' \
+                >> "${error_path}"
+            worker_ready=0
+        elif ! rhyolite_harness_invoke harness_prepare_worker_home \
             "${runtime_harness_home}" \
             "${REASONING_EFFORT}" \
             "${CONTEXT_TIER}" \

@@ -673,6 +673,7 @@ readonly LAUNCHER_ACCESS_PROMPT='Rhyolite model check. Reply with exactly: OK'
 LAUNCHER_ACCESS_RESULT=''
 LAUNCHER_ACCESS_DETAIL=''
 LAUNCHER_ACCESS_ROOT=''
+LAUNCHER_ACCESS_LOCK=''
 LAUNCHER_ACCESS_SEQUENCE=0
 LAUNCHER_ACCESS_MODEL=''
 LAUNCHER_ACCESS_EFFORT=''
@@ -683,7 +684,23 @@ finish_copilot_model_access_check() {
     rhyolite_harness_invoke harness_sanitize_runtime_home \
         "${LAUNCHER_ACCESS_ROOT}/home" >/dev/null 2>&1 || true
     rm -rf -- "${LAUNCHER_ACCESS_ROOT}" 2>/dev/null || true
+    rhyolite_unlock_runtime_home "${LAUNCHER_ACCESS_LOCK}"
+    LAUNCHER_ACCESS_LOCK=''
     LAUNCHER_ACCESS_ROOT=''
+}
+
+# A launcher killed during its model check cannot remove that check's
+# runtime home, with its authentication bridge, from its session directory.
+sweep_stale_model_check_homes() {
+    local sessions_dir="$1"
+    local session
+
+    for session in "${sessions_dir}"/*; do
+        [[ -d "${session}" && ! -L "${session}" && -O "${session}" ]] ||
+            continue
+        rhyolite_sweep_stale_runtime_homes \
+            "${session}" "${RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN}"
+    done
 }
 
 # Sets LAUNCHER_ACCESS_RESULT to available, model-unavailable,
@@ -715,7 +732,9 @@ check_copilot_model_access() {
         return 0
     fi
     LAUNCHER_ACCESS_ROOT="${check_root}"
-    if ! mkdir -m 700 -- \
+    if ! rhyolite_lock_runtime_home \
+            "${LAUNCHER_ACCESS_ROOT}" LAUNCHER_ACCESS_LOCK 2>/dev/null ||
+        ! mkdir -m 700 -- \
             "${LAUNCHER_ACCESS_ROOT}/home" "${LAUNCHER_ACCESS_ROOT}/cwd" ||
         ! rhyolite_harness_invoke harness_prepare_run >/dev/null 2>&1 ||
         ! rhyolite_harness_invoke harness_prepare_worker_home \
@@ -1383,6 +1402,7 @@ main() {
 
     launcher_home="$(rhyolite_launcher_home)"
     session_dir="$(create_session_dir "${launcher_home}")"
+    sweep_stale_model_check_homes "${launcher_home}/sessions"
     log_dir="${session_dir}/${harness}-logs"
     if [[ "${harness}" == copilot ]]; then
         mkdir -p "${log_dir}"

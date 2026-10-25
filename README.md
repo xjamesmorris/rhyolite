@@ -765,7 +765,13 @@ unique user-only temporary runtime home, never into the read-only
 checkout. Authentication variables are marked secret for child tools.
 After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
-runtime home.
+runtime home. A runner stopped with `SIGKILL` cannot delete it, so each
+later review start removes your `rhyolite-*` runtime homes under `TMPDIR`
+that no running process holds and that have not changed for 60 minutes;
+the launcher does the same for `model-check-<n>` homes in its session
+directories. To clean up sooner, first make sure no Rhyolite review is
+running, then delete the leftover `${TMPDIR:-/tmp}/rhyolite-repo-*` and
+`${TMPDIR:-/tmp}/rhyolite-report-repair*` directories.
 
 Add `--harness claude` to run Claude Code workers instead. The runner then
 uses the Claude Code authentication described in
