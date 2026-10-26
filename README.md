@@ -49,8 +49,9 @@ other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
    to accept every default without a prompt. Copilot CLI then opens with
    the `repo-review` agent selected and starts guided setup, as in the
    screenshot above.
-4. Answer the numbered setup questions for the output location and review
-   scope. Choose `Scope 1 - Core repository review` for your first run.
+4. If you did not use `--auto-defaults`, answer the numbered setup questions
+   for the output location and review scope. Choose
+   `Scope 1 - Core repository review` for your first run.
 5. Check the `EFFECTIVE REVIEW PLAN`, then select `Run review`.
 6. While the review runs, type `/rhyolite:status` to check progress, or
    `stop` to cancel it.
@@ -147,6 +148,19 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   assessment includes documentation and proposal material.
 - **Strongly recommended:** select `1 - Core repository review` for the
   first run; broader scopes can be resource-intensive and long-running.
+
+## Known limitations
+
+- **Security-file coverage:** the security pass must inspect every
+  security-relevant tracked file, but the runner does not independently
+  verify which files the worker opened. Reports may omit unopened files
+  from their limitations. A clean report means no qualifying defects were
+  identified, not proof of exhaustive coverage or absence of vulnerabilities.
+- **Host sleep:** Rhyolite does not keep the host awake. Sleep pauses model
+  work, but counts against the wall-clock time remaining for same-session
+  recovery and consolidation-ledger requests. Keep the host awake during a
+  review; otherwise recovery can run out of time even when little model work
+  has occurred.
 
 ## Install from a published marketplace
 

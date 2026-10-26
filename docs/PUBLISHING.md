@@ -131,6 +131,10 @@ Copilot plugins are public-preview features.
   `plugins/rhyolite/.claude-plugin/plugin.json`), and both marketplace
   registries (`.github/plugin/marketplace.json` and
   `.claude-plugin/marketplace.json`) synchronized.
+- Also update both packaged version commands, both prompt-native help
+  panels and orchestrators' release-scope text, the shared review skill's
+  release-scope text, `PRIVACY.md`, and the extension's `RHYOLITE_VERSION`
+  constant. The displayed version must match the manifests on every surface.
 - Keep the temporary user-facing `Beta` display suffix separate from machine
   semver. `VERSION` and JSON version fields remain `X.Y.Z`, stable tags remain
   `vX.Y.Z`, and plan, state, and other schemas keep their independent integer
@@ -172,7 +176,8 @@ that onboarding notice.
 1. Update `VERSION`, `plugins/rhyolite/plugin.json`,
    `plugins/rhyolite/.claude-plugin/plugin.json`,
    `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
-   `CHANGELOG.md`.
+   `CHANGELOG.md`, plus the packaged version strings listed under
+   [Versioning](#versioning).
 2. On Fedora Linux 44, run the release validator:
 
    ```bash
@@ -196,7 +201,10 @@ that onboarding notice.
    smoke-test its namespaced agents from an isolated new Copilot session.
    Verify the exported package's load status, command-triggered plaque, and
    exact setup controls; automated package/helper checks do not substitute
-   for interactive agent handoff.
+   for interactive agent handoff. When a release changes multi-model scans,
+   also complete a live two-scan review with findings from both scans and a
+   valid consolidation ledger; a refused scan does not exercise that success
+   path.
 7. Fast-forward local `main` to the approved release commit and push
    `origin/main`.
 8. Create and push the matching annotated stable tag on that exact commit,

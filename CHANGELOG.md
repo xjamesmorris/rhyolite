@@ -2,138 +2,82 @@
 
 ## Unreleased
 
-- Provider refusals no longer look like prompt-size failures and no longer
-  fail a review that other approved models can finish. In a two-scan review,
-  the model provider declined one `claude-opus-5.5` scan response. Copilot
-  CLI's automatic refusal fallback then rejected its own request against the
-  fallback model's 128,000-token prompt budget, although the approved model's
-  long-context budget was 968,000 tokens and its largest prompt 185,172. The
-  scan was treated as an ordinary failure, and the review failed below its
-  required scans. Harness Contract v9 now reports a `refused` worker
-  outcome, detected live and after exit in any event order, from Copilot's
-  `content_filter` usage records and refusal-fallback events and from Claude
-  Code's `refusal` stops and safeguard handovers. The runner stops a refused
-  worker before any automatic fallback can answer and never retries the
-  declined model for the repository. Under the new approval-bound
-  `RefusalPolicy`, a declined security scan is skipped and excluded from the
-  required scans, and a declined report writer or research worker hands over,
-  in a fresh session, to the next approved model: the consolidation model,
-  the review model, then the scan B and C models. Only when none remains does
-  the review fail, at stage `provider refusal`. Repository and run state,
-  manifest, handoffs, the HTML index, and the executive summary record every
-  refusal and handover as `ProviderRefusals`.
-- Worker outcomes (schema 2) record the approved session's prompt budget and
-  largest prompt. Failure analysis adds a `provider-refusal` class, which
-  explains that a prompt-budget error after a refusal names the fallback
-  model's limit, and a `context-limit` class for a genuine overflow of the
-  approved model's budget.
-- The dedicated security pass and the security scan request now ask for the
-  attacker's position, preconditions or trust boundary, and triggering input
-  at source level, and forbid exploit code, payloads, shellcode, and
-  step-by-step attack instructions, to reduce provider refusals without
-  narrowing the pass.
-- Added multi-model security scans. Different models reviewing the same
-  commit report materially different security defects, and one run can
-  confidently clear an area that another run shows to be broken. With
-  `--security-scans 2` or `3`, each repository now gets up to three
-  independent security-only scans right after its read-only snapshot and
-  before any research: scan A on the review model and scans B and C on
-  other models, run in parallel in separate isolated sessions and runtime
-  homes with an identical request. Their findings reach the reviewer's
-  working directory only after research, so the network-enabled research
-  worker never sees them. The review worker then runs on the
-  consolidation model (by default the review model), performs its own
-  complete security pass, verifies every scan finding at its cited line,
-  merges duplicates, and returns a ledger that classifies every scan finding
-  as confirmed, merged, refined, or rejected. The runner validates the scan
-  reports and the ledger, relaunches a scan once after a transient
-  model-service failure or blocked model fallback, asks the same session
-  once for a missing ledger, and fails the review when fewer than the
-  approved minimum of scans succeed or the ledger stays invalid. The scan
-  count, every scan and consolidation model and effort, and the minimum are
-  part of the approved plan as `SecurityScans`; artifacts are saved under
-  `<repository>/security-scans/`. One scan, the direct-runner default, keeps
-  the integrated security pass.
-- The launcher asks for the security scan count, each extra scan model, and
-  the consolidation model. It offers the choices approved last time for the
-  same repositories first, saved in a new companion preference file, and
-  otherwise suggests models from another vendor or model family. The new
-  `--security-scans`, `--scan-model`, and `--consolidation-model` options set
-  them on the command line, where `default` selects the remembered or
-  suggested value without a prompt, as `--model default` and
-  `--reasoning-effort default` now do for the review runtime. With Copilot,
-  each additional model gets the same one-request pre-launch model check.
-  The new `--auto-defaults` option accepts the default for every choice not
-  given on the command line, in the launcher and in guided setup (home
-  output and scope 1), so the only remaining step is approving the
-  effective plan. The direct runner adds `--min-successful-scans` and
-  `--suggest-scan-models`.
-- The dedicated security pass now names the defect classes it must check:
-  arithmetic and bounds on untrusted lengths, counts, offsets, and indices;
-  ownership and privilege checks on every path to a privileged operation,
-  including update paths that skip checks applied at install;
-  time-of-check to time-of-use gaps; error paths that leave privileged state
-  behind; and parser behavior on malformed, truncated, and oversized input.
-  A scope 1 review of the same commit missed an update-path privilege check
-  that both scope 3 reviews reported, and the scan prompt uses the same
-  checklist.
-- A hard-killed runner or launcher no longer leaves its runtime homes, with
-  their ephemeral authentication bridge, behind indefinitely. A runner
-  stopped with `SIGKILL` cannot run its cleanup, so its review, research, and
-  report-repair homes under `TMPDIR` stayed until deleted by hand, as did a
-  launcher's `model-check-<n>` home in its session directory. Each owner now
-  holds a util-linux `flock` lock on its home, which its children inherit,
-  and each review execution start and launcher start removes the current
-  user's exact-name homes whose lock is free and whose whole tree has not
-  changed for 60 minutes. The age limit also protects homes that an older,
-  lock-unaware Rhyolite is still actively writing. Without `flock`, nothing is
-  locked or removed.
+## 0.9.0 - 2026-10-26
 
-- Copilot reviews work again with Copilot CLI 1.0.103, which removed the
-  `--no-remote-export` option that Rhyolite passed to every Copilot child.
-  Each review, research, and report-repair worker exited before it
-  started, so every Copilot review failed closed before analysis began;
-  scopes 2 and 3 stopped at the research capability stage. The launcher's
-  pre-launch model check could only warn that it could not verify the
-  selected model. Every Copilot child and the model check now pass the
-  replacement `--sync-session=off`, which keeps Copilot account
-  session-history sync off. The value stays attached with `=` because a
-  bare `--sync-session` turns sync on.
-- Retired native fleet mode. It never made a review faster: Copilot's
-  `--fleet` changed only the outer setup session, whose orchestrator never
-  starts subagents and runs every review through the trusted runner. The
-  runner already reviews up to two repositories at a time by default
-  (`--throttle`), and review workers never receive subagents, so the
-  approved model stays enforced. In native mode Copilot also flattened the
-  launcher's setup block and added conflicting instructions to dispatch
-  subagents. The launcher no longer asks for an execution mode or passes
-  `--fleet`; the orchestrators no longer ask about fleet mode or show it in
-  `help` or `status`; and the effective plan and its approval hash no longer
-  include `FleetMode`, which plan schema 5 now omits. The launcher and the
-  direct runner reject `--fleet-mode native` with an explanation and still
-  accept `--fleet-mode standard` with no effect. Launcher preferences move to
-  schema 4 without `fleetMode`; schemas 1-3 stay readable, and their saved
-  model, effort, and context are still reused. The `fleet` harness
-  capability is retired. State schema 6 is unchanged.
-- The dedicated security pass is now the same in every scope. Scope 1 always
-  ran it with the same approved model, reasoning effort, and context, but
-  three scope-dependent inputs could make it lighter than the scope 3 pass:
-  a 60-minute default session timeout (scope 2: 120, scope 3: 240), a worker
-  request that named scope 3 "Full review" with no rule about security
-  depth, and no explicit coverage requirement, while scope 3's
-  whole-repository provenance work made its worker read more of the tree.
-  The default session timeout is now 240 minutes for every scope; dedicated
-  research keeps its own 60- and 120-minute limits. The review prompt,
-  shared skill, and both worker agents state that the security pass is
-  identical for every scope, that Core and Full in scope names do not
-  describe security depth, and that the pass maps trust boundaries,
-  privilege transitions, entry points, and untrusted-input parsers and
-  inspects every security-relevant tracked file instead of sampling. The
-  scope descriptions no longer imply a cheaper model for scope 1 or a larger
-  model or subagents for scope 3: scope 1 uses the fewest AI credits because
-  it runs only the review worker, and a new fifth setup line states that
-  every scope runs the same full security pass with the same model, effort,
-  context, and time limit. Scope 1 keeps every existing section.
+### Added
+
+- Multi-model security scans: up to three independent, isolated scans of
+  the same read-only snapshot, followed by a consolidation review that runs
+  its own complete security pass, verifies every scan finding, and returns
+  a validated ledger. Scans run before research; the research worker never
+  sees their findings. Scan models, efforts, consolidation settings, and the
+  minimum successful scans are approval-bound as `SecurityScans`.
+- Launcher options `--security-scans`, `--scan-model`, and
+  `--consolidation-model`, with remembered choices and suggestions from
+  another vendor or model family. The launcher defaults to two scans; the
+  direct runner defaults to one integrated security pass. Two scans use
+  three base model sessions per repository, before any research or recovery,
+  and Copilot checks each additional selected model with one short request.
+  The direct runner also adds `--min-successful-scans` and
+  `--suggest-scan-models`.
+- `--auto-defaults` accepts every unspecified launcher and guided-setup
+  default, including home output and scope 1, while preserving explicit
+  effective-plan approval. `default` also selects remembered or suggested
+  values without a prompt for the review model, reasoning effort, scan
+  models, and consolidation model.
+
+### Changed
+
+- Every scope now requires the same complete security pass under the same
+  approved model, reasoning effort, context, and 240-minute default session
+  timeout. Dedicated research retains its separate 60- and 120-minute
+  limits. The shared checklist covers untrusted arithmetic and bounds,
+  privilege checks including update paths, time-of-check to time-of-use
+  gaps, privileged error paths, and malformed input.
+- Security requests ask for source-level attacker position, preconditions,
+  trust boundaries, and triggering input, without exploit code, payloads,
+  shellcode, or step-by-step attack instructions.
+- Native fleet mode is retired. The launcher no longer passes Copilot's
+  `--fleet`; `--fleet-mode native` is rejected and
+  `--fleet-mode standard` remains a no-op compatibility spelling. Plan
+  schema 5 omits `FleetMode`, and launcher preferences use schema 4 while
+  preserving model, effort, and context from schemas 1-3. State schema 6
+  is unchanged.
+
+### Fixed
+
+- Provider refusals no longer discard work that other approved models can
+  finish. Harness Contract v9 recognizes a `refused` outcome live and after
+  exit, in any event order. The approval-bound `RefusalPolicy` skips
+  declined scans and excludes them from the required minimum; consolidation
+  still runs when every scan is declined. A declined report writer or
+  research worker hands over in a fresh session to the next approved model
+  that has not been declined. Rhyolite never retries the declined model for
+  that repository or accepts an automatic fallback outside the plan.
+- Refusals and handovers are disclosed as `ProviderRefusals` in state,
+  manifests, handoffs, the HTML index, and the executive summary. Worker
+  outcome schema 2 records the approved prompt budget and largest prompt.
+  Failure analysis distinguishes `provider-refusal` from genuine
+  `context-limit` failures instead of attributing a fallback model's small
+  prompt budget to the approved model. See the
+  [October 25 incident and live verification](docs/RUN-FAILURE-INCIDENT-2026-10-25.md).
+- Copilot CLI 1.0.103 compatibility: every child and launcher model check
+  now use `--sync-session=off` instead of the removed
+  `--no-remote-export`, keeping account session-history sync off.
+- Abandoned runtime homes from hard-killed runners and launcher model checks
+  are swept on later starts. Inherited util-linux `flock` locks protect
+  active homes; only the current user's exact-name, unlocked homes whose
+  whole tree has been unchanged for 60 minutes are removed. Without `flock`,
+  no sweep occurs.
+
+### Known limitations
+
+- Host sleep pauses model work but consumes the wall-clock recovery budget.
+  Keep the host awake during reviews.
+- The runner does not independently audit security-file coverage, and
+  reports may omit unopened files from their limitations. A clean report
+  is not proof of exhaustive coverage. See
+  [Known limitations](README.md#known-limitations).
 
 ## 0.8.4 - 2026-10-20
 
