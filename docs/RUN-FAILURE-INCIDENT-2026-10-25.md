@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-25 (local time)
 **Status:** Root cause confirmed; provider-refusal handling implemented
-(Harness Contract v9 and `RefusalPolicy`); live verification pending
+(Harness Contract v9 and `RefusalPolicy`) and verified live on 2026-10-25
+(see the follow-up below)
 **Severity:** Medium (review reliability; scan A's completed findings
 were not consolidated)
 **Security impact:** None observed. No output from a model outside the
@@ -135,3 +136,33 @@ with the refusal disclosed.
 - `tests/validate-plugin.sh`: a declined scan, every scan declined, a
   report-writer handover, a declined review with no other approved model,
   a research handover, and the plan's `RefusalPolicy`.
+
+## Follow-up: live verification (2026-10-25)
+
+Run `20261025-222910` repeated the review on the fixed runner, from 22:29 to
+23:07 local time with the host awake. The approved plan was unchanged: scan A
+and the consolidation on `gpt-5.6-sol` at `max`, scan B on `claude-opus-5.5`
+at `max`, both with `long_context`, at OpenSBI commit
+`bcf587a987573057968a11b941729d70799947f4`.
+
+- The provider again declined scan B, on its 40th call, 8 minutes 21 seconds
+  in, with a largest prompt of 327,413 of 968,000 tokens. Copilot CLI's
+  refusal fallback again failed its own pre-flight check (229,462 tokens;
+  limit 128,000) and ended the session within 0.1 seconds, before the
+  5-second live poll, so the post-exit worker outcome classified it as
+  `refused`.
+- Rhyolite recorded scan B as `Refused`, did not retry `claude-opus-5.5`, and
+  lowered the required scans from 2 to 1. Scan A completed with 9 findings
+  in 25 minutes 45 seconds.
+- The consolidation review validated its ledger (8 confirmed, 1 refined) and
+  completed the review in 38 minutes 41 seconds with 3 model sessions. Its
+  report includes the DBTR update-path privilege-check defect as finding 3.
+- `state.json` `ProviderRefusals`, the manifest, both handoffs, the HTML
+  index, and the executive summary named the declined model: "The provider
+  declined Claude Opus 5.5 for scan B; GPT-5.6 Sol wrote the canonical
+  consolidation report."
+
+`claude-opus-5.5` has declined both security scans of this repository, so
+this run consolidated one scan's findings; a live review in which two scans
+both contribute findings has not been observed yet. The live refusal stop
+was not exercised, because the CLI ended both refused sessions itself.
