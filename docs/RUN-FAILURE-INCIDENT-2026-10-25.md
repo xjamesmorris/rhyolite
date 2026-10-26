@@ -1,0 +1,132 @@
+# Rhyolite incident report: security scan refusal of 2026-10-25
+
+**Date:** 2026-10-25 (local time)
+**Status:** Root cause confirmed; provider-refusal handling implemented
+(Harness Contract v9 and `RefusalPolicy`); live verification pending
+**Severity:** Medium (review reliability; about 1 hour 48 minutes of
+completed scan work was not consolidated)
+**Security impact:** None observed. No output from a model outside the
+approved plan was accepted.
+**Confidence:** High, from the retained scan session event records, worker
+outcome, scan state, and the installed Copilot CLI 1.0.104-3 schemas
+
+## Executive summary
+
+A scope 1 review of `https://github.com/riscv-software-src/opensbi` with two
+multi-model security scans failed after 1 hour 48 minutes. Scan A
+completed with 12 findings. Scan B, on `claude-opus-5.5` at `max` reasoning
+effort with the `long_context` tier, ended with:
+
+    Execution failed: Request exceeds the model's prompt budget after
+    reserving output (134437 tokens; limit 128000). Reduce context or
+    compact before continuing.
+
+The approved plan required both scans, so consolidation never started and
+the repository failed.
+
+The error did not describe the approved model. Scan B never approached its
+own budget: every one of its 19 model calls recorded a prompt budget
+(`maxPromptTokens`) of 968,000 tokens, and its largest prompt was 185,172
+tokens. On the 19th call the model provider declined the response (a
+content refusal). Copilot CLI then started its automatic refusal fallback,
+which re-issues the conversation on another model. The CLI's own pre-flight
+check rejected that re-issued request against the fallback model's
+128,000-token budget before any fallback call was made, and the session
+ended with the error above.
+
+Rhyolite recognized a blocked fallback only when another model appeared in
+the event stream. None did, so the scan was classified as an ordinary
+`failed` outcome, which is never relaunched.
+
+## Evidence
+
+From the scan B session record and worker outcome:
+
+| Signal | Value |
+| --- | --- |
+| Approved model, effort, tier | `claude-opus-5.5`, `max`, `long_context` |
+| Prompt budget on every call | 968,000 tokens |
+| Largest prompt (call 19) | 185,172 tokens |
+| Call 19 `finishReason` | `content_filter` |
+| Call 19 `contentFilterTriggered` | `true` |
+| Call 19 output | 2,837 tokens, all reasoning |
+| Time from call 19 to the error | 1 ms |
+| Models recorded in the session | `claude-opus-5.5` only |
+| Worker outcome | `failed`, not retryable |
+
+Copilot CLI's session-event schema documents that it reports an Anthropic
+`refusal` stop reason as `finishReason: content_filter`, and that a
+`refusal_fallback` model change switches to a configured fallback model. The
+account's Copilot CLI experiment cache enabled
+`copilot_cli_anthropic_refusal_fallback`. In the October 13 incident the same
+fallback targeted `claude-opus-4.8`.
+
+Both scans also stalled at the same moment for 93 minutes and then logged
+"Response was interrupted due to a server error. Retrying...". The shared
+timing points to a host sleep or a network outage rather than to either
+model.
+
+## Root cause
+
+1. **No refusal outcome.** The worker outcome had no class for a provider
+   refusal. A refusal was visible only indirectly, as an attempted fallback
+   model, and this run recorded none.
+2. **Misleading harness error.** The only session error named a prompt
+   budget, which reads as a context-size problem with the approved model.
+3. **All-or-nothing scan quorum.** With the default minimum of every scan,
+   one refused scan discarded the completed scan and the consolidation pass.
+
+## Fixes
+
+- **Harness Contract v9.** `harness_worker_outcome` adds the `refused`
+  outcome and schema 2 with `ContentRefusals`, `PromptBudget`, and
+  `PeakPromptTokens`. Copilot recognizes approved-model usage records with
+  `finishReason: content_filter`, `refusal_fallback` model changes, and the
+  CLI's refusal notice; Claude Code recognizes `refusal` stops and
+  `model_refusal_fallback` handovers. A recorded refusal explains the
+  harness's fallback model in any event order. Live detection returns
+  `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5), so the runner stops a
+  refused worker before any fallback can answer.
+- **Approval-bound `RefusalPolicy`.** Rhyolite never retries a refusing
+  model for the repository and never accepts output from a model outside the
+  approved plan. A declined scan is skipped and excluded from the required
+  scans; consolidation still runs, even when every scan was declined. A
+  declined report writer or research worker hands over, in a fresh session,
+  to the next approved model that has not been declined, in plan order:
+  consolidation model, review model, then the scan B and C models.
+- **Reporting.** `ProviderRefusals` appears in repository and run state, the
+  manifest, handoffs, and the HTML index, and the executive summary names any
+  refusal or handover. Failure analysis adds `provider-refusal`, which
+  explains a fallback model's prompt-budget error, and `context-limit` for a
+  genuine overflow of the approved model's budget.
+- **Prevention.** The dedicated security pass and the scan request ask for
+  the attacker's position, preconditions or trust boundary, and triggering
+  input at source level, and forbid exploit code, payloads, shellcode, and
+  step-by-step attack instructions.
+
+Under these rules, this run would have skipped scan B, consolidated scan A's
+12 findings with the consolidation model's own security pass, and completed
+with the refusal disclosed.
+
+## Remaining limits
+
+- Prompt budgets cannot be checked before a run. Copilot CLI's offline
+  catalog lists only model IDs; the budget appears only in each session's
+  usage records, and the CLI already compacts against the approved tier.
+- A repository can provoke refusals in some models to remove their scans.
+  Rhyolite discloses every refusal and keeps the consolidation pass, but the
+  review then reflects fewer independent models.
+- Copilot CLI exposes no documented setting that disables its refusal
+  fallback, so Rhyolite stops the worker instead.
+
+## Validation
+
+- `tests/validate-harness-contract.sh`: this run's exact usage records,
+  the refusal fallback in both event orders, a refusal followed by a clean
+  finish, a genuine overflow, refusal-fallback model changes and notices,
+  live refusal status, and outcome schema 2 validation.
+- `tests/harness-contract-claude.sh`: Claude Code `refused` transcripts,
+  live detection, research finalization, and a refused single-model review.
+- `tests/validate-plugin.sh`: a declined scan, every scan declined, a
+  report-writer handover, a declined review with no other approved model,
+  a research handover, and the plan's `RefusalPolicy`.

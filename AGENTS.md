@@ -178,7 +178,7 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` and
   `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
   Production runtime support covers GitHub Copilot CLI and Claude Code.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v8 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v9 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -365,11 +365,14 @@ supported and must not drive new work.
   A scan is relaunched at most once (`ScanRelaunchLimit`) with a fresh
   session after a transient model-service failure or a blocked automatic
   fallback, classified from the adapter's worker outcome in the same order
-  as same-session recovery; every other scan failure is final, and live and
+  as same-session recovery; a scan whose model the provider declines is
+  recorded as `Refused`, never relaunched, and excluded from the required
+  scans; every other scan failure is final, and live and
   post-exit approved-model enforcement apply to every scan. The runner validates each
   `REPOSITORY SECURITY SCAN REVIEW REPORT`, relabels its findings as `A-1`,
-  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: every scan)
-  before consolidation, and keeps the relabelled reports outside the session
+  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: every scan),
+  less any declined scans, before consolidation, which therefore runs even
+  when every scan was declined, and keeps the relabelled reports outside the session
   root until any research phase has finished, so the network-enabled
   research worker never sees scan findings; only then does it copy them
   read-only under the session root. The review worker then runs on the
@@ -545,8 +548,8 @@ supported and must not drive new work.
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
 - Plan-only output includes `ApprovalHash`, `Model`,
-  `ModelCatalogMembership`, `RememberPreferences`, `ResearchTransport`, and
-  `SecurityScans`.
+  `ModelCatalogMembership`, `RememberPreferences`, `ResearchTransport`,
+  `SecurityScans`, and `RefusalPolicy`.
   Preserve approved settings,
   pass the hash unchanged to execution with `--expected-plan-hash`, and never
   execute without a valid hash.
@@ -567,7 +570,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v8 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v9 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -606,9 +609,32 @@ supported and must not drive new work.
   session with its context and append to the same session record, while the
   original `--session-id` argv fails once the session exists, so the
   continuation argv replaces the `--session-id` pair with `--resume` and
-  omits `--name`). Follow
+  omits `--name`). Contract v9 adds the `refused` worker outcome, outcome
+  schema 2 with `ContentRefusals`, `PromptBudget`, and `PeakPromptTokens`,
+  and `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5) for live detection, so a
+  provider refusal of the approved model (Copilot `finishReason`
+  `content_filter`, a Claude Code `refusal` stop or `model_refusal_fallback`
+  handover) is reported as a refusal, whatever automatic fallback the
+  harness then tried, in any event order. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
+- Provider refusals are approval-bound as `RefusalPolicy`. When the model
+  provider declines a request to an approved model, the runner stops the
+  worker at once, before any automatic harness fallback can answer, records
+  the refusal with the approved prompt budget and largest prompt, never
+  retries that model for the repository, and never accepts output from a
+  model outside the approved plan. A declined security scan is skipped and
+  excluded from the required scans. A declined report writer hands the same
+  request over, in a fresh session and runtime home, to the next listed
+  `ReportWriterCandidates` entry (consolidation model, review model, then
+  scan B and C models) that the provider has not declined for the
+  repository, archiving the refused attempt under
+  `report-writer/attempts/<n>/`; a declined research worker hands over the
+  same way through `ResearchCandidates` with a fresh broker and network log.
+  A refusal of every runnable approved model fails the repository at stage
+  `provider refusal`. Repository state, manifest, run state, handoffs, and
+  the HTML index record `ProviderRefusals`, and the executive summary names
+  any refusal or handover.
 - Same-session worker recovery is approval-bound as `WorkerRecoveryPolicy`.
   When `worker_continuation` is `yes`, the runner may continue the review
   worker's own session, with the exact approved argv less only its
@@ -651,6 +677,10 @@ supported and must not drive new work.
   highest effort, never below `high`, and the orchestrators ask whether to use
   it, choose another model, or stop; either change regenerates the plan and
   needs a fresh approval, so the effort never drops without that choice.
+  The `provider-refusal` class reports declined models and explains that a
+  harness prompt-budget error after a refusal names the limit of the
+  harness's fallback model, not the approved model's; the `context-limit`
+  class reports a genuine overflow of the approved model's prompt budget.
 - No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
   argument override every configured `subagents.agents.<name>.model` value
   (verified live: `modelSelectionSource: "explicit_override"`), so a
@@ -734,12 +764,14 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v8 requirement, negative test,
+  decision and must satisfy every Contract-v9 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with
   a model or effort other than the approved one, for example after a Claude
-  Code safeguard fallback. Adapters never accept substituted output.
+  Code safeguard fallback. Adapters never accept substituted output. A
+  recorded provider refusal is reported as `refused` rather than as an
+  enforcement failure, and its fallback model's output is never accepted.
 - A test no-op adapter belongs only under `tests/fixtures`. It is never a
   production registry entry, launcher option, plugin asset, marketplace
   feature, or user-facing supported harness.

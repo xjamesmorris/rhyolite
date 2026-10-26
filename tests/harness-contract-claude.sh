@@ -240,6 +240,8 @@ add({**base, "type": "user", "uuid": "u-2",
          {"type": "tool_result", "tool_use_id": "toolu_fixture",
           "content": "### Claude\n# mock repository"}]}})
 if mode == "substituted":
+    add(assistant([{"type": "text", "text": report}], used_model="claude-opus-4-8"))
+elif mode == "refused":
     add({**base, "type": "system", "subtype": "model_refusal_fallback",
          "content": "Fixture safeguards switched to another model."})
     add(assistant([{"type": "text", "text": report}], used_model="claude-opus-4-8"))
@@ -1167,6 +1169,8 @@ done
     }
     claude_assert_verify_failure substituted substituted \
         'answered with a model other than the approved model'
+    claude_assert_verify_failure refused refused \
+        'declined a request to the approved model'
     claude_assert_verify_failure effort effort-changed \
         'reasoning effort other than the approved effort'
     claude_assert_verify_failure subagent subagent \
@@ -1995,6 +1999,23 @@ claude_run_case substituted 1 --env RHYOLITE_MOCK_CLAUDE_MODE=substituted
 claude_assert_failed_run substituted \
     'Stage: approved model enforcement' \
     'answered with a model other than the approved model'
+claude_run_case refused 1 --env RHYOLITE_MOCK_CLAUDE_MODE=refused
+claude_assert_failed_run refused \
+    'Stage: provider refusal' \
+    'the model provider declined a request to the approved model'
+assert_contains "${CLAUDE_RUN_REPOSITORY}/errors.txt" \
+    'no other approved model that the provider has not declined for this repository remains' \
+    'Claude Code refused review without another approved model'
+node - "${CLAUDE_RUN_REPOSITORY}/state.json" <<'JS'
+const state = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
+const refusals = state.ProviderRefusals;
+if (refusals?.Count !== 1 || refusals.Events[0].Phase !== "report-writer" ||
+    refusals.Events[0].Model !== "claude-opus-5-5" ||
+    refusals.Events[0].FallbackModel !== "claude-opus-4-8" ||
+    refusals.ReportWriter?.Handovers !== 0) {
+  throw new Error(`Claude Code refusal state is wrong: ${JSON.stringify(refusals)}`);
+}
+JS
 claude_run_case effort 1 --env RHYOLITE_MOCK_CLAUDE_MODE=effort
 claude_assert_failed_run effort \
     'Stage: approved model enforcement' \
@@ -3253,6 +3274,15 @@ JS
     fi
     [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *'model other than the approved model'* ]] ||
         fail 'Claude Code substituted-research detail changed.'
+    claude_write_session_fixture refused \
+        "${research_project}/${research_session_id}.jsonl" \
+        "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
+    if rhyolite_harness_invoke harness_finalize_research_session \
+        "${research_home}" "${research_root}/raw-dossier"; then
+        fail 'Claude Code accepted refused research.'
+    fi
+    [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == *'declined a research request to the approved model'* ]] ||
+        fail "Claude Code refused-research detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
 
     # Live detection reads the same private session record incrementally while
     # the worker runs, so a substituted model, effort, or sidechain ends the
@@ -3277,29 +3307,29 @@ JS
     [[ "$(cat "${research_cursor}")" == "$(stat -c '%s' "${research_record}")" ]] ||
         fail 'Claude Code live detection cursor did not reach the end of the record.'
     # Records already scanned are never re-read; only appended records count.
-    claude_write_session_fixture substituted "${research_root}/substituted.jsonl" \
+    claude_write_session_fixture refused "${research_root}/refused.jsonl" \
         "${research_session_root}" claude-opus-5-5 max "${research_session_id}"
-    grep -F 'model_refusal_fallback' "${research_root}/substituted.jsonl" |
+    grep -F 'model_refusal_fallback' "${research_root}/refused.jsonl" |
         head -c 60 | tr -d '\n' >> "${research_record}"
     rhyolite_harness_invoke harness_detect_worker_violation \
         research "${research_root}/raw-dossier" claude-opus-5-5 max \
         "${research_cursor}" ||
         fail 'Claude Code live detection judged a partially written record.'
-    grep -F 'model_refusal_fallback' "${research_root}/substituted.jsonl" |
+    grep -F 'model_refusal_fallback' "${research_root}/refused.jsonl" |
         tail -c +61 >> "${research_record}"
     if rhyolite_harness_invoke harness_detect_worker_violation \
         research "${research_root}/raw-dossier" claude-opus-5-5 max \
         "${research_cursor}"; then
         fail 'Claude Code live detection missed a model-refusal fallback record.'
     fi
-    assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+    assert_equal "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
         "${RHYOLITE_HARNESS_LAST_STATUS}" \
-        'Claude Code live detection violation status'
+        'Claude Code live detection refusal status'
     [[ "${RHYOLITE_HARNESS_ERROR_DETAIL}" == \
-        "Claude Code answered with a model other than the approved model in the research phase (recorded 'model_refusal_fallback'); Rhyolite does not accept a substituted review." ]] ||
+        "The model provider declined a request to the approved model in the research phase (Claude Code recorded a content refusal); Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan." ]] ||
         fail "Claude Code live detection detail changed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
     for claude_live_case in \
-        'substituted|model_refusal_fallback|answered with a model other than the approved model' \
+        'substituted|claude-opus-4-8|answered with a model other than the approved model' \
         'effort|high|recorded a reasoning effort other than the approved effort' \
         'subagent|sidechain|recorded a subagent turn in the research phase'; do
         IFS='|' read -r live_mode live_detail live_fragment <<< "${claude_live_case}"

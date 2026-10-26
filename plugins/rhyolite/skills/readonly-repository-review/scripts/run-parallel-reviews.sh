@@ -76,6 +76,8 @@ SECURITY_CONSOLIDATION_PROTOCOL='RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
 SECURITY_SCAN_FINDING_LIMIT=60
 SECURITY_SCAN_RELAUNCH_LIMIT=1
 SECURITY_LEDGER_REQUEST_LIMIT=1
+# Provider refusals (RefusalPolicy): see refusal_policy_json.
+REFUSAL_POLICY_PROTOCOL_VERSION=1
 ENABLE_PUBLIC_RESEARCH=0
 ENABLE_PROVENANCE_RESEARCH=0
 DEFAULT_PRIOR_ART_LOOKBACK_MONTHS=6
@@ -435,6 +437,7 @@ PY
 # recorded output.
 RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS=5
 WORKER_VIOLATION_DETAIL=''
+WORKER_REFUSAL_DETAIL=''
 
 # Wait for a tracked worker while emitting heartbeats and asking the adapter,
 # every RHYOLITE_WORKER_WATCH_INTERVAL_SECONDS, whether the output recorded so
@@ -443,6 +446,10 @@ WORKER_VIOLATION_DETAIL=''
 # once instead of letting an unacceptable session run to completion; the
 # detail is recorded as a harness failure stage and in WORKER_VIOLATION_DETAIL,
 # and the post-exit normalization still fails closed on the same evidence.
+# A recorded provider refusal of the approved model also terminates the
+# worker at once, before an automatic harness fallback can answer; it is a
+# provider decision, not an enforcement failure, so its detail goes to
+# WORKER_REFUSAL_DETAIL and the worker outcome classifies it after exit.
 # A monitor error never stops the worker; it is recorded once as a warning.
 wait_for_monitored_worker() {
     local process_id="$1"
@@ -462,6 +469,7 @@ wait_for_monitored_worker() {
     local monitor_warned=0
 
     WORKER_VIOLATION_DETAIL=''
+    WORKER_REFUSAL_DETAIL=''
     rm -f -- "${cursor_path}"
     started_epoch="$(date +%s)"
     last_heartbeat_epoch="${started_epoch}"
@@ -493,6 +501,21 @@ wait_for_monitored_worker() {
                         "${subject}" \
                         "${progress_stage}" \
                         "approved model enforcement: terminating the ${phase} worker after ${elapsed_seconds}s; ${WORKER_VIOLATION_DETAIL}"
+                    terminated=1
+                    terminate_process_tree "${process_id}"
+                    continue
+                fi
+                if ((RHYOLITE_HARNESS_LAST_STATUS == RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS)); then
+                    WORKER_REFUSAL_DETAIL="${RHYOLITE_HARNESS_ERROR_DETAIL:-The model provider declined a request to the approved model in the ${phase} phase.}"
+                    elapsed_seconds=$((now_epoch - started_epoch))
+                    printf '%s\n' \
+                        "Provider refusal: ${WORKER_REFUSAL_DETAIL}" \
+                        "Rhyolite stopped the ${phase} worker ${elapsed_seconds}s after it started, before any automatic harness fallback could answer." \
+                        >> "${error_path}"
+                    review_progress \
+                        "${subject}" \
+                        "${progress_stage}" \
+                        "provider refusal: stopping the ${phase} worker on ${MODEL} after ${elapsed_seconds}s; the refusing model is not retried"
                     terminated=1
                     terminate_process_tree "${process_id}"
                     continue
@@ -740,6 +763,23 @@ errors_report_model_service_failure() {
         "$1" 2>/dev/null
 }
 
+# Errors that record a provider refusal as the final failure: the last
+# approved model that could run was declined, and no approved model that the
+# provider had not declined for the repository remained.
+errors_report_provider_refusal() {
+    grep -Eq \
+        -e '^Worker outcome: the model provider declined a request to the approved model' \
+        -e '^Provider refusal: ' \
+        -e 'declined every approved model for this repository' \
+        -e 'no other approved model that the provider has not declined for this repository remains' \
+        "$1" 2>/dev/null
+}
+
+provider_refusal_remediation() {
+    printf '%s' \
+        'Read failure-analysis.md and errors.txt. The model provider declined every approved model that could run for this repository; Rhyolite never retries a refusing model and never switches to a model outside the approved plan. Approve a plan that adds security scan models from other vendors or families, which also become report-writer and research candidates, then rerun.'
+}
+
 repository_failure_stage() {
     local status="$1"
     local errors_path="$2"
@@ -750,6 +790,16 @@ repository_failure_stage() {
             's/^Harness failure stage: \(harness [a-z][a-z0-9-]* [a-zA-Z_][a-zA-Z0-9_]*\)$/\1/p' \
             "${errors_path}" 2>/dev/null | head -n 1
     )"
+    # A provider refusal of the last runnable approved model also leaves the
+    # adapter's own records of the harness's refusal fallback, so it is
+    # checked before those enforcement stages; cleanup still comes first.
+    if [[ "${harness_stage}" != \
+        "harness ${HARNESS} harness_sanitize_runtime_home" ]] &&
+        [[ "${status}" == ReviewFailed || "${status}" == ResearchFailed ]] &&
+        errors_report_provider_refusal "${errors_path}"; then
+        printf 'provider refusal'
+        return
+    fi
     if [[ -n "${harness_stage}" ]]; then
         if [[ "${harness_stage}" == \
             "harness ${HARNESS} harness_sanitize_runtime_home" ]]; then
@@ -900,6 +950,9 @@ repository_failure_summary() {
                 'model service')
                     printf 'The model service failed repeatedly during the dedicated research phase, before the main repository review began.'
                     ;;
+                'provider refusal')
+                    printf 'The model provider declined the dedicated research request (a content refusal), and no approved model that it had not declined remained for this repository.'
+                    ;;
                 *)
                     printf 'The dedicated public-research worker failed before the main repository review began.'
                     ;;
@@ -927,6 +980,9 @@ repository_failure_summary() {
                     ;;
                 'model service')
                     printf 'The model service failed repeatedly during the review session, and the bounded same-session retries did not recover it.'
+                    ;;
+                'provider refusal')
+                    printf 'The model provider declined the report-writing model (a content refusal), and no approved model that it had not declined remained for this repository.'
                     ;;
                 'model availability')
                     printf 'The repository-review worker could not start because %s rejected the approved model as unavailable.' \
@@ -1012,6 +1068,9 @@ repository_failure_remediation() {
                 'approved model enforcement')
                     approved_model_enforcement_remediation
                     ;;
+                'provider refusal')
+                    provider_refusal_remediation
+                    ;;
                 'model service')
                     printf '%s' \
                         'Check network, DNS, and model-service status, then rerun the approved review. research-errors.txt and failure-analysis.md record the exact session errors; research is relaunched at most once after a transient research-worker failure, with a separate network log per attempt under research/attempts/.'
@@ -1033,6 +1092,9 @@ repository_failure_remediation() {
                     ;;
                 'approved model enforcement')
                     approved_model_enforcement_remediation
+                    ;;
+                'provider refusal')
+                    provider_refusal_remediation
                     ;;
                 'report validation')
                     printf '%s' \
@@ -1509,6 +1571,8 @@ write_approval_hash_material() {
         "$(approval_hash_string "$(worker_recovery_policy_json)")"
     printf 'SecurityScans=%s\n' \
         "$(approval_hash_string "$(security_scans_json)")"
+    printf 'RefusalPolicy=%s\n' \
+        "$(approval_hash_string "$(refusal_policy_json)")"
     printf 'SessionTimeoutMinutes=%s\n' "${SESSION_TIMEOUT_MINUTES}"
     printf 'ThrottleLimit=%s\n' "${THROTTLE_LIMIT}"
     printf 'MaxRepositories=%s\n' "${MAX_REPOSITORIES}"
@@ -1637,6 +1701,137 @@ security_scans_text() {
         "$((THROTTLE_LIMIT * SECURITY_SCAN_COUNT))"
     printf '  %-18s %s per repository (%s security scans, then 1 consolidation review); AI credit use grows with each session\n' \
         'Model sessions:' "$((SECURITY_SCAN_COUNT + 1))" "${SECURITY_SCAN_COUNT}"
+}
+
+# Approved models that may write the canonical report, in handover order:
+# the model that writes it first, then every other approved model once. Each
+# line is "<model> <effort> <source>". A model the provider refused for a
+# repository is skipped for that repository at run time.
+report_writer_candidates() {
+    local index slugs=abc
+    local -A seen=()
+    local -a models=() efforts=() sources=()
+
+    if ((SECURITY_SCAN_COUNT > 1)); then
+        models+=("${CONSOLIDATION_MODEL}")
+        efforts+=("${CONSOLIDATION_REASONING_EFFORT}")
+        sources+=(consolidation)
+    fi
+    models+=("${MODEL}")
+    efforts+=("${REASONING_EFFORT}")
+    sources+=(review)
+    for ((index = 1; index < ${#SECURITY_SCAN_MODELS[@]}; index++)); do
+        models+=("${SECURITY_SCAN_MODELS[index]}")
+        efforts+=("${SECURITY_SCAN_EFFORTS[index]}")
+        sources+=("scan-${slugs:index:1}")
+    done
+    for index in "${!models[@]}"; do
+        [[ -n "${models[index]}" && -z "${seen[${models[index]}]+x}" ]] ||
+            continue
+        seen["${models[index]}"]=1
+        printf '%s %s %s\n' \
+            "${models[index]}" "${efforts[index]}" "${sources[index]}"
+    done
+}
+
+# Approved models for the dedicated research worker, in handover order: the
+# review model first, then every other approved model once.
+research_worker_candidates() {
+    local index slugs=abc
+    local -A seen=()
+    local -a models=("${MODEL}") efforts=("${REASONING_EFFORT}")
+    local -a sources=(review)
+
+    if ((SECURITY_SCAN_COUNT > 1)); then
+        models+=("${CONSOLIDATION_MODEL}")
+        efforts+=("${CONSOLIDATION_REASONING_EFFORT}")
+        sources+=(consolidation)
+    fi
+    for ((index = 1; index < ${#SECURITY_SCAN_MODELS[@]}; index++)); do
+        models+=("${SECURITY_SCAN_MODELS[index]}")
+        efforts+=("${SECURITY_SCAN_EFFORTS[index]}")
+        sources+=("scan-${slugs:index:1}")
+    done
+    for index in "${!models[@]}"; do
+        [[ -n "${models[index]}" && -z "${seen[${models[index]}]+x}" ]] ||
+            continue
+        seen["${models[index]}"]=1
+        printf '%s %s %s\n' \
+            "${models[index]}" "${efforts[index]}" "${sources[index]}"
+    done
+}
+
+refusal_candidates_json() {
+    local first=1 model effort source
+
+    printf '['
+    while read -r model effort source; do
+        [[ -n "${model}" ]] || continue
+        ((first)) || printf ','
+        first=0
+        printf '{"Model":"%s","ReasoningEffort":"%s","Source":"%s"}' \
+            "$(json_escape "${model}")" "$(json_escape "${effort}")" \
+            "$(json_escape "${source}")"
+    done
+    printf ']'
+}
+
+refusal_source_text() {
+    case "$1" in
+        consolidation) printf 'consolidation model' ;;
+        review) printf 'review model' ;;
+        scan-?) printf 'scan %s model' "$(tr '[:lower:]' '[:upper:]' <<< "${1#scan-}")" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+refusal_candidates_text() {
+    local count=0 model effort source text=''
+
+    while read -r model effort source; do
+        [[ -n "${model}" ]] || continue
+        ((count == 0)) || text+=', then '
+        text+="${model} at ${effort} ($(refusal_source_text "${source}"))"
+        count=$((count + 1))
+    done
+    if ((count == 1)); then
+        text+='; no other approved model, so a refusal fails the review'
+    fi
+    printf '%s' "${text}"
+}
+
+# Provider refusals, approval-bound as RefusalPolicy. A worker whose approved
+# model the provider declines is stopped and never retried on that model, and
+# no model outside the approved plan ever answers. A refused security scan is
+# skipped and excluded from the required scans; a refused report writer or
+# research worker hands over, in a fresh session and runtime home, to the
+# next approved candidate that the provider has not refused for the same
+# repository.
+refusal_policy_json() {
+    local research='[]'
+
+    if ((ENABLE_PUBLIC_RESEARCH)); then
+        research="$(research_worker_candidates | refusal_candidates_json)"
+    fi
+    printf '{"Mode":"report-and-continue","ProtocolVersion":%s,"UnapprovedModelFallback":"never","RefusingModelRetries":0,"RefusedModelReuse":"never-for-the-same-repository","ScanRefusal":"skip-and-exclude-from-required-scans","Handover":"fresh-session-and-runtime-home","ReportWriterCandidates":%s,"ResearchCandidates":%s}' \
+        "${REFUSAL_POLICY_PROTOCOL_VERSION}" \
+        "$(report_writer_candidates | refusal_candidates_json)" \
+        "${research}"
+}
+
+refusal_policy_text() {
+    printf '%-20s %s\n' 'Provider refusals:' \
+        'reported; the refusing model is never retried for the repository, and no model outside this plan ever answers'
+    printf '  %-18s %s\n' 'Report writer:' \
+        "$(report_writer_candidates | refusal_candidates_text)"
+    if ((ENABLE_PUBLIC_RESEARCH)); then
+        printf '  %-18s %s\n' 'Research worker:' \
+            "$(research_worker_candidates | refusal_candidates_text)"
+    fi
+    if ((SECURITY_SCAN_COUNT > 1)); then
+        printf '  %-18s %s\n' 'Scan refusal:' \
+            'the scan is skipped and excluded from the required scans; the consolidation pass still runs'
+    fi
 }
 
 worker_recovery_policy_text() {
@@ -1861,6 +2056,7 @@ write_review_plan_json() {
   "ReportRepairPolicy": $(report_repair_policy_json),
   "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "SecurityScans": $(security_scans_json),
+  "RefusalPolicy": $(refusal_policy_json),
   "SessionTimeoutMinutes": ${SESSION_TIMEOUT_MINUTES},
   "ThrottleLimit": ${THROTTLE_LIMIT},
   "MaxRepositories": ${MAX_REPOSITORIES},
@@ -1957,6 +2153,7 @@ write_review_plan_text() {
         "model-free Markdown table conversion; ${REPORT_REPAIR_ATTEMPT_LIMIT} isolated, tool-less confidence edit; ${REPORT_REPAIR_TIMEOUT_SECONDS}s maximum; no research rerun"
     printf '%-20s %s\n' 'Worker recovery:' "$(worker_recovery_policy_text)"
     security_scans_text
+    refusal_policy_text
     printf '%-20s %s\n' 'Throttle limit:' "${THROTTLE_LIMIT}"
     printf '%-20s %s\n' 'Maximum repositories:' "${MAX_REPOSITORIES}"
     printf '%-20s %s\n' 'Model:' "${MODEL}"
@@ -4503,6 +4700,125 @@ print(summary)
 PY
 }
 
+# Append one provider-refusal record for the repository from a validated
+# worker outcome, which supplies the approved session's prompt budget, its
+# largest recorded prompt, and any automatic fallback the harness attempted.
+#   record_provider_refusal <destination> <phase> <label> <model> <effort>
+#       <session-id> <outcome.json>
+record_provider_refusal() {
+    python3 - "$@" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY' || return 1
+import json
+import os
+import sys
+
+destination, phase, label, model, effort, session, outcome_path, recorded = sys.argv[1:9]
+try:
+    with open(outcome_path, encoding="utf-8") as stream:
+        outcome = json.load(stream)
+except (OSError, ValueError):
+    outcome = {}
+record = {
+    "Phase": phase,
+    "Label": label,
+    "Model": model,
+    "ReasoningEffort": effort,
+    "SessionId": session,
+    "RecordedAt": recorded,
+    "ContentRefusals": max(1, int(outcome.get("ContentRefusals") or 0)),
+    "PromptBudget": outcome.get("PromptBudget"),
+    "PeakPromptTokens": outcome.get("PeakPromptTokens"),
+    "FallbackModel": str(outcome.get("FallbackModel") or ""),
+}
+descriptor = os.open(destination, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record, sort_keys=True) + "\n")
+PY
+}
+
+# The ProviderRefusals state object: every recorded refusal of the
+# repository, and which approved model wrote the canonical report and ran the
+# research phase, with the number of handovers each needed.
+provider_refusals_saved_json() {
+    python3 - "${PROVIDER_REFUSALS_PATH:-}" \
+        "${REPORT_WRITER_MODEL:-}" "${REPORT_WRITER_EFFORT:-}" \
+        "${REPORT_WRITER_SOURCE:-}" "${REPORT_WRITER_HANDOVERS:-0}" \
+        "${RESEARCH_WORKER_MODEL:-}" "${RESEARCH_WORKER_EFFORT:-}" \
+        "${RESEARCH_WORKER_SOURCE:-}" "${RESEARCH_WORKER_HANDOVERS:-0}" <<'PY'
+import json
+import sys
+
+(path, writer_model, writer_effort, writer_source, writer_handovers,
+ research_model, research_effort, research_source, research_handovers) = sys.argv[1:10]
+events = []
+if path:
+    try:
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(value, dict):
+                    events.append(value)
+    except OSError:
+        pass
+
+
+def worker(model, effort, source, handovers):
+    if not model:
+        return None
+    return {"Model": model, "ReasoningEffort": effort, "Source": source,
+            "Handovers": int(handovers or 0)}
+
+
+print(json.dumps({
+    "Count": len(events),
+    "Events": events,
+    "ReportWriter": worker(writer_model, writer_effort, writer_source, writer_handovers),
+    "Research": worker(research_model, research_effort, research_source, research_handovers),
+}, sort_keys=True))
+PY
+}
+
+# One line for handoffs and the HTML index from a ProviderRefusals object.
+#   provider_refusals_summary <provider-refusals-json>
+provider_refusals_summary() {
+    python3 - "$1" <<'PY' 2>/dev/null || printf 'none recorded'
+import json
+import sys
+
+data = json.loads(sys.argv[1] or "{}")
+if not isinstance(data, dict):
+    data = {}
+events = [event for event in data.get("Events") or [] if isinstance(event, dict)]
+parts = []
+if events:
+    labels = []
+    for event in events:
+        where = str(event.get("Phase", "?"))
+        if event.get("Label"):
+            where += " " + str(event["Label"])
+        labels.append(f"{where} on {event.get('Model', '?')}")
+    parts.append(f"{len(events)} provider refusal{'s' if len(events) != 1 else ''} ({'; '.join(labels)})")
+for key, name in (("Research", "research"), ("ReportWriter", "report")):
+    worker = data.get(key)
+    if isinstance(worker, dict) and worker.get("Handovers"):
+        handovers = int(worker["Handovers"])
+        parts.append(f"{name} by {worker.get('Model')} at {worker.get('ReasoningEffort')} ({worker.get('Source')} candidate) after {handovers} handover{'s' if handovers != 1 else ''}")
+print("; ".join(parts) if parts else "none")
+PY
+}
+
+state_provider_refusals_json() {
+    python3 - "$1" <<'PY' 2>/dev/null || printf '{}'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8")).get("ProviderRefusals")
+print(json.dumps(value if isinstance(value, dict) else {}))
+PY
+}
+
 worker_recovery_attempted() {
     case "${WORKER_RECOVERY_STATUS:-NotReached}" in
         NotReached|NotNeeded|NotEligible) return 1 ;;
@@ -4637,6 +4953,17 @@ classify_worker_invocation() {
     fi
     WORKER_INVOCATION_OUTCOME="${outcome_token}"
     WORKER_RECOVERY_LAST_OUTCOME="${outcome_token}"
+    # A provider refusal of the report writer is recorded at once; the
+    # pipeline then hands the review over instead of continuing the session.
+    if [[ "${outcome_token}" == refused ]]; then
+        REVIEW_REFUSED=1
+        if [[ -n "${PROVIDER_REFUSALS_PATH:-}" ]]; then
+            record_provider_refusal "${PROVIDER_REFUSALS_PATH}" \
+                report-writer "attempt ${REPORT_WRITER_ATTEMPT:-1}" \
+                "${MODEL}" "${REASONING_EFFORT}" "${session_id}" \
+                "${outcome_path}" 2>> "${error_path}" || true
+        fi
+    fi
     WORKER_RECOVERY_OUTPUT_LIMIT_HITS="$(
         python3 - "${outcome_path}" <<'PY'
 import json
@@ -4656,6 +4983,7 @@ append_worker_session_errors() {
     [[ -f "${outcome_path}" ]] || return 0
     python3 - "${outcome_path}" >> "${destination}" <<'PY'
 import json
+import re
 import sys
 
 data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -4667,6 +4995,28 @@ elif data["Outcome"] == "fallback-blocked":
     print(
         "Worker outcome: automatic model fallback to "
         f"{data['FallbackModel']} was blocked before it produced output."
+    )
+elif data["Outcome"] == "refused":
+    print(
+        "Worker outcome: the model provider declined a request to the approved "
+        "model (content refusal); Rhyolite does not retry the refusing model."
+    )
+    if data["FallbackModel"]:
+        print(
+            "Worker outcome: the harness then tried its automatic refusal fallback to "
+            f"{data['FallbackModel']}; Rhyolite stopped it and accepted no output from it."
+        )
+budget = data.get("PromptBudget")
+peak = data.get("PeakPromptTokens")
+if (budget or peak) and (
+    data["Outcome"] == "refused"
+    or any(re.search(r"prompt budget|context (?:window|limit)", item, re.IGNORECASE)
+           for item in data["SessionErrors"])
+):
+    print(
+        "Worker prompt size: largest recorded prompt "
+        f"{peak if peak else 'not recorded'} tokens; approved prompt budget "
+        f"{budget if budget else 'not recorded'} tokens."
     )
 if data["OutputLimitHits"]:
     limit = data["OutputTokenLimit"]
@@ -4975,7 +5325,9 @@ security_scan_outcome() {
 
 # Like review_harness_failure_blocks_recovery: any adapter-function failure
 # makes a scan failure final, except the live-monitor and normalizer failures
-# that a blocked automatic fallback itself causes.
+# that a blocked automatic fallback itself causes, and the live-monitor,
+# normalizer, and isolation-verification failures that a provider refusal and
+# the harness's own refusal fallback cause.
 security_scan_harness_failure_blocks_relaunch() {
     local error_file="$1"
     local outcome="$2"
@@ -4985,7 +5337,11 @@ security_scan_harness_failure_blocks_relaunch() {
         case "${stage}" in
             "harness ${HARNESS} harness_detect_worker_violation" | \
             "harness ${HARNESS} harness_normalize_worker_output")
-                [[ "${outcome}" == fallback-blocked ]] || return 0
+                [[ "${outcome}" == fallback-blocked ||
+                    "${outcome}" == refused ]] || return 0
+                ;;
+            "harness ${HARNESS} harness_verify_isolation")
+                [[ "${outcome}" == refused ]] || return 0
                 ;;
             *)
                 return 0
@@ -4998,10 +5354,10 @@ security_scan_harness_failure_blocks_relaunch() {
 }
 
 # Classify one failed scan attempt from its own artifacts, in the main review
-# path's order: a failed adapter function or a timeout is final, and the
-# adapter's transient-failure or fallback-blocked outcome comes before the
-# approved-plan check, because a blocked fallback always records the attempted
-# model in the scan errors.
+# path's order: a failed adapter function is final, a provider refusal is
+# never retried, a timeout is final, and the adapter's transient-failure or
+# fallback-blocked outcome comes before the approved-plan check, because a
+# blocked fallback always records the attempted model in the scan errors.
 #   security_scan_failure_class <errors> <worker-status> <outcome> <problem>
 security_scan_failure_class() {
     local error_file="$1"
@@ -5011,6 +5367,10 @@ security_scan_failure_class() {
 
     if [[ "${problem}" == harness ]]; then
         printf 'harness'
+    elif [[ "${outcome}" == refused ]] &&
+        ! security_scan_harness_failure_blocks_relaunch \
+            "${error_file}" "${outcome}"; then
+        printf 'provider-refusal'
     elif [[ "${worker_status}" == 124 || "${worker_status}" == 137 ]]; then
         printf 'timeout'
     elif [[ "${outcome}" == fallback-blocked ]] &&
@@ -5060,6 +5420,9 @@ security_scan_failure_text() {
             ;;
         fallback-blocked)
             printf 'the harness tried an automatic switch to another model, which Rhyolite blocked, and one fresh relaunch did not recover the scan'
+            ;;
+        provider-refusal)
+            printf 'the model provider declined the scan request (content refusal), so Rhyolite skipped the scan without retrying that model'
             ;;
         missing-report)
             printf 'the scan returned no complete REPOSITORY SECURITY SCAN REVIEW REPORT'
@@ -5216,7 +5579,7 @@ run_security_scan_attempt() {
     RHYOLITE_ACTIVE_CHILD_PID=''
     # Like the main review path, a worker that the live monitor stopped is
     # never a timeout, even when it needed a forced kill (status 137).
-    if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+    if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
         exit_status=1
     fi
     SCAN_ATTEMPT_WORKER_STATUS="${exit_status}"
@@ -5224,6 +5587,11 @@ run_security_scan_attempt() {
     # exist: a blocked automatic fallback can end with exit status 0 and fail
     # only the post-exit normalization.
     SCAN_ATTEMPT_OUTCOME="$(security_scan_outcome "${raw}" "${outcome_path}")"
+    # A refused session is never accepted, whatever the harness's own
+    # refusal fallback produced afterward.
+    if [[ "${SCAN_ATTEMPT_OUTCOME}" == refused ]]; then
+        exit_status=1
+    fi
     if ((exit_status != 0)); then
         append_worker_session_errors "${outcome_path}" "${scan_error}"
     fi
@@ -5372,6 +5740,26 @@ run_one_security_scan() {
                 "${SCAN_ATTEMPT_WORKER_STATUS}" "${SCAN_ATTEMPT_OUTCOME}" \
                 "${SCAN_ATTEMPT_PROBLEM}"
         )"
+        # The provider declined this scan's model: report it, never retry
+        # that model, and let the remaining scans and the consolidation pass
+        # continue without it.
+        if [[ "${failure_class}" == provider-refusal ]]; then
+            diagnostic="$(security_scan_failure_text "${failure_class}")"
+            printf 'Security scan %s was declined: %s.\n' "${scan_label}" \
+                "${diagnostic}" >> "${scan_error}"
+            record_provider_refusal "${scan_directory}/refusal.jsonl" \
+                security-scan "${scan_label}" "${MODEL}" \
+                "${REASONING_EFFORT}" "${scan_session_id}" \
+                "${scan_directory}/outcome.json" 2>> "${scan_error}" || true
+            write_security_scan_state "${scan_state}" "${scan_label}" \
+                "${MODEL}" "${REASONING_EFFORT}" Refused 0 "${scan_attempt}" \
+                "${scan_session_id}" "${scan_started_at}" \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${failure_class}" \
+                "${diagnostic}"
+            review_progress "${scan_subject}" 'security-scan' \
+                "scan ${scan_label} declined by the model provider on ${MODEL}; skipped without retrying that model"
+            exit 1
+        fi
         if [[ "${failure_class}" == model-service ||
             "${failure_class}" == fallback-blocked ]] &&
             ((scan_attempt <= SECURITY_SCAN_RELAUNCH_LIMIT)) &&
@@ -5422,10 +5810,15 @@ ledger = {"Protocol": ledger_protocol, "Status": ledger_status,
 if ledger_path and os.path.isfile(ledger_path):
     with open(ledger_path, encoding="utf-8") as stream:
         ledger["Counts"] = json.load(stream)["Counts"]
+refused = sum(1 for scan in scans if scan.get("Status") == "Refused")
 summary = {
     "Protocol": protocol,
     "Count": int(count),
     "MinimumSuccessfulScans": int(minimum),
+    "RefusedScans": refused,
+    # A scan that the model provider declined is skipped and excluded from
+    # the required scans.
+    "EffectiveMinimumSuccessfulScans": min(int(minimum), int(count) - refused),
     "SuccessfulScans": sum(1 for scan in scans if scan.get("Status") == "Completed"),
     "Scans": scans,
     "Ledger": ledger,
@@ -5500,7 +5893,9 @@ PY
 
 # Run every approved security scan of one repository in parallel, wait for
 # all of them, enforce MinimumSuccessfulScans, and prepare the read-only scan
-# evidence and the consolidation addendum. Return 1 when the phase cannot
+# evidence and the consolidation addendum. A scan that the model provider
+# declined is skipped and excluded from the required scans, and its model is
+# never used again for the repository. Return 1 when the phase cannot
 # continue, with the reason in SECURITY_SCAN_FAILURE.
 run_security_scan_phase() {
     local scan_index scan_label scan_slug scan_pid scan_directory
@@ -5508,7 +5903,7 @@ run_security_scan_phase() {
     local staged_directory="${SECURITY_SCANS_DIRECTORY}/evidence"
     local status_lines='' evidence_lines='' finding_ids scan_diagnostic
     local authentication_variable_list
-    local successful=0
+    local successful=0 refused=0 required refused_note=''
     local -a scan_state_fields=()
 
     authentication_variable_list="$(
@@ -5607,6 +6002,22 @@ PY
             successful=$((successful + 1))
             evidence_lines+="Scan ${scan_label}: ${evidence_directory}/scan-${scan_slug}.txt"$'\n'
             status_lines+="Scan ${scan_label}: completed"$'\n'
+        elif [[ "${scan_state_fields[0]-Unknown}" == Refused ]]; then
+            refused=$((refused + 1))
+            REFUSED_MODELS["${SECURITY_SCAN_MODELS[scan_index]}"]=1
+            if [[ -s "${scan_directory}/refusal.jsonl" ]]; then
+                cat -- "${scan_directory}/refusal.jsonl" \
+                    >> "${PROVIDER_REFUSALS_PATH}" 2>> "${error_path}" || true
+                chmod 600 -- "${PROVIDER_REFUSALS_PATH}" 2>/dev/null || true
+            fi
+            status_lines+="Scan ${scan_label}: declined by its model provider (content refusal); no evidence from this scan is available"$'\n'
+            printf 'Security scan %s (%s at %s) was declined by its model provider (content refusal); it is skipped, does not count against the required scans, and its model is not used again for this repository. See security-scans/scan-%s/errors.txt.\n' \
+                "${scan_label}" \
+                "${SECURITY_SCAN_MODELS[scan_index]}" \
+                "${SECURITY_SCAN_EFFORTS[scan_index]}" \
+                "${scan_slug}" |
+                tee -a -- "${SECURITY_SCANS_DIRECTORY}/scan-phase-errors.txt" \
+                >> "${error_path}"
         else
             if [[ "${scan_state_fields[0]-Unknown}" == Completed ]]; then
                 scan_diagnostic='its validated report could not be prepared as consolidation evidence'
@@ -5624,13 +6035,22 @@ PY
                 >> "${error_path}"
         fi
     done
-    if ((successful < MIN_SUCCESSFUL_SCANS)); then
+    # Refused scans are excluded from the required scans; every other failed
+    # scan still counts against them.
+    required="${MIN_SUCCESSFUL_SCANS}"
+    if ((required > SECURITY_SCAN_COUNT - refused)); then
+        required=$((SECURITY_SCAN_COUNT - refused))
+    fi
+    if ((refused)); then
+        refused_note=" after excluding ${refused} scan$( ((refused == 1)) || printf s) that the model provider declined"
+    fi
+    if ((successful < required)); then
         write_security_scans_summary NotReached '' NotReached \
             'Too few security scans completed for consolidation.'
-        SECURITY_SCAN_FAILURE="Only ${successful} of ${SECURITY_SCAN_COUNT} security scans completed; the approved plan requires ${MIN_SUCCESSFUL_SCANS}. See security-scans/."
+        SECURITY_SCAN_FAILURE="Only ${successful} of ${SECURITY_SCAN_COUNT} security scans completed; the approved plan requires ${required}${refused_note}. See security-scans/."
         printf '%s\n' "${SECURITY_SCAN_FAILURE}" >> "${error_path}"
         review_progress "${slug}" 'security-scans' \
-            "quorum failed; ${successful}/${SECURITY_SCAN_COUNT} completed, ${MIN_SUCCESSFUL_SCANS} required"
+            "quorum failed; ${successful}/${SECURITY_SCAN_COUNT} completed, ${required} required${refused_note}"
         return 1
     fi
     write_security_scans_summary NotReached '' NotReached \
@@ -5639,6 +6059,8 @@ PY
     finding_ids="$(cat -- "${SECURITY_SCAN_IDS_PATH}")"
     [[ -n "${finding_ids}" ]] ||
         finding_ids='None. No scan reported a finding, so no ledger is required.'
+    [[ -n "${evidence_lines}" ]] ||
+        evidence_lines='None. No security scan completed, so no scan evidence is available.'
     if ! python3 - "${CONSOLIDATION_PROMPT_PATH}" "${SECURITY_SCAN_ADDENDUM_PATH}" \
         "${evidence_lines%$'\n'}" "${status_lines%$'\n'}" "${finding_ids}" \
         2>> "${error_path}" <<'PY'
@@ -5668,7 +6090,7 @@ PY
     fi
     chmod 600 -- "${SECURITY_SCAN_ADDENDUM_PATH}"
     review_progress "${slug}" 'security-scans' \
-        "${successful}/${SECURITY_SCAN_COUNT} scans completed; evidence ready for consolidation"
+        "${successful}/${SECURITY_SCAN_COUNT} scans completed${refused_note:+; ${refused} declined by the model provider}; evidence ready for consolidation"
     return 0
 }
 
@@ -5849,10 +6271,15 @@ run_worker_continuation() {
     continuation_exit=$?
     RHYOLITE_ACTIVE_CHILD_PID=""
     set -e
-    if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+    if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
         continuation_exit=1
     fi
     classify_worker_invocation "${raw}" "${outcome}"
+    # A refused continuation is never accepted, even with a reply, and the
+    # refusing model is never asked again.
+    if [[ "${WORKER_INVOCATION_OUTCOME}" == refused ]]; then
+        continuation_exit=1
+    fi
     if ! rhyolite_harness_invoke harness_normalize_worker_output \
         review \
         "${raw}" \
@@ -6114,6 +6541,11 @@ EOF
                     fi
                     worker_recovery_finish Exhausted \
                         "The worker continuation ended with ${WORKER_INVOCATION_OUTCOME} after ${WORKER_RECOVERY_TRANSIENT_RETRY_LIMIT} retries."
+                    return 1
+                    ;;
+                refused)
+                    worker_recovery_finish Failed \
+                        'The model provider declined a worker continuation (content refusal); Rhyolite does not retry the refusing model.'
                     return 1
                     ;;
                 *)
@@ -6926,8 +7358,8 @@ run_report_repair() {
         repair_exit_code=0
         wait "${repair_process_id}" || repair_exit_code=$?
         RHYOLITE_ACTIVE_CHILD_PID=""
-        if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
-            report_repair_normalization_error="${WORKER_VIOLATION_DETAIL}"
+        if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
+            report_repair_normalization_error="${WORKER_VIOLATION_DETAIL:-${WORKER_REFUSAL_DETAIL}}"
         elif [[ -f "${report_repair_raw_output}" ]] &&
             ! rhyolite_harness_invoke harness_normalize_worker_output \
                 report-repair \
@@ -6956,8 +7388,8 @@ run_report_repair() {
 
     if ((repair_ready == 0)); then
         REPORT_REPAIR_FINAL_DIAGNOSTIC='Report repair harness preparation failed.'
-    elif [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
-        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair output was rejected: ${WORKER_VIOLATION_DETAIL}"
+    elif [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
+        REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair output was rejected: ${WORKER_VIOLATION_DETAIL:-${WORKER_REFUSAL_DETAIL}}"
     elif ((repair_exit_code == 124 || repair_exit_code == 137)); then
         REPORT_REPAIR_STATUS='TimedOut'
         REPORT_REPAIR_FINAL_DIAGNOSTIC="Report repair exceeded ${REPORT_REPAIR_TIMEOUT_SECONDS} seconds."
@@ -7165,6 +7597,8 @@ write_result() {
   "ResearchTransport": $(research_transport_json '  '),
   "ReportRepair": $(report_repair_saved_json "${output_directory}"),
   "WorkerRecovery": $(worker_recovery_saved_json "${output_directory}"),
+  "ProviderRefusals": $(provider_refusals_saved_json ||
+      printf '{"Count":0,"Events":[],"ReportWriter":null,"Research":null}'),
   "Research": {
     "Status": "$(json_escape "${RESEARCH_STATUS:-Disabled}")",
     "Directory": "$(json_escape "${RESEARCH_DIRECTORY:-}")",
@@ -7299,7 +7733,8 @@ Artifacts: ${REPORT_REPAIR_DIRECTORY:-}$(
                 printf '\nWorker recovery: %s' \
                     "$(worker_recovery_summary "${output_directory}")"
             fi
-        )"
+        )" \
+        "$(provider_refusals_summary "$(provider_refusals_saved_json)")"
     write_result \
         "${state_path}" "${slug}" "${repository}" "${session}" "${commit}" \
         "${status}" "${exit_code}" "${checkout}" "${output_directory}" \
@@ -7702,9 +8137,13 @@ write_research_state() {
     "Name": "$(json_escape "${session_name}")"
   },
   "ResearchTransport": $(research_transport_json '  '),
+  "Model": "$(json_escape "${MODEL}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
   "Attempts": {
     "Count": ${research_attempt:-1},
     "RelaunchLimit": ${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT},
+    "Relaunches": ${research_transient_relaunches:-0},
+    "RefusalHandovers": ${RESEARCH_WORKER_HANDOVERS:-0},
     "Archived": [$(
         separator=''
         for archived_attempt in "${research_archived_attempts[@]}"; do
@@ -7766,6 +8205,8 @@ archive_research_attempt() {
   "Attempt": ${attempt},
   "Outcome": "$(json_escape "${outcome}")",
   "ExitCode": ${exit_code},
+  "Model": "$(json_escape "${MODEL}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
   "StartedAt": "$(json_escape "${started_at}")",
   "CompletedAt": "$(json_escape "${completed_at}")",
   "Session": {
@@ -9926,6 +10367,133 @@ PY
     fi
 }
 
+# Print "<index> <model> <effort> <source>" for the first approved candidate
+# of the named plan, at or after <start>, that the model provider has not
+# refused for this repository.
+#   next_unrefused_candidate <plan-array-name> <start>
+next_unrefused_candidate() {
+    local -n refusal_candidate_plan="$1"
+    local index="$2" model effort source
+
+    for ((; index < ${#refusal_candidate_plan[@]}; index++)); do
+        read -r model effort source <<< "${refusal_candidate_plan[index]}"
+        [[ -n "${model}" && -z "${REFUSED_MODELS[${model}]+x}" ]] || continue
+        printf '%s %s %s %s\n' "${index}" "${model}" "${effort}" "${source}"
+        return 0
+    done
+    return 1
+}
+
+# Reset every per-attempt value of the report-writer pipeline before the next
+# approved candidate starts in a fresh session. The values are locals of
+# process_repository, reached through dynamic scope.
+reset_report_writer_attempt_state() {
+    exit_code=1
+    post_process_failure=0
+    report_contract_error=''
+    runtime_harness_home=''
+    session_id=''
+    session_name=''
+    REVIEW_REFUSED=0
+    REPORT_REPAIR_STATUS='NotReached'
+    REPORT_REPAIR_ATTEMPT_COUNT=0
+    REPORT_REPAIR_TABLE_NORMALIZATION='NotRun'
+    REPORT_REPAIR_TABLES_CONVERTED=0
+    REPORT_REPAIR_CONFIDENCE_NORMALIZATION='NotRun'
+    REPORT_REPAIR_CONFIDENCE_FIELDS_NORMALIZED=0
+    REPORT_REPAIR_LABEL_NORMALIZATION='NotRun'
+    REPORT_REPAIR_LABELS_REJOINED=0
+    REPORT_REPAIR_INITIAL_DIAGNOSTIC=''
+    REPORT_REPAIR_FINAL_DIAGNOSTIC=''
+    REPORT_REPAIR_PRESERVATION='NotRun'
+    REPORT_REPAIR_VALIDATION='NotRun'
+    REPORT_REPAIR_CLEANUP='NotRun'
+    REPORT_REPAIR_PROMOTED=0
+    REPORT_REPAIR_DIRECTORY=''
+    REPORT_REPAIR_INITIAL_PATH=''
+    REPORT_REPAIR_INITIAL_DIAGNOSTIC_PATH=''
+    REPORT_REPAIR_NORMALIZED_PATH=''
+    REPORT_REPAIR_NORMALIZED_DIAGNOSTIC_PATH=''
+    REPORT_REPAIR_REQUEST_PATH=''
+    REPORT_REPAIR_EDIT_PATH=''
+    REPORT_REPAIR_CANDIDATE_PATH=''
+    REPORT_REPAIR_FINAL_DIAGNOSTIC_PATH=''
+    REPORT_REPAIR_TIMELINE_PATH=''
+    REPORT_REPAIR_TRANSCRIPT_PATH=''
+    WORKER_RECOVERY_STATUS='NotReached'
+    WORKER_RECOVERY_TRIGGER=''
+    WORKER_RECOVERY_CONTINUATIONS=0
+    WORKER_RECOVERY_TRANSIENT_RETRIES=0
+    WORKER_RECOVERY_ROUNDS=0
+    WORKER_RECOVERY_PAGE_REQUESTS=0
+    WORKER_RECOVERY_PAGES_ACCEPTED=0
+    WORKER_RECOVERY_PAGES_REJECTED=0
+    WORKER_RECOVERY_PARTS_ACCEPTED=0
+    WORKER_RECOVERY_SECTIONS_NEEDED=0
+    WORKER_RECOVERY_OUTPUT_LIMIT_HITS=0
+    WORKER_RECOVERY_LAST_OUTCOME=''
+    WORKER_RECOVERY_FINAL_DIAGNOSTIC=''
+    WORKER_INVOCATION_OUTCOME='unknown'
+    WORKER_CONTINUATION_REPLY=''
+    WORKER_CONTINUATION_EXIT_CODE=1
+    WORKER_REVIEW_STARTED_EPOCH=0
+    REVIEW_RUNTIME_HOME_FINALIZED=0
+    REVIEW_AGENT_STATE_CURRENT=0
+    worker_recovery_reason=''
+    worker_recovery_candidate=''
+    worker_initial_outcome='unknown'
+    security_ledger_reply=''
+    if ((SECURITY_SCAN_COUNT > 1)); then
+        SECURITY_LEDGER_STATUS='Pending'
+        SECURITY_LEDGER_REQUEST='NotReached'
+        SECURITY_LEDGER_DIAGNOSTIC=''
+        write_security_scans_summary Pending '' NotReached '' || true
+    fi
+}
+
+# Keep a refused report-writer attempt's artifacts under
+# report-writer/attempts/<n>/ before the next approved candidate starts, so
+# nothing from the refused session can reach the canonical report.
+archive_report_writer_attempt() {
+    local target="${result_path}/report-writer/attempts/${REPORT_WRITER_ATTEMPT}"
+    local name
+
+    mkdir -p -m 700 -- "${result_path}/report-writer" "${target}" || return 1
+    for name in errors.txt analysis-timeline.txt session.md agent-state \
+        worker-recovery report-repair review.txt report-candidate.txt \
+        "${HARNESS}-final-reply.sanitized"; do
+        if [[ -e "${result_path}/${name}" ]]; then
+            mv -- "${result_path}/${name}" "${target}/${name}" || return 1
+        fi
+    done
+    if [[ -e "${result_path}/.refused-outcome.json" ]]; then
+        mv -- "${result_path}/.refused-outcome.json" \
+            "${target}/outcome.json" || return 1
+    fi
+    for name in consolidation-final-reply.txt \
+        consolidation-report-unverified.txt consolidation-ledger.json; do
+        if [[ -e "${SECURITY_SCANS_DIRECTORY}/${name}" ]]; then
+            mv -- "${SECURITY_SCANS_DIRECTORY}/${name}" "${target}/${name}" ||
+                return 1
+        fi
+    done
+    cat > "${target}/attempt.json" <<EOF || return 1
+{
+  "SchemaVersion": 1,
+  "Attempt": ${REPORT_WRITER_ATTEMPT},
+  "Outcome": "refused",
+  "Model": "$(json_escape "${MODEL}")",
+  "ReasoningEffort": "$(json_escape "${REASONING_EFFORT}")",
+  "Source": "$(json_escape "${REPORT_WRITER_SOURCE}")",
+  "Session": {
+    "Id": "$(json_escape "${session_id}")",
+    "Name": "$(json_escape "${session_name}")"
+  }
+}
+EOF
+    chmod 600 -- "${target}/attempt.json"
+}
+
 process_repository() {
     local repository="$1"
     local slug="$2"
@@ -10040,6 +10608,29 @@ process_repository() {
     local SECURITY_LEDGER_REQUEST='NotReached'
     local SECURITY_LEDGER_DIAGNOSTIC=''
     local security_ledger_reply=''
+    # Provider refusals of this repository (RefusalPolicy). A model the
+    # provider declined is never used again for this repository; the report
+    # writer and the research worker hand over to the next approved
+    # candidate in a fresh session.
+    local PROVIDER_REFUSALS_PATH="${result_path}/provider-refusals.jsonl"
+    local REPORT_WRITER_NOTES_PATH="${result_path}/report-writer/handovers.txt"
+    local -A REFUSED_MODELS=()
+    local REVIEW_REFUSED=0
+    local REPORT_WRITER_ATTEMPT=0
+    local REPORT_WRITER_MODEL=''
+    local REPORT_WRITER_EFFORT=''
+    local REPORT_WRITER_SOURCE=''
+    local REPORT_WRITER_HANDOVERS=0
+    local RESEARCH_WORKER_MODEL=''
+    local RESEARCH_WORKER_EFFORT=''
+    local RESEARCH_WORKER_SOURCE=''
+    local RESEARCH_WORKER_HANDOVERS=0
+    local -a report_writer_plan=()
+    local -a research_worker_plan=()
+    mapfile -t report_writer_plan < <(report_writer_candidates)
+    if ((ENABLE_PUBLIC_RESEARCH)); then
+        mapfile -t research_worker_plan < <(research_worker_candidates)
+    fi
 
     trap 'interrupt_repository_process INT' INT
     trap 'interrupt_repository_process TERM' TERM
@@ -10407,6 +10998,25 @@ EOF
         local -a research_archived_attempts=()
         local research_attempt_outcome=''
         local research_previous_outcome=''
+        local research_previous_model=''
+        local research_transient_relaunches=0
+        # Research runs on the review model unless the provider already
+        # declined it for this repository; a refused attempt hands research
+        # over to the next approved candidate with a fresh broker, runtime,
+        # session, and network log.
+        local research_candidate='' research_candidate_index=0
+        local research_candidate_source='' research_no_candidate=0
+        local MODEL="${MODEL}" REASONING_EFFORT="${REASONING_EFFORT}"
+        if research_candidate="$(next_unrefused_candidate research_worker_plan 0)"; then
+            read -r research_candidate_index MODEL REASONING_EFFORT \
+                research_candidate_source <<< "${research_candidate}"
+        else
+            research_no_candidate=1
+        fi
+        RESEARCH_WORKER_MODEL="${MODEL}"
+        RESEARCH_WORKER_EFFORT="${REASONING_EFFORT}"
+        RESEARCH_WORKER_SOURCE="${research_candidate_source:-review}"
+        RESEARCH_WORKER_HANDOVERS="${research_candidate_index}"
         while :; do
         research_attempt_outcome=''
         local research_worker_exit_code=0
@@ -10521,13 +11131,29 @@ EOF
                 "${research_raw_transcript}"
         )
         if ((research_attempt > 1)); then
-            printf 'Research relaunch %s of %s: attempt %s ended with a %s outcome, so Rhyolite relaunched research with a fresh broker, runtime, session, and network log. The earlier attempt is archived under %s.\n' \
-                "$((research_attempt - 1))" \
-                "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}" \
-                "$((research_attempt - 1))" \
-                "${research_previous_outcome}" \
-                "${research_archived_attempts[-1]}" \
+            if [[ "${research_previous_outcome}" == refused ]]; then
+                printf 'Research handover: the model provider declined attempt %s on %s (content refusal), so Rhyolite handed research over to %s at %s, an approved model, with a fresh broker, runtime, session, and network log. The earlier attempt is archived under %s.\n' \
+                    "$((research_attempt - 1))" \
+                    "${research_previous_model}" \
+                    "${MODEL}" \
+                    "${REASONING_EFFORT}" \
+                    "${research_archived_attempts[-1]}" \
+                    >> "${research_raw_error}"
+            else
+                printf 'Research relaunch %s of %s: attempt %s ended with a %s outcome, so Rhyolite relaunched research with a fresh broker, runtime, session, and network log. The earlier attempt is archived under %s.\n' \
+                    "${research_transient_relaunches}" \
+                    "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}" \
+                    "$((research_attempt - 1))" \
+                    "${research_previous_outcome}" \
+                    "${research_archived_attempts[-1]}" \
+                    >> "${research_raw_error}"
+            fi
+        fi
+        if ((research_no_candidate)); then
+            printf '%s\n' \
+                'Research worker: the model provider declined every approved model for this repository, so no research worker remains.' \
                 >> "${research_raw_error}"
+            research_ready=0
         fi
         research_broker_arguments=(
             --runtime-root "${research_runtime_root}"
@@ -10718,36 +11344,46 @@ EOF
             research_worker_exit_code="${research_exit_code}"
             RHYOLITE_ACTIVE_CHILD_PID=""
             set -e
-            if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+            if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
                 research_exit_code=1
                 research_monitor_terminated=1
             fi
             # Record the research worker's own sanitized session errors so a
             # failed research phase never ends without its cause, and keep the
-            # outcome that decides whether a fresh relaunch is allowed.
-            if ((research_exit_code != 0)); then
-                local research_outcome_path="${research_runtime_root}/research-outcome.json"
-                local research_outcome_token=''
-                rm -f -- "${research_outcome_path}"
-                if rhyolite_harness_invoke harness_worker_outcome \
-                    research \
-                    "${research_raw_output}" \
-                    "${research_runtime_home}" \
-                    "${research_session_id}" \
-                    "${MODEL}" \
-                    "${REASONING_EFFORT}" \
-                    "${research_outcome_path}" \
-                    >/dev/null 2>&1 &&
-                    research_outcome_token="$(
-                        rhyolite_harness_validate_outcome_json \
-                            "${research_outcome_path}" research
-                    )"; then
+            # outcome that decides whether a fresh relaunch or a handover to
+            # another approved model is allowed. A refused session is never
+            # accepted.
+            local research_outcome_path="${research_runtime_root}/research-outcome.json"
+            local research_outcome_token=''
+            rm -f -- "${research_outcome_path}"
+            if rhyolite_harness_invoke harness_worker_outcome \
+                research \
+                "${research_raw_output}" \
+                "${research_runtime_home}" \
+                "${research_session_id}" \
+                "${MODEL}" \
+                "${REASONING_EFFORT}" \
+                "${research_outcome_path}" \
+                >/dev/null 2>&1 &&
+                research_outcome_token="$(
+                    rhyolite_harness_validate_outcome_json \
+                        "${research_outcome_path}" research
+                )"; then
+                if [[ "${research_outcome_token}" == refused ]]; then
+                    research_exit_code=1
+                    record_provider_refusal "${PROVIDER_REFUSALS_PATH}" \
+                        research "attempt ${research_attempt}" \
+                        "${MODEL}" "${REASONING_EFFORT}" \
+                        "${research_session_id}" "${research_outcome_path}" \
+                        2>> "${research_raw_error}" || true
+                fi
+                if ((research_exit_code != 0)); then
                     research_attempt_outcome="${research_outcome_token}"
                     append_worker_session_errors \
                         "${research_outcome_path}" "${research_raw_error}"
                 fi
-                rm -f -- "${research_outcome_path}"
             fi
+            rm -f -- "${research_outcome_path}"
             if ! rhyolite_harness_invoke harness_finalize_research_session \
                 "${research_runtime_home}" \
                 "${research_raw_output}" \
@@ -10933,6 +11569,56 @@ EOF
 
         research_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+        # A refused research attempt hands research over to the next approved
+        # candidate that the provider has not declined for this repository;
+        # the refusing model is never retried. Only a cleanup failure, which
+        # leaves the attempt unsafe to archive, stops the handover.
+        if ((research_exit_code != 0 && research_cleanup_failed == 0)) &&
+            [[ "${research_attempt_outcome}" == refused ]]; then
+            REFUSED_MODELS["${MODEL}"]=1
+            if research_candidate="$(
+                next_unrefused_candidate research_worker_plan \
+                    "$((research_candidate_index + 1))"
+            )"; then
+                if archive_research_attempt \
+                    "${research_attempt}" \
+                    "${research_attempt_outcome}" \
+                    "${research_exit_code}" \
+                    "${research_session_id}" \
+                    "${research_session_name}" \
+                    "${research_started_at}" \
+                    "${research_completed_at}" \
+                    "${research_network_root}" \
+                    2>> "${error_path}"; then
+                    research_archived_attempts+=(
+                        "${RESEARCH_DIRECTORY}/attempts/${research_attempt}"
+                    )
+                    research_previous_outcome='refused'
+                    research_previous_model="${MODEL}"
+                    read -r research_candidate_index MODEL REASONING_EFFORT \
+                        research_candidate_source <<< "${research_candidate}"
+                    RESEARCH_WORKER_MODEL="${MODEL}"
+                    RESEARCH_WORKER_EFFORT="${REASONING_EFFORT}"
+                    RESEARCH_WORKER_SOURCE="${research_candidate_source}"
+                    RESEARCH_WORKER_HANDOVERS="${research_candidate_index}"
+                    review_progress \
+                        "${slug}" \
+                        'research' \
+                        "attempt ${research_attempt} on ${research_previous_model} was declined by the model provider; handing research over to ${MODEL} at ${REASONING_EFFORT} with a fresh broker and network log"
+                    research_attempt=$((research_attempt + 1))
+                    continue
+                fi
+                printf '%s\n' \
+                    'Research handover was not attempted because the refused attempt could not be archived safely.' \
+                    >> "${research_error_path}"
+            else
+                printf '%s\n' \
+                    'Research handover: the model provider declined every approved model for this repository, so no research worker remains.' \
+                    >> "${research_error_path}"
+            fi
+            break
+        fi
+
         # Relaunch only after the research worker's own transient
         # model-service failure or blocked automatic fallback. Timeouts,
         # including a forced kill after the timeout (137) but not the live
@@ -10945,7 +11631,7 @@ EOF
             (research_worker_exit_code != 137 || research_monitor_terminated) &&
             research_adapter_failed == 0 &&
             research_cleanup_failed == 0 &&
-            research_attempt <= WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT)) &&
+            research_transient_relaunches < WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT)) &&
             [[ "${research_attempt_outcome}" == transient-failure ||
                 "${research_attempt_outcome}" == fallback-blocked ]]; then
             if archive_research_attempt \
@@ -10962,10 +11648,11 @@ EOF
                     "${RESEARCH_DIRECTORY}/attempts/${research_attempt}"
                 )
                 research_previous_outcome="${research_attempt_outcome}"
+                research_transient_relaunches=$((research_transient_relaunches + 1))
                 review_progress \
                     "${slug}" \
                     'research' \
-                    "attempt ${research_attempt} ended with a ${research_attempt_outcome} outcome; relaunching research with a fresh broker and network log ($((research_attempt + 1))/$((WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT + 1)))"
+                    "attempt ${research_attempt} ended with a ${research_attempt_outcome} outcome; relaunching research with a fresh broker and network log ($((research_transient_relaunches + 1))/$((WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT + 1)))"
                 research_attempt=$((research_attempt + 1))
                 sleep "${WORKER_RECOVERY_RETRY_DELAY_SECONDS}"
                 continue
@@ -10978,7 +11665,10 @@ EOF
         done
 
         if ((research_exit_code != 0)); then
-            if ((research_capability_count < 1)); then
+            # A refused research worker may stop before its first broker
+            # call; that is a provider refusal, not a capability failure.
+            if ((research_capability_count < 1 && research_no_candidate == 0)) &&
+                [[ "${research_attempt_outcome}" != refused ]]; then
                 RESEARCH_STATUS='ResearchCapabilityFailed'
             else
                 RESEARCH_STATUS='ResearchFailed'
@@ -11155,14 +11845,57 @@ EOF
 
     if ((SECURITY_SCAN_COUNT > 1)); then
         cat -- "${SECURITY_SCAN_ADDENDUM_PATH}" >> "${request_path}"
-        # The consolidation model writes the canonical report, so every
-        # later approved-plan check of this repository uses it.
-        local MODEL="${CONSOLIDATION_MODEL}"
-        local REASONING_EFFORT="${CONSOLIDATION_REASONING_EFFORT}"
     fi
+
+    # The approved report writer, the consolidation model when security scans
+    # ran, writes the canonical report, so every later approved-plan check of
+    # this repository uses it. When the model provider declines it, the
+    # review hands over to the next approved candidate that the provider has
+    # not declined for this repository, in a fresh session with the same
+    # request; the refusing model is never retried.
+    local MODEL="${MODEL}" REASONING_EFFORT="${REASONING_EFFORT}"
+    local report_writer_candidate='' report_writer_index=0
+    local report_writer_next='' refused_model='' refused_effort=''
+    if ! report_writer_candidate="$(
+        next_unrefused_candidate report_writer_plan 0
+    )"; then
+        printf '%s\n' \
+            'Report writer: the model provider declined every approved model for this repository, so no report writer remains.' \
+            >> "${error_path}"
+        write_failed_review_report "${report_path}" \
+            'The model provider declined every approved model for this repository, so no report writer remained.'
+        if ((SECURITY_SCAN_COUNT > 1)); then
+            SECURITY_LEDGER_STATUS='NotReached'
+            write_security_scans_summary NotReached '' NotReached \
+                'No approved report writer remained for consolidation.' || true
+        fi
+        finalize_repository_artifacts \
+            "${state_path}" "${slug}" "${repository}" "" "${commit}" \
+            "ReviewFailed" 1 "${review_path}" "${result_path}" \
+            "${report_path}" "${markdown_path}" "${html_path}" \
+            "${timeline_path}" "${transcript_path}" "${request_path}" \
+            "${error_path}" "${handoff_path}" "${started_at}" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        return 1
+    fi
+    read -r report_writer_index MODEL REASONING_EFFORT REPORT_WRITER_SOURCE \
+        <<< "${report_writer_candidate}"
+    while :; do
+    REPORT_WRITER_ATTEMPT=$((REPORT_WRITER_ATTEMPT + 1))
+    if ((REPORT_WRITER_ATTEMPT > 1)); then
+        reset_report_writer_attempt_state
+        cat -- "${REPORT_WRITER_NOTES_PATH}" > "${error_path}" 2>/dev/null ||
+            : > "${error_path}"
+    fi
+    REPORT_WRITER_MODEL="${MODEL}"
+    REPORT_WRITER_EFFORT="${REASONING_EFFORT}"
+    REPORT_WRITER_HANDOVERS="${report_writer_index}"
 
     session_id="$(new_session_id)"
     local session_prefix='review-'
+    if ((REPORT_WRITER_ATTEMPT > 1)); then
+        session_prefix="review${REPORT_WRITER_ATTEMPT}-"
+    fi
     local session_suffix="-${RUN_ID}"
     local maximum_slug_length=$((96 - ${#session_prefix} - ${#session_suffix}))
     local session_slug="${slug:0:maximum_slug_length}"
@@ -11263,6 +11996,9 @@ EOF
             cat -- "${SECURITY_SCANS_DIRECTORY}/scan-phase-errors.txt" \
                 >> "${error_path}"
         fi
+        if [[ -s "${REPORT_WRITER_NOTES_PATH}" ]]; then
+            cat -- "${REPORT_WRITER_NOTES_PATH}" >> "${error_path}"
+        fi
         set +e
         "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
             --signal=TERM \
@@ -11290,7 +12026,7 @@ EOF
         exit_code=$?
         RHYOLITE_ACTIVE_CHILD_PID=""
         set -e
-        if [[ -n "${WORKER_VIOLATION_DETAIL}" ]]; then
+        if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
             exit_code=1
         fi
     else
@@ -11309,6 +12045,13 @@ EOF
         classify_worker_invocation \
             "${raw_output}" "${result_path}/.initial-worker-outcome.json"
         worker_initial_outcome="${WORKER_INVOCATION_OUTCOME}"
+        # A refused session is never accepted or continued; the review hands
+        # over to the next approved candidate instead.
+        if [[ "${worker_initial_outcome}" == refused ]]; then
+            exit_code=1
+            cp -- "${result_path}/.initial-worker-outcome.json" \
+                "${result_path}/.refused-outcome.json" 2>/dev/null || true
+        fi
         if ((exit_code != 0)); then
             append_worker_session_errors \
                 "${result_path}/.initial-worker-outcome.json"
@@ -11594,6 +12337,48 @@ EOF
         fi
     fi
     write_worker_recovery_state || true
+    # A refused report writer hands the review over to the next approved
+    # candidate that the provider has not declined for this repository. The
+    # refused session, with anything an automatic harness fallback produced,
+    # is archived under report-writer/attempts/<n>/ and never reaches the
+    # canonical report.
+    if ((REVIEW_REFUSED && exit_code != 0)); then
+        REFUSED_MODELS["${MODEL}"]=1
+        refused_model="${MODEL}"
+        refused_effort="${REASONING_EFFORT}"
+        if ((post_process_failure)); then
+            printf '%s\n' \
+                'Report writer handover was not attempted because the refused session could not be finalized safely.' \
+                >> "${error_path}"
+        elif report_writer_next="$(
+            next_unrefused_candidate report_writer_plan \
+                "$((report_writer_index + 1))"
+        )"; then
+            if archive_report_writer_attempt 2>> "${error_path}"; then
+                read -r report_writer_index MODEL REASONING_EFFORT \
+                    REPORT_WRITER_SOURCE <<< "${report_writer_next}"
+                printf 'Report writer handover: the model provider declined %s at %s (content refusal), so the review continued with %s at %s (%s), an approved model, in a fresh session. The refused attempt is archived under report-writer/attempts/%s/.\n' \
+                    "${refused_model}" "${refused_effort}" \
+                    "${MODEL}" "${REASONING_EFFORT}" \
+                    "$(refusal_source_text "${REPORT_WRITER_SOURCE}")" \
+                    "${REPORT_WRITER_ATTEMPT}" \
+                    >> "${REPORT_WRITER_NOTES_PATH}"
+                chmod 600 -- "${REPORT_WRITER_NOTES_PATH}"
+                review_progress "${slug}" 'analysis' \
+                    "the model provider declined ${refused_model}; handing the review over to ${MODEL} at ${REASONING_EFFORT} in a fresh session"
+                continue
+            fi
+            printf '%s\n' \
+                'Report writer handover was not attempted because the refused attempt could not be archived safely.' \
+                >> "${error_path}"
+        else
+            printf 'Report writer: the model provider declined %s, and no other approved model that the provider has not declined for this repository remains.\n' \
+                "${refused_model}" >> "${error_path}"
+        fi
+    fi
+    break
+    done
+    rm -f -- "${result_path}/.refused-outcome.json"
     if ((post_process_failure)); then
         exit_code=1
     fi
@@ -11871,6 +12656,7 @@ fi
   "ReportRepairPolicy": $(report_repair_policy_json),
   "WorkerRecoveryPolicy": $(worker_recovery_policy_json),
   "SecurityScans": $(security_scans_json),
+  "RefusalPolicy": $(refusal_policy_json),
   "Paths": {
     "ReadOnlyWorkspace": "$(json_escape "${RUN_WORKSPACE}")",
     "WritableOutput": "$(json_escape "${RUN_RESULTS}")"
@@ -11914,6 +12700,7 @@ PY
           'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["ReportRepair"]))' \
           "${result_files[index]}"),
       "WorkerRecovery": ${worker_recovery_entry},
+      "ProviderRefusals": $(state_provider_refusals_json "${result_files[index]}"),
       "State": "$(json_escape "${state}")",
       "Handoff": "$(json_escape "${handoff}")",
       "Html": "$(json_escape "${html}")"
@@ -11973,6 +12760,8 @@ promote_run_artifact "${mode}" "${RUN_STATE_PATH}" json || return 1
         printf 'Status:\n\n    %s\n\n' "${status}"
         printf 'Research status:\n\n    %s\n\n' "${research_status}"
         printf 'Report repair:\n\n    %s\n\n' "${repair_summary}"
+        printf 'Provider refusals:\n\n    %s\n\n' \
+            "$(provider_refusals_summary "$(state_provider_refusals_json "${result_file}")")"
         if [[ -n "${research_directory}" ]]; then
             printf 'Research directory:\n\n    %s\n\n' \
                 "${research_directory}"
@@ -12026,18 +12815,19 @@ EOF
             '<p>Private research evidence exists under each repository research/network/private directory, and under research/attempts/&lt;n&gt;/network/private for a relaunched research phase. It may contain sensitive tracking identifiers and hostile bytes; individual private files are intentionally not linked.</p>'
     fi
     printf '<p><a href="review-plan.txt" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (text)</a> · <a href="review-plan.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Review plan (JSON)</a> · <a href="handoff.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run handoff</a> · <a href="state.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Run state</a> · <a href="manifest.json" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Manifest</a></p>\n'
-    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
+    printf '<table><thead><tr><th>Repository</th><th>Source</th><th>Status</th><th>Research</th><th>Report repair</th><th>Provider refusals</th><th>Commit</th><th>Artifacts</th></tr></thead><tbody>\n'
     for result_file in "${result_files[@]}"; do
         summary_file="${result_file%/state.json}/.result-summary"
         read_result_summary "${summary_file}"
         slug="$(basename -- "$(dirname -- "${result_file}")")"
         encoded_slug="$(html_escape_value "${slug}")"
-        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
+        printf '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td>' \
             "$(html_escape_value "${repository}")" \
             "$(html_escape_value "${source_kind}")" \
             "$(html_escape_value "${status}")" \
             "$(html_escape_value "${research_status}")" \
             "$(html_escape_value "${repair_summary}")" \
+            "$(html_escape_value "$(provider_refusals_summary "$(state_provider_refusals_json "${result_file}")")")" \
             "$(html_escape_value "${commit}")"
         printf '<td><a href="%s/review.html" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">HTML</a> ' "${encoded_slug}"
         printf '<a href="%s/review.md" rel="noopener noreferrer nofollow external" referrerpolicy="no-referrer">Markdown</a> ' "${encoded_slug}"

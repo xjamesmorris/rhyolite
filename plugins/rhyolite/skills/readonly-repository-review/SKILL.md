@@ -271,10 +271,12 @@ security-pass output against every item below:
 2. Evidence: every included finding is high-confidence and
    security-significant, cites exact `path:line` support, and states the source
    behavior that creates the issue.
-3. Exploitability and impact: every included finding states a concrete exploit
-   or abuse path, relevant preconditions or trust boundary, and concrete
-   security impact. If those elements are not supported, do not return the
-   item as a security finding.
+3. Exploitability and impact: every included finding states, at source level,
+   the attacker's position, the relevant preconditions or trust boundary, the
+   triggering input or call sequence, and the concrete security impact. It
+   never includes exploit code, payloads, shellcode, or step-by-step attack
+   instructions. If those elements are not supported, do not return the item
+   as a security finding.
 4. Classification: distinguish exploitable defects from design or quality
    concerns, missing implementation, misleading claims, and generic hardening
    suggestions; do not promote those other categories into security findings.
@@ -960,7 +962,10 @@ completed repository read only the canonical report at its
 `RHYOLITE EXECUTIVE SUMMARY` with three to five concise bullets grounded
 only in the canonical report or reports. Preserve confidence and
 limitations. For multiple repositories, include one outcome per
-repository and one cross-run priority.
+repository and one cross-run priority. When a repository's manifest entry
+records a provider refusal or a model handover in `ProviderRefusals`, use
+one bullet to state which approved model the provider declined and which
+approved model wrote the report.
 
 Then show exactly one path, the run output folder, as
 `Run output: <absolute path>`. That folder contains the HTML index, every
@@ -976,8 +981,10 @@ and compare it against every item below:
 1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.
 2. The summary contains exactly three to five concise `- ` bullets grounded
    only in the canonical report or reports, preserving confidence and material
-   limitations. For multiple repositories, it includes one short outcome per
-   repository plus one cross-run priority.
+   limitations, except that one bullet states a provider refusal or model
+   handover that the trusted manifest's `ProviderRefusals` record names. For
+   multiple repositories, it includes one short outcome per repository plus
+   one cross-run priority.
 3. After the bullets, the response contains exactly one
    `Run output: <absolute path>` line. Its value is exactly the run output
    folder returned by the runner, and no other artifact or report path appears.

@@ -225,9 +225,12 @@ shorthand is a Copilot extension and does not exist in Claude Code. Exact
 - **Model substitution:** Claude Code safeguards can stop a response and
   continue with another model, for example from Fable 5.1 to Opus 4.8, or
   from Opus 5.5 to Opus 5 on security-heavy content. Rhyolite checks every
-  worker turn in the session record and fails the review rather than accept
-  output from a model or effort other than the approved one. Rerun with
-  another model, such as `claude-opus-5`.
+  worker turn in the session record and never accepts output from a model or
+  effort other than the approved one. It reports such a safeguard handover
+  as a provider refusal, stops the worker, and continues only with another
+  model in your approved plan (see
+  [Provider refusals](#provider-refusals)); with no other approved model, the
+  review fails. Rerun with another model, such as `claude-opus-5`.
 - **Authentication:** run `claude auth login` from a clean non-Git
   directory, or export `CLAUDE_CODE_OAUTH_TOKEN` (from
   `claude setup-token`) or `ANTHROPIC_API_KEY`. When no supported
@@ -756,9 +759,13 @@ consolidate them into the one canonical report.
   `security-scans/consolidation-report-unverified.txt`, and the review
   fails.
 - A scan that ends with a transient model-service failure or a blocked
-  automatic model fallback is relaunched once with a fresh session. The
-  review fails before consolidation when fewer than the approved minimum
-  of scans succeed; by default every scan must succeed.
+  automatic model fallback is relaunched once with a fresh session. A scan
+  whose model provider declines the request (a content refusal) is reported,
+  skipped, and never relaunched on that model, and it does not count against
+  the required scans. The review fails before consolidation when fewer than
+  the approved minimum of the remaining scans succeed; by default every scan
+  must succeed. When every scan is declined, the consolidation review still
+  runs its own complete security pass.
 - Each repository uses one model session per scan plus the consolidation
   review, so two scans use about three times the model sessions of a single
   integrated security pass. With Copilot CLI, the launcher also checks each
@@ -767,6 +774,32 @@ consolidate them into the one canonical report.
 The scan count, every scan model and effort, the consolidation model, and
 the minimum successful scans are part of the approved
 `EFFECTIVE REVIEW PLAN`, so changing any of them requires a new approval.
+
+### Provider refusals
+
+A model provider can decline a request (a content refusal), most often on
+security-heavy content. Copilot CLI and Claude Code then try an automatic
+fallback to another model. Rhyolite never accepts that fallback: it stops the
+worker as soon as the refusal is recorded, reports it, and never retries the
+declined model for the same repository. The approval-bound `RefusalPolicy`
+in the effective plan lists what happens next:
+
+- A declined security scan is skipped and excluded from the required scans.
+- A declined report writer hands the same request over, in a fresh session,
+  to the next approved model that has not been declined: the consolidation
+  model, the review model, then the scan B and scan C models. A declined
+  research worker hands over the same way with a fresh broker and network
+  log.
+- When no approved model remains, the review fails at stage
+  `provider refusal`.
+
+`state.json`, `manifest.json`, the handoffs, and the HTML index record every
+refusal under `ProviderRefusals`, and the executive summary names the
+declined model and the model that wrote the report. After a refusal, Copilot
+CLI may report "Request exceeds the model's prompt budget" with a small
+limit such as 128,000 tokens. That limit belongs to the fallback model it
+tried, not to your approved model; `failure-analysis.md` shows the approved
+prompt budget and the largest recorded prompt.
 
 ### Choose scan models
 
@@ -1014,7 +1047,9 @@ evidence, and recommended repair actions. When the approved model rejects
 only the approved reasoning effort, that analysis names the next highest
 effort, never below `high`, and the guided agent asks whether to use it,
 choose another model, or stop; either change regenerates the effective plan,
-which you approve again before anything runs.
+which you approve again before anything runs. The analysis distinguishes a
+provider refusal (`provider-refusal`) from a genuine overflow of the approved
+model's prompt budget (`context-limit`).
 
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot
@@ -1185,7 +1220,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v8 implementation playbook is in
+Contract-v9 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in

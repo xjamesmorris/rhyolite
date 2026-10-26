@@ -438,7 +438,13 @@ handle that specific command result rather than using a broad catch:
    say that Rhyolite supports public anonymous HTTPS repositories only
    and intentionally does not attempt target authentication. Plan-hash
    changes require regeneration and reconfirmation. Worker
-   authentication failures require `copilot login`; timeouts may use a
+   authentication failures require `copilot login`; a `provider refusal`
+   stage means the model provider declined every approved model that could
+   run for the repository (a content refusal), Rhyolite already handed over
+   to every other approved model it had not declined and never retries a
+   refusing model, so suggest approving a plan with security scan models
+   from other vendors or families, which also become report-writer and
+   research candidates; timeouts may use a
    larger runner timeout or narrower scope; incomplete reports require
    a rerun; research-capability failures require restoring the exact bundled
    broker/tool contract; research failures require the dedicated phase to
@@ -451,7 +457,7 @@ field and using `UNAVAILABLE` when necessary:
 ```text
 RHYOLITE ERROR
 Summary: <plain-language cause supported by returned evidence>
-Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, model service, approved model enforcement, report validation, worker recovery, cleanup, or finalization>
+Stage: <setup validation, plan, preflight, clone, commit, snapshot, research capability, research worker, research validation, research cleanup, worker, model availability, model service, approved model enforcement, provider refusal, report validation, worker recovery, cleanup, or finalization>
 Source: <repository URL or NOT APPLICABLE>
 Details: <safe returned status, exit code, and underlying detail>
 Consequence: <what did not run or complete>
@@ -609,13 +615,20 @@ start the review yet. Instead:
    root, effective scope, public research setting, provenance setting,
    provenance lookback if any,
    `ReviewDate`, `PriorArtWindow`, `ProvenanceWindow`, `GeneratedAt`, and
-   `ResearchTransport`, `ReportRepairPolicy`, and `SecurityScans`. For
+   `ResearchTransport`, `ReportRepairPolicy`, `SecurityScans`, and
+   `RefusalPolicy`. For
    `SecurityScans`, show the count, each scan's label, model, reasoning
    effort, and catalog membership, the minimum successful scans, and the
    consolidation model; state that the scans run in parallel in isolated
    sessions with an identical prompt, that more scans use proportionally
    more AI credits, and that the review fails when fewer than the minimum
-   scans succeed. When
+   scans succeed, not counting scans that the model provider declined. For
+   `RefusalPolicy`, state that a provider refusal is reported, that the
+   refusing model is never retried for the repository, that no model
+   outside the plan ever answers, that a declined scan is skipped and
+   excluded from the required scans, and that a declined report writer or
+   research worker hands over, in a fresh session, to the next listed
+   approved candidate (`ReportWriterCandidates`, `ResearchCandidates`). When
    `ModelCatalogMembership` is `unlisted`, state that the model is outside
    Copilot's offline catalog, that Copilot verifies its availability when
    the review starts, and that an unavailable model fails the review
@@ -765,7 +778,11 @@ RHYOLITE EXECUTIVE SUMMARY
 Use three to five concise bullets total. For multiple repositories,
 include one short outcome per repository plus one cross-run priority.
 Do not introduce conclusions absent from the canonical reports, and
-preserve their confidence levels and material limitations.
+preserve their confidence levels and material limitations. When a
+repository's manifest entry records a provider refusal or a model handover
+in `ProviderRefusals`, use one bullet to state which approved model the
+provider declined and which approved model wrote the report; that run fact
+comes from the trusted manifest, never from the report.
 
 Then show exactly one path, the run output folder, as
 `Run output: <absolute path>`. That folder contains the HTML index, every
@@ -778,8 +795,10 @@ and compare it against every item below:
 1. The first non-empty line is exactly `RHYOLITE EXECUTIVE SUMMARY`.
 2. The summary contains exactly three to five concise `- ` bullets grounded
    only in the canonical report or reports, preserving confidence and material
-   limitations. For multiple repositories, it includes one short outcome per
-   repository plus one cross-run priority.
+   limitations, except that one bullet states a provider refusal or model
+   handover that the trusted manifest's `ProviderRefusals` record names. For
+   multiple repositories, it includes one short outcome per repository plus
+   one cross-run priority.
 3. After the bullets, the response contains exactly one
    `Run output: <absolute path>` line. Its value is exactly the run output
    folder returned by the runner, and no other artifact or report path appears.

@@ -57,9 +57,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v8 seam.
+  Contract-v9 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v8 and any future production adapter.
+  playbook for Contract v9 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -98,6 +98,14 @@ decision; compatibility must not be preserved speculatively.
   assembled report passes unchanged strict finalization. Every failed
   repository gets a deterministic `failure-analysis.md` and
   `failure-analysis.json`.
+- Contract v9 makes a provider refusal of the approved model its own
+  `refused` worker outcome, detected live and after exit in any event order,
+  with the approved prompt budget and largest prompt recorded. The
+  approval-bound `RefusalPolicy` never retries a refusing model or accepts a
+  model outside the plan: a declined security scan is skipped and excluded
+  from the required scans, and a declined report writer or research worker
+  hands over, in a fresh session, to the next approved model that the
+  provider has not declined for the repository.
 - Contract v4 added an isolated, fresh, zero-tool report-repair invocation.
   The plan's fixed `ReportRepairPolicy` allows one confidence-edit attempt
   within at most 300 seconds, capped by the session timeout, under the approved

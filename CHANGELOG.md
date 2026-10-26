@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Provider refusals no longer look like prompt-size failures and no longer
+  fail a review that other approved models can finish. In a two-scan review,
+  the model provider declined one `claude-opus-5.5` scan response. Copilot
+  CLI's automatic refusal fallback then rejected its own request against the
+  fallback model's 128,000-token prompt budget, although the approved model's
+  long-context budget was 968,000 tokens and its largest prompt 185,172. The
+  scan was treated as an ordinary failure, and the review failed below its
+  required scans. Harness Contract v9 now reports a `refused` worker
+  outcome, detected live and after exit in any event order, from Copilot's
+  `content_filter` usage records and refusal-fallback events and from Claude
+  Code's `refusal` stops and safeguard handovers. The runner stops a refused
+  worker before any automatic fallback can answer and never retries the
+  declined model for the repository. Under the new approval-bound
+  `RefusalPolicy`, a declined security scan is skipped and excluded from the
+  required scans, and a declined report writer or research worker hands over,
+  in a fresh session, to the next approved model: the consolidation model,
+  the review model, then the scan B and C models. Only when none remains does
+  the review fail, at stage `provider refusal`. Repository and run state,
+  manifest, handoffs, the HTML index, and the executive summary record every
+  refusal and handover as `ProviderRefusals`.
+- Worker outcomes (schema 2) record the approved session's prompt budget and
+  largest prompt. Failure analysis adds a `provider-refusal` class, which
+  explains that a prompt-budget error after a refusal names the fallback
+  model's limit, and a `context-limit` class for a genuine overflow of the
+  approved model's budget.
+- The dedicated security pass and the security scan request now ask for the
+  attacker's position, preconditions or trust boundary, and triggering input
+  at source level, and forbid exploit code, payloads, shellcode, and
+  step-by-step attack instructions, to reduce provider refusals without
+  narrowing the pass.
 - Added multi-model security scans. Different models reviewing the same
   commit report materially different security defects, and one run can
   confidently clear an area that another run shows to be broken. With

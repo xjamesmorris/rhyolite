@@ -1,6 +1,6 @@
 # Adding a review harness
 
-This is the implementation playbook for Rhyolite Harness Contract version 5. It is written for contributors and coding agents that must change
+This is the implementation playbook for Rhyolite Harness Contract version 9. It is written for contributors and coding agents that must change
 the harness seam without weakening Rhyolite's read-only repository-review
 boundary.
 
@@ -9,7 +9,7 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 ## Status and scope
 
-- The implemented production seam is Contract v8.
+- The implemented production seam is Contract v9.
 - The current review plan is schema 5 and repository/run state is schema 6.
 - Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
   and Claude Code (`claude`). A contract refactor does not itself add another
@@ -54,7 +54,7 @@ true:
 11. Scope 1 remains transport-free. Scope 2/3 is enabled only if the harness
     can support the exact constrained research-worker contract; a similar
     feature name is not enough.
-12. The adapter can satisfy every Contract-v8 function and every negative and
+12. The adapter can satisfy every Contract-v9 function and every negative and
     end-to-end test in this playbook.
 
 If any precondition is unresolved, stop. Do not add a partial adapter, a
@@ -87,7 +87,12 @@ approved model and effort verification. Contract v7 keeps those schemas and
 adds live enforcement: while a child runs, the runner polls the adapter's
 incremental violation detector and terminates the child on the first recorded
 model, effort, or subagent outside the approved plan. No worker receives a
-subagent tool on any harness. Do not register an adapter before
+subagent tool on any harness. Contract v8 adds worker outcomes and bounded
+same-session recovery. Contract v9 keeps those schemas and functions and
+adds the `refused` outcome, outcome schema 2, and
+`RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS`, so a provider refusal of the
+approved model is reported, never retried on that model, and never answered
+by a model outside the approved plan. Do not register an adapter before
 validation understands its complete lifecycle.
 
 ## Fixed registry procedure
@@ -126,12 +131,12 @@ The development no-op adapter must be loaded only by test-owned code, such as
 a temporary fixture plugin tree with its own fixed test registry. Production
 `common.sh` must reject `--harness noop`.
 
-## Contract-v8 boundary
+## Contract-v9 boundary
 
 Set the shared contract version to:
 
 ```bash
-RHYOLITE_HARNESS_CONTRACT_VERSION=8
+RHYOLITE_HARNESS_CONTRACT_VERSION=9
 ```
 
 The shared loader must require all functions in this document before calling
@@ -181,7 +186,7 @@ Use the existing guarded boundaries:
 | `harness_require_cli` | No arguments. Status only. | Check availability without starting the CLI, logging in, writing state, or accessing the network. It is execution-only and is not called for plan-only mode. |
 | `harness_capability` | One capability key. Print exactly `yes`, `no`, or `unverified`. | Unknown keys return `unverified`. Empty or alternate spellings fail validation. |
 
-Contract-v8 capability keys are:
+Contract-v9 capability keys are:
 
 ```text
 structured_questions
@@ -291,7 +296,7 @@ release artifacts.
 | Function | Signature and output | Required behavior |
 | --- | --- | --- |
 | `harness_prepare_run` | No arguments. Status only; no contract data on stdout. | Run once after approved-plan verification and protected-name validation. Prepare only run-wide ephemeral adapter context. |
-| `harness_worker_outcome` | Phase, raw worker stdout path, the worker's runtime home, session ID, approved model, approved effort, and a new outcome path. Status only. | Validate the arguments with `rhyolite_harness_validate_outcome_arguments`, then write one mode-0600 JSON object with exactly `Schema` (1), `Phase`, `Outcome`, `Retryable`, `ExitCode`, `SessionErrors`, `ModelCallFailures`, `TurnRetries`, `OutputLimitHits`, `OutputTokenLimit`, `FinalReplyAtOutputLimit`, and `FallbackModel`. Classify `substituted` whenever any recorded output or effort is outside the approved plan, `fallback-blocked` only when another model was attempted but produced no output, and `transient-failure` only for network, DNS, stream, or server failures, never for an unavailable model or authentication failure. A CLI without structured evidence may call `rhyolite_harness_worker_outcome_unknown`. The runner validates the object with `rhyolite_harness_validate_outcome_json`. |
+| `harness_worker_outcome` | Phase, raw worker stdout path, the worker's runtime home, session ID, approved model, approved effort, and a new outcome path. Status only. | Validate the arguments with `rhyolite_harness_validate_outcome_arguments`, then write one mode-0600 JSON object with exactly `Schema` (2), `Phase`, `Outcome`, `Retryable`, `ExitCode`, `SessionErrors`, `ModelCallFailures`, `TurnRetries`, `OutputLimitHits`, `OutputTokenLimit`, `FinalReplyAtOutputLimit`, `FallbackModel`, `ContentRefusals`, `PromptBudget`, and `PeakPromptTokens`. Classify `refused` when the provider declined a request to the approved model and the session did not finish cleanly on it, including when the harness's automatic refusal fallback then tried another model in any event order, with `ContentRefusals` counting each declined call once and `FallbackModel` naming that fallback model; `substituted` whenever any other recorded output, a subagent, or an approved-model effort is outside the approved plan; `fallback-blocked` only when another model was attempted without a recorded refusal and produced no output; and `transient-failure` only for network, DNS, stream, or server failures, never for an unavailable model or authentication failure. Report the approved session's prompt budget and largest recorded prompt when the CLI records them, otherwise null. A CLI without structured evidence may call `rhyolite_harness_worker_outcome_unknown`. The runner validates the object with `rhyolite_harness_validate_outcome_json`. |
 | `harness_worker_continuation_argv` | Destination array name and the name of the approved worker argv array. Status only. | Return the argv that resumes the same session under the identical approval-bound settings, tools, and isolation, changing only options that apply solely to a new session (Copilot rejects `--name` for an existing session; Claude Code resumes with `--resume <id>` and rejects the original `--session-id` once the session exists). Report `worker_continuation` as `yes` only after a live probe resumes a session created with the adapter-built worker argv by invoking the exact argv this function returns, and proves that the CLI keeps the session's context in non-interactive mode; otherwise report `unverified` and fail this function. |
 | `harness_render_request` | Template path, request path, repository URL, snapshot path, exact commit, review dates/windows, scope, output path, bounded metadata, research instructions, dossier path, network-summary path, and transport instructions. Status only. | Write the request file without evaluating template or repository content. |
 | `harness_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, comma-separated protected variable names, available tools, transcript path, and public-research flag. Status only. | Populate the exact ordered CLI argument array. |
@@ -303,7 +308,7 @@ release artifacts.
 | `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
 | `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, subagent event, or subagent metric names a model or reasoning effort other than the approved values, and when any subagent event appears at all, because no Rhyolite worker receives a subagent tool; remove both outputs on failure. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
-| `harness_detect_worker_violation` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, and a runner-owned cursor path. Status only. | Called every five seconds while the child runs. Validate the shared arguments with `rhyolite_harness_validate_violation_arguments`. Scan only the complete lines appended since the offset stored in the cursor file, then store the new offset in a mode-0600 cursor; a half-written final line is neither consumed nor judged. Return 0 when nothing outside the approved plan is recorded yet (including before any output exists), `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` with a sanitized detail on the first recorded model, effort, or subagent other than the approved plan, and 1 for any other failure, which the runner records once as a warning. Use the same evidence rules as the adapter's post-exit verification. A CLI that records no live evidence may call `rhyolite_harness_detect_worker_violation_none`. The runner terminates the child's process tree on the violation status and still runs the post-exit checks. |
+| `harness_detect_worker_violation` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, and a runner-owned cursor path. Status only. | Called every five seconds while the child runs. Validate the shared arguments with `rhyolite_harness_validate_violation_arguments`. Scan only the complete lines appended since the offset stored in the cursor file, then store the new offset in a mode-0600 cursor; a half-written final line is neither consumed nor judged. Return 0 when nothing outside the approved plan is recorded yet (including before any output exists), `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` with a sanitized detail on the first recorded model, effort, or subagent other than the approved plan, `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` with a sanitized detail when the provider declined a request to the approved model (a refusal outranks the fallback model it caused, a subagent outranks both), and 1 for any other failure, which the runner records once as a warning. Use the same evidence rules as the adapter's post-exit verification. A CLI that records no live evidence may call `rhyolite_harness_detect_worker_violation_none`. The runner terminates the child's process tree on the violation or refusal status and still runs the post-exit checks. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
 configuration source. It must:
@@ -960,7 +965,7 @@ fixtures.
 An implementation is not complete until the change supplies:
 
 - a fixed-registry diff and proof that all other IDs fail;
-- the complete Contract-v8 function inventory for the adapter;
+- the complete Contract-v9 function inventory for the adapter;
 - an evidence record, such as `docs/CLAUDE-HARNESS-EVIDENCE.md`, with probes,
   real runs, and their consequences;
 - a capability decision table with evidence;

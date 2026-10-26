@@ -58,13 +58,17 @@ truncated, and oversized input.
 
 Report only high-confidence, security-significant findings. Every finding
 must cite exact `path:line` evidence that you opened and read in this
-session, state the source behavior that creates the issue, a concrete exploit
-or abuse path with its preconditions or trust boundary, and its concrete
-security impact. Distinguish exploitable defects from design or quality
-concerns, missing implementation, misleading claims, and generic hardening
-suggestions; do not report those other categories as findings. Do not
-declare an area free of defects unless you inspected it; list it under
-COVERAGE only when you did. Report at most 60 findings, ordered by severity.
+session and state the source behavior that creates the issue; the
+attacker's position, the preconditions or trust boundary, and the
+triggering input or call sequence, described at source level; and its
+concrete security impact. Describe how the defect is reached, never how to
+weaponize it: never write exploit code, payloads, shellcode, or
+step-by-step attack instructions. Distinguish exploitable defects from
+design or quality concerns, missing implementation, misleading claims, and
+generic hardening suggestions; do not report those other categories as
+findings. Do not declare an area free of defects unless you inspected it;
+list it under COVERAGE only when you did. Report at most 60 findings,
+ordered by severity.
 
 Return exactly one security scan report. Begin and end it with a line of at
 least 80 `=` characters; the closing delimiter is mandatory and must be the
@@ -89,7 +93,7 @@ Severity: <Critical, High, Medium, or Low>
 Confidence: <High, Medium, or Low>
 Location: <path:line or path:start-end, separated by commas>
 Behavior: <the source behavior that creates the issue>
-Exploit path: <attacker, preconditions or trust boundary, and steps>
+Exploit path: <attacker position, preconditions or trust boundary, and the triggering input or call sequence, at source level>
 Impact: <concrete security impact>
 Remediation: <a written recommendation>
 

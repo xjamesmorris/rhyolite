@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=8
+RHYOLITE_HARNESS_CONTRACT_VERSION=9
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -11,12 +11,20 @@ RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
 # or subagent other than the approved plan; the runner then terminates the
 # worker instead of waiting for it to finish.
 RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4
+# harness_detect_worker_violation returns this status when the model provider
+# has declined a request to the approved model (a content refusal). The
+# runner then terminates the worker before any automatic harness fallback can
+# answer, never retries the refusing model, and never accepts another
+# model's output.
+RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5
 # harness_worker_outcome writes one JSON object with exactly these keys so the
 # runner can decide, deterministically, whether a worker invocation may be
 # continued in the same session (transient model-service failure, or an
-# automatic model fallback that was blocked before it produced any output).
-RHYOLITE_HARNESS_OUTCOME_SCHEMA=1
-RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked substituted failed unknown)
+# automatic model fallback that was blocked before it produced any output) or
+# was declined by the model provider (refused), which is never retried on the
+# refusing model.
+RHYOLITE_HARNESS_OUTCOME_SCHEMA=2
+RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked refused substituted failed unknown)
 # Exact phase names accepted by harness_normalize_worker_output and
 # harness_detect_worker_violation.
 RHYOLITE_HARNESS_WORKER_PHASES=(review research report-repair)
@@ -153,8 +161,11 @@ rhyolite_harness_normalize_worker_output_identity() {
 # The adapter scans only the complete lines appended since the offset saved in
 # the runner-owned cursor file, returns 0 when nothing is recorded yet, returns
 # RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS with a sanitized detail on the first
-# violation, and returns 1 for any other failure, which the runner treats as a
-# monitor warning; the post-exit normalization remains authoritative.
+# violation, returns RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS with a sanitized
+# detail when the model provider declined a request to the approved model
+# before any violation, and returns 1 for any other failure, which the runner
+# treats as a monitor warning; the post-exit normalization and worker outcome
+# remain authoritative.
 rhyolite_harness_validate_violation_arguments() {
     local phase="$1"
     local raw_output="$2"
@@ -238,7 +249,7 @@ rhyolite_harness_worker_outcome_unknown() {
     rhyolite_harness_validate_outcome_arguments "$@" || return 1
     (
         umask 077
-        printf '{"Schema":1,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}\n' \
+        printf '{"Schema":2,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}\n' \
             "${phase}" > "${outcome_output}"
     ) || {
         rhyolite_harness_set_error 'Could not write the worker outcome.'
@@ -247,7 +258,13 @@ rhyolite_harness_worker_outcome_unknown() {
 }
 
 # Strictly validate an adapter-written worker outcome before the runner uses
-# it. Prints the validated outcome token on success.
+# it. Prints the validated outcome token on success. ContentRefusals counts
+# the approved-model requests that the model provider declined; a `refused`
+# outcome requires at least one. PromptBudget is the approved session's
+# prompt-token budget and PeakPromptTokens its largest recorded prompt, each
+# null when the harness did not record it. FallbackModel names the model of an
+# automatic harness fallback and may be set only for a blocked fallback, which
+# requires it, or a refusal.
 rhyolite_harness_validate_outcome_json() {
     local outcome_path="$1"
     local expected_phase="$2"
@@ -262,11 +279,12 @@ path, phase = sys.argv[1:3]
 keys = {
     "Schema", "Phase", "Outcome", "Retryable", "ExitCode", "SessionErrors",
     "ModelCallFailures", "TurnRetries", "OutputLimitHits", "OutputTokenLimit",
-    "FinalReplyAtOutputLimit", "FallbackModel",
+    "FinalReplyAtOutputLimit", "FallbackModel", "ContentRefusals",
+    "PromptBudget", "PeakPromptTokens",
 }
 outcomes = {
-    "completed", "transient-failure", "fallback-blocked", "substituted",
-    "failed", "unknown",
+    "completed", "transient-failure", "fallback-blocked", "refused",
+    "substituted", "failed", "unknown",
 }
 try:
     with open(path, encoding="utf-8") as stream:
@@ -279,10 +297,14 @@ def count(value):
     return type(value) is int and 0 <= value <= 1000000
 
 
+def tokens(value):
+    return value is None or (type(value) is int and 0 < value <= 100000000)
+
+
 if (
     not isinstance(data, dict)
     or set(data) != keys
-    or data["Schema"] != 1
+    or data["Schema"] != 2
     or data["Phase"] != phase
     or data["Outcome"] not in outcomes
     or type(data["Retryable"]) is not bool
@@ -296,12 +318,16 @@ if (
         or re.search(r"[\x00-\x1f\x7f]", item)
         for item in data["SessionErrors"]
     )
-    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits"))
+    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits", "ContentRefusals"))
     or not (data["OutputTokenLimit"] is None or count(data["OutputTokenLimit"]))
     or type(data["FinalReplyAtOutputLimit"]) is not bool
     or not isinstance(data["FallbackModel"], str)
     or not re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?", data["FallbackModel"])
-    or (data["Outcome"] == "fallback-blocked") != bool(data["FallbackModel"])
+    or (data["Outcome"] == "fallback-blocked" and not data["FallbackModel"])
+    or (data["Outcome"] not in ("fallback-blocked", "refused") and data["FallbackModel"])
+    or (data["Outcome"] == "refused" and data["ContentRefusals"] < 1)
+    or not tokens(data["PromptBudget"])
+    or not tokens(data["PeakPromptTokens"])
 ):
     raise SystemExit(1)
 print(data["Outcome"])

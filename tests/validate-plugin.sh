@@ -279,7 +279,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v8' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v9' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -2500,8 +2500,12 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=8' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 8.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=9' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 9.'
+grep -Fq 'RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5' "${HARNESS_COMMON}" &&
+    grep -Fq 'RefusalPolicy=%s' "${RUNNER}" &&
+    grep -Fq '"UnapprovedModelFallback":"never"' "${RUNNER}" ||
+    fail 'Provider refusals are not a distinct, approval-bound outcome.'
 grep -Fxq '    harness_worker_outcome' "${HARNESS_COMMON}" &&
     grep -Fxq '    harness_worker_continuation_argv' "${HARNESS_COMMON}" &&
     grep -Fq 'worker_continuation; do' "${HARNESS_COMMON}" ||
@@ -6319,6 +6323,7 @@ function assertCommonPlan(
     "Provider",
     "ProvenanceWindow",
     "ReasoningEffort",
+    "RefusalPolicy",
     "ReportRepairPolicy",
     "ResearchTransport",
     "ReviewDate",
@@ -7830,6 +7835,21 @@ if sys.argv[4] == "fallback":
           {"model": "claude-opus-4.8", "cancelPhase": "pre_first_token"})
     print(json.dumps({"type": "result", "exitCode": 0}))
     raise SystemExit(0)
+if sys.argv[4] == "refused":
+    # The provider declined the approved model (finishReason
+    # content_filter); Copilot CLI's automatic refusal fallback then failed
+    # its pre-flight check against the fallback model's smaller prompt
+    # budget, as recorded in run 20261025-125439.
+    event("assistant.usage", {
+        "model": model, "inputTokens": 185172, "outputTokens": 2837,
+        "maxPromptTokens": 968000, "maxOutputTokens": 32000,
+        "finishReason": "content_filter", "contentFilterTriggered": True,
+        "apiCallId": "msg_mock_refused"})
+    event("session.error", {
+        "errorType": "query",
+        "message": "Execution failed: Request exceeds the model's prompt budget after reserving output (134437 tokens; limit 128000). Reduce context or compact before continuing."})
+    print(json.dumps({"type": "result", "exitCode": 1}))
+    raise SystemExit(0)
 if sys.argv[4] == "1":
     # A transient model-service failure that Copilot's own retries did not
     # recover, as recorded by Copilot CLI 1.0.98.
@@ -8291,6 +8311,13 @@ EOF
     chmod 600 -- "${broker_runtime}/broker-exit.json"
     cat > "${MOCK_LOG}.research-request"
     printf '# Mock Copilot research session\n' > "${share_path}"
+    # MOCK_REFUSE_RESEARCH_MODEL names a model whose provider declines the
+    # research request before the first broker call.
+    if [[ "${MOCK_REFUSE_RESEARCH_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' "${network_root}" >> "${MOCK_LOG}.refused-research"
+        mock_emit_transient=refused
+        exit 1
+    fi
     # MOCK_RESEARCH_TRANSIENT names a marker: the first research attempt ends
     # with a transient model-service failure, and a marker that holds
     # `always` fails every attempt.
@@ -8780,6 +8807,13 @@ if grep -Fxq 'RHYOLITE_SECURITY_SCAN_V1' "${mock_worker_request}"; then
         printf 'mock scan failure for %s\n' "${model}" >&2
         exit 97
     fi
+    # MOCK_REFUSE_SCAN_MODELS lists scan models whose provider declines the
+    # scan request.
+    if [[ ",${MOCK_REFUSE_SCAN_MODELS-}," == *",${model},"* ]]; then
+        printf '%s\n' "${COPILOT_HOME}" >> "${MOCK_LOG}.refused-scan.${model}"
+        mock_emit_transient=refused
+        exit 1
+    fi
     # The first attempt of this scan model ends with a transient
     # model-service failure; a marker that holds `always` fails every attempt.
     if [[ "${MOCK_SCAN_TRANSIENT_MODEL-}" == "${model}" ]]; then
@@ -8899,6 +8933,14 @@ if grep -Fxq 'RHYOLITE SECURITY CONSOLIDATION LEDGER REQUEST' \
     fi
     rm -f -- "${mock_worker_request}"
     exit 0
+fi
+# MOCK_REFUSE_REVIEW_MODEL names a model whose provider declines the review
+# or consolidation request.
+if [[ "${MOCK_REFUSE_REVIEW_MODEL-}" == "${model}" ]]; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.refused-review-request.${model}"
+    rm -f -- "${mock_worker_request}"
+    mock_emit_transient=refused
+    exit 1
 fi
 cp -- "${mock_worker_request}" "${MOCK_LOG}.review-request"
 if grep -Fxq 'RHYOLITE_SECURITY_CONSOLIDATION_V1' "${mock_worker_request}" &&
@@ -10672,6 +10714,7 @@ assertKeys(reviewPlan, [
   "Provider",
   "ProvenanceWindow",
   "ReasoningEffort",
+  "RefusalPolicy",
   "ReportRepairPolicy",
   "ResearchTransport",
   "ReviewDate",
@@ -16328,6 +16371,20 @@ if (scans.Mode !== "multi-model" || scans.Count !== 3 ||
       JSON.stringify({ Mode: "same-session-continuation", Available: true, AttemptLimit: 1 })) {
   throw new Error(`unexpected SecurityScans plan: ${JSON.stringify(scans)}`);
 }
+const refusal = plan.RefusalPolicy;
+const writers = refusal?.ReportWriterCandidates ?? [];
+if (refusal?.Mode !== "report-and-continue" || refusal.ProtocolVersion !== 1 ||
+    refusal.UnapprovedModelFallback !== "never" || refusal.RefusingModelRetries !== 0 ||
+    refusal.RefusedModelReuse !== "never-for-the-same-repository" ||
+    refusal.ScanRefusal !== "skip-and-exclude-from-required-scans" ||
+    refusal.Handover !== "fresh-session-and-runtime-home" ||
+    JSON.stringify(writers.map((item) => [item.Model, item.Source])) !==
+      JSON.stringify([[plan.Model, "consolidation"], ["claude-opus-5.5", "scan-b"],
+        ["claude-fable-5.1", "scan-c"]]) ||
+    writers[1].ReasoningEffort !== "high" ||
+    JSON.stringify(refusal.ResearchCandidates) !== "[]") {
+  throw new Error(`unexpected RefusalPolicy plan: ${JSON.stringify(refusal)}`);
+}
 JS
 PATH="${mock_bin}:${PATH}" "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World --scope 1 \
@@ -16342,6 +16399,10 @@ if (scans.Mode !== "integrated" || scans.Count !== 1 ||
     scans.ScanRelaunchLimit !== 0 || scans.Consolidation !== null ||
     scans.Scans.length !== 1 || scans.Scans[0].Model !== plan.Model) {
   throw new Error("default plan is not one integrated security pass");
+}
+const writers = plan.RefusalPolicy.ReportWriterCandidates;
+if (writers.length !== 1 || writers[0].Model !== plan.Model || writers[0].Source !== "review") {
+  throw new Error("a single-model plan names a report-writer successor");
 }' "${security_scan_root}/single-plan.json"
 # Suggestions add vendor, then family diversity from the offline catalog and
 # never repeat the review model, with or without an explicit --model.
@@ -16358,6 +16419,12 @@ done
     fail 'Security scan suggestions did not exclude a chosen scan model.'
 
 SECURITY_SCAN_CASE_SCOPE=1
+SECURITY_SCAN_CASE_DEFAULT_SCANS=(
+    --security-scans 3
+    --scan-model claude-opus-5.5
+    --scan-model claude-fable-5.1
+)
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
 run_security_scan_case() {
     local name="$1"
     shift
@@ -16372,7 +16439,7 @@ run_security_scan_case() {
     mkdir -p -- "${case_root}/tmp"
     : > "${mock_log}"
     rm -f -- "${mock_log}".scan-request.* "${mock_log}.review-request" \
-        "${mock_log}.ledger-request"
+        "${mock_log}.ledger-request" "${mock_log}".refused-*
     set +e
     env "${case_environment[@]}" \
         RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
@@ -16390,9 +16457,7 @@ run_security_scan_case() {
         "${RUNNER}" \
             --repo https://github.com/octocat/Hello-World \
             --scope "${SECURITY_SCAN_CASE_SCOPE}" \
-            --security-scans 3 \
-            --scan-model claude-opus-5.5 \
-            --scan-model claude-fable-5.1 \
+            "${SECURITY_SCAN_CASE_SCANS[@]}" \
             --output-root "${case_root}/output" \
             --workspace-root "${case_root}/workspace" \
             --non-interactive \
@@ -16630,6 +16695,193 @@ if (state.Status !== "ReviewFailed" || summary.Ledger.Status !== "Invalid" ||
     !report.includes("did not account for every security scan finding") ||
     !unverified.includes("REPOSITORY REVIEW REPORT")) {
   throw new Error("an invalid consolidation ledger did not fail the repository review");
+}
+JS
+
+# Contract v9 provider refusals (RefusalPolicy). A scan whose model the
+# provider declines is skipped without a relaunch and does not count against
+# the required scans; its evidence never reaches consolidation, and the
+# refusal, with the approved prompt budget and largest prompt, is reported.
+run_security_scan_case scan-refused MOCK_REFUSE_SCAN_MODELS=claude-opus-5.5
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-refused/stdout" >&2
+    fail "A declined security scan failed the review (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+[[ "$(wc -l < "${mock_log}.refused-scan.claude-opus-5.5")" -eq 1 ]] &&
+    grep -Fxq 'Scan B: declined by its model provider (content refusal); no evidence from this scan is available' \
+        "${mock_log}.review-request" &&
+    ! grep -Fxq 'B-1' "${mock_log}.review-request" &&
+    grep -Eq '^Security scan B \(claude-opus-5\.5 at [a-z]+\) was declined by its model provider \(content refusal\)' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" &&
+    grep -Fxq 'Worker prompt size: largest recorded prompt 185172 tokens; approved prompt budget 968000 tokens.' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/security-scans/scan-b/errors.txt" ||
+    fail 'A declined scan was retried, not reported, or its evidence reached consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const run = path.dirname(repository);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+const scan = summary.Scans[1];
+const refusals = state.ProviderRefusals;
+const event = refusals?.Events?.[0] ?? {};
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+const index = fs.readFileSync(path.join(run, "index.html"), "utf8");
+const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
+const line = "1 provider refusal (security-scan B on claude-opus-5.5)";
+if (state.Status !== "Completed" || scan.Status !== "Refused" ||
+    scan.FailureClass !== "provider-refusal" || scan.Attempts !== 1 ||
+    summary.RefusedScans !== 1 || summary.EffectiveMinimumSuccessfulScans !== 2 ||
+    summary.SuccessfulScans !== 2 || summary.Ledger.Status !== "Validated" ||
+    refusals.Count !== 1 || event.Phase !== "security-scan" || event.Label !== "B" ||
+    event.Model !== "claude-opus-5.5" || event.PromptBudget !== 968000 ||
+    event.PeakPromptTokens !== 185172 || event.FallbackModel !== "" ||
+    refusals.ReportWriter?.Model !== state.Model || refusals.ReportWriter.Handovers !== 0 ||
+    runState.Repositories[0].ProviderRefusals?.Count !== 1 ||
+    runState.RefusalPolicy?.Mode !== "report-and-continue" ||
+    !index.includes("<th>Provider refusals</th>") || !index.includes(line) ||
+    !handoff.includes(`Provider refusals:\n\n    ${line}`) ||
+    fs.existsSync(path.join(repository, "security-scans", "scan-b", "attempts"))) {
+  throw new Error(`a declined scan was not skipped truthfully: ${JSON.stringify([summary, refusals])}`);
+}
+JS
+
+# Every scan declined: no scan evidence remains, the required scans drop to
+# zero, and the consolidation pass, on a model that no scan used, still runs
+# its own complete security pass.
+run_security_scan_case scans-all-refused \
+    MOCK_REFUSE_SCAN_MODELS=gpt-5.6-sol,claude-opus-5.5,claude-fable-5.1 \
+    -- --model gpt-5.6-sol --consolidation-model gpt-6-sol
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scans-all-refused/stdout" >&2
+    fail "Declining every scan model stopped the consolidation pass (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+grep -Fxq 'None. No security scan completed, so no scan evidence is available.' \
+    "${mock_log}.review-request" &&
+    grep -Fxq 'None. No scan reported a finding, so no ledger is required.' \
+        "${mock_log}.review-request" ||
+    fail 'A consolidation request without scan evidence did not say so.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+if (state.Status !== "Completed" || state.Model !== "gpt-6-sol" ||
+    summary.SuccessfulScans !== 0 || summary.RefusedScans !== 3 ||
+    summary.EffectiveMinimumSuccessfulScans !== 0 ||
+    state.ProviderRefusals.Count !== 3 ||
+    state.ProviderRefusals.ReportWriter?.Source !== "consolidation" ||
+    state.ProviderRefusals.ReportWriter.Handovers !== 0) {
+  throw new Error(`declined scans did not leave a consolidation pass: ${JSON.stringify([summary, state.ProviderRefusals])}`);
+}
+JS
+
+# A declined report writer hands the same request over, in a fresh session,
+# to the next approved candidate (the scan B model); the refused attempt is
+# archived and never reaches the canonical report.
+run_security_scan_case writer-refused MOCK_REFUSE_REVIEW_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/writer-refused/stdout" >&2
+    fail "A declined report writer was not handed over (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+cmp -s -- "${mock_log}.refused-review-request.gpt-5.6-sol" \
+    "${mock_log}.review-request" &&
+    grep -Fq 'Report writer handover: the model provider declined gpt-5.6-sol at max (content refusal), so the review continued with claude-opus-5.5 at max (scan B model), an approved model, in a fresh session.' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" ||
+    fail 'The handover did not reuse the exact request or report the declined model.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const attempt = read("report-writer/attempts/1/attempt.json");
+const summary = read("security-scans/security-scans.json");
+const refusals = state.ProviderRefusals;
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "Completed" || state.Model !== "claude-opus-5.5" ||
+    refusals.Count !== 1 || refusals.Events[0].Phase !== "report-writer" ||
+    refusals.Events[0].Label !== "attempt 1" || refusals.Events[0].Model !== "gpt-5.6-sol" ||
+    refusals.ReportWriter?.Model !== "claude-opus-5.5" ||
+    refusals.ReportWriter.Source !== "scan-b" || refusals.ReportWriter.Handovers !== 1 ||
+    attempt.Outcome !== "refused" || attempt.Model !== "gpt-5.6-sol" ||
+    attempt.Source !== "consolidation" ||
+    !fs.existsSync(path.join(repository, "report-writer", "attempts", "1", "errors.txt")) ||
+    summary.Ledger.Status !== "Validated" ||
+    !report.includes("REPOSITORY REVIEW REPORT") ||
+    fs.existsSync(path.join(repository, "failure-analysis.json")) ||
+    fs.existsSync(path.join(repository, ".refused-outcome.json"))) {
+  throw new Error(`a declined report writer was not handed over truthfully: ${JSON.stringify(refusals)}`);
+}
+JS
+
+# With no other approved model, a declined report writer fails the review
+# with a provider-refusal analysis that explains the harness's prompt-budget
+# error as the fallback model's limit, not the approved model's.
+SECURITY_SCAN_CASE_SCANS=(--security-scans 1)
+run_security_scan_case writer-refused-alone MOCK_REFUSE_REVIEW_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
+[[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]] ||
+    fail 'A declined review without another approved model succeeded.'
+grep -Fq 'Stage: provider refusal' "${security_scan_root}/writer-refused-alone/stdout" ||
+    fail 'The runner did not report the provider-refusal stage.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const analysis = read("failure-analysis.json");
+if (state.Status !== "ReviewFailed" || state.ProviderRefusals.Count !== 1 ||
+    analysis.Stage !== "provider refusal" || analysis.FailureClass !== "provider-refusal" ||
+    analysis.ProviderRefusals !== 1 || analysis.PromptBudget !== 968000 ||
+    analysis.PeakPromptTokens !== 185172 ||
+    !analysis.RootCause.includes("does not describe the approved model, whose budget was 968000 tokens with a largest recorded prompt of 185172 tokens") ||
+    fs.existsSync(path.join(repository, "report-writer", "attempts"))) {
+  throw new Error(`a declined review was not analyzed truthfully: ${JSON.stringify(analysis)}`);
+}
+JS
+
+# A declined research worker hands research over to the next approved model
+# with a fresh broker and network log; that model also writes the report,
+# because the declined model is never used again for the repository.
+SECURITY_SCAN_CASE_SCOPE=2
+SECURITY_SCAN_CASE_SCANS=(--security-scans 2 --scan-model claude-opus-5.5)
+run_security_scan_case research-refused MOCK_REFUSE_RESEARCH_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+SECURITY_SCAN_CASE_SCOPE=1
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/research-refused/stdout" >&2
+    fail "A declined research worker was not handed over (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+[[ "$(wc -l < "${mock_log}.refused-research")" -eq 1 ]] ||
+    fail 'The declined research model was retried.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const research = read("research/research-state.json");
+const attempt = read("research/attempts/1/attempt.json");
+const refusals = state.ProviderRefusals;
+if (state.Status !== "Completed" || state.Model !== "claude-opus-5.5" ||
+    refusals.Count !== 1 || refusals.Events[0].Phase !== "research" ||
+    refusals.Events[0].Model !== "gpt-5.6-sol" ||
+    refusals.Research?.Model !== "claude-opus-5.5" || refusals.Research.Handovers !== 1 ||
+    refusals.ReportWriter?.Model !== "claude-opus-5.5" || refusals.ReportWriter.Handovers !== 1 ||
+    research.Status !== "Completed" || research.Model !== "claude-opus-5.5" ||
+    research.Attempts.Count !== 2 || research.Attempts.RefusalHandovers !== 1 ||
+    research.Attempts.Relaunches !== 0 || research.Attempts.Archived.length !== 1 ||
+    attempt.Outcome !== "refused" || attempt.Model !== "gpt-5.6-sol") {
+  throw new Error(`a declined research worker was not handed over truthfully: ${JSON.stringify([research, refusals])}`);
 }
 JS
 

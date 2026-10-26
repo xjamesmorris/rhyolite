@@ -4380,6 +4380,78 @@ def _():
 
 
 security_scans = read_json(directory / "security-scans" / "security-scans.json")
+provider_refusals = state.get("ProviderRefusals") if isinstance(state.get("ProviderRefusals"), dict) else {}
+refusal_events = [event for event in provider_refusals.get("Events") or [] if isinstance(event, dict)]
+# A harness error such as "Request exceeds the model's prompt budget after
+# reserving output (134437 tokens; limit 128000)" names the limit of the model
+# that request went to. After a refusal that is the harness's automatic
+# fallback model, not the approved model, whose own budget the worker outcome
+# records.
+budget_error = re.search(
+    r"exceeds the model's prompt budget[^(]*\(([0-9]+) tokens; limit ([0-9]+)\)", text)
+prompt_size = re.search(
+    r"Worker prompt size: largest recorded prompt ([0-9]+|not recorded) tokens; "
+    r"approved prompt budget ([0-9]+|not recorded) tokens", text)
+approved_budget = None
+recorded_peak = None
+if prompt_size:
+    if prompt_size.group(2).isdigit():
+        approved_budget = int(prompt_size.group(2))
+    if prompt_size.group(1).isdigit():
+        recorded_peak = int(prompt_size.group(1))
+for event in refusal_events:
+    if approved_budget is None and isinstance(event.get("PromptBudget"), int):
+        approved_budget = event["PromptBudget"]
+    if recorded_peak is None and isinstance(event.get("PeakPromptTokens"), int):
+        recorded_peak = event["PeakPromptTokens"]
+
+
+def budget_note():
+    if not budget_error:
+        return ""
+    requested, limit = int(budget_error.group(1)), int(budget_error.group(2))
+    if approved_budget and limit < approved_budget:
+        return (f" The harness error about a {limit}-token prompt budget ({requested} tokens requested) "
+                f"does not describe the approved model, whose budget was {approved_budget} tokens"
+                + (f" with a largest recorded prompt of {recorded_peak} tokens" if recorded_peak else "")
+                + "; it is the limit of the model that the harness's automatic refusal fallback tried, which Rhyolite never uses.")
+    return ""
+
+
+@rule("provider-refusal")
+def _():
+    if stage != "provider refusal":
+        return None
+    declined = "; ".join(
+        f"{event.get('Phase', '?')}{' ' + str(event['Label']) if event.get('Label') else ''} "
+        f"on {event.get('Model', '?')} at {event.get('ReasoningEffort', '?')}"
+        for event in refusal_events) or "see errors.txt"
+    return ("The model provider declined every approved model that could run for this repository.",
+            f"The provider declined these requests (content refusals): {declined}. "
+            "Rhyolite stopped each refused session, never retried a refusing model, handed over to every "
+            "other approved model it had not declined, and never accepted output from a model outside the approved plan."
+            + budget_note(),
+            ["Approve a plan that adds security scan models from other vendors or families with --scan-model; they also become report-writer and research candidates. Then rerun.",
+             "If the same models are declined again at the same point, the provider is declining this repository's security content for them; keep the models that completed."],
+            ["Read the refusal records in state.json ProviderRefusals and the archived attempts under report-writer/attempts/ or research/attempts/ for the declined request."])
+
+
+@rule("context-limit")
+def _():
+    if not budget_error and not has(r"exceeds the model's context limit|context_length_exceeded|prompt is too long"):
+        return None
+    if budget_note():
+        return None
+    detail = (f"a request of {budget_error.group(1)} tokens exceeded a {budget_error.group(2)}-token prompt budget"
+              if budget_error else "a request exceeded the model's context limit")
+    return ("The session's prompt exceeded the approved model's prompt budget.",
+            f"The harness reported that {detail} after its own automatic compaction"
+            + (f"; the largest recorded prompt was {recorded_peak} tokens" if recorded_peak else "")
+            + (f" against an approved budget of {approved_budget} tokens" if approved_budget else "")
+            + ". No provider refusal was recorded.",
+            ["Rerun with the long_context context tier, the Copilot default, in a new approved plan if a smaller tier was approved.",
+             "Or choose a model with a larger context window in a new approved plan."],
+            ["Compare the recorded peak prompt with the approved budget and check whether one phase reads too much source at once."])
 
 
 @rule("security-scans")
@@ -4409,6 +4481,8 @@ def _():
             actions.append(f"Choose another model for scan {label}, preferably from another vendor, that your account can use, in a new approved plan.")
         elif failure_class in ("model-service", "fallback-blocked"):
             actions.append(f"Rerun the approved review; scan {label} was already relaunched once with a fresh session after its transient failure.")
+        elif failure_class == "provider-refusal":
+            actions.append(f"Scan {label} was declined by its model provider (content refusal) and did not count against the required scans; to keep its independent evidence, choose another model, preferably from another vendor, for scan {label} in a new approved plan.")
         elif failure_class in ("missing-report", "invalid-report"):
             actions.append(f"Rerun the approved review; read security-scans/scan-{label.lower()}/analysis-timeline.txt and errors.txt for the scan report problem.")
         elif failure_class == "approved-model-enforcement":
@@ -4420,10 +4494,15 @@ def _():
     actions.append(
         "Approve a plan with a lower --min-successful-scans (now "
         f"{security_scans.get('MinimumSuccessfulScans', '?')}) only if fewer independent scans are acceptable.")
+    refused_scans = security_scans.get("RefusedScans") or 0
+    required = security_scans.get("EffectiveMinimumSuccessfulScans",
+                                  security_scans.get("MinimumSuccessfulScans", "?"))
     return ("Too few independent security scans completed for the approved plan.",
             f"{security_scans.get('SuccessfulScans', 0)} of {security_scans.get('Count', '?')} scans completed, "
-            f"and the approved plan requires {security_scans.get('MinimumSuccessfulScans', '?')}: "
-            + ("; ".join(details) or "no scan detail was recorded") + ".",
+            f"and the approved plan requires {required}"
+            + (f" after excluding {refused_scans} scan{'s' if refused_scans != 1 else ''} that the model provider declined"
+               if refused_scans else "")
+            + ": " + ("; ".join(details) or "no scan detail was recorded") + ".",
             actions,
             ["Inspect security-scans/scan-*/errors.txt, analysis-timeline.txt, and scan-state.json for the failed scans."])
 
@@ -4481,8 +4560,8 @@ def _():
                 f"A request to the approved model did not complete (the service refused or failed it), and the harness automatically retried on {attempted}. "
                 "Rhyolite stopped the worker before that model produced output and never accepts substituted output. "
                 f"Same-session recovery status: {recovered or 'not attempted'}.",
-                ["Rerun the approved review; refusals of the approved model are often transient.",
-                 "If it repeats for the same repository, the approved model may be declining specific content; consider approving a different model in a new plan. Rhyolite never switches models automatically."],
+                ["Rerun the approved review; failures of the approved model are often transient.",
+                 "If it repeats for the same repository, the approved model may be declining specific content. Rhyolite records a recognized provider refusal and hands over only to another model in the approved plan; it never switches to a model outside the plan."],
                 ["Check the worker-recovery outcomes for the request that triggered the fallback and whether it repeats at the same point."])
 
 
@@ -4602,6 +4681,9 @@ record = {
     "OutputLimitHits": limit_hits,
     "OutputTokenLimit": limit_value,
     "FallbackModels": fallback_models,
+    "ProviderRefusals": len(refusal_events),
+    "PromptBudget": approved_budget,
+    "PeakPromptTokens": recorded_peak,
     "ReasoningEffortFallback": effort_fallback,
     "RecoveryAttempted": {
         "WorkerRecovery": recovery.get("Status", "NotReached"),
@@ -4651,6 +4733,14 @@ lines += [
     f"- Same-session worker recovery: {record['RecoveryAttempted']['WorkerRecovery']}",
     f"- Report repair: {record['RecoveryAttempted']['ReportRepair']}",
 ]
+if refusal_events:
+    handovers = []
+    for key, name in (("Research", "research"), ("ReportWriter", "report writer")):
+        worker = provider_refusals.get(key)
+        if isinstance(worker, dict) and worker.get("Handovers"):
+            handovers.append(f"{name} handed over {worker['Handovers']} time(s), last to {worker.get('Model')}")
+    lines.append(f"- Provider refusals recorded: {len(refusal_events)}"
+                 + (f"; {'; '.join(handovers)}" if handovers else ""))
 if limit_hits:
     lines.append(f"- Responses at the output token limit: {limit_hits}" + (f" (limit {limit_value})" if limit_value else ""))
 lines += ["", "## Recommended repair actions", ""]
@@ -4756,6 +4846,7 @@ write_review_handoff() {
     local provider_env_names="${27:-(none)}"
     local resume_policy="${28:-}"
     local repair_summary="${29:-}"
+    local refusal_summary="${30:-}"
     local continuation
 
     if [[ -n "${session_id}" ]]; then
@@ -4800,6 +4891,9 @@ write_review_handoff() {
                 printf '    %s\n' "${line}"
             done <<< "${repair_summary}"
             printf '\n'
+        fi
+        if [[ -n "${refusal_summary}" ]]; then
+            printf 'Provider refusals:\n\n    %s\n\n' "${refusal_summary}"
         fi
         if [[ -n "${research_directory}" ]]; then
             printf 'Research artifact directory:\n\n    %s\n\n' \

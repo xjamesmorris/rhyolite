@@ -904,7 +904,14 @@ harness_finalize_research_session() {
 # checkpoint, and subagent metric used the approved model and effort, and both
 # reject any subagent event because Rhyolite workers receive no subagent tool
 # and Copilot CLI lets a `task` argument override every configured subagent
-# model. It prints one status token followed by one sanitized detail line.
+# model. Both also recognize a content refusal of the approved model: a usage
+# record for the approved model whose response the provider declined
+# (finishReason content_filter, which Copilot CLI also reports for an
+# Anthropic `refusal` stop), a `refusal_fallback` model change, or the CLI's
+# refusal notice. A refusal that precedes every unapproved model is reported
+# as `refused`, because Copilot CLI's automatic refusal fallback is what
+# brings in the other model. It prints one status token followed by one
+# sanitized detail line.
 copilot_scan_structured_output() {
     local mode="$1"
     local raw_output="$2"
@@ -942,6 +949,10 @@ SUBAGENT_EVENTS = (
     "subagent.completed",
     "subagent.failed",
 )
+REFUSAL_NOTICE = re.compile(
+    r"'([^'\s]{1,128})' declined the request (?:due to a content policy refusal|\(content refusal\))"
+)
+FALLBACK_NOTICE = re.compile(r"re-issuing on fallback model '([^'\s]{1,128})'")
 
 
 def safe_token(value):
@@ -987,6 +998,8 @@ observed_models = []
 content_models = []
 observed_efforts = []
 subagent_seen = None
+refusal_seen = False
+refusal_fallback = ""
 
 
 def flush_passthrough():
@@ -1000,6 +1013,21 @@ def observe_model(value, content=False):
         observed_models.append(value)
         if content:
             content_models.append(value)
+
+
+def observe_refusal(fallback=""):
+    global refusal_seen, refusal_fallback
+    refusal_seen = True
+    if fallback and not refusal_fallback:
+        refusal_fallback = fallback
+
+
+def observe_usage(usage):
+    if not isinstance(usage, dict) or usage.get("model") != approved_model:
+        return
+    if (usage.get("contentFilterTriggered") is True
+            or usage.get("finishReason") == "content_filter"):
+        observe_refusal()
 
 
 def observe_effort(value):
@@ -1080,6 +1108,28 @@ for raw_line in lines:
         observe_model(data.get("model"))
     elif event_type in SUBAGENT_EVENTS:
         observe_subagent(data)
+    elif event_type == "assistant.usage":
+        observe_usage(data)
+    elif event_type == "session.usage_record":
+        observe_usage(data.get("usage"))
+    elif event_type == "session.model_change":
+        # Only a runtime-initiated switch can move a worker off the approved
+        # model; startup and SDK selections name the approved model itself.
+        automatic = (data.get("cause") in ("refusal_fallback", "rate_limit_auto_switch")
+                     or data.get("source") == "automatic")
+        if (data.get("cause") == "refusal_fallback"
+                and data.get("previousModel") in (approved_model, None)):
+            fallback = data.get("newModel")
+            observe_refusal(fallback if isinstance(fallback, str) else "")
+        if automatic:
+            observe_model(data.get("newModel"))
+    elif event_type in ("session.info", "session.warning"):
+        message = data.get("message")
+        if isinstance(message, str):
+            notice = REFUSAL_NOTICE.search(message)
+            fallback = FALLBACK_NOTICE.search(message)
+            if notice and notice.group(1) == approved_model:
+                observe_refusal(fallback.group(1) if fallback else "")
     elif event_type == "session.usage_checkpoint":
         for state in data.get("promptCacheBreakState") or []:
             if not isinstance(state, dict):
@@ -1108,13 +1158,22 @@ if mode == "watch":
 if subagent_seen is not None:
     name, model = subagent_seen
     finish("subagent", f"{name}:{model}" if model else name)
+# Copilot CLI's automatic refusal fallback is the only recorded way a worker
+# leaves the approved model after the provider declines it, so a recorded
+# refusal explains any other model in the same output, whatever order the
+# events arrived in. The watch mode reports it at once so the runner stops the
+# worker before the fallback can answer; normalization reports it only when
+# another model was recorded, because then the session cannot be accepted.
+attempted = [model for model in observed_models if model != approved_model]
+if refusal_seen and (mode == "watch" or attempted):
+    fallback = refusal_fallback or (attempted[0] if attempted else "")
+    finish("refused", safe_token(fallback) if fallback else "")
 substituted = [model for model in content_models if model != approved_model]
 if substituted:
     finish("substituted", safe_token(substituted[0]))
 # Copilot CLI automatically retries a request on another model when the
 # approved model refuses it. Any such attempt still fails closed; the worker
 # outcome tells the runner whether it was blocked before producing output.
-attempted = [model for model in observed_models if model != approved_model]
 if attempted:
     finish("fallback", safe_token(attempted[0]))
 changed = [effort for effort in observed_efforts if effort != approved_effort]
@@ -1181,6 +1240,15 @@ copilot_set_scan_error() {
             rhyolite_harness_set_error \
                 "Copilot attempted an automatic fallback from the approved model '${approved_model}' to model '${detail}' in the ${phase} phase after a request to the approved model did not complete; no output from '${detail}' was recorded, and Rhyolite does not accept substituted output."
             ;;
+        refused)
+            if [[ -n "${detail}" ]]; then
+                rhyolite_harness_set_error \
+                    "The model provider declined a request to the approved model '${approved_model}' in the ${phase} phase (content refusal), and Copilot then tried its automatic refusal fallback to model '${detail}'; Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan."
+            else
+                rhyolite_harness_set_error \
+                    "The model provider declined a request to the approved model '${approved_model}' in the ${phase} phase (content refusal); Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan."
+            fi
+            ;;
         effort-changed)
             rhyolite_harness_set_error \
                 "Copilot recorded reasoning effort '${detail}' in the ${phase} phase instead of the approved effort '${approved_effort}'; Rhyolite does not accept downgraded or substituted effort."
@@ -1234,8 +1302,9 @@ harness_normalize_worker_output() {
 }
 
 # Live enforcement while a worker runs: scan the JSONL appended since the last
-# call and report the first recorded model, effort, or subagent violation so
-# the runner can terminate the worker immediately instead of after completion.
+# call and report the first recorded model, effort, or subagent violation, or
+# a provider refusal of the approved model, so the runner can terminate the
+# worker immediately instead of after completion.
 harness_detect_worker_violation() {
     local phase="$1"
     local raw_output="$2"
@@ -1264,6 +1333,12 @@ harness_detect_worker_violation() {
     case "${status}" in
         ok)
             return 0
+            ;;
+        refused)
+            copilot_set_scan_error \
+                "${phase}" "${status}" "${detail}" \
+                "${approved_model}" "${approved_effort}"
+            return "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}"
             ;;
         subagent | substituted | fallback | effort-changed)
             copilot_set_scan_error \
@@ -1334,12 +1409,25 @@ SUBAGENT_EVENTS = (
     "subagent.completed",
     "subagent.failed",
 )
+REFUSAL_NOTICE = re.compile(
+    r"'([^'\s]{1,128})' declined the request (?:due to a content policy refusal|\(content refusal\))"
+)
+FALLBACK_NOTICE = re.compile(r"re-issuing on fallback model '([^'\s]{1,128})'")
+TOKEN_LIMIT = 100000000
 
 
 def clean(text):
     text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text))
     text = re.sub(r"\s+", " ", text).strip()
     return text[:400]
+
+
+def safe(value):
+    return value if SAFE_TOKEN.fullmatch(value) else "unrecognized"
+
+
+def token_count(value):
+    return value if type(value) is int and 0 < value <= TOKEN_LIMIT else None
 
 
 exit_code = None
@@ -1351,6 +1439,55 @@ observed = []
 content = []
 efforts = []
 subagent = False
+line_number = 0
+refusal_fallback = ""
+refusal_noticed = False
+refused_calls = set()
+prompt_budget = None
+peak_prompt = None
+last_approved_refused = None
+
+
+def observe(model, is_content=False):
+    if isinstance(model, str):
+        observed.append(model)
+        if is_content:
+            content.append(model)
+
+
+# A declined approved-model call counts once, by its API call ID, whether the
+# streamed usage event, the persisted usage record, or both recorded it. A CLI
+# notice or refusal-fallback model change without a usage record counts as one.
+def note_refusal(identity=None, fallback=""):
+    global refusal_fallback, refusal_noticed
+    if identity is None:
+        refusal_noticed = True
+    else:
+        refused_calls.add(identity)
+    if fallback and not refusal_fallback:
+        refusal_fallback = fallback
+
+
+# Approved-model usage records carry the prompt budget, each prompt's size,
+# and whether the provider declined the response.
+def approved_usage(usage, identity):
+    global prompt_budget, peak_prompt, last_approved_refused
+    if not isinstance(usage, dict) or usage.get("model") != approved_model:
+        return
+    budget = token_count(usage.get("maxPromptTokens"))
+    if budget is not None:
+        prompt_budget = budget
+    prompt = token_count(usage.get("inputTokens"))
+    if prompt is not None and (peak_prompt is None or prompt > peak_prompt):
+        peak_prompt = prompt
+    refused = (usage.get("contentFilterTriggered") is True
+               or usage.get("finishReason") == "content_filter")
+    last_approved_refused = refused
+    if refused:
+        call = usage.get("apiCallId")
+        note_refusal(call if isinstance(call, str) and call else identity)
+
+
 for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
     line = raw_line.strip()
     if not line.startswith(b"{"):
@@ -1361,6 +1498,7 @@ for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
         continue
     if not isinstance(event, dict):
         continue
+    line_number += 1
     kind = event.get("type")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if kind == "result":
@@ -1374,38 +1512,50 @@ for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
     elif kind == "model.call_failure":
         call_failures += 1
         failure_kinds.append(str(data.get("failureKind", "")))
-        if isinstance(data.get("model"), str):
-            observed.append(data["model"])
+        observe(data.get("model"))
     elif kind == "assistant.turn_retry":
         turn_retries += 1
     elif kind in ("model.call_start", "agent.interrupted"):
-        if isinstance(data.get("model"), str):
-            observed.append(data["model"])
+        observe(data.get("model"))
     elif kind == "model.call_final_result":
-        if isinstance(data.get("model"), str):
-            observed.append(data["model"])
-            if data.get("result") == "success":
-                content.append(data["model"])
+        observe(data.get("model"), data.get("result") == "success")
     elif kind in ("assistant.message", "tool.execution_start", "tool.execution_complete"):
-        if isinstance(data.get("model"), str):
-            observed.append(data["model"])
-            content.append(data["model"])
+        observe(data.get("model"), True)
     elif kind in SUBAGENT_EVENTS:
         subagent = True
+    elif kind == "assistant.usage":
+        approved_usage(data, f"stdout:{line_number}")
+    elif kind == "session.usage_record":
+        approved_usage(data.get("usage"), f"stdout:{line_number}")
+    elif kind == "session.model_change":
+        if (data.get("cause") == "refusal_fallback"
+                and data.get("previousModel") in (approved_model, None)):
+            fallback = data.get("newModel")
+            note_refusal(None, fallback if isinstance(fallback, str) else "")
+        if (data.get("cause") in ("refusal_fallback", "rate_limit_auto_switch")
+                or data.get("source") == "automatic"):
+            observe(data.get("newModel"))
+    elif kind in ("session.info", "session.warning"):
+        message = data.get("message")
+        if isinstance(message, str):
+            notice = REFUSAL_NOTICE.search(message)
+            fallback = FALLBACK_NOTICE.search(message)
+            if notice and notice.group(1) == approved_model:
+                note_refusal(None, fallback.group(1) if fallback else "")
     elif kind == "session.usage_checkpoint":
         for state in data.get("promptCacheBreakState") or []:
             models = state.get("models") if isinstance(state, dict) else None
             if isinstance(models, dict):
-                for call in models.values():
+                for model_id, call in models.items():
                     if isinstance(call, dict) and isinstance(call.get("reasoning_effort"), str):
-                        efforts.append(call["reasoning_effort"])
+                        efforts.append((call.get("model") or model_id, call["reasoning_effort"]))
 
 output_limit = None
 limit_hits = 0
 final_at_limit = False
 events_path = pathlib.Path(events_name)
 if events_path.is_file() and not events_path.is_symlink():
-    for raw_line in events_path.read_bytes().split(b"\n"):
+    for index, raw_line in enumerate(events_path.read_bytes().split(b"\n")):
         if b'"session.usage_record"' not in raw_line:
             continue
         try:
@@ -1418,18 +1568,32 @@ if events_path.is_file() and not events_path.is_symlink():
             output_limit = min(maximum, 1000000)
             final_at_limit = produced >= maximum
             limit_hits += 1 if final_at_limit else 0
+        approved_usage(usage, f"events:{index}")
 
 attempted = [model for model in observed if model != approved_model]
+refusals = len(refused_calls) or (1 if refusal_noticed else 0)
+approved_effort_changed = any(
+    effort != approved_effort for model, effort in efforts if model == approved_model
+)
 fallback = ""
-if (
-    subagent
-    or any(model != approved_model for model in content)
-    or any(effort != approved_effort for effort in efforts)
+if subagent or approved_effort_changed:
+    outcome = "substituted"
+elif refusals and (attempted or exit_code != 0 or last_approved_refused):
+    # The provider declined the approved model and the session did not finish
+    # cleanly on it. Copilot CLI's automatic refusal fallback is the only
+    # recorded way to another model after a refusal, so whatever it did, in
+    # any event order, is discarded.
+    outcome = "refused"
+    candidate = refusal_fallback or (attempted[0] if attempted else "")
+    fallback = safe(candidate) if candidate else ""
+elif (
+    any(model != approved_model for model in content)
+    or any(effort != approved_effort for _, effort in efforts)
 ):
     outcome = "substituted"
 elif attempted:
     outcome = "fallback-blocked"
-    fallback = attempted[0] if SAFE_TOKEN.fullmatch(attempted[0]) else "unrecognized"
+    fallback = safe(attempted[0])
 elif exit_code == 0:
     outcome = "completed"
 elif any(TRANSIENT.search(item) and not PERMANENT.search(item) for item in errors) or (
@@ -1444,7 +1608,7 @@ elif exit_code is not None:
 else:
     outcome = "unknown"
 record = {
-    "Schema": 1,
+    "Schema": 2,
     "Phase": phase,
     "Outcome": outcome,
     "Retryable": outcome in ("transient-failure", "fallback-blocked"),
@@ -1456,6 +1620,9 @@ record = {
     "OutputTokenLimit": output_limit,
     "FinalReplyAtOutputLimit": final_at_limit,
     "FallbackModel": fallback,
+    "ContentRefusals": min(refusals, 1000000),
+    "PromptBudget": prompt_budget,
+    "PeakPromptTokens": peak_prompt,
 }
 pathlib.Path(output_name).write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
 PY

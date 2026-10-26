@@ -277,12 +277,18 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '8' \
+assert_equal '9' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 assert_equal '4' \
     "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
     'Harness worker violation status'
+assert_equal '5' \
+    "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+    'Harness worker refusal status'
+assert_equal '2' \
+    "${RHYOLITE_HARNESS_OUTCOME_SCHEMA}" \
+    'Harness worker outcome schema'
 production_registry_path=''
 rhyolite_harness_registry_lookup \
     production_registry_path "${PLUGIN_ROOT}" copilot ||
@@ -1491,12 +1497,181 @@ assert data["FinalReplyAtOutputLimit"] is True, data
 PY
 rm -f -- "${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
 
+# Contract v9: a provider refusal of the approved model is its own outcome,
+# whatever automatic fallback Copilot CLI attempted afterward and in whatever
+# order the events arrived. In run 20261025-125439 the refused call's usage
+# record (finishReason content_filter) was persisted, and the CLI's pre-flight
+# check of its refusal fallback then failed against the fallback model's
+# smaller prompt budget; no fallback call was recorded.
+copilot_v9_events="${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
+node - "${copilot_v9_events}" <<'JS'
+const fs = require("fs");
+const usage = (input, finish, filtered) => JSON.stringify({type: "session.usage_record",
+  data: {usage: {model: "claude-opus-5.5", inputTokens: input, outputTokens: 2837,
+    maxPromptTokens: 968000, maxOutputTokens: 32000, finishReason: finish,
+    contentFilterTriggered: filtered, apiCallId: `msg_${input}`}}});
+fs.writeFileSync(process.argv[2],
+  [usage(178113, "tool_calls", false), usage(185172, "content_filter", true)].join("\n") + "\n");
+JS
+copilot_v9_budget_error='session.error|{"errorType":"query","message":"Execution failed: Request exceeds the model prompt budget after reserving output (134437 tokens; limit 128000). Reduce context or compact before continuing."}'
+copilot_v8_stream "${copilot_v8_raw}" \
+    'model.call_start|{"turnId":"18","model":"claude-opus-5.5"}' \
+    "${copilot_v9_budget_error}" \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 1 and data["Retryable"] is False, data
+assert data["PromptBudget"] == 968000 and data["PeakPromptTokens"] == 185172, data
+assert data["FallbackModel"] == "" and data["ExitCode"] == 1, data
+PY2
+rm -f -- "${copilot_v9_events}"
+
+# The October 13 pattern with the refusal streamed: the refused call's usage,
+# then the CLI's refusal fallback, in either order. Normalization and live
+# detection report a refusal, never an enforcement violation.
+copilot_v9_refusal='assistant.usage|{"model":"claude-opus-5.5","inputTokens":90000,"maxPromptTokens":968000,"finishReason":"content_filter","contentFilterTriggered":true,"apiCallId":"msg_refused"}'
+for copilot_v9_order in refusal-first fallback-first; do
+    if [[ "${copilot_v9_order}" == refusal-first ]]; then
+        copilot_v8_stream "${copilot_fallback_output}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-5.5"}' \
+            "${copilot_v9_refusal}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-4.8"}' \
+            'model.call_failure|{"model":"claude-opus-4.8","statusCode":400,"failureKind":"api"}' \
+            'agent.interrupted|{"model":"claude-opus-4.8","cancelPhase":"pre_first_token"}' \
+            'result|{"exitCode":0}'
+    else
+        copilot_v8_stream "${copilot_fallback_output}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-5.5"}' \
+            'model.call_start|{"turnId":"5","model":"claude-opus-4.8"}' \
+            "${copilot_v9_refusal}" \
+            'agent.interrupted|{"model":"claude-opus-4.8","cancelPhase":"pre_first_token"}' \
+            'result|{"exitCode":0}'
+    fi
+    rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+    if rhyolite_harness_invoke harness_normalize_worker_output \
+        review "${copilot_fallback_output}" claude-opus-5.5 max \
+        "${copilot_normalized_output}" "${copilot_exact_reply}"; then
+        fail "Copilot normalization accepted a refused session (${copilot_v9_order})."
+    fi
+    assert_equal \
+        "The model provider declined a request to the approved model 'claude-opus-5.5' in the review phase (content refusal), and Copilot then tried its automatic refusal fallback to model 'claude-opus-4.8'; Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan." \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        "Copilot refusal diagnostic (${copilot_v9_order})"
+    rm -f -- "${copilot_watch_cursor}"
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        review "${copilot_fallback_output}" claude-opus-5.5 max "${copilot_watch_cursor}"; then
+        fail "Copilot live detection missed a provider refusal (${copilot_v9_order})."
+    fi
+    assert_equal "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+        "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        "Copilot live refusal status (${copilot_v9_order})"
+    rm -f -- "${copilot_watch_cursor}"
+    copilot_v8_outcome "${copilot_fallback_output}" refused
+    python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["FallbackModel"] == "claude-opus-4.8" and data["ContentRefusals"] == 1, data
+assert data["Retryable"] is False and data["PromptBudget"] == 968000, data
+PY2
+done
+
+# A refusal followed by a clean finish on the approved model is not a
+# refused outcome, although the live monitor stops on the first refusal.
+copilot_v8_stream "${copilot_v8_raw}" \
+    "${copilot_v9_refusal}" \
+    'assistant.usage|{"model":"claude-opus-5.5","inputTokens":95000,"maxPromptTokens":968000,"finishReason":"stop","contentFilterTriggered":false,"apiCallId":"msg_after"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 1 and data["PeakPromptTokens"] == 95000, data
+PY2
+rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+rhyolite_harness_invoke harness_normalize_worker_output \
+    review "${copilot_v8_raw}" claude-opus-5.5 max \
+    "${copilot_normalized_output}" "${copilot_exact_reply}" ||
+    fail "Copilot normalization rejected a session that finished on the approved model: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+rm -f -- "${copilot_watch_cursor}"
+if rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_v8_raw}" claude-opus-5.5 max "${copilot_watch_cursor}"; then
+    fail 'Copilot live detection ignored a streamed provider refusal.'
+fi
+assert_equal "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+    "${RHYOLITE_HARNESS_LAST_STATUS}" \
+    'Copilot live refusal status before a clean finish'
+rm -f -- "${copilot_watch_cursor}"
+
+# A genuine overflow of the approved model's own prompt budget, with no
+# refusal, stays an ordinary failure that records the budget and peak.
+copilot_v8_stream "${copilot_v8_raw}" \
+    'assistant.usage|{"model":"claude-opus-5.5","inputTokens":127000,"maxPromptTokens":128000,"finishReason":"tool_calls","contentFilterTriggered":false,"apiCallId":"msg_large"}' \
+    "${copilot_v9_budget_error}" \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" failed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 0 and data["FallbackModel"] == "", data
+assert data["PromptBudget"] == 128000 and data["PeakPromptTokens"] == 127000, data
+PY2
+
+# A refusal-fallback model change or a CLI refusal notice that names the
+# approved model also records the refusal and the fallback model; a startup
+# selection of the approved model is not a model change.
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.model_change|{"newModel":"claude-opus-5.5","source":"startup"}' \
+    'session.model_change|{"previousModel":"claude-opus-5.5","newModel":"claude-opus-4.8","cause":"refusal_fallback","source":"automatic"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["FallbackModel"] == "claude-opus-4.8" and data["ContentRefusals"] == 1, data
+PY2
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.info|{"infoType":"model","message":"Model '"'"'claude-opus-5.5'"'"' declined the request (content refusal); re-issuing on fallback model '"'"'claude-opus-4.8'"'"'"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.model_change|{"newModel":"claude-opus-5.5","source":"startup"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+
+# Contract v9 outcome schema 2: a refusal needs a recorded refusal, a
+# fallback model belongs only to a blocked fallback or a refusal, and token
+# counts are positive integers or null.
+copilot_v9_valid_refusal='{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":32000,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":1,"PromptBudget":968000,"PeakPromptTokens":185172}'
+printf '%s\n' "${copilot_v9_valid_refusal}" > "${copilot_v8_root}/good-outcome.json"
+assert_equal refused \
+    "$(rhyolite_harness_validate_outcome_json "${copilot_v8_root}/good-outcome.json" review)" \
+    'Valid refused worker outcome'
 for copilot_v8_bad_outcome in \
-    'extra|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","Extra":1}' \
-    'retryable|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'fallback|{"Schema":1,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'control|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'phase|{"Schema":1,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}'; do
+    'extra|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Extra":1}' \
+    'schema|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
+    'retryable|{"Schema":2,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'fallback|{"Schema":2,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'control|{"Schema":2,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'phase|{"Schema":2,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'refused-without-refusal|{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'refused-retryable|{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":1,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'completed-fallback|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'zero-budget|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":0,"PeakPromptTokens":null}' \
+    'text-peak|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":"185172"}'; do
     printf '%s\n' "${copilot_v8_bad_outcome#*|}" > "${copilot_v8_root}/bad-outcome.json"
     if rhyolite_harness_validate_outcome_json \
         "${copilot_v8_root}/bad-outcome.json" review >/dev/null; then

@@ -115,6 +115,10 @@
     review, one scan reads another scan's work, a consolidation report
     silently drops scan findings, or a failed scan is misreported as the
     consolidation model's failure.
+36. Repository content provokes a model provider's content refusal, so that a
+    harness's automatic refusal fallback answers with an unapproved model, a
+    refusal is misread as a context overflow or an enforcement failure, or
+    selected security scans are silently suppressed.
 
 ## Controls
 
@@ -541,6 +545,28 @@
   consolidation model. A stop request signals every scan's process tree,
   records each scan as `Interrupted`, and removes every scan runtime home.
 
+### Provider refusals
+
+- A provider refusal is detected only from structured, provider-originated
+  evidence: an approved-model usage record whose finish reason is
+  `content_filter`, a refusal-fallback model change, a harness notice that
+  names the approved model, or a Claude Code `refusal` stop or
+  `model_refusal_fallback` handover. Model-written text is never evidence of
+  a refusal.
+- The live monitor stops a refused worker within one poll, before the
+  harness's automatic refusal fallback can answer, and every output from a
+  model outside the approved plan is discarded. A refused session is never
+  continued, a refusing model is never retried for the same repository, and
+  a handover goes only to the next approved candidate named in the
+  approval-bound `RefusalPolicy`, in a fresh session and runtime home with
+  the same request and the same live and post-exit enforcement.
+- A declined security scan is skipped and excluded from the required scans
+  rather than failing the review, so a repository that provokes refusals can
+  remove individual scans. Every refusal is recorded in `ProviderRefusals`,
+  surfaced in the consolidation request, handoffs, HTML index, and executive
+  summary, and the consolidation review always runs its own complete security
+  pass; a refusal of every runnable approved model fails the repository.
+
 ## Residual risks
 
 - Copilot, Claude Code's model provider, and public search services process
@@ -557,6 +583,10 @@
   security scans reduce, but cannot eliminate, findings that every selected
   model misses, and a consolidation review can still reject a valid scan
   finding with a stated reason.
+- A repository can provoke content refusals in some models, which removes
+  their scans or moves the report to another approved model. Rhyolite
+  discloses every refusal and handover and never weakens the remaining
+  security pass, but the review then reflects fewer independent models.
 - Claims, reputation, community, prior-art, and provenance indicators can be
   false positives or miss context. They are advisory, never verdicts about
   people, and require human review before they are shared or acted on.
