@@ -3,8 +3,8 @@
 **Date:** 2026-10-25 (local time)
 **Status:** Root cause confirmed; provider-refusal handling implemented
 (Harness Contract v9 and `RefusalPolicy`); live verification pending
-**Severity:** Medium (review reliability; about 1 hour 48 minutes of
-completed scan work was not consolidated)
+**Severity:** Medium (review reliability; scan A's completed findings
+were not consolidated)
 **Security impact:** None observed. No output from a model outside the
 approved plan was accepted.
 **Confidence:** High, from the retained scan session event records, worker
@@ -13,8 +13,8 @@ outcome, scan state, and the installed Copilot CLI 1.0.104-3 schemas
 ## Executive summary
 
 A scope 1 review of `https://github.com/riscv-software-src/opensbi` with two
-multi-model security scans failed after 1 hour 48 minutes. Scan A
-completed with 12 findings. Scan B, on `claude-opus-5.5` at `max` reasoning
+multi-model security scans failed after 1 hour 48 minutes, 1 hour 33
+minutes of it while the host was asleep. Scan A completed with 12 findings. Scan B, on `claude-opus-5.5` at `max` reasoning
 effort with the `long_context` tier, ended with:
 
     Execution failed: Request exceeds the model's prompt budget after
@@ -61,10 +61,11 @@ account's Copilot CLI experiment cache enabled
 `copilot_cli_anthropic_refusal_fallback`. In the October 13 incident the same
 fallback targeted `claude-opus-4.8`.
 
-Both scans also stalled at the same moment for 93 minutes and then logged
-"Response was interrupted due to a server error. Retrying...". The shared
-timing points to a host sleep or a network outage rather than to either
-model.
+Both scans also stalled at the same moment for 93 minutes, from 12:55 to
+14:29 local time, and then logged "Response was interrupted due to a server
+error. Retrying...". The operator confirmed that the laptop running the review
+was asleep for that period. Copilot CLI retried after resume, so the sleep
+cost wall-clock time but did not cause the failure.
 
 ## Root cause
 
@@ -118,6 +119,10 @@ with the refusal disclosed.
   review then reflects fewer independent models.
 - Copilot CLI exposes no documented setting that disables its refusal
   fallback, so Rhyolite stops the worker instead.
+- Rhyolite does not keep the host awake. A host that sleeps during a review
+  pauses model work, and the runner measures the session time remaining for
+  same-session recovery and the ledger request with the wall clock, so sleep
+  counts against them.
 
 ## Validation
 

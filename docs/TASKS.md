@@ -32,6 +32,7 @@ Status values:
 | T19 | P2 | Verify | Verify multi-model security scans in a live run |
 | T21 | P2 | Verify | Verify provider-refusal handling in a live run |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
+| T22 | P3 | Open | Keep host sleep from consuming a review's session time |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
@@ -48,7 +49,8 @@ Status values:
   with consolidation and a validated ledger are implemented and covered by
   mocked validation. The security pass now also names update paths that
   skip install-time checks. The first live two-scan review (run
-  `20261025-125439`) failed after 1 hour 48 minutes: the provider declined
+  `20261025-125439`) failed after 1 hour 48 minutes, 1 hour 33 minutes of
+  it while the host was asleep: the provider declined
   scan B's `claude-opus-5.5` model, and the review stopped below its
   required scans. T21 covers the fix; no live multi-model review has
   completed yet.
@@ -95,6 +97,20 @@ Status values:
 - **Done when:** a review discloses security-relevant files that its
   security pass did not open, or the project records why it cannot.
 - **Source:** 2026-10-25 T18 comparison.
+
+### T22 (P3, Open): Keep host sleep from consuming a review's session time
+
+- **Problem:** Run `20261025-125439` spent 1 hour 33 minutes of its 1 hour
+  48 minutes with the laptop asleep. Model work pauses during sleep, and the
+  runner measures the session time remaining for same-session recovery and
+  the ledger request with the wall clock (`date +%s`), so a long sleep can
+  leave too little time for them.
+- **Next step:** decide whether the launcher and direct runner should hold a
+  `systemd-inhibit --what=sleep` lock for the run, measure remaining session
+  time with a monotonic clock, or both; check how each behaves on lid close.
+- **Done when:** a review keeps its full recovery budget across host sleep,
+  or the limitation is documented in the README.
+- **Source:** 2026-10-25 maintainer confirmation that the laptop slept.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 
