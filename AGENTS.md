@@ -99,9 +99,10 @@ supported and must not drive new work.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual
-  review-start commands only. Claude Code's `SessionStart` and
-  `UserPromptSubmit` hooks follow the same rules and emit only a display
-  `systemMessage`.
+  review-start commands only, either literally or in Copilot CLI's fixed
+  skill-invocation sentence at the start of the prompt. Claude Code's
+  `SessionStart` and `UserPromptSubmit` hooks follow the same rules and emit
+  only a display `systemMessage`.
 - `plugins/rhyolite/branding/banner.txt` and
   `plugins/rhyolite/branding/welcome-metadata.json` centralize replaceable
   onboarding branding and public home/docs/support/issues/pulls URLs.
@@ -117,10 +118,12 @@ supported and must not drive new work.
   sources without stripping a terminal `.git` endpoint, selects spellings
   that differ only by that endpoint once, rejects unknown options before
   any state or harness start and `github.com` URLs that name only an account
-  before the harness starts, collects native
-  fleet/model/reasoning/context settings, preselects `rhyolite:repo-review`,
-  passes `--mode interactive`, and submits a trusted `-i` setup block
-  without enabling allow-all mode. A request that holds only repository URLs
+  before the harness starts, collects model/reasoning/context settings,
+  preselects `rhyolite:repo-review`, passes `--mode interactive`, and
+  submits a trusted `-i` setup block without enabling allow-all mode. It
+  never passes Copilot's `--fleet`: native fleet mode is retired,
+  `--fleet-mode native` is rejected, and `--fleet-mode standard` is accepted
+  with no effect. A request that holds only repository URLs
   is not forwarded as request text, and the orchestrators select every
   `Source=` line without asking about sources again. Because Copilot's
   interactive session silently runs on its default model when the selected
@@ -131,10 +134,31 @@ supported and must not drive new work.
   and on a rejected model or effort asks for another model, the next highest
   effort (never below `high`, with no default answer), or quit; without a
   terminal it stops with a `launcher model availability` error.
+  It also resolves multi-model security scans: `--security-scans
+  1|2|3|default`, up to two `--scan-model MODEL[:EFFORT]|default` values for
+  scans B and C, and `--consolidation-model MODEL[:EFFORT]|default`. Its
+  pickers offer the remembered choice first and otherwise suggest models
+  from another vendor or family; `default` selects without a prompt, never
+  repeats a model already selected or requested for a later scan, and
+  `--model default` and `--reasoning-effort default` do the same for the
+  review runtime. With Copilot, every additional scan or consolidation model
+  gets the same pre-launch model check. `--min-successful-scans
+  1|2|3|default`, `--commit <full-sha>`, and `--reuse-scans <run output
+  folder>` add `MinimumSuccessfulScans=`, `Commit=`, and `ReuseScans=` to the
+  setup block; `--commit` and `--reuse-scans` require exactly one
+  repository, `--reuse-scans` requires multiple scans and resolves the
+  folder to a canonical absolute path that is not a symbolic link, and the
+  runner verifies the earlier run itself. `--auto-defaults` accepts the
+  default for every launcher choice not given on the command line and adds
+  `AutoDefaults=true` to the setup block, which makes the orchestrators skip
+  every setup question, using home output and scope 1, while still requiring
+  explicit approval of the effective plan. Without a terminal, scans are
+  resolved only when a scan option or `--auto-defaults` is given; otherwise
+  guided setup asks.
   With `--harness claude` it starts Claude Code with `--plugin-dir`,
   `--agent rhyolite:repo-review`, `--strict-mcp-config`, a permission rule
   that allows only the bundled runner, and the trusted setup block appended
-  to the system prompt. Claude Code has no native fleet mode.
+  to the system prompt.
 - `plugins/rhyolite/bin/rhyolite-summary` is the standalone, read-only saved
   output inventory utility. It performs a bounded top-level scan, uses JSON as
   its canonical in-memory representation, renders JSON/Markdown/text/inert
@@ -151,8 +175,11 @@ supported and must not drive new work.
   incidental compatibility does not make macOS or BSD a supported platform.
   It creates user-only launcher state and does not persist the initial review
   request or source in launch context.
-- The trusted runner saves approved harness/fleet/model/reasoning/context
-  preferences per canonical repository under user-only launcher state.
+- The trusted runner saves approved harness/model/reasoning/context
+  preferences per canonical repository under user-only launcher state, and
+  the approved security scan count, scan models, and any consolidation model
+  other than the review model in a schema-1
+  `<preference>.security-scans.json` companion file.
   `/rhyolite:start` remains the
   in-session compatibility path.
 - `plugins/rhyolite/lib/harness/common.sh` owns safe harness selection,
@@ -169,7 +196,7 @@ supported and must not drive new work.
   assets. The shared launcher contains a Codex branch that is unreachable
   through the production registry and is exercised only from a copied
   test-owned plugin; there is no root Codex marketplace registration.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v9 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v11 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -179,7 +206,7 @@ supported and must not drive new work.
   orchestrator for the initial/default module. It reserves its embedded
   prompt-native panel for exact
   `help`, follows that panel with a live `CURRENT SETUP STATUS` block,
-  consumes trusted launcher source/fleet/model/reasoning/context selections
+  consumes trusted launcher source/model/reasoning/context selections
   or asks through
   guided setup, then asks for output and scope through numbered `ask_user`
   pickers. It surfaces exact `help`, `status`, and `explain scopes` setup
@@ -302,7 +329,7 @@ supported and must not drive new work.
   dossier/summary to the main worker. No child receives `web_fetch` or
   `--allow-all-urls`.
 - The offline snapshot-read transport is specified in
-  `docs/SNAPSHOT-TRANSPORT.md`. Contract v9 requires
+  `docs/SNAPSHOT-TRANSPORT.md`. Contract v11 requires
   `harness_snapshot_transport` and `harness_configure_snapshot_transport`.
   Native Copilot/Claude readers remain unchanged. Only an adapter that
   explicitly selects the fixed offline MCP transport gets runner-created
@@ -312,6 +339,9 @@ supported and must not drive new work.
   Repair gets neither snapshot MCP nor research MCP. Bash owns grant trust,
   process identity, lifecycle, timeout, cleanup, and truthful failure state.
   Scope 1 remains research-free; snapshot MCP is a separate offline purpose.
+  Its grants do not cover security scan reports, so a plan that combines it
+  with more than one security scan fails before planning and keeps the
+  integrated security pass.
 - `WorkerRecoveryPolicy.RetryBackoff` discloses transient/rate-limit retry
   delays: 30 seconds initially, doubling to at most 300 seconds, bounded by
   the approved session timeout and existing retry limits. Retry keeps the
@@ -335,6 +365,12 @@ supported and must not drive new work.
   still leaves truthful state. Every worker starts under util-linux
   `setpriv --pdeathsig TERM` when available, so a hard kill of the runner
   stops the worker's `timeout` process group instead of orphaning it.
+  Every runner runtime home under `TMPDIR` and every launcher
+  `model-check-<n>` home is held under a util-linux `flock` lock that its
+  children inherit. Each execution start of the runner, and each launcher
+  start, removes only the current user's exact-name homes whose lock is free
+  and whose whole tree is unchanged for 60 minutes, so a hard kill does not
+  leave an authentication bridge indefinitely.
 - Plan/autopilot mode is unsupported during guided setup and review
   execution. A mode-related UI notice never changes the approval-bound worker
   model. Return to interactive mode before continuing.
@@ -347,6 +383,72 @@ supported and must not drive new work.
   remediation priorities, and overall conclusions carry High/Medium/Low
   confidence with an evidence basis. Completeness, clarity, and correctness
   take priority over speed.
+- The dedicated security pass is scope-invariant. Every scope, including
+  scope 1, runs the same complete pass inside the review worker under the
+  same approved model, reasoning effort, context tier, and default session
+  timeout (240 minutes); scopes 2 and 3 only add research, corroboration,
+  prior-art, and provenance work. The review prompt, shared skill, and both
+  worker agents carry the same scope-invariance paragraph. Never make
+  security coverage, depth, instructions, or time depend on scope, and never
+  describe a scope as using a different or cheaper model. The same defect
+  checklist (untrusted arithmetic and bounds, privilege checks including
+  update paths that bypass install-time checks, time-of-check to
+  time-of-use gaps, privileged error paths, and malformed input) ends that
+  paragraph and the security scan prompt.
+- Multi-model security scans are approval-bound plan data as
+  `SecurityScans`. With two or three scans, the runner starts them right
+  after the read-only snapshot and before any research, in parallel, each
+  in its own session and runtime home with the identical
+  `RHYOLITE_SECURITY_SCAN_V1` request rendered from
+  `security-scan-prompt.txt` and the review worker's read-only tools: scan A
+  on the approved review model and scans B and C on other approved models.
+  A scan is relaunched at most once (`ScanRelaunchLimit`) with a fresh
+  session after a transient model-service failure or a blocked automatic
+  fallback, classified from the adapter's worker outcome in the same order
+  as same-session recovery; a scan whose model the provider declines is
+  recorded as `Refused`, never relaunched, and excluded from the required
+  scans. A scan whose session ends normally on the approved model without a
+  valid report is asked once, in the same session, under the adapter's
+  continuation argv and live enforcement, for only its report
+  (approval-bound `ScanReportRecovery`), with the runner's exact diagnostic
+  and the full report contract; its state records `ReportRequest` and the
+  session's `Compactions`. Because context compaction replaces the request
+  with a summary, both worker agents repeat the scan report contract,
+  between `RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1` and its end marker,
+  byte-for-byte as `security-scan-prompt.txt` defines it. Every other scan
+  failure is final, and live and
+  post-exit approved-model enforcement apply to every scan. The runner validates each
+  `REPOSITORY SECURITY SCAN REVIEW REPORT`, relabels its findings as `A-1`,
+  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: two of
+  three scans, otherwise every scan),
+  less any declined scans, before consolidation, which therefore runs even
+  when every scan was declined, and keeps the relabelled reports outside the session
+  root until any research phase has finished, so the network-enabled
+  research worker never sees scan findings; only then does it copy them
+  read-only under the session root. The review worker then runs on the
+  approved consolidation model
+  with the `consolidation-prompt.txt` addendum
+  (`RHYOLITE_SECURITY_CONSOLIDATION_V1`), performs its own complete security
+  pass and review, verifies every scan finding, and returns a
+  `RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1` ledger before the report that
+  classifies every scan finding ID exactly once. Scan models stay anonymous
+  to the consolidator. When the ledger is missing or invalid, the runner
+  asks the same session once for only the ledger (a counted continuation);
+  a report whose ledger still fails is kept only as
+  `security-scans/consolidation-report-unverified.txt` and the repository
+  fails. Scan failures reach the repository errors only as paraphrases, so
+  failure analysis never attributes them to the consolidation model.
+  Artifacts live under `<repository>/security-scans/`. One scan, the
+  direct-runner default, keeps the integrated security pass.
+  `--reuse-scans <run output folder>` reuses the validated reports of
+  completed scans from an earlier run of the same one repository when the
+  harness, context tier, scan protocol, scan model, and effort match. It
+  pins the earlier commit; the earlier run folder and each reused report's
+  SHA-256 digest are approval-bound `SecurityScans` data; and the scan phase
+  copies each reused report and verifies its digest and the scan contract
+  again instead of running that scan. Every folder and file on the way must
+  be owned by the current user, must not be a symbolic link, and must not be
+  writable by others.
 - Scope 3 keeps direct model/effort/harness attribution direct-evidence-only.
   Heuristic model candidates are separate non-attribution about repository
   assets, never people. Prefer family-level identification, cite
@@ -504,8 +606,9 @@ supported and must not drive new work.
 - The effective-plan confirmation flow uses the exact choices `Run review`,
   `Edit setup`, and `Explain scope`, while still accepting exact
   `Change scope` as a shortcut into editing `Scope`.
-- Plan-only output includes `ApprovalHash`, `FleetMode`, `Model`,
-  `ModelCatalogMembership`, `RememberPreferences`, and `ResearchTransport`.
+- Plan-only output includes `ApprovalHash`, `Model`,
+  `ModelCatalogMembership`, `RememberPreferences`, `ResearchTransport`,
+  `SecurityScans`, and `RefusalPolicy`.
   Preserve approved settings,
   pass the hash unchanged to execution with `--expected-plan-hash`, and never
   execute without a valid hash.
@@ -526,7 +629,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v9 is implemented. It retains plan schema 5 and state schema
+- Harness Contract v11 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -565,9 +668,39 @@ supported and must not drive new work.
   session with its context and append to the same session record, while the
   original `--session-id` argv fails once the session exists, so the
   continuation argv replaces the `--session-id` pair with `--resume` and
-  omits `--name`). Follow
+  omits `--name`). Contract v9 adds the `refused` worker outcome, outcome
+  schema 2 with `ContentRefusals`, `PromptBudget`, and `PeakPromptTokens`,
+  and `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5) for live detection, so a
+  provider refusal of the approved model (Copilot `finishReason`
+  `content_filter`, a Claude Code `refusal` stop or `model_refusal_fallback`
+  handover) is reported as a refusal, whatever automatic fallback the
+  harness then tried, in any event order. Contract v10 adds outcome schema 3
+  with `Compactions`, the context compactions recorded in the session so far
+  (Copilot `session.compaction_complete` events with outcome `applied`,
+  counted once by attempt ID; Claude Code `compact_boundary` records).
+  Contract v11 adds the required `harness_snapshot_transport` and
+  `harness_configure_snapshot_transport` functions for the offline
+  snapshot-read transport; the Copilot and Claude Code adapters report
+  `native` and reject offline configuration. Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
+- Provider refusals are approval-bound as `RefusalPolicy`. When the model
+  provider declines a request to an approved model, the runner stops the
+  worker at once, before any automatic harness fallback can answer, records
+  the refusal with the approved prompt budget and largest prompt, never
+  retries that model for the repository, and never accepts output from a
+  model outside the approved plan. A declined security scan is skipped and
+  excluded from the required scans. A declined report writer hands the same
+  request over, in a fresh session and runtime home, to the next listed
+  `ReportWriterCandidates` entry (consolidation model, review model, then
+  scan B and C models) that the provider has not declined for the
+  repository, archiving the refused attempt under
+  `report-writer/attempts/<n>/`; a declined research worker hands over the
+  same way through `ResearchCandidates` with a fresh broker and network log.
+  A refusal of every runnable approved model fails the repository at stage
+  `provider refusal`. Repository state, manifest, run state, handoffs, and
+  the HTML index record `ProviderRefusals`, and the executive summary names
+  any refusal or handover.
 - Same-session worker recovery is approval-bound as `WorkerRecoveryPolicy`.
   When `worker_continuation` is `yes`, the runner may continue the review
   worker's own session, with the exact approved argv less only its
@@ -610,6 +743,13 @@ supported and must not drive new work.
   highest effort, never below `high`, and the orchestrators ask whether to use
   it, choose another model, or stop; either change regenerates the plan and
   needs a fresh approval, so the effort never drops without that choice.
+  The `provider-refusal` class reports declined models and explains that a
+  harness prompt-budget error after a refusal names the limit of the
+  harness's fallback model, not the approved model's; the `context-limit`
+  class reports a genuine overflow of the approved model's prompt budget.
+  A scan or report that failed its contract after a context compaction names
+  the compaction, and when completed scans exist the analysis recommends a
+  new plan with `--reuse-scans` and the run output folder.
 - No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
   argument override every configured `subagents.agents.<name>.model` value
   (verified live: `modelSelectionSource: "explicit_override"`), so a
@@ -693,12 +833,14 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v9 requirement, negative test,
+  decision and must satisfy every Contract-v11 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with
   a model or effort other than the approved one, for example after a Claude
-  Code safeguard fallback. Adapters never accept substituted output.
+  Code safeguard fallback. Adapters never accept substituted output. A
+  recorded provider refusal is reported as `refused` rather than as an
+  enforcement failure, and its fallback model's output is never accepted.
 - A test no-op adapter belongs only under `tests/fixtures`. It is never a
   production registry entry, launcher option, plugin asset, marketplace
   feature, or user-facing supported harness.

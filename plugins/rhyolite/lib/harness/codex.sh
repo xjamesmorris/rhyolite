@@ -741,7 +741,7 @@ harness_capability() {
         shell_denial|structured_questions|web_research|builtin_research_specialist|final_message_file)
             printf '%s\n' 'yes'
             ;;
-        fleet|subagents|builtin_security_specialist)
+        subagents|builtin_security_specialist)
             printf '%s\n' 'no'
             ;;
         worker_continuation)
@@ -1253,6 +1253,24 @@ allowed_mcp = {
     },
     "report-repair": set(),
 }[phase]
+
+
+def refusal_message(message):
+    text = message.strip()
+    return (
+        "Incomplete response returned, reason: content_filter" in text
+        or text in {
+            "This request has been flagged for possible cybersecurity risk.",
+            "This content was flagged for possible biological risk.",
+            "This request was blocked due to a misalignment policy violation.",
+        }
+        or any(
+            code in {"content_filter", "cyber_policy", "bio_policy", "misalignment_policy_violation"}
+            for code in re.findall(r'"code"\s*:\s*"([A-Za-z_]{1,64})"', text)
+        )
+    )
+
+
 try:
     raw = pathlib.Path(raw_name).read_text(encoding="utf-8")
     exact = pathlib.Path(final_name).read_text(encoding="utf-8")
@@ -1276,7 +1294,10 @@ for line in raw.splitlines():
         if isinstance(candidate, str):
             threads.add(candidate)
     elif event_type in {"turn.failed", "error"}:
-        status = "failed"
+        error = event.get("error") if event_type == "turn.failed" else event
+        message = str(error.get("message", "")) if isinstance(error, dict) else ""
+        if status not in {"substituted", "subagent", "refused"}:
+            status = "refused" if refusal_message(message) else "failed"
     elif event_type in {"item.started", "item.updated", "item.completed"}:
         item = event.get("item")
         if not isinstance(item, dict):
@@ -1287,7 +1308,11 @@ for line in raw.splitlines():
         elif item_type == "error":
             message = str(item.get("message", ""))
             if message.startswith("model rerouted: "):
-                status = "substituted"
+                status = (
+                    "refused"
+                    if message.rstrip().endswith(" (HighRiskCyberActivity)")
+                    else "substituted"
+                )
         elif item_type == "collab_tool_call":
             status = "subagent"
         elif item_type in {
@@ -1314,6 +1339,10 @@ PY
             rhyolite_harness_set_error \
                 'Codex recorded a model reroute; Rhyolite does not accept substituted output.'
             ;;
+        refused)
+            rhyolite_harness_set_error \
+                'Codex recorded a provider refusal of the approved model; Rhyolite does not accept another model'"'"'s output.'
+            ;;
         subagent)
             rhyolite_harness_set_error \
                 'Codex recorded a collab/subagent tool call although subagents are disabled.'
@@ -1335,6 +1364,362 @@ PY
     return 1
 }
 
+# Classify Codex worker evidence for live enforcement (watch) or for a
+# finished invocation (outcome). Codex CLI 0.163.0 exec JSON carries only the
+# message text of a failed turn or a critical error, and the private session
+# rollout never stores error events, so these pinned forms are the refusal
+# evidence: the only model reroute reason, HighRiskCyberActivity, is the
+# provider declining the approved model and answering with another model; a
+# response that the provider's content filter stopped; the fallback messages
+# of the cyber, bio, and misalignment policy errors; and a provider error body
+# whose code names one of those refusals. A server-worded policy message
+# without those forms stays an ordinary failure. The rollout adds each
+# response's prompt size, the session's usable context window, the recorded
+# model and effort of every turn, and every context compaction.
+codex_scan_worker_events() {
+    local mode="$1"
+    local phase="$2"
+    local raw_output="$3"
+    local runtime_home="$4"
+    local approved_model="$5"
+    local approved_effort="$6"
+    local destination="$7"
+
+    python3 -I - \
+        "${mode}" "${phase}" "${raw_output}" "${runtime_home}" \
+        "${approved_model}" "${approved_effort}" "${destination}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+(mode, phase, raw_name, home_name, approved_model, approved_effort,
+ destination) = sys.argv[1:8]
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+REROUTE = re.compile(r"model rerouted: (\S{1,128}) -> (\S{1,128}) \(([A-Za-z]{1,64})\)")
+REFUSAL_REROUTE_REASON = "HighRiskCyberActivity"
+CONTENT_FILTER = "Incomplete response returned, reason: content_filter"
+OUTPUT_LIMIT = "Incomplete response returned, reason: max_output_tokens"
+POLICY_FALLBACKS = {
+    "This request has been flagged for possible cybersecurity risk.",
+    "This content was flagged for possible biological risk.",
+    "This request was blocked due to a misalignment policy violation.",
+}
+REFUSAL_CODES = {
+    "content_filter", "cyber_policy", "bio_policy",
+    "misalignment_policy_violation",
+}
+ERROR_CODE = re.compile(r'"code"\s*:\s*"([A-Za-z_]{1,64})"')
+FORBIDDEN_ITEMS = {"command_execution", "file_change", "web_search", "todo_list"}
+TRANSIENT = re.compile(
+    r"stream disconnected before completion|"
+    r"Error while reading the server response|Connection failed|"
+    r"request timed out|rate limit exceeded|"
+    r"(?:exceeded retry limit, last status:|unexpected status) (?:429|5[0-9][0-9])(?![0-9])|"
+    r"Selected model is at capacity|currently experiencing high demand",
+    re.IGNORECASE,
+)
+PERMANENT = re.compile(
+    r"Quota exceeded|usage limit|unexpected status 40[0-9](?![0-9])|"
+    r"unauthori[sz]ed|forbidden|Missing environment variable|"
+    r"ran out of room in the model's context window|"
+    r"model .{0,80}(?:not found|not supported|does not exist)",
+    re.IGNORECASE,
+)
+TOKEN_LIMIT = 100000000
+
+
+def clean(text):
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(text))
+    return re.sub(r"\s+", " ", text).strip()[:400]
+
+
+def safe(value):
+    return value if SAFE_TOKEN.fullmatch(value) else "unrecognized"
+
+
+def token_count(value):
+    return value if type(value) is int and 0 < value <= TOKEN_LIMIT else None
+
+
+def refusal_kind(message):
+    text = message.strip()
+    if CONTENT_FILTER in text:
+        return "the provider's content filter stopped the response"
+    if text in POLICY_FALLBACKS:
+        return "a provider policy declined the request"
+    if any(code in REFUSAL_CODES for code in ERROR_CODE.findall(text)):
+        return "the provider declined the request"
+    return ""
+
+
+def parse(raw):
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def inspect(event):
+    """Return one (kind, value) observation for an exec JSON event."""
+    event_type = event.get("type")
+    if event_type == "thread.started":
+        return ("thread", event.get("thread_id"))
+    if event_type == "turn.started":
+        return ("turn-started", None)
+    if event_type == "turn.completed":
+        return ("turn-completed", None)
+    if event_type == "turn.failed":
+        error = event.get("error")
+        message = error.get("message") if isinstance(error, dict) else None
+        return ("turn-failed", str(message or "turn failed"))
+    if event_type == "error":
+        return ("error", str(event.get("message") or "error"))
+    if event_type not in {"item.started", "item.updated", "item.completed"}:
+        return None
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    if item_type == "collab_tool_call":
+        return ("subagent", None)
+    if item_type in FORBIDDEN_ITEMS:
+        return ("forbidden", None)
+    if item_type == "error" and event_type == "item.completed":
+        match = REROUTE.fullmatch(str(item.get("message", "")).strip())
+        if match:
+            source, target, reason = match.groups()
+            if reason == REFUSAL_REROUTE_REASON and source == approved_model:
+                return ("reroute-refusal", target)
+            return ("reroute", target)
+        return None
+    if item_type == "agent_message" and event_type == "item.completed":
+        return ("agent", None)
+    return None
+
+
+def watch():
+    cursor = pathlib.Path(destination)
+    source = pathlib.Path(raw_name)
+    offset = 0
+    try:
+        if cursor.is_file():
+            offset = max(0, int(cursor.read_text(encoding="ascii").strip() or 0))
+        data = source.read_bytes() if source.is_file() else b""
+    except (OSError, ValueError, UnicodeError):
+        print("error\nThe Codex worker output could not be monitored.")
+        return
+    lines = data[offset:].split(b"\n")[:-1]
+    consumed = sum(len(line) + 1 for line in lines)
+    status, detail = "clean", ""
+    for raw in lines:
+        event = parse(raw) if raw.strip() else None
+        observation = inspect(event) if event is not None else None
+        if observation is None:
+            continue
+        kind, value = observation
+        if kind == "subagent":
+            status, detail = "violation", "Codex recorded a collab/subagent tool call."
+        elif kind == "forbidden":
+            status, detail = "violation", "Codex recorded a tool outside the approved phase inventory."
+        elif kind == "reroute":
+            status, detail = "violation", "Codex recorded an automatic model reroute."
+        elif kind == "reroute-refusal":
+            status, detail = "refusal", (
+                f"The model provider declined the approved model {approved_model} "
+                f"for high-risk cyber activity, and Codex rerouted the request to "
+                f"{safe(value)}; Rhyolite does not accept that model's output."
+            )
+        elif kind in {"error", "turn-failed"} and refusal_kind(value):
+            status, detail = "refusal", (
+                f"The model provider declined a request to the approved model "
+                f"{approved_model}: {refusal_kind(value)}."
+            )
+        else:
+            continue
+        break
+    try:
+        cursor.write_text(f"{offset + consumed}\n", encoding="ascii")
+        cursor.chmod(0o600)
+    except OSError:
+        status, detail = "error", "The Codex worker-output cursor could not be written."
+    print(status)
+    print(detail)
+
+
+def rollout_evidence():
+    evidence = {
+        "budget": None, "peak": None, "compactions": set(),
+        "model_changed": False, "effort_changed": False,
+    }
+    root = pathlib.Path(home_name) / "sessions"
+    if not root.is_dir() or root.is_symlink():
+        return evidence
+    for path in sorted(root.glob("**/*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw_lines = path.read_bytes().split(b"\n")
+        except OSError:
+            continue
+        for index, raw in enumerate(raw_lines):
+            record = parse(raw) if raw.strip() else None
+            if record is None:
+                continue
+            record_type = record.get("type")
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if record_type == "compacted":
+                window = payload.get("window_id")
+                evidence["compactions"].add(
+                    window if isinstance(window, str) and window
+                    else f"{path.name}:{index}"
+                )
+            elif record_type == "turn_context":
+                if payload.get("model") != approved_model:
+                    evidence["model_changed"] = True
+                elif payload.get("effort") != approved_effort:
+                    evidence["effort_changed"] = True
+            elif record_type == "event_msg":
+                payload_type = payload.get("type")
+                if payload_type == "task_started":
+                    budget = token_count(payload.get("model_context_window"))
+                    if budget is not None:
+                        evidence["budget"] = budget
+                elif payload_type == "token_count":
+                    info = payload.get("info")
+                    if not isinstance(info, dict):
+                        continue
+                    budget = token_count(info.get("model_context_window"))
+                    if budget is not None and evidence["budget"] is None:
+                        evidence["budget"] = budget
+                    last = info.get("last_token_usage")
+                    prompt = token_count(last.get("input_tokens")) if isinstance(last, dict) else None
+                    if prompt is not None and (
+                        evidence["peak"] is None or prompt > evidence["peak"]
+                    ):
+                        evidence["peak"] = prompt
+    return evidence
+
+
+def outcome():
+    errors = []
+    turn = 0
+    failed_turns = set()
+    refused_turns = set()
+    limit_turns = set()
+    turn_status = {}
+    reroute_refusals = 0
+    refusal_target = ""
+    other_reroute = ""
+    agent_messages = 0
+    agent_after_reroute = False
+    subagent = False
+    forbidden = False
+    messages = []
+    for raw in pathlib.Path(raw_name).read_bytes().split(b"\n"):
+        event = parse(raw) if raw.strip() else None
+        observation = inspect(event) if event is not None else None
+        if observation is None:
+            continue
+        kind, value = observation
+        if kind == "turn-started":
+            turn += 1
+        elif kind == "turn-completed":
+            turn_status[turn] = "completed"
+        elif kind in {"turn-failed", "error"}:
+            if kind == "turn-failed":
+                turn_status[turn] = "failed"
+            failed_turns.add(turn)
+            message = clean(value)
+            if message:
+                messages.append(message)
+                if message not in errors and len(errors) < 5:
+                    errors.append(message)
+            if refusal_kind(value):
+                refused_turns.add(turn)
+            if OUTPUT_LIMIT in value:
+                limit_turns.add(turn)
+        elif kind == "reroute-refusal":
+            reroute_refusals += 1
+            refusal_target = refusal_target or value
+        elif kind == "reroute":
+            other_reroute = other_reroute or value
+        elif kind == "agent":
+            agent_messages += 1
+            if reroute_refusals or other_reroute:
+                agent_after_reroute = True
+        elif kind == "subagent":
+            subagent = True
+        elif kind == "forbidden":
+            forbidden = True
+    evidence = rollout_evidence()
+    unrecovered = any(turn_status.get(index) != "completed" for index in refused_turns)
+    final_completed = bool(turn_status) and turn_status.get(turn) == "completed"
+    fallback = ""
+    if subagent or evidence["effort_changed"]:
+        result = "substituted"
+    elif reroute_refusals or (refused_turns and unrecovered):
+        # A refusal of the approved model explains a reroute in any order;
+        # its output is never accepted, and the refusing model is not retried.
+        result = "refused"
+        fallback = safe(refusal_target) if refusal_target else ""
+    elif other_reroute:
+        if agent_after_reroute:
+            result = "substituted"
+        else:
+            result = "fallback-blocked"
+            fallback = safe(other_reroute)
+    elif evidence["model_changed"]:
+        result = "substituted"
+    elif forbidden:
+        result = "failed"
+    elif final_completed and agent_messages and not failed_turns:
+        result = "completed"
+    elif any(
+        TRANSIENT.search(message) and not PERMANENT.search(message)
+        and not refusal_kind(message)
+        for message in messages
+    ):
+        result = "transient-failure"
+    elif failed_turns or messages:
+        result = "failed"
+    else:
+        result = "unknown"
+    record = {
+        "Schema": 3,
+        "Phase": phase,
+        "Outcome": result,
+        "Retryable": result in ("transient-failure", "fallback-blocked"),
+        "ExitCode": None,
+        "SessionErrors": errors,
+        "ModelCallFailures": min(len(failed_turns), 1000000),
+        "TurnRetries": 0,
+        "OutputLimitHits": min(len(limit_turns), 1000000),
+        "OutputTokenLimit": None,
+        "FinalReplyAtOutputLimit": False,
+        "FallbackModel": fallback,
+        "ContentRefusals": min(reroute_refusals + len(refused_turns), 1000000),
+        "PromptBudget": evidence["budget"],
+        "PeakPromptTokens": evidence["peak"],
+        "Compactions": min(len(evidence["compactions"]), 1000000),
+    }
+    pathlib.Path(destination).write_text(
+        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+if mode == "watch":
+    watch()
+elif mode == "outcome":
+    outcome()
+else:
+    raise SystemExit(1)
+PY
+}
+
 harness_detect_worker_violation() {
     local phase="$1"
     local raw_output="$2"
@@ -1344,65 +1729,26 @@ harness_detect_worker_violation() {
     local result
 
     rhyolite_harness_validate_violation_arguments "$@" || return 1
-    : "${approved_model}" "${approved_effort}"
     result="$(
-        python3 -I - "${phase}" "${raw_output}" "${cursor_path}" <<'PY'
-import json
-import pathlib
-import sys
-
-phase, raw_name, cursor_name = sys.argv[1:4]
-source = pathlib.Path(raw_name)
-cursor = pathlib.Path(cursor_name)
-offset = 0
-try:
-    if cursor.is_file():
-        offset = max(0, int(cursor.read_text(encoding="ascii").strip() or 0))
-    data = source.read_bytes() if source.is_file() else b""
-except (OSError, ValueError, UnicodeError):
-    print("error\nThe Codex worker output could not be monitored.")
-    raise SystemExit(0)
-tail = data[offset:]
-lines = tail.split(b"\n")[:-1]
-consumed = sum(len(line) + 1 for line in lines)
-status = "clean"
-detail = ""
-for raw in lines:
-    if not raw.strip():
-        continue
-    try:
-        event = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError):
-        continue
-    if event.get("type") not in {"item.started", "item.updated", "item.completed"}:
-        continue
-    item = event.get("item")
-    if not isinstance(item, dict):
-        continue
-    item_type = item.get("type")
-    if item_type == "collab_tool_call":
-        status, detail = "violation", "Codex recorded a collab/subagent tool call."
-        break
-    if item_type in {"command_execution", "file_change", "web_search", "todo_list"}:
-        status, detail = "violation", "Codex recorded a tool outside the approved phase inventory."
-        break
-    if item_type == "error" and str(item.get("message", "")).startswith("model rerouted: "):
-        status, detail = "violation", "Codex recorded an automatic model reroute."
-        break
-try:
-    cursor.write_text(f"{offset + consumed}\n", encoding="ascii")
-    cursor.chmod(0o600)
-except OSError:
-    status, detail = "error", "The Codex worker-output cursor could not be written."
-print(status)
-print(detail)
-PY
-    )" || return 1
+        umask 077
+        codex_scan_worker_events \
+            watch "${phase}" "${raw_output}" "${CODEX_RUNTIME_HOME:-/}" \
+            "${approved_model}" "${approved_effort}" "${cursor_path}" \
+            2>/dev/null
+    )" || {
+        rhyolite_harness_set_error \
+            'The Codex worker output could not be monitored.'
+        return 1
+    }
     case "${result%%$'\n'*}" in
         clean) return 0 ;;
         violation)
             RHYOLITE_HARNESS_ERROR_DETAIL="${result#*$'\n'}"
             return "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}"
+            ;;
+        refusal)
+            RHYOLITE_HARNESS_ERROR_DETAIL="${result#*$'\n'}"
+            return "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}"
             ;;
         *)
             RHYOLITE_HARNESS_ERROR_DETAIL="${result#*$'\n'}"
@@ -1421,85 +1767,19 @@ harness_worker_outcome() {
     local outcome_output="$7"
 
     rhyolite_harness_validate_outcome_arguments "$@" || return 1
-    : "${runtime_home}" "${session_id}" "${approved_model}" "${approved_effort}"
-    python3 -I - "${phase}" "${raw_output}" "${outcome_output}" <<'PY' || {
-import json
-import pathlib
-import re
-import sys
-
-phase, raw_name, output_name = sys.argv[1:4]
-transient = re.compile(
-    r"429|rate limit|overloaded|timed out|timeout|connection|"
-    r"ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|5[0-9][0-9]",
-    re.I,
-)
-errors = []
-completed = False
-agent_messages = 0
-rerouted = ""
-failed = False
-for line in pathlib.Path(raw_name).read_text(encoding="utf-8").splitlines():
-    if not line.strip():
-        continue
-    try:
-        event = json.loads(line)
-    except ValueError:
-        continue
-    event_type = event.get("type")
-    if event_type == "turn.completed":
-        completed = True
-    elif event_type in {"turn.failed", "error"}:
-        failed = True
-        value = event.get("error") if isinstance(event.get("error"), dict) else event
-        message = str(value.get("message", "turn failed"))
-        if message and message not in errors and len(errors) < 5:
-            errors.append(message[:400])
-    elif event_type == "item.completed":
-        item = event.get("item")
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "agent_message":
-            agent_messages += 1
-        if item.get("type") == "error":
-            message = str(item.get("message", ""))
-            if message.startswith("model rerouted: "):
-                match = re.search(r" -> ([A-Za-z0-9._:-]+)", message)
-                rerouted = match.group(1) if match else "unrecognized"
-            elif message and message not in errors and len(errors) < 5:
-                errors.append(message[:400])
-if rerouted and agent_messages:
-    outcome = "substituted"
-elif rerouted:
-    outcome = "fallback-blocked"
-elif completed and agent_messages and not failed:
-    outcome = "completed"
-elif any(transient.search(error) for error in errors):
-    outcome = "transient-failure"
-elif failed or errors:
-    outcome = "failed"
-else:
-    outcome = "unknown"
-pathlib.Path(output_name).write_text(json.dumps({
-    "Schema": 1,
-    "Phase": phase,
-    "Outcome": outcome,
-    "Retryable": outcome in {"transient-failure", "fallback-blocked"},
-    "ExitCode": None,
-    "SessionErrors": errors,
-    "ModelCallFailures": 1 if failed else 0,
-    "TurnRetries": 0,
-    "OutputLimitHits": 0,
-    "OutputTokenLimit": None,
-    "FinalReplyAtOutputLimit": False,
-    "FallbackModel": rerouted if outcome == "fallback-blocked" else "",
-}, sort_keys=True) + "\n", encoding="utf-8")
-PY
+    : "${session_id}"
+    if ! (
+        umask 077
+        codex_scan_worker_events \
+            outcome "${phase}" "${raw_output}" "${runtime_home}" \
+            "${approved_model}" "${approved_effort}" "${outcome_output}" \
+            2>/dev/null
+    ); then
         rm -f -- "${outcome_output}"
         rhyolite_harness_set_error \
             'The Codex worker outcome could not be classified.'
         return 1
-    }
+    fi
     chmod 600 -- "${outcome_output}"
 }
 

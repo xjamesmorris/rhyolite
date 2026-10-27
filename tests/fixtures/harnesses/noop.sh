@@ -61,7 +61,7 @@ harness_capability() {
         shell_denial|final_message_file)
             printf '%s\n' 'yes'
             ;;
-        fleet|structured_questions|subagents|builtin_security_specialist|builtin_research_specialist|web_research|worker_continuation)
+        structured_questions|subagents|builtin_security_specialist|builtin_research_specialist|web_research|worker_continuation)
             printf '%s\n' 'no'
             ;;
         *)

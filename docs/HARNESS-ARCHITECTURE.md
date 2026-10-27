@@ -1,6 +1,6 @@
 # Harness architecture
 
-**Contract version:** 9
+**Contract version:** 11
 
 **Initial implementation:** I1a
 
@@ -20,7 +20,7 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v9 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v11 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
@@ -58,8 +58,24 @@ blocked automatic fallback, the runner relaunches research at most once
 (approval-bound `ResearchRelaunchLimit`) with a fresh broker, runtime,
 session, and network log, archives the failed attempt under
 `research/attempts/<n>/`, and never passes an archived ledger to a broker.
+Contract v9 makes a provider refusal its own outcome. When the model provider
+declines a request to the approved model (a content refusal), the adapter's
+live detector returns `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5) and the
+runner stops the worker before any automatic harness fallback can answer,
+and `harness_worker_outcome` reports `refused` with the number of declined
+calls, the approved session's prompt budget, and its largest recorded prompt.
+The runner never retries the refusing model and never accepts another
+model's output; under the approval-bound `RefusalPolicy` a refused security
+scan is skipped and excluded from the required scans, and a refused report
+writer or research worker hands over, in a fresh session and runtime home,
+to the next approved model that the provider has not declined for the
+repository. Contract v10 adds `Compactions` to the worker outcome (schema 3):
+the number of context compactions that the harness recorded in the session,
+each of which replaces earlier conversation, including the request, with a
+model-written summary. The runner records it for every security scan and
+names it in failure analysis when a report then fails its contract.
 
-Contract v9 adds explicit snapshot transport selection/configuration without
+Contract v11 adds explicit snapshot transport selection/configuration without
 changing the native Copilot or Claude Code worker tools. The fixed offline
 MCP mode reuses the approved bundled Python broker, with Bash owning bounded
 snapshot grants and lifecycle. Its policy, exact tools/schemas, limits, and
@@ -72,7 +88,7 @@ doubling to at most 300 seconds within the approved session timeout and
 unchanged retry limits, preserving model, effort, context, tools, and session.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v9 and any future production adapter.
+playbook for Contract v11 and any future production adapter.
 
 ## I1a invariants
 
@@ -156,7 +172,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v9 function exists.
+6. Assert every required Contract-v11 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -193,7 +209,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v9 functions
+## Contract-v11 functions
 
 Every mapped adapter must define all functions below.
 
@@ -231,8 +247,8 @@ Every mapped adapter must define all functions below.
 | `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
 | `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort and on any recorded subagent event, because no Rhyolite worker receives a subagent tool; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
-| `harness_detect_worker_violation` | For phase `review`, `research`, or `report-repair`, while the worker is still running: scan only the complete lines appended to the recorded output since the offset saved in the runner-owned cursor file, return 0 when nothing outside the approved plan is recorded yet, return `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on the first recorded model, reasoning effort, or subagent other than the approved plan, and return 1 for any other failure, which the runner records once as a warning while the post-exit normalization stays authoritative. Copilot scans its JSONL stdout; Claude Code scans its private session record under the isolated runtime home and reports nothing until that record exists. The runner polls every five seconds and terminates the worker's process tree on the first violation. |
-| `harness_worker_outcome` | After every worker invocation, write one JSON outcome with exactly the documented keys: the outcome class (`completed`, `transient-failure`, `fallback-blocked`, `substituted`, `failed`, or `unknown`), whether it is retryable, the CLI exit code when recorded, up to five sanitized session errors, model-call failure and retry counts, how many responses reached the per-response output token limit, and the fallback model of a blocked automatic fallback. The runner validates it before use; an adapter whose CLI records no structured evidence may call `rhyolite_harness_worker_outcome_unknown`. |
+| `harness_detect_worker_violation` | For phase `review`, `research`, or `report-repair`, while the worker is still running: scan only the complete lines appended to the recorded output since the offset saved in the runner-owned cursor file, return 0 when nothing outside the approved plan is recorded yet, return `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on the first recorded model, reasoning effort, or subagent other than the approved plan, return `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5) with a sanitized detail when the provider declined a request to the approved model (a recorded refusal outranks the fallback model it caused, but not a subagent), and return 1 for any other failure, which the runner records once as a warning while the post-exit normalization stays authoritative. Copilot scans its JSONL stdout; Claude Code scans its private session record under the isolated runtime home and reports nothing until that record exists. The runner polls every five seconds and terminates the worker's process tree on the first violation or refusal. |
+| `harness_worker_outcome` | After every worker invocation, write one schema-2 JSON outcome with exactly the documented keys: the outcome class (`completed`, `transient-failure`, `fallback-blocked`, `refused`, `substituted`, `failed`, or `unknown`), whether it is retryable, the CLI exit code when recorded, up to five sanitized session errors, model-call failure and retry counts, how many responses reached the per-response output token limit, the fallback model of a blocked automatic fallback or of a refusal, the number of approved-model calls the provider declined, the approved session's prompt budget, and its largest recorded prompt. The runner validates it before use; an adapter whose CLI records no structured evidence may call `rhyolite_harness_worker_outcome_unknown`. |
 | `harness_worker_continuation_argv` | Return the argv that resumes the same worker session with the exact approved model, effort, context, tools, and isolation, or fail when the adapter has not verified `worker_continuation`. |
 | `harness_render_request` | Render the worker request without evaluating repository content. |
 | `harness_extract_final_report` | Extract the canonical report and apply the adapter's safe transcript fallback. |
@@ -251,6 +267,16 @@ behavior. The runner calls the five research functions only for scope 2/3,
 and only when the adapter reports `web_research=yes`; otherwise scope 2/3
 fails at stage `harness <id> harness_capability` before any broker or worker
 activity.
+Multi-model security scans add no adapter function or phase. Each scan is a
+fresh normal review-worker invocation, phase `review`, that the runner builds
+with `harness_worker_argv`, `harness_prepare_worker_home`,
+`harness_worker_env`, `harness_detect_worker_violation`,
+`harness_worker_outcome`, `harness_normalize_worker_output`,
+`harness_verify_isolation`, `harness_persist_agent_state`, and
+`harness_sanitize_runtime_home`, on that scan's approved model and effort in
+its own runtime home, and with `harness_render_request` for the scan
+request. The ledger request after consolidation is an ordinary counted
+review-worker continuation.
 Array-producing functions receive the destination array name first.
 
 ## Capabilities
@@ -270,7 +296,6 @@ Contract v5 retains these capability keys:
 
 | Capability | Copilot | Claude Code |
 | --- | --- | --- |
-| `fleet` | `yes` | `no` |
 | `structured_questions` | `yes` | `yes` |
 | `subagents` | `no` | `no` |
 | `builtin_security_specialist` | `no` | `no` |
@@ -570,8 +595,7 @@ The outer launcher starts Claude Code from a clean non-Git directory with
 `--effort`, `--strict-mcp-config`, a permission rule that pre-approves only
 `bash <runner> ...`, `--permission-mode default`, and the trusted
 `RHYOLITE_LAUNCHER_SETUP_V1` block in `--append-system-prompt`. `--yolo` adds
-`--dangerously-skip-permissions`; native fleet mode is rejected because
-`fleet` is `no`.
+`--dangerously-skip-permissions`.
 
 ## Lifecycle
 
@@ -776,6 +800,68 @@ attempted fallback, reported accurately as such) from a model that produced
 messages or tool calls (substituted output); both still fail the invocation
 closed.
 
+Contract v9 keeps the same functions, schemas, and registry. It adds
+`RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5), the `refused` outcome, and
+worker-outcome schema 2, which adds the keys `ContentRefusals`,
+`PromptBudget`, and `PeakPromptTokens`. `refused` requires at least one
+declined call and is never retryable; `FallbackModel` may be set only for
+`fallback-blocked`, which requires it, or `refused`; the two token counts are
+positive integers or null. Copilot recognizes a refusal from an
+approved-model usage event whose `finishReason` is `content_filter` (Copilot
+reports an Anthropic `refusal` stop that way) or whose
+`contentFilterTriggered` is true, from a `refusal_fallback` model change, and
+from the CLI's refusal notice naming the approved model; its usage events
+also carry `maxPromptTokens` and `inputTokens`. Claude Code recognizes an
+approved-model `refusal` stop and the `model_refusal_fallback` safeguard
+handover, and reports no prompt budget. Each harness's automatic refusal
+fallback is the only recorded way a worker leaves the approved model after a
+refusal, so a recorded refusal explains that model in any event order, while
+a subagent or an approved-model effort change still fails as enforcement.
+A refusal that the session recovered from on the approved model stays
+`completed`.
+
+The live failure that motivated Contract v9 was a security scan on
+`claude-opus-5.5` with a 968,000-token long-context prompt budget and a
+185,172-token largest prompt. The provider declined one response; Copilot
+CLI's automatic refusal fallback then rejected its own request against the
+fallback model's 128,000-token budget before any fallback call, so no other
+model was recorded, the scan was classified as an ordinary failure, and the
+review failed below its required scans. See
+[RUN-FAILURE-INCIDENT-2026-10-25.md](RUN-FAILURE-INCIDENT-2026-10-25.md).
+
+Contract v10 keeps the same functions, statuses, and registry. It adds
+worker-outcome schema 3, which adds the key `Compactions`, a non-negative
+count. Copilot counts each `session.compaction_complete` event with
+`success: true` and outcome `applied` once by its `compactionAttemptId`,
+whether the event stream, the persisted session events, or both recorded it.
+Claude Code counts each `compact_boundary` system record of the session
+record once by its UUID. A continuation reports the session's cumulative
+count.
+
+The live failure that motivated Contract v10 was a security scan on
+`gemini-4-argon` with a 983,040-token long-context prompt budget. Copilot CLI
+compacted the session at 82% of that budget and replaced the scan request,
+the only definition of the scan report contract, with a summary; the scan
+then returned a report in a layout of its own, and the review failed below
+its required scans. Both worker agents now repeat the scan report contract in
+their own instructions, which compaction keeps, and the runner asks the same
+scan session once for a conforming report. See
+[RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
+
+Contract v11 keeps the same statuses, outcome schema 3, plan schema 5, state
+schema 6, and registry. It adds the required functions
+`harness_snapshot_transport` and `harness_configure_snapshot_transport`. The
+Copilot and Claude Code adapters report `native`, keep their existing worker
+tools and argv, and reject offline configuration. An adapter that reports
+`local-stdio-mcp-snapshot-read-v1` reads the snapshot only through the
+bundled broker's offline snapshot mode, under runner-created grants that
+[SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines. Only such plans carry
+the approval-bound `SnapshotTransport` object; native plans and states keep
+their existing bytes. The work that motivated Contract v11 is the
+unregistered Codex adapter candidate, whose shell-free configuration has no
+other snapshot reader; that candidate does not change the supported
+harnesses.
+
 ## Adding a future adapter
 
 A future adapter is a separate implementation phase. It must be added without
@@ -783,7 +869,7 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add the adapter file without a production registry entry.
-3. Implement every Contract-v9 function; do not inherit missing behavior from
+3. Implement every Contract-v11 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.
@@ -810,7 +896,7 @@ partially initialized run.
 
 ## Validation
 
-The focused Contract-v9 validator is:
+The focused Contract-v11 validator is:
 
 ```bash
 bash ./tests/validate-harness-contract.sh

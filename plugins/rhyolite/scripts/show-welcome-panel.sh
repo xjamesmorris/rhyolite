@@ -45,12 +45,17 @@ prompt_requests_review_start() {
     local hook_input="$1"
     local hook_prompt
     local command
+    # Copilot CLI hands a plugin prompt command to this hook as its fixed
+    # skill-invocation sentence followed by the expanded command text. The
+    # prompt keeps its JSON escapes, so these quotes are backslash-escaped.
+    local skill_invocation_prefix='The user explicitly invoked the \"'
+    local skill_invocation_suffix='\" skill.'
 
     [[ "${hook_input}" != *'--rhyolite-resume'* ]] || return 1
     hook_prompt="$(
         printf '%s' "${hook_input}" |
             sed -nE \
-                's/.*"prompt"[[:space:]]*:[[:space:]]*"([^"]*).*/\1/p' |
+                's/.*"prompt"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*).*/\1/p' |
             head -n 1
     )"
     hook_prompt="${hook_prompt#"${hook_prompt%%[![:space:]]*}"}"
@@ -61,6 +66,9 @@ prompt_requests_review_start() {
         '/repo-review'; do
         case "${hook_prompt}" in
             "${command}"|"${command} "*|"${command}\\n"*|"${command}\\r"*|"${command}\\t"*)
+                return 0
+                ;;
+            "${skill_invocation_prefix}${command}${skill_invocation_suffix}"*)
                 return 0
                 ;;
         esac

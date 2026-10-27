@@ -207,7 +207,7 @@ adapter belongs only under `tests/fixtures` and may be loaded only through
 test-owned fixed fixture wiring. It must never be added to the production
 registry, plugin assets, launcher choices, marketplace metadata, or public
 support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
-for Contract-v8 work and any future adapter.
+for Contract-v10 work and any future adapter.
 [docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
 probes and real runs behind the Claude Code adapter's capability values.
 

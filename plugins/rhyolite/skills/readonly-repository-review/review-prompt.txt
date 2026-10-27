@@ -242,6 +242,24 @@ shell and Git commands are unavailable. Use source viewing/search plus the
 wrapper-collected untrusted Git metadata above. Do not inspect `.git` directly.
 Explain conclusions that cannot be verified because execution is prohibited.
 
+The dedicated security pass is identical for every scope. Scopes 2 and 3 only
+add research, corroboration, prior-art, and provenance work around the core
+review; scope never narrows the security pass's coverage, depth, evidence
+standard, or reasoning effort, and Core and Full in scope names do not
+describe security depth. In every scope, including scope 1, map the
+snapshot's trust boundaries, privilege transitions, externally reachable
+entry points, and untrusted-input parsers, then inspect every
+security-relevant tracked file instead of sampling, starting with privileged
+and externally reachable code and including build, install, packaging, CI,
+configuration, and dependency files. Record any security-relevant area that
+the pass could not cover as a limitation. Within that pass, check arithmetic
+on untrusted lengths, counts, offsets, and indices; bounds of every access
+through an untrusted index or range; ownership and privilege checks on every
+path that reaches a privileged operation, including update paths that bypass
+checks applied at install; time-of-check to time-of-use gaps; error paths
+that leave privileged state behind; and parser behavior on malformed,
+truncated, and oversized input.
+
 Perform the security pass yourself as a distinct, dedicated pass within this
 session. No subagent or specialist exists in a Rhyolite review worker: never
 attempt to start one, and never select, name, or request a model, reasoning
@@ -260,10 +278,12 @@ security-pass output against every item below:
 2. Evidence: every included finding is high-confidence and
    security-significant, cites exact `path:line` support, and states the source
    behavior that creates the issue.
-3. Exploitability and impact: every included finding states a concrete exploit
-   or abuse path, relevant preconditions or trust boundary, and concrete
-   security impact. If those elements are not supported, do not return the
-   item as a security finding.
+3. Exploitability and impact: every included finding states, at source level,
+   the attacker's position, the relevant preconditions or trust boundary, the
+   triggering input or call sequence, and the concrete security impact. It
+   never includes exploit code, payloads, shellcode, or step-by-step attack
+   instructions. If those elements are not supported, do not return the item
+   as a security finding.
 4. Classification: distinguish exploitable defects from design or quality
    concerns, missing implementation, misleading claims, and generic hardening
    suggestions; do not promote those other categories into security findings.

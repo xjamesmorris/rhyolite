@@ -4,4 +4,4 @@ Thumbs.db
 repo-review-results/
 repo-review-workspaces/
 .test-output/
-local-issues.txt
+local-issues*.txt

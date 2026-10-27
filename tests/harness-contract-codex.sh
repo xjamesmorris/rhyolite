@@ -129,7 +129,7 @@ case "${prompt}" in
         ;;
 esac
 if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
-    printf 'RHYOLITE_CODEX_NATIVE_UI %s\n' "${native_stage}"
+    printf 'RHYOLITE_CODEX_NATIVE_UI %s TERM=%s\n' "${native_stage}" "${TERM-}"
 fi
 escaped_final="${final//\\/\\\\}"
 escaped_final="${escaped_final//\"/\\\"}"
@@ -206,7 +206,7 @@ for capability in \
     assert_equal yes "$(harness_capability "${capability}")" \
         "Codex ${capability} capability"
 done
-for capability in fleet subagents builtin_security_specialist; do
+for capability in subagents builtin_security_specialist; do
     assert_equal no "$(harness_capability "${capability}")" \
         "Codex ${capability} capability"
 done
@@ -423,6 +423,11 @@ cat > "${codex_session_dir}/rollout.jsonl" <<EOF
 {"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}
 {"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"read-only"},"model":"gpt-5.6-sol","effort":"max","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.6-sol","reasoning_effort":"max"}}}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fixture request"}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200000,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":200010},"last_token_usage":{"input_tokens":185172,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":185182},"model_context_window":828400},"rate_limits":null}}
+{"type":"compacted","payload":{"message":"","window_id":"fixture-window-1"}}
+{"type":"compacted","payload":{"message":"","window_id":"fixture-window-1"}}
+{"type":"compacted","payload":{"message":""}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":214810,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":214830},"last_token_usage":{"input_tokens":14810,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":14820},"model_context_window":828400},"rate_limits":null}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"EXACT_CODEX_FIXTURE_REPLY"}]}}
 EOF
 codex_raw="${fixture_root}/codex-output.raw"
@@ -456,6 +461,17 @@ harness_worker_outcome \
 assert_equal completed \
     "$(rhyolite_harness_validate_outcome_json "${codex_outcome}" review)" \
     'Codex completed outcome'
+# Outcome schema 3 reads the private rollout: the approved usable window, the
+# largest per-response prompt, and each compaction once by its window ID.
+python3 - "${codex_outcome}" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert (data["Schema"], data["PromptBudget"], data["PeakPromptTokens"],
+        data["Compactions"], data["ContentRefusals"], data["FallbackModel"]) == (
+    3, 828400, 185172, 2, 0, ""), data
+PY
 declare -a codex_resumed_argv=()
 harness_worker_continuation_argv \
     codex_resumed_argv codex_worker_argv ||
@@ -491,6 +507,94 @@ harness_worker_outcome \
 assert_equal substituted \
     "$(rhyolite_harness_validate_outcome_json "${codex_reroute_outcome}" review)" \
     'Codex substituted outcome'
+
+# Codex CLI 0.163.0 records a provider refusal of the approved model as its
+# only reroute reason, HighRiskCyberActivity, or as a turn that the content
+# filter or a provider policy stopped. Each is refused, never retried, and
+# its fallback output is never accepted.
+codex_outcome_case() {
+    local name="$1"
+    local expected="$2"
+    local expected_refusals="$3"
+    local expected_fallback="$4"
+    local raw="${fixture_root}/codex-${name}.raw"
+    local result="${fixture_root}/codex-${name}-outcome.json"
+
+    cat > "${raw}"
+    harness_worker_outcome \
+        review "${raw}" "${codex_runtime}" \
+        "${codex_session_id}" gpt-5.6-sol max "${result}" ||
+        fail "Codex ${name} outcome failed."
+    assert_equal "${expected}" \
+        "$(rhyolite_harness_validate_outcome_json "${result}" review)" \
+        "Codex ${name} outcome"
+    python3 - "${result}" "${expected_refusals}" "${expected_fallback}" <<'PY' ||
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == int(sys.argv[2]), data
+assert data["FallbackModel"] == sys.argv[3], data
+PY
+        fail "Codex ${name} outcome evidence changed."
+}
+codex_outcome_case cyber-reroute refused 1 fixture-other <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"FALLBACK_REPLY"}}
+{"type":"item.completed","item":{"id":"item-2","type":"error","message":"model rerouted: gpt-5.6-sol -> fixture-other (HighRiskCyberActivity)"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
+EOF
+if harness_normalize_worker_output \
+    review "${fixture_root}/codex-cyber-reroute.raw" gpt-5.6-sol max \
+    "${fixture_root}/cyber-normalized" "${fixture_root}/cyber-reply" \
+    >/dev/null 2>&1; then
+    fail 'Codex accepted a reply after a provider refusal reroute.'
+fi
+assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
+    'provider refusal of the approved model' 'Codex refusal rejection'
+codex_outcome_case content-filter refused 1 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"error","message":"stream disconnected before completion: Incomplete response returned, reason: content_filter"}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: Incomplete response returned, reason: content_filter"}}
+EOF
+codex_outcome_case cyber-policy refused 1 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"turn.failed","error":{"message":"This request has been flagged for possible cybersecurity risk."}}
+EOF
+codex_outcome_case rate-limit transient-failure 0 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"turn.failed","error":{"message":"exceeded retry limit, last status: 429 Too Many Requests"}}
+EOF
+codex_outcome_case quota failed 0 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"turn.failed","error":{"message":"Quota exceeded. Check your plan and billing details."}}
+EOF
+codex_refusal_cursor="${fixture_root}/codex-refusal-cursor"
+set +e
+harness_detect_worker_violation \
+    review "${fixture_root}/codex-cyber-reroute.raw" gpt-5.6-sol max \
+    "${codex_refusal_cursor}"
+codex_refusal_status=$?
+set -e
+((codex_refusal_status == RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS)) ||
+    fail 'Codex live enforcement did not report a provider refusal.'
+assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
+    'declined the approved model gpt-5.6-sol' 'Codex live refusal detail'
+rm -f -- "${codex_refusal_cursor}"
+set +e
+harness_detect_worker_violation \
+    review "${fixture_root}/codex-content-filter.raw" gpt-5.6-sol max \
+    "${codex_refusal_cursor}"
+codex_refusal_status=$?
+set -e
+((codex_refusal_status == RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS)) ||
+    fail 'Codex live enforcement did not report a content-filter refusal.'
+
 codex_collab_raw="${fixture_root}/codex-collab.raw"
 printf '%s\n' \
     '{"type":"item.completed","item":{"id":"item-1","type":"collab_tool_call","tool":"spawn_agent","status":"completed"}}' \
@@ -511,6 +615,39 @@ harness_allow_all_detected &&
 
 codex_guided_work="${fixture_root}/codex-guided-work"
 mkdir -- "${codex_guided_work}"
+# Run one command with a pseudo-terminal on stdin and stderr, where the
+# native Codex questions appear, and its stdout in the named file.
+codex_run_with_terminal() {
+    local stdout_path="$1"
+    shift
+    python3 -I - "${stdout_path}" "$@" <<'PY'
+import errno
+import os
+import pty
+import subprocess
+import sys
+
+stdout_path, command = sys.argv[1], sys.argv[2:]
+master, slave = pty.openpty()
+with open(stdout_path, "wb") as stdout:
+    process = subprocess.Popen(
+        command, stdin=slave, stdout=stdout, stderr=slave,
+        start_new_session=True,
+    )
+    status = process.wait(timeout=60)
+os.close(slave)
+while True:
+    try:
+        if not os.read(master, 65536):
+            break
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        break
+os.close(master)
+sys.exit(status)
+PY
+}
 codex_setup_input="${fixture_root}/codex-setup-input.txt"
 cat > "${codex_setup_input}" <<'SETUP_INPUT'
 RHYOLITE_CODEX_SETUP_INPUT_V1
@@ -523,7 +660,7 @@ CurrentResearchCookies=NOT SELECTED
 END_RHYOLITE_CODEX_SETUP_INPUT_V1
 SETUP_INPUT
 codex_setup_result="${fixture_root}/codex-setup-result.json"
-"${CODEX_GUIDED_STAGE}" \
+if "${CODEX_GUIDED_STAGE}" \
     --stage setup \
     --plugin-root "${PLUGIN_ROOT}" \
     --working-directory "${codex_guided_work}" \
@@ -531,7 +668,24 @@ codex_setup_result="${fixture_root}/codex-setup-result.json"
     --result "${codex_setup_result}" \
     --model gpt-5.6-sol \
     --reasoning-effort max \
-    --context long_context >/dev/null ||
+    --context long_context \
+    < /dev/null > /dev/null 2> "${fixture_root}/codex-stage-no-terminal.stderr"; then
+    fail 'Codex guided setup ran without a terminal.'
+fi
+assert_contains "${fixture_root}/codex-stage-no-terminal.stderr" \
+    'Codex guided stage failed: terminal' 'Codex guided stage terminal check'
+[[ ! -e "${codex_setup_result}" ]] ||
+    fail 'Codex guided setup wrote a result without a terminal.'
+codex_run_with_terminal "${fixture_root}/codex-setup.stdout" \
+    "${CODEX_GUIDED_STAGE}" \
+    --stage setup \
+    --plugin-root "${PLUGIN_ROOT}" \
+    --working-directory "${codex_guided_work}" \
+    --input "${codex_setup_input}" \
+    --result "${codex_setup_result}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context ||
     fail 'Codex guided setup helper failed with the fixture CLI.'
 node - "${codex_setup_result}" <<'JS'
 const fs = require("fs");
@@ -553,7 +707,8 @@ ApprovalHash=${codex_approval_hash}
 END_RHYOLITE_CODEX_APPROVAL_INPUT_V1
 EOF
 codex_approval_result="${fixture_root}/codex-approval-result.json"
-"${CODEX_GUIDED_STAGE}" \
+codex_run_with_terminal "${fixture_root}/codex-approval.stdout" \
+    "${CODEX_GUIDED_STAGE}" \
     --stage approval \
     --plugin-root "${PLUGIN_ROOT}" \
     --working-directory "${codex_guided_work}" \
@@ -561,7 +716,7 @@ codex_approval_result="${fixture_root}/codex-approval-result.json"
     --result "${codex_approval_result}" \
     --model gpt-5.6-sol \
     --reasoning-effort max \
-    --context long_context >/dev/null ||
+    --context long_context ||
     fail 'Codex guided approval helper failed with the fixture CLI.'
 node - "${codex_approval_result}" "${codex_approval_hash}" <<'JS'
 const fs = require("fs");
@@ -703,8 +858,10 @@ plan, run = calls
 assert "--plan-only" in plan and "--expected-plan-hash" not in plan
 assert "--plan-only" not in run
 assert run[run.index("--expected-plan-hash") + 1] == "a" * 64
+assert "--fleet-mode" not in plan and "--commit" not in plan
+assert plan[plan.index("--security-scans") + 1] == "1"
 for expected in (
-    "--harness", "codex", "--fleet-mode", "standard",
+    "--harness", "codex", "--security-scans", "1",
     "--model", "gpt-5.6-sol", "--reasoning-effort", "max",
     "--context", "long_context", "--scope", "1",
     "--non-interactive", "--no-open-html",
@@ -712,6 +869,60 @@ for expected in (
 ):
     assert expected in plan and expected in run
 PY
+
+codex_auto_session="${fixture_root}/codex-controller-auto-session"
+codex_auto_capture="${fixture_root}/codex-controller-auto-capture"
+codex_auto_commit="$(printf 'b%.0s' {1..40})"
+mkdir -p -- "${codex_auto_session}" "${codex_auto_capture}"
+RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
+RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_auto_session}" \
+RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_auto_capture}" \
+HOME="${fixture_root}/codex-controller-home" \
+"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+    --plugin-root "${codex_controller_plugin}" \
+    --working-directory "${codex_controller_work}" \
+    --session-directory "${codex_auto_session}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context \
+    --repo https://github.com/octocat/Hello-World \
+    --commit "${codex_auto_commit}" \
+    --auto-defaults \
+    > "${fixture_root}/codex-controller-auto.stdout" \
+    2> "${fixture_root}/codex-controller-auto.stderr" ||
+    fail 'Codex guided controller failed with --auto-defaults.'
+[[ -z "$(find "${codex_auto_session}" -name 'codex-setup-*' -print -quit)" &&
+    -n "$(find "${codex_auto_session}" -name 'codex-approval-*.json' -print -quit)" ]] ||
+    fail 'Codex --auto-defaults did not skip only the setup questions.'
+python3 -I - "${codex_auto_capture}" "${fixture_root}/codex-controller-home" \
+    "${codex_auto_commit}" <<'PY'
+import pathlib
+import sys
+
+root, home, commit = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+calls = [
+    [item.decode() for item in path.read_bytes().split(b"\0") if item]
+    for path in sorted(root.glob("call-*.nul"))
+]
+assert len(calls) == 2
+for call in calls:
+    assert call[call.index("--commit") + 1] == commit
+    assert call[call.index("--scope") + 1] == "1"
+    assert call[call.index("--output-root") + 1] == f"{home}/rhyolite-output/repo-review"
+PY
+if "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+    --plugin-root "${codex_controller_plugin}" \
+    --working-directory "${codex_controller_work}" \
+    --session-directory "${codex_auto_session}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context \
+    --repo https://github.com/octocat/Hello-World \
+    --repo https://github.com/octocat/Spoon-Knife \
+    --commit "${codex_auto_commit}" \
+    >/dev/null 2>&1; then
+    fail 'Codex guided controller pinned one commit for several repositories.'
+fi
 
 codex_controller_stop_session="${fixture_root}/codex-controller-stop-session"
 codex_controller_stop_capture="${fixture_root}/codex-controller-stop-capture"
@@ -777,6 +988,7 @@ for path in (session, capture, temporary):
 environment = dict(
     os.environ,
     RHYOLITE_CODEX_REQUIRE_TTY="1",
+    TERM="dumb",
     RHYOLITE_CODEX_CONTROLLER_SESSION=str(session),
     RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
     TMPDIR=str(temporary),
@@ -828,6 +1040,8 @@ assert process.returncode == 0, terminal.decode("utf-8", errors="replace")
 for stage in ("setup", "approval"):
     marker = f"RHYOLITE_CODEX_NATIVE_UI {stage}".encode()
     assert marker in terminal, f"{stage} UI did not reach the terminal"
+    assert f"{stage} TERM=xterm-256color".encode() in terminal, \
+        f"{stage} UI kept the worker terminal type"
     assert marker not in stdout, f"{stage} UI contaminated controller stdout"
 assert b"EFFECTIVE REVIEW PLAN" in stdout
 assert b"/tmp/rhyolite-controller-run" in stdout
@@ -916,5 +1130,56 @@ assert value("--repo") == "https://github.com/octocat/Hello-World"
 PY
 assert_not_contains "${fixture_root}/codex-launcher.stderr" \
     'RHYOLITE ERROR' 'Staged Codex launcher error output'
+codex_launcher_commit="$(printf 'c%.0s' {1..40})"
+rm -f -- "${codex_launcher_capture}"
+(
+    cd -- "${codex_launcher_caller}"
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        HOME="${fixture_root}/codex-launcher-home" \
+        CODEX_HOME="${codex_home}" \
+        FIXTURE_CODEX_KEY='fixture-secret-value' \
+        XDG_STATE_HOME="${codex_launcher_state}" \
+        RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+        PATH="${codex_fake_bin}:/usr/bin:/bin" \
+        "${codex_launcher_plugin}/bin/rhyolite" \
+        --harness codex \
+        --repo https://github.com/octocat/Hello-World \
+        --commit "${codex_launcher_commit}" \
+        --auto-defaults
+) > "${fixture_root}/codex-launcher-auto.stdout" \
+    2> "${fixture_root}/codex-launcher-auto.stderr" ||
+    fail 'Staged Codex launcher failed with --auto-defaults.'
+python3 -I - "${codex_launcher_capture}" "${codex_launcher_commit}" <<'PY'
+import pathlib
+import sys
+
+args = [item.decode() for item in pathlib.Path(sys.argv[1]).read_bytes().split(b"\0") if item]
+assert args[args.index("--commit") + 1] == sys.argv[2]
+assert "--auto-defaults" in args
+assert args[args.index("--model") + 1] == "gpt-5.6-sol"
+PY
+rm -f -- "${codex_launcher_capture}"
+if (
+    cd -- "${codex_launcher_caller}"
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+        HOME="${fixture_root}/codex-launcher-home" \
+        CODEX_HOME="${codex_home}" \
+        FIXTURE_CODEX_KEY='fixture-secret-value' \
+        XDG_STATE_HOME="${codex_launcher_state}" \
+        RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+        PATH="${codex_fake_bin}:/usr/bin:/bin" \
+        "${codex_launcher_plugin}/bin/rhyolite" \
+        --harness codex \
+        --repo https://github.com/octocat/Hello-World \
+        --security-scans 2
+) > "${fixture_root}/codex-launcher-scans.stdout" \
+    2> "${fixture_root}/codex-launcher-scans.stderr"; then
+    fail 'Staged Codex launcher accepted independent security scans.'
+fi
+assert_contains "${fixture_root}/codex-launcher-scans.stderr" \
+    'Independent security scans are unavailable for this harness.' \
+    'Staged Codex launcher scan rejection'
+[[ ! -e "${codex_launcher_capture}" ]] ||
+    fail 'Staged Codex launcher started its controller after rejecting scans.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

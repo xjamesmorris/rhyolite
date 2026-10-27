@@ -285,7 +285,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v9' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v11' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -795,8 +795,6 @@ grep -Fq 'CURRENT SETUP STATUS' "${AGENT}" ||
     fail 'Agent help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing Source.'
-grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${AGENT}" ||
-    fail 'Agent help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${AGENT}" ||
     fail 'Agent help/status block is missing model.'
 grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${AGENT}" ||
@@ -897,13 +895,10 @@ grep -Fq 'If the user selects `Edit setup`, use `ask_user` for exactly one focus
     "${AGENT}" ||
     fail 'Agent does not describe Edit setup.'
 grep -Fq 'exact explicit choices `Source`, `Model`,' "${AGENT}" &&
-    grep -Fq '`Reasoning effort`, `Context tier`, `Output`, `Scope`, or' "${AGENT}" &&
+    grep -Fq '`Reasoning effort`, `Context tier`, `Security scans`, `Output`, `Scope`, or' "${AGENT}" &&
     grep -Fq '`Research cookies`, in that order.' "${AGENT}" ||
     fail 'Agent Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
-    grep -Fq '`Continue in standard mode`' "${AGENT}" &&
-    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
-        "${AGENT}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${AGENT}" &&
     grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${AGENT}" &&
     grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${AGENT}" &&
@@ -913,7 +908,17 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Confirm runtime settings`' "${AGENT}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${AGENT}" ||
-    fail 'Agent fleet/model preference setup contract is incomplete.'
+    fail 'Agent model preference setup contract is incomplete.'
+# Native fleet mode is retired: no orchestrator surface asks about it, shows
+# it, accepts it from the launcher block, or passes it to the runner.
+for retired_fleet_surface in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" \
+    "${COMMAND_STATUS}"; do
+    ! grep -Fqi 'fleet' "${retired_fleet_surface}" ||
+        fail "Orchestrator surface still mentions retired fleet mode: ${retired_fleet_surface}"
+done
 for unlisted_contract_file in "${AGENT}" "${SKILL}"; do
     grep -Fq '`AllowUnlistedModel=true`' "${unlisted_contract_file}" &&
         grep -Fq '`--allow-unlisted-model`' "${unlisted_contract_file}" &&
@@ -985,9 +990,10 @@ grep -Fq 'PriorArtWindow.StartDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.StartDate.'
 grep -Fq 'PriorArtWindow.EndDate=' "${RUNNER}" ||
     fail 'Bash approval hash material does not include PriorArtWindow.EndDate.'
-grep -Fq 'FleetMode=' "${RUNNER}" &&
-    grep -Fq 'RememberPreferences=' "${RUNNER}" ||
-    fail 'Bash approval hash material does not include fleet/preferences.'
+grep -Fq 'RememberPreferences=' "${RUNNER}" ||
+    fail 'Bash approval hash material does not include preferences.'
+! grep -Fq 'FleetMode' "${RUNNER}" ||
+    fail 'Bash runner still emits the retired FleetMode plan field.'
 grep -Fq -- '--expected-plan-hash SHA256' "${RUNNER}" ||
     fail 'Bash runner usage does not document --expected-plan-hash.'
 grep -Fq 'ApprovalHash' "${RUNNER}" ||
@@ -1032,9 +1038,14 @@ for guided_file in "${AGENT}" "${SKILL}"; do
         "${guided_file}" ||
         fail "Final review decision is not an ask_user choice picker: ${guided_file}"
 done
-for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
+for scope_ui_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${UI_VALIDATOR_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" \
+    "${README}"; do
     grep -Fq \
-        'Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.' \
+        'Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.' \
         "${scope_ui_file}" ||
         fail "Scope 1 UI wording drifted: ${scope_ui_file}"
     grep -Fq \
@@ -1042,13 +1053,23 @@ for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         "${scope_ui_file}" ||
         fail "Scope 2 UI wording drifted: ${scope_ui_file}"
     grep -Fq \
-        'Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.' \
+        'Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.' \
         "${scope_ui_file}" ||
         fail "Scope 3 UI wording drifted: ${scope_ui_file}"
+    grep -Fq \
+        'Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.' \
+        "${scope_ui_file}" ||
+        fail "Scope security-pass invariance note drifted: ${scope_ui_file}"
     grep -Fq \
         'All timing ranges are rough and can increase substantially for large repositories or broad topics.' \
         "${scope_ui_file}" ||
         fail "Scope timing note drifted: ${scope_ui_file}"
+done
+for scope_ui_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${UI_VALIDATOR_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
     grep -Fq \
         'Scope 1 - Core repository review (Recommended) - 15-45 minutes' \
         "${scope_ui_file}" ||
@@ -1061,6 +1082,77 @@ for scope_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
         'Scope 3 - Full + generated-code provenance review - 60-120+ minutes' \
         "${scope_ui_file}" ||
         fail "Scope 3 picker mapping drifted: ${scope_ui_file}"
+done
+# The dedicated security pass is identical for every scope: each worker
+# contract surface carries the same scope-invariance rule, and each
+# orchestrator states it when explaining scopes.
+security_pass_invariance_rule='The dedicated security pass is identical for every scope. Scopes 2 and 3 only add research, corroboration, prior-art, and provenance work around the core review; scope never narrows the security pass'"'"'s coverage, depth, evidence standard, or reasoning effort, and Core and Full in scope names do not describe security depth. In every scope, including scope 1, map the snapshot'"'"'s trust boundaries, privilege transitions, externally reachable entry points, and untrusted-input parsers, then inspect every security-relevant tracked file instead of sampling, starting with privileged and externally reachable code and including build, install, packaging, CI, configuration, and dependency files. Record any security-relevant area that the pass could not cover as a limitation.'
+for security_contract_file in \
+    "${PROMPT}" \
+    "${SKILL}" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    tr '\r\n\t' '   ' < "${security_contract_file}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${security_pass_invariance_rule}" ||
+        fail "Worker contract does not make the security pass scope-invariant: ${security_contract_file}"
+done
+# Every review worker and every multi-model security scan applies the same
+# defect checklist, so a single-scan review never runs a narrower pass.
+security_pass_checklist_rule='Record any security-relevant area that the pass could not cover as a limitation. Within that pass, check arithmetic on untrusted lengths, counts, offsets, and indices; bounds of every access through an untrusted index or range; ownership and privilege checks on every path that reaches a privileged operation, including update paths that bypass checks applied at install; time-of-check to time-of-use gaps; error paths that leave privileged state behind; and parser behavior on malformed, truncated, and oversized input.'
+for security_contract_file in \
+    "${PROMPT}" \
+    "${SKILL}" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md" \
+    "${PLUGIN_ROOT}/skills/readonly-repository-review/security-scan-prompt.txt"; do
+    tr '\r\n\t' '   ' < "${security_contract_file}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${security_pass_checklist_rule}" ||
+        fail "Security pass checklist drifted: ${security_contract_file}"
+done
+# The scan report contract lives in the scan request and, word for word, in
+# both worker agents' own instructions, which stay in the system prompt when
+# automatic context compaction replaces the request with a summary. The
+# runner's scan report validator and finding limit must match it.
+scan_report_contract=''
+for scan_contract_file in \
+    "${SKILL_ROOT}/security-scan-prompt.txt" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    [[ "$(grep -cFx 'RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1' "${scan_contract_file}")" == 1 &&
+        "$(grep -cFx 'END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1' "${scan_contract_file}")" == 1 ]] ||
+        fail "The scan report contract block must appear exactly once: ${scan_contract_file}"
+    scan_contract_block="$(
+        sed -n '/^RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/,/^END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/p' \
+            "${scan_contract_file}"
+    )"
+    if [[ -z "${scan_report_contract}" ]]; then
+        scan_report_contract="${scan_contract_block}"
+    elif [[ "${scan_contract_block}" != "${scan_report_contract}" ]]; then
+        fail "The scan report contract block drifted from security-scan-prompt.txt: ${scan_contract_file}"
+    fi
+done
+grep -Fq 'block; this copy keeps it in force after earlier conversation, including the' \
+    "${WORKER_AGENT}" &&
+    grep -Fq 'block; this copy keeps it in force after earlier conversation, including the' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md" ||
+    fail 'A worker agent does not say that its scan report contract survives compaction.'
+grep -Fq "write at most $(sed -n 's/^SECURITY_SCAN_FINDING_LIMIT=//p' "${RUNNER}") findings, ordered by" \
+    <<< "${scan_report_contract}" ||
+    fail 'The scan report contract finding limit does not match SECURITY_SCAN_FINDING_LIMIT.'
+grep -Fq 'SECTIONS = ["SCAN CONTEXT", "SECURITY FINDINGS", "COVERAGE", "LIMITATIONS"]' "${RUNNER}" &&
+    [[ "${scan_report_contract}" == *$'\nSCAN CONTEXT\nSECURITY FINDINGS\nCOVERAGE\nLIMITATIONS\n'* ]] ||
+    fail 'The scan report contract sections do not match the runner scan report validator.'
+security_pass_explanation_rule='every scope, including scope `1`, runs the same full dedicated security pass with the same approved model, reasoning effort, context tier, and session time limit; scope adds only research and provenance work.'
+for scope_explanation_file in \
+    "${AGENT}" \
+    "${SKILL}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md"; do
+    tr '\r\n\t' '   ' < "${scope_explanation_file}" |
+        sed -E 's/[[:space:]]+/ /g' |
+        grep -Fq -- "${security_pass_explanation_rule}" ||
+        fail "Scope explanation does not state the scope-invariant security pass: ${scope_explanation_file}"
 done
 for output_ui_file in "${AGENT}" "${SKILL}" "${UI_VALIDATOR_AGENT}"; do
     grep -Fq \
@@ -1249,7 +1341,7 @@ grep -Fq 'allowed-tools: ["agent"]' "${COMMAND_STATUS}" &&
         "${COMMAND_STATUS}" ||
     fail '/rhyolite:status is not restricted to task/subagent introspection.'
 for status_field in \
-    'Command:' 'Stage:' 'Elapsed:' 'Fleet mode:' 'Model:' \
+    'Command:' 'Stage:' 'Elapsed:' 'Model:' \
     'Remember settings:' 'Output:' 'Tasks:' 'Subagents:'; do
     grep -Fq "${status_field}" "${COMMAND_STATUS}" ||
         fail "/rhyolite:status is missing ${status_field}"
@@ -1505,8 +1597,6 @@ grep -Fq 'CURRENT SETUP STATUS' "${SKILL}" ||
     fail 'Skill help/status contract is missing CURRENT SETUP STATUS.'
 grep -Fq 'Source: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing Source.'
-grep -Fq 'Fleet mode: <native, standard, or NOT SELECTED>' "${SKILL}" ||
-    fail 'Skill help/status block is missing fleet mode.'
 grep -Fq 'Model: <selected value or NOT SELECTED>' "${SKILL}" ||
     fail 'Skill help/status block is missing model.'
 grep -Fq 'Reasoning effort: <high, xhigh, max, or NOT SELECTED>' "${SKILL}" ||
@@ -1605,15 +1695,12 @@ grep -Fq 'Accept exact `Change scope` as the shortcut `Edit setup` ->' \
     "${SKILL}" ||
     fail 'Skill does not describe the Change scope shortcut.'
 grep -Fq 'exact explicit choices `Source`, `Model`,' "${SKILL}" &&
-    grep -Fq '`Reasoning effort`, `Context tier`, `Output`, `Scope`, or' \
+    grep -Fq '`Reasoning effort`, `Context tier`, `Security scans`, `Output`,' \
         "${SKILL}" &&
-    grep -Fq '`Research cookies`, in that order.' \
+    grep -Fq '`Scope`, or `Research cookies`, in that order.' \
         "${SKILL}" ||
     fail 'Skill Edit setup options are incomplete.'
 grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
-    grep -Fq '`Continue in standard mode`' "${SKILL}" &&
-    grep -Fq '`Restart with the Rhyolite launcher for native fleet mode`' \
-        "${SKILL}" &&
     grep -Fq '`GPT-5.6 Sol (Recommended) - gpt-5.6-sol`' "${SKILL}" &&
     grep -Fq '`Claude Opus 5.5 - claude-opus-5.5`' "${SKILL}" &&
     grep -Fq '`Claude Fable 5.1 - claude-fable-5.1`' "${SKILL}" &&
@@ -1623,7 +1710,7 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${SKILL}" &&
     grep -Fq '`Confirm runtime settings`' "${SKILL}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${SKILL}" ||
-    fail 'Skill fleet/model preference setup contract is incomplete.'
+    fail 'Skill model preference setup contract is incomplete.'
 grep -Fq 'clear provenance immediately when the' "${SKILL}" &&
     grep -Fq 'resulting scope is not `3`' "${SKILL}" ||
     fail 'Skill does not clear provenance when editing scope away from 3.'
@@ -1767,9 +1854,9 @@ grep -Fq 'numbered picker for' "${README}" &&
     grep -Fq '`Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks' \
         "${README}" ||
     fail 'README does not describe Edit setup follow-up choices.'
-grep -Fq 'process-level `--fleet` flag' "${README}" &&
+grep -Fq '`--fleet-mode native` option is rejected' "${README}" &&
     grep -Fq 'canonical repository URL' "${README}" ||
-    fail 'README does not describe native fleet and per-repository preferences.'
+    fail 'README does not describe retired fleet mode and per-repository preferences.'
 grep -Fq 'numbered `ask_user` picker' "${README}" ||
     fail 'README does not describe native numbered setup choices.'
 grep -Fq 'final `Other` custom-answer option' "${README}" ||
@@ -2462,13 +2549,22 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=9' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 9.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=11' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 11.'
 grep -Fxq '    harness_snapshot_transport' "${HARNESS_COMMON}" &&
     grep -Fxq '    harness_configure_snapshot_transport' "${HARNESS_COMMON}" &&
     grep -Fq 'SnapshotTransport=%s' "${RUNNER}" &&
     grep -Fq '"RetryBackoff"' "${RUNNER}" ||
     fail 'Harness snapshot transport or bounded retry backoff is missing.'
+grep -Fq 'RHYOLITE_HARNESS_OUTCOME_SCHEMA=3' "${HARNESS_COMMON}" &&
+    grep -Fq '"Compactions": min(len(compactions), 1000000),' "${COPILOT_HARNESS}" &&
+    grep -Fq '"Compactions": min(len(compactions), 1000000),' \
+        "${PLUGIN_ROOT}/lib/harness/claude.sh" ||
+    fail 'Worker outcome schema 3 does not report context compactions from both adapters.'
+grep -Fq 'RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5' "${HARNESS_COMMON}" &&
+    grep -Fq 'RefusalPolicy=%s' "${RUNNER}" &&
+    grep -Fq '"UnapprovedModelFallback":"never"' "${RUNNER}" ||
+    fail 'Provider refusals are not a distinct, approval-bound outcome.'
 grep -Fxq '    harness_worker_outcome' "${HARNESS_COMMON}" &&
     grep -Fxq '    harness_worker_continuation_argv' "${HARNESS_COMMON}" &&
     grep -Fq 'worker_continuation; do' "${HARNESS_COMMON}" ||
@@ -2875,7 +2971,7 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
         "${RHYOLITE_LAUNCHER}" &&
     ! grep -Fq -- 'copilot_arguments=(--autopilot' \
         "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq -- 'copilot_arguments=(--fleet "${copilot_arguments[@]}")' \
+    ! grep -Fq -- 'copilot_arguments=(--fleet' \
         "${RHYOLITE_LAUNCHER}" &&
     grep -Fq -- '-i "${initial_prompt}"' "${RHYOLITE_LAUNCHER}" &&
     grep -Fq 'export RHYOLITE_LAUNCHER_IMMEDIATE_START="${RHYOLITE_LAUNCHER_IMMEDIATE_START_MARKER}"' \
@@ -2894,14 +2990,14 @@ grep -Fq "readonly RHYOLITE_START_MARKER='RHYOLITE_START_COMMAND_V1'" \
 grep -Fq 'RHYOLITE_LAUNCHER_IMMEDIATE_START' "${WELCOME_HELPER_BASH}" ||
     fail 'Welcome helpers do not use the trusted launcher-start marker.'
 grep -Fq 'rhyolite_write_preference' "${LAUNCHER_PREFERENCES_BASH}" &&
-    grep -Fq -- '--remember-preferences' "${RUNNER}" &&
-    grep -Fq -- '--fleet-mode' "${RUNNER}" ||
-    fail 'Linux fleet/model preference persistence contract is incomplete.'
-grep -Fq "printf '\\nRhyolite execution mode\\n' >&2" \
-    "${RHYOLITE_LAUNCHER}" &&
-    grep -Fq "printf '\\nReview model\\n' >&2" \
-        "${RHYOLITE_LAUNCHER}" ||
-    fail 'Unix launcher picker text can contaminate captured fleet/model values.'
+    grep -Fq -- '--remember-preferences' "${RUNNER}" ||
+    fail 'Linux model preference persistence contract is incomplete.'
+grep -Fq "printf '\\nReview model\\n' >&2" \
+    "${RHYOLITE_LAUNCHER}" ||
+    fail 'Unix launcher picker text can contaminate captured model values.'
+! grep -Eq 'FleetMode|RHYOLITE_LAUNCHER_FLEET_MODE|prompt_for_fleet_mode|harness_capability fleet|Rhyolite execution mode' \
+    "${RHYOLITE_LAUNCHER}" ||
+    fail 'Unix launcher still selects or forwards retired fleet mode.'
 
 grep -Fq 'name: "repo-review"' "${RHYOLITE_EXTENSION}" ||
     fail 'Rhyolite extension does not register /repo-review.'
@@ -2999,7 +3095,6 @@ preference_helper_root="${fixture_dir}/preference-helper-state"
 rhyolite_write_preference \
     'https://github.com/octocat/Hello-World' \
     copilot \
-    native \
     gpt-5.6-sol \
     max \
     long_context \
@@ -3021,7 +3116,6 @@ preference_helper_path="$(
 rhyolite_write_preference \
     "${git_preference_repository}" \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -3032,7 +3126,6 @@ const fs = require("fs");
 const preference = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const expectedKeys = [
   "canonicalRepository",
-  "fleetMode",
   "harness",
   "model",
   "reasoningEffort",
@@ -3041,13 +3134,12 @@ const expectedKeys = [
   "updatedAt",
 ].sort().join(",");
 if (Object.keys(preference).sort().join(",") !== expectedKeys ||
-    preference.schemaVersion !== 3 ||
+    preference.schemaVersion !== 4 ||
     preference.harness !== "copilot" ||
-    preference.fleetMode !== "native" ||
     preference.model !== "gpt-5.6-sol" ||
     preference.reasoningEffort !== "max" ||
     preference.contextTier !== "long_context") {
-  throw new Error("launcher preference schema 3 is invalid");
+  throw new Error("launcher preference schema 4 is invalid");
 }
 JS
 if ! rhyolite_read_preference \
@@ -3055,14 +3147,13 @@ if ! rhyolite_read_preference \
     copilot \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_HARNESS}" != copilot ]]; then
-    fail 'Bash preference helper could not read schema 3 for Copilot.'
+    fail 'Bash preference helper could not read schema 4 for Copilot.'
 fi
 if ! rhyolite_read_preference \
     "${git_preference_repository}" \
     copilot \
     "${preference_helper_root}" ||
-    [[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" != standard ||
-        "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
+    [[ "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
         "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" != xhigh ||
         "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" != default ]]; then
     fail 'Bash preference helper did not preserve the distinct .git preference.'
@@ -3072,7 +3163,47 @@ if rhyolite_read_preference \
     codex \
     "${preference_helper_root}" ||
     [[ "${RHYOLITE_PREFERENCE_STATUS}" != mismatch ]]; then
-    fail 'Bash preference helper reused schema 3 across harnesses.'
+    fail 'Bash preference helper reused schema 4 across harnesses.'
+fi
+
+# Schema 3 files written before fleet mode was retired keep their saved
+# model, effort, and context; their fleetMode value is validated but ignored.
+schema_three_preference_repository='https://github.com/octocat/schema-three'
+schema_three_preference_path="$(
+    rhyolite_preference_path \
+        "${schema_three_preference_repository}" \
+        "${preference_helper_root}"
+)"
+cat > "${schema_three_preference_path}" <<'EOF'
+{
+  "schemaVersion": 3,
+  "canonicalRepository": "https://github.com/octocat/schema-three",
+  "harness": "copilot",
+  "fleetMode": "native",
+  "model": "gpt-6-sol",
+  "reasoningEffort": "xhigh",
+  "contextTier": "default",
+  "updatedAt": "2026-10-20T12:00:00Z"
+}
+EOF
+chmod 600 -- "${schema_three_preference_path}"
+if ! rhyolite_read_preference \
+    "${schema_three_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_MODEL}" != gpt-6-sol ||
+        "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" != xhigh ||
+        "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" != default ]]; then
+    fail 'Bash preference helper did not reuse a schema 3 preference saved with native fleet mode.'
+fi
+sed -i 's/"fleetMode": "native"/"fleetMode": "turbo"/' \
+    "${schema_three_preference_path}"
+if rhyolite_read_preference \
+    "${schema_three_preference_repository}" \
+    copilot \
+    "${preference_helper_root}" ||
+    [[ "${RHYOLITE_PREFERENCE_STATUS}" != invalid ]]; then
+    fail 'Bash preference helper accepted a schema 3 preference with an unknown fleetMode.'
 fi
 
 legacy_preference_repository='https://github.com/octocat/legacy-preference'
@@ -3134,7 +3265,6 @@ mkdir -p -- "${directory_preference_path}"
 if rhyolite_write_preference \
     "${directory_preference_repository}" \
     copilot \
-    standard \
     gpt-5.6-sol \
     max \
     long_context \
@@ -3157,6 +3287,11 @@ welcome_plaque_marker_only="${fixture_dir}/welcome-plaque-marker-only.txt"
 welcome_plaque_internal_resume="${fixture_dir}/welcome-plaque-internal-resume.txt"
 welcome_plaque_launcher_prompt="${fixture_dir}/welcome-plaque-launcher-prompt.txt"
 welcome_plaque_unrelated="${fixture_dir}/welcome-plaque-unrelated.txt"
+welcome_plaque_skill_start="${fixture_dir}/welcome-plaque-skill-start.jsonl"
+welcome_plaque_skill_repo_review="${fixture_dir}/welcome-plaque-skill-repo-review.jsonl"
+welcome_plaque_skill_other="${fixture_dir}/welcome-plaque-skill-other.txt"
+welcome_plaque_skill_longer_name="${fixture_dir}/welcome-plaque-skill-longer-name.txt"
+welcome_plaque_skill_embedded="${fixture_dir}/welcome-plaque-skill-embedded.txt"
 welcome_panel_output="${fixture_dir}/welcome-panel.txt"
 welcome_panel_c_locale_output="${fixture_dir}/welcome-panel-c-locale.txt"
 welcome_panel_stderr="${fixture_dir}/welcome-panel.stderr"
@@ -3212,11 +3347,37 @@ printf '{"prompt":"/rhyolite:start"}\n' |
 printf '{"prompt":"ordinary user prompt"}\n' |
     bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_unrelated}" 2>>"${welcome_progress_stderr}"
+# Copilot CLI hands a prompt command to userPromptSubmitted as its fixed
+# skill-invocation sentence followed by the expanded command text.
+printf '%s\n' '{"sessionId":"s","prompt":"The user explicitly invoked the \"/rhyolite:start\" skill. Follow its instructions now.\n\n<skill-context name=\"start\">\n<!-- RHYOLITE_START_COMMAND_V1 -->\n</skill-context>","timestamp":1,"cwd":"/tmp"}' |
+    NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_start}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"sessionId":"s", "prompt": "The user explicitly invoked the \"/rhyolite:repo-review\" skill. Follow its instructions now.\n\n<skill-context name=\"repo-review\">\n</skill-context>", "cwd":"/tmp"}' |
+    NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_repo_review}" 2>>"${welcome_progress_stderr}"
+for skill_plaque_output in \
+    "${welcome_plaque_skill_start}" \
+    "${welcome_plaque_skill_repo_review}"; do
+    cmp -s "${welcome_plaque_no_color}" "${skill_plaque_output}" ||
+        fail "Copilot CLI's skill invocation of a review-start command does not trigger the Rhyolite plaque: ${skill_plaque_output}"
+done
+printf '%s\n' '{"prompt":"The user explicitly invoked the \"/rhyolite:status\" skill. Follow its instructions now."}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_other}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"prompt":"The user explicitly invoked the \"/rhyolite:start-other\" skill. Follow its instructions now."}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_longer_name}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"prompt":"The main agent received the following user request:\n\n<main_agent_user_request>The user explicitly invoked the \"/rhyolite:start\" skill.</main_agent_user_request>"}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_embedded}" 2>>"${welcome_progress_stderr}"
 for suppressed_plaque_output in \
     "${welcome_plaque_marker_only}" \
     "${welcome_plaque_internal_resume}" \
     "${welcome_plaque_launcher_prompt}" \
-    "${welcome_plaque_unrelated}"; do
+    "${welcome_plaque_unrelated}" \
+    "${welcome_plaque_skill_other}" \
+    "${welcome_plaque_skill_longer_name}" \
+    "${welcome_plaque_skill_embedded}"; do
     [[ ! -s "${suppressed_plaque_output}" ]] ||
         fail "Non-user or unrelated prompt triggers the Rhyolite plaque: ${suppressed_plaque_output}"
 done
@@ -3650,7 +3811,6 @@ fi
     printf 'SESSION\0%s\0' "${RHYOLITE_LAUNCHER_SESSION_DIR-}"
     printf 'VERSION\0%s\0' "${RHYOLITE_LAUNCHER_VERSION-}"
     printf 'IMMEDIATE\0%s\0' "${RHYOLITE_LAUNCHER_IMMEDIATE_START-}"
-    printf 'FLEET\0%s\0' "${RHYOLITE_LAUNCHER_FLEET_MODE-}"
     printf 'MODEL\0%s\0' "${RHYOLITE_LAUNCHER_MODEL-}"
     printf 'ARGS\0'
     printf '%s\0' "$@"
@@ -3803,7 +3963,6 @@ assert_unsafe_launcher_state_rejected() {
             PATH="${launcher_mock_bin}:${PATH}" \
             "${launcher_link}" \
                 --repo https://example.com/owner/repository \
-                --fleet-mode standard \
                 --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
@@ -3847,7 +4006,6 @@ assert_unsafe_launcher_state_rejected \
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode native \
             --model claude-fable-5.1 \
             --yolo \
             --yolo \
@@ -3897,7 +4055,6 @@ const expectedPrompt =
   "RHYOLITE_START_COMMAND_V1\n" +
   "RHYOLITE_LAUNCHER_SETUP_V1\n" +
   "Source=https://example.com/owner/repository.git\n" +
-  "FleetMode=native\n" +
   "Model=claude-fable-5.1\n" +
   "ReasoningEffort=max\n" +
   "ContextTier=long_context\n" +
@@ -3913,13 +4070,13 @@ if (fs.realpathSync(pluginRoot) !== fs.realpathSync(expectedPlugin) ||
 if (valueAfter("--agent") !== "rhyolite:repo-review") {
   throw new Error("launcher did not preselect rhyolite:repo-review");
 }
-if (!args.includes("--fleet") ||
+if (args.includes("--fleet") ||
     valueAfter("--mode") !== "interactive" ||
     valueAfter("--model") !== "claude-fable-5.1" ||
     valueAfter("--reasoning-effort") !== "max" ||
     valueAfter("--context") !== "long_context") {
   throw new Error(
-    "launcher did not apply fleet/model/reasoning/context selections",
+    "launcher did not apply model/reasoning/context selections without fleet mode",
   );
 }
 if (countArg("--yolo") !== 1 || countArg("--autopilot") !== 0) {
@@ -3938,7 +4095,6 @@ if (fs.realpathSync(values.get("CALLER")) !== fs.realpathSync(root) ||
       fs.realpathSync(launchDirectory) ||
     values.get("VERSION") !== expectedVersion ||
     values.get("IMMEDIATE") !== "RHYOLITE_LAUNCHER_IMMEDIATE_START_V1" ||
-    values.get("FLEET") !== "native" ||
     values.get("MODEL") !== "claude-fable-5.1") {
   throw new Error("launcher environment context is inconsistent");
 }
@@ -3965,7 +4121,7 @@ const context = fs.readFileSync(
 if (context.includes("InitialRequest=") ||
     context.includes(expectedRequest) ||
     context.includes("https://example.com/owner/repository") ||
-    !context.includes("FleetMode=native") ||
+    context.includes("FleetMode") ||
     !context.includes("Model=claude-fable-5.1") ||
     !context.includes("ReasoningEffort=max") ||
     !context.includes("ContextTier=long_context") ||
@@ -3982,7 +4138,6 @@ rm -f -- "${launcher_stub_log}"
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/custom-model \
-            --fleet-mode standard \
             --model gpt-6-sol \
             --reasoning-effort xhigh \
             --context default
@@ -3999,7 +4154,7 @@ if (valueAfter("--model") !== "gpt-6-sol" ||
     valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
       "Source=https://example.com/owner/custom-model\n" +
-      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "Model=gpt-6-sol\n" +
       "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
   throw new Error("runtime selections did not round-trip through launcher setup");
@@ -4021,7 +4176,7 @@ assert_launcher_sources() {
         XDG_STATE_HOME="${launcher_state_home}" \
             RHYOLITE_STUB_LOG="${launcher_stub_log}" \
             PATH="${launcher_mock_bin}:${PATH}" \
-            "${launcher_link}" --fleet-mode standard "$@"
+            "${launcher_link}" "$@"
     ) </dev/null >/dev/null 2>&1 ||
         fail "${name}: launcher did not start."
     node - \
@@ -4085,7 +4240,6 @@ set +e
         RHYOLITE_STUB_LOG="${launcher_stub_log}" \
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
-            --fleet-mode standard \
             --repo https://example.com/owner/multi-one \
             'https://example.com/owner/multi-two?tab=readme'
 ) </dev/null >/dev/null 2>"${launcher_invalid_request_url_stderr}"
@@ -4112,7 +4266,6 @@ for launcher_account_url in \
             RHYOLITE_STUB_LOG="${launcher_stub_log}" \
             PATH="${launcher_mock_bin}:${PATH}" \
             "${launcher_link}" \
-                --fleet-mode standard \
                 --repo "${launcher_account_url}"
     ) </dev/null >/dev/null 2>"${launcher_account_url_stderr}"
     launcher_account_url_status=$?
@@ -4148,9 +4301,11 @@ done
 # flag exists in the runner's --help, so neither has to read the runner or
 # its --help to rediscover the CLI before planning.
 for plan_flag in \
-    --repo --harness --fleet-mode --model --reasoning-effort --context \
+    --repo --harness --model --reasoning-effort --context \
     --output-root --scope --provenance-lookback-months --research-cookies \
     --remember-preferences --allow-unlisted-model --no-open-html \
+    --security-scans --scan-model --consolidation-model \
+    --min-successful-scans --commit --reuse-scans \
     --plan-only --non-interactive --expected-plan-hash; do
     plan_flag_pattern="(^|[^-[:alnum:]])${plan_flag}([^-[:alnum:]]|\$)"
     grep -Eq -- "${plan_flag_pattern}" <<< "${runner_help}" ||
@@ -4171,7 +4326,6 @@ launcher_preference_home="${launcher_state_home}/rhyolite/launcher"
 rhyolite_write_preference \
     'https://example.com/owner/custom-preference' \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -4197,7 +4351,8 @@ if (valueAfter("--model") !== "gpt-6-sol" ||
     valueAfter("--reasoning-effort") !== "xhigh" ||
     valueAfter("--context") !== "default" ||
     !valueAfter("-i").includes(
-      "FleetMode=standard\nModel=gpt-6-sol\n" +
+      "Source=https://example.com/owner/custom-preference\n" +
+      "Model=gpt-6-sol\n" +
       "ReasoningEffort=xhigh\nContextTier=default\n",
     )) {
   throw new Error("stored runtime settings did not round-trip through launcher");
@@ -4207,7 +4362,6 @@ JS
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
     copilot \
-    native \
     claude-fable-5.1 \
     max \
     long_context \
@@ -4232,9 +4386,11 @@ const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--yolo") || args.includes("--autopilot")) {
   throw new Error("launcher enabled yolo/autopilot without explicit flags");
 }
-if (!args.includes("--fleet") ||
+if (args.includes("--fleet") ||
     valueAfter("--model") !== "claude-fable-5.1" ||
-    !valueAfter("-i").includes("FleetMode=native\nModel=claude-fable-5.1\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=claude-fable-5.1\n",
+    )) {
   throw new Error("launcher did not reuse the saved repository preference");
 }
 JS
@@ -4242,7 +4398,6 @@ JS
 rhyolite_write_preference \
     'https://example.com/owner/repository' \
     codex \
-    native \
     claude-fable-5.1 \
     max \
     long_context \
@@ -4272,7 +4427,9 @@ const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
     valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=gpt-5.6-sol\n",
+    )) {
   throw new Error("launcher reused a preference for a different harness");
 }
 JS
@@ -4316,7 +4473,9 @@ const args = fields.slice(argsIndex + 1);
 const valueAfter = (flag) => args[args.indexOf(flag) + 1];
 if (args.includes("--fleet") ||
     valueAfter("--model") !== "gpt-5.6-sol" ||
-    !valueAfter("-i").includes("FleetMode=standard\nModel=gpt-5.6-sol\n")) {
+    !valueAfter("-i").includes(
+      "Source=https://example.com/owner/repository\nModel=gpt-5.6-sol\n",
+    )) {
   throw new Error("launcher did not ignore the invalid repository preference");
 }
 JS
@@ -4333,7 +4492,6 @@ set +e
         PATH="${launcher_mock_bin}:${PATH}" \
         "${launcher_link}" \
             --repo https://example.com/owner/repository \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) >"${launcher_failure_stdout}" 2>"${launcher_failure_stderr}"
 launcher_failure_exit=$?
@@ -5922,22 +6080,55 @@ plan_scope_one_padded_git_stderr="${fixture_dir}/plan-scope-1-padded-git.stderr"
 [[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
     fail 'Bash zero-padded default-port plan-only created workspace or output roots.'
 
-plan_scope_one_fleet_json="${fixture_dir}/plan-scope-1-fleet.json"
-plan_scope_one_fleet_stderr="${fixture_dir}/plan-scope-1-fleet.stderr"
+plan_scope_one_remember_json="${fixture_dir}/plan-scope-1-remember.json"
+plan_scope_one_remember_stderr="${fixture_dir}/plan-scope-1-remember.stderr"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --remember-preferences \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_remember_json}" \
+    2>"${plan_scope_one_remember_stderr}"
+[[ ! -s "${plan_scope_one_remember_stderr}" ]] ||
+    fail 'Bash scope 1 remember-preferences plan-only wrote unexpected stderr.'
+[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
+    fail 'Bash scope 1 remember-preferences plan-only created workspace or output roots.'
+
+# The retired --fleet-mode option still accepts standard, which changes
+# nothing, and rejects native before planning.
+plan_scope_one_retired_fleet_json="${fixture_dir}/plan-scope-1-retired-fleet.json"
+"${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World \
+    --scope 1 \
+    --workspace-root "${plan_scope_one_workspace}" \
+    --output-root "${plan_scope_one_output}" \
+    --fleet-mode standard \
+    --non-interactive \
+    --plan-only >"${plan_scope_one_retired_fleet_json}" ||
+    fail 'Bash runner rejected the retired --fleet-mode standard compatibility spelling.'
+retired_native_fleet_stdout="${fixture_dir}/plan-scope-1-native-fleet.stdout"
+retired_native_fleet_stderr="${fixture_dir}/plan-scope-1-native-fleet.stderr"
+set +e
 "${RUNNER}" \
     --repo https://github.com/octocat/Hello-World \
     --scope 1 \
     --workspace-root "${plan_scope_one_workspace}" \
     --output-root "${plan_scope_one_output}" \
     --fleet-mode native \
-    --remember-preferences \
     --non-interactive \
-    --plan-only >"${plan_scope_one_fleet_json}" \
-    2>"${plan_scope_one_fleet_stderr}"
-[[ ! -s "${plan_scope_one_fleet_stderr}" ]] ||
-    fail 'Bash scope 1 fleet plan-only wrote unexpected stderr.'
-[[ ! -e "${plan_scope_one_workspace}" && ! -e "${plan_scope_one_output}" ]] ||
-    fail 'Bash scope 1 fleet plan-only created workspace or output roots.'
+    --plan-only >"${retired_native_fleet_stdout}" \
+    2>"${retired_native_fleet_stderr}"
+retired_native_fleet_status=$?
+set -e
+[[ "${retired_native_fleet_status}" -eq 2 &&
+    ! -s "${retired_native_fleet_stdout}" &&
+    ! -e "${plan_scope_one_workspace}" &&
+    ! -e "${plan_scope_one_output}" ]] &&
+    grep -Fq 'Native fleet mode has been retired' \
+        "${retired_native_fleet_stderr}" ||
+    fail 'Bash runner did not reject retired native fleet mode before planning.'
 
 plan_scope_two_workspace="${fixture_dir}/plan workspace scope 2"
 plan_scope_two_output="${fixture_dir}/plan output scope 2"
@@ -6138,7 +6329,8 @@ node - \
     "${plan_scope_one_canonical_json}" \
     "${plan_scope_one_git_json}" \
     "${plan_scope_one_padded_git_json}" \
-    "${plan_scope_one_fleet_json}" \
+    "${plan_scope_one_remember_json}" \
+    "${plan_scope_one_retired_fleet_json}" \
     "${plan_scope_two_json}" \
     "${plan_scope_two_none_json}" \
     "${plan_scope_two_cookie_json}" \
@@ -6165,7 +6357,8 @@ const [
   scopeOneCanonicalPath,
   scopeOneGitPath,
   scopeOnePaddedGitPath,
-  scopeOneFleetPath,
+  scopeOneRememberPath,
+  scopeOneRetiredFleetPath,
   scopeTwoPath,
   scopeTwoNonePath,
   scopeTwoCookiePath,
@@ -6227,7 +6420,6 @@ function assertCommonPlan(
   assertKeys(plan, [
     "ApprovalHash",
     "ContextTier",
-    "FleetMode",
     "GeneratedAt",
     "Harness",
     "MaxRepositories",
@@ -6239,12 +6431,14 @@ function assertCommonPlan(
     "Provider",
     "ProvenanceWindow",
     "ReasoningEffort",
+    "RefusalPolicy",
     "ReportRepairPolicy",
     "ResearchTransport",
     "ReviewDate",
     "RememberPreferences",
     "SchemaVersion",
     "Scope",
+    "SecurityScans",
     "SessionTimeoutMinutes",
     "Sources",
     "ThrottleLimit",
@@ -6284,7 +6478,6 @@ function assertCommonPlan(
       ]) ||
       plan.Model !== "gpt-5.6-sol" ||
       plan.ModelCatalogMembership !== "listed" ||
-      plan.FleetMode !== "standard" ||
       plan.RememberPreferences !== false ||
       plan.OpenHtmlPolicy !== expectedOpenHtmlPolicy ||
       plan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||
@@ -6484,7 +6677,7 @@ if (scopeOne.Scope.Number !== 1 ||
     typeof scopeOne.Scope.ProvenanceResearch !== "boolean" ||
     scopeOne.Scope.ProvenanceResearch !== false ||
     scopeOne.ProvenanceWindow !== null ||
-    scopeOne.SessionTimeoutMinutes !== 60 ||
+    scopeOne.SessionTimeoutMinutes !== 240 ||
     scopeOne.Sources[0].Kind !== "RemoteUrl" ||
     scopeOne.Sources[0].LocalPath !== null ||
     scopeOne.Sources[0].RemoteUrl !== "https://github.com/octocat/Hello-World" ||
@@ -6610,11 +6803,16 @@ if (scopeOnePaddedGit.Sources[0].RemoteUrl !==
   throw new Error("zero-padded default HTTPS port changed the .git plan");
 }
 
-const scopeOneFleet = parsePlan(scopeOneFleetPath);
-if (scopeOneFleet.FleetMode !== "native" ||
-    scopeOneFleet.RememberPreferences !== true ||
-    scopeOneFleet.ApprovalHash === scopeOne.ApprovalHash) {
-  throw new Error("fleet/preference settings did not change the approval hash");
+const scopeOneRemember = parsePlan(scopeOneRememberPath);
+if (scopeOneRemember.RememberPreferences !== true ||
+    scopeOneRemember.ApprovalHash === scopeOne.ApprovalHash) {
+  throw new Error("remember-preferences setting did not change the approval hash");
+}
+
+const scopeOneRetiredFleet = parsePlan(scopeOneRetiredFleetPath);
+if (Object.hasOwn(scopeOneRetiredFleet, "FleetMode") ||
+    scopeOneRetiredFleet.ApprovalHash !== scopeOne.ApprovalHash) {
+  throw new Error("retired --fleet-mode standard changed the effective plan");
 }
 
 const scopeTwo = parsePlan(scopeTwoPath);
@@ -6627,7 +6825,7 @@ if (scopeTwo.Scope.Number !== 2 ||
     scopeTwo.Scope.PublicResearch !== true ||
     scopeTwo.Scope.ProvenanceResearch !== false ||
     scopeTwo.ProvenanceWindow !== null ||
-    scopeTwo.SessionTimeoutMinutes !== 120 ||
+    scopeTwo.SessionTimeoutMinutes !== 240 ||
     scopeTwo.Sources[0].Kind !== "RemoteUrl" ||
     scopeTwo.Sources[0].LocalPath !== null ||
     scopeTwo.Sources[0].RemoteUrl !== "https://github.com/octocat/Hello-World" ||
@@ -7325,8 +7523,8 @@ case "${command_name}" in
             'Committer name (attacker-controlled evidence): Example Committer Long hostile committer ' \
             "${long_identity_filler}" \
             " ${committer_secret}"
-        printf '%s\n' \
-            'Subject (attacker-controlled evidence): Initial & exact commit'
+        printf 'Subject (attacker-controlled evidence): %s\n' \
+            "${MOCK_GIT_SUBJECT:-Initial & exact commit}"
         printf '%s\n' \
             "Selected trailer values (attacker-controlled evidence): Co-authored-by: Fixture Collaborator <${collaborator_email}> | Generated-with: aider model fixture; \$(touch '${MOCK_HOSTILE_TRAILER_SENTINEL}'); ${metadata_secret}; <script>alert('trailer')</script> | ${long_trailer_filler} | Boundary <${trailer_boundary_email}>" \
             '' \
@@ -7523,7 +7721,8 @@ mock_continuation=0
 if [[ "${agent}" == rhyolite:repo-review-worker ]]; then
     mock_review_request="$(mktemp "${TMPDIR:-/tmp}/mock-review-request.XXXXXXXX")"
     cat > "${mock_review_request}"
-    if grep -Fxq 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_review_request}"; then
+    if grep -Fxq 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_review_request}" ||
+        grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${mock_review_request}"; then
         mock_continuation=1
     fi
     # Re-provide the same request on stdin for the review-request capture.
@@ -7546,7 +7745,7 @@ fi
     printf '%s\n' 'END_INVOCATION'
 } >> "${MOCK_LOG}"
 grep -Fxq -- '--disallow-temp-dir' "${invocation_log}" || exit 72
-grep -Fxq -- '--no-remote-export' "${invocation_log}" || exit 73
+grep -Fxq -- '--sync-session=off' "${invocation_log}" || exit 73
 ! grep -Fq 'shell(git' "${invocation_log}" || exit 74
 grep -Fxq -- 'shell' "${invocation_log}" || exit 76
 ! grep -Fq -- '--allow-all-urls' "${invocation_log}" || exit 89
@@ -7718,6 +7917,7 @@ for argument in "$@"; do
 done
 [[ "${output_format}" == json ]] || exit 120
 mock_emit_transient=0
+mock_compactions=0
 mock_structured_capture="$(
     mktemp "${TMPDIR:-/tmp}/mock-copilot-stdout.XXXXXXXX"
 )"
@@ -7730,7 +7930,8 @@ emit_structured_events() {
         "${mock_structured_capture}" \
         "${MOCK_REPLY_MODEL:-${model}}" \
         "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" \
-        "${mock_emit_transient}" <<'EVENTS'
+        "${mock_emit_transient}" \
+        "${mock_compactions}" <<'EVENTS'
 import json
 import pathlib
 import sys
@@ -7746,6 +7947,42 @@ def event(kind, data):
 
 
 event("model.call_start", {"turnId": "0", "model": model})
+# Automatic context compaction, as Copilot CLI 1.0.104-4 recorded it in run
+# 20261026-170519.
+for number in range(int(sys.argv[5])):
+    event("session.compaction_start", {
+        "compactionAttemptId": f"mock-compaction-{number}", "model": model,
+        "currentTokens": 809055, "tokenLimit": 983040, "trigger": "threshold"})
+    event("session.compaction_complete", {
+        "success": True, "outcome": "applied",
+        "compactionAttemptId": f"mock-compaction-{number}",
+        "preCompactionMessagesLength": 353, "messagesRemoved": 315,
+        "tokenLimit": 983040, "trigger": "threshold"})
+if sys.argv[4] == "fallback":
+    # An automatic fallback to another model that never produced output, as
+    # recorded by Copilot CLI 1.0.98; the worker still exits with status 0.
+    event("model.call_start", {"turnId": "0", "model": "claude-opus-4.8"})
+    event("model.call_failure",
+          {"model": "claude-opus-4.8", "statusCode": 400, "failureKind": "api"})
+    event("agent.interrupted",
+          {"model": "claude-opus-4.8", "cancelPhase": "pre_first_token"})
+    print(json.dumps({"type": "result", "exitCode": 0}))
+    raise SystemExit(0)
+if sys.argv[4] == "refused":
+    # The provider declined the approved model (finishReason
+    # content_filter); Copilot CLI's automatic refusal fallback then failed
+    # its pre-flight check against the fallback model's smaller prompt
+    # budget, as recorded in run 20261025-125439.
+    event("assistant.usage", {
+        "model": model, "inputTokens": 185172, "outputTokens": 2837,
+        "maxPromptTokens": 968000, "maxOutputTokens": 32000,
+        "finishReason": "content_filter", "contentFilterTriggered": True,
+        "apiCallId": "msg_mock_refused"})
+    event("session.error", {
+        "errorType": "query",
+        "message": "Execution failed: Request exceeds the model's prompt budget after reserving output (134437 tokens; limit 128000). Reduce context or compact before continuing."})
+    print(json.dumps({"type": "result", "exitCode": 1}))
+    raise SystemExit(0)
 if sys.argv[4] == "1":
     # A transient model-service failure that Copilot's own retries did not
     # recover, as recorded by Copilot CLI 1.0.98.
@@ -7978,6 +8215,9 @@ PY
 fi
 
 if [[ "${agent}" == 'rhyolite:repo-research-worker' ]]; then
+    # Security scan findings reach the session root only after research, so
+    # the network-enabled research worker can never read them.
+    [[ ! -e "${working_directory}/security-scan-evidence" ]] || exit 87
     [[ -n "${additional_mcp_config}" &&
         "${additional_mcp_config}" == @* ]] || exit 92
     grep -Fxq -- 'rhyolite-research(research_capabilities)' "${invocation_log}" ||
@@ -8204,6 +8444,13 @@ EOF
     chmod 600 -- "${broker_runtime}/broker-exit.json"
     cat > "${MOCK_LOG}.research-request"
     printf '# Mock Copilot research session\n' > "${share_path}"
+    # MOCK_REFUSE_RESEARCH_MODEL names a model whose provider declines the
+    # research request before the first broker call.
+    if [[ "${MOCK_REFUSE_RESEARCH_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' "${network_root}" >> "${MOCK_LOG}.refused-research"
+        mock_emit_transient=refused
+        exit 1
+    fi
     # MOCK_RESEARCH_TRANSIENT names a marker: the first research attempt ends
     # with a transient model-service failure, and a marker that holds
     # `always` fails every attempt.
@@ -8680,8 +8927,212 @@ PY
 fi
 
 [[ -z "${additional_mcp_config}" ]] || exit 101
-cat > "${MOCK_LOG}.review-request"
+mock_worker_request="$(mktemp "${TMPDIR:-/tmp}/mock-worker-request.XXXXXXXX")"
+cat > "${mock_worker_request}"
 printf '# Mock Copilot session\n' > "${share_path}"
+emit_mock_scan_report() {
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
+        'SCAN CONTEXT' \
+        'Repository: https://github.com/octocat/Hello-World' \
+        'Commit: 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
+        '' \
+        'SECURITY FINDINGS'
+    if [[ "${MOCK_SCAN_EMPTY_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' 'No qualifying security findings'
+    elif [[ "${MOCK_SCAN_LOOSE_MODEL-}" == "${model}" ]]; then
+        # Indented, list-marked fields and a qualified severity are accepted.
+        printf '%s\n' \
+            '- Finding 1: Unchecked index reaches the table lookup' \
+            '  - Severity: High (reachable from untrusted input)' \
+            '  - Confidence: high' \
+            '  - Location: src/table.c:41' \
+            '  - Behavior: The index is used before any bounds check.' \
+            '  - Exploit path: A crafted request supplies a large index.' \
+            '  - Impact: Out-of-bounds read.' \
+            '  - Remediation: Check the index against the table size.' \
+            '' \
+            '- Finding 2: Length arithmetic overflows before the bounds check' \
+            '  - Severity: Medium' \
+            '  - Confidence: Medium' \
+            '  - Location: src/parser.c:203-207' \
+            '  - Behavior: A 32-bit length sum wraps before it is compared.' \
+            '  - Exploit path: A crafted record passes the wrapped check.' \
+            '  - Impact: Out-of-bounds read of adjacent memory.' \
+            '  - Remediation: Check the sum for overflow before comparing.'
+    else
+        printf '%s\n' \
+            'Finding 1: Length arithmetic overflows before the bounds check' \
+            'Severity: Medium' \
+            'Confidence: High' \
+            'Location: src/parser.c:203-207' \
+            'Behavior: A 32-bit length sum wraps before it is compared.' \
+            'Exploit path: A crafted record reaches the parser and passes the' \
+            'wrapped check.' \
+            'Impact: Out-of-bounds read of adjacent memory.' \
+            'Remediation: Check the sum for overflow before comparing.'
+    fi
+    printf '%s\n' \
+        '' \
+        'COVERAGE' \
+        'src/parser.c and the build configuration.' \
+        '' \
+        'LIMITATIONS' \
+        'Fixture scan; no code was executed.' \
+        '================================================================================'
+}
+emit_mock_invalid_scan_report() {
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
+        'Repository: https://github.com/octocat/Hello-World' \
+        '' \
+        'SECURITY POSTURE SUMMARY' \
+        'One length-arithmetic defect.' \
+        '' \
+        'SECURITY FINDINGS' \
+        '1. [MEDIUM] Length arithmetic overflows before the bounds check' \
+        '  Severity: Medium' \
+        '  Location: src/parser.c:203-207' \
+        '' \
+        'PRIORITIZED REMEDIATION' \
+        'Check the sum for overflow before comparing.' \
+        '================================================================================'
+}
+# A parallel security-only scan answers with one scan report and exits.
+if grep -Fxq 'RHYOLITE_SECURITY_SCAN_V1' "${mock_worker_request}"; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.scan-request.${model}"
+    rm -f -- "${mock_worker_request}"
+    # Scans finish before research starts, so no scan can see its evidence.
+    [[ ! -e "${working_directory}/research-evidence" ]] || exit 98
+    if [[ "${MOCK_SCAN_FAIL_MODEL-}" == "${model}" ]]; then
+        printf 'mock scan failure for %s\n' "${model}" >&2
+        exit 97
+    fi
+    # MOCK_REFUSE_SCAN_MODELS lists scan models whose provider declines the
+    # scan request.
+    if [[ ",${MOCK_REFUSE_SCAN_MODELS-}," == *",${model},"* ]]; then
+        printf '%s\n' "${COPILOT_HOME}" >> "${MOCK_LOG}.refused-scan.${model}"
+        mock_emit_transient=refused
+        exit 1
+    fi
+    # The first attempt of this scan model ends with a transient
+    # model-service failure; a marker that holds `always` fails every attempt.
+    if [[ "${MOCK_SCAN_TRANSIENT_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' "${COPILOT_HOME}" >> "${MOCK_SCAN_TRANSIENT_MARKER}.attempts"
+        if [[ ! -e "${MOCK_SCAN_TRANSIENT_MARKER}" ||
+            "$(cat -- "${MOCK_SCAN_TRANSIENT_MARKER}")" == always ]]; then
+            [[ -e "${MOCK_SCAN_TRANSIENT_MARKER}" ]] ||
+                : > "${MOCK_SCAN_TRANSIENT_MARKER}"
+            mock_emit_transient=1
+            exit 1
+        fi
+    fi
+    # The first attempt of this scan model records a blocked automatic
+    # fallback at once and then ignores TERM, so the live monitor has to force
+    # it to stop (status 137), which is never a timeout.
+    if [[ "${MOCK_SCAN_STUBBORN_FALLBACK_MODEL-}" == "${model}" &&
+        ! -e "${MOCK_SCAN_STUBBORN_FALLBACK_MARKER}" ]]; then
+        : > "${MOCK_SCAN_STUBBORN_FALLBACK_MARKER}"
+        trap - EXIT
+        trap '' TERM INT HUP
+        /usr/bin/python3 - "${model}" >&3 <<'EVENTS'
+import json
+import sys
+
+for kind, data in (
+    ("model.call_start", {"turnId": "0", "model": sys.argv[1]}),
+    ("model.call_start", {"turnId": "0", "model": "claude-opus-4.8"}),
+    ("model.call_failure",
+     {"model": "claude-opus-4.8", "statusCode": 400, "failureKind": "api"}),
+):
+    print(json.dumps({"type": kind, "data": data, "id": "mock"}), flush=True)
+EVENTS
+        sleep 120
+        exit 0
+    fi
+    # The first attempt of this scan model records a blocked automatic
+    # fallback to another model.
+    if [[ "${MOCK_SCAN_FALLBACK_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' "${COPILOT_HOME}" >> "${MOCK_SCAN_FALLBACK_MARKER}.attempts"
+        if [[ ! -e "${MOCK_SCAN_FALLBACK_MARKER}" ]]; then
+            : > "${MOCK_SCAN_FALLBACK_MARKER}"
+            mock_emit_transient=fallback
+            exit 0
+        fi
+    fi
+    if [[ -n "${MOCK_SCAN_BLOCK_PID_DIRECTORY-}" ]]; then
+        printf '%s\n' "$$" > "${MOCK_SCAN_BLOCK_PID_DIRECTORY}/${model}"
+        sleep 300 &
+        wait "$!"
+        exit 96
+    fi
+    # MOCK_SCAN_COMPACT_MODEL records one automatic context compaction.
+    if [[ "${MOCK_SCAN_COMPACT_MODEL-}" == "${model}" ]]; then
+        mock_compactions=1
+    fi
+    # MOCK_SCAN_INVALID_MODEL answers in its own layout, as scan C of run
+    # 20261026-170519 did after compaction removed the request.
+    if [[ "${MOCK_SCAN_INVALID_MODEL-}" == "${model}" ]]; then
+        emit_mock_invalid_scan_report
+        exit 0
+    fi
+    emit_mock_scan_report
+    exit 0
+fi
+# A same-session request for only the scan report. MOCK_SCAN_REPORT_REQUEST_MODE
+# `never` answers in the invalid layout again; `fail` ends the continuation
+# with an error before any reply.
+if grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${mock_worker_request}"; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.scan-report-request.${model}"
+    rm -f -- "${mock_worker_request}"
+    if [[ "${MOCK_SCAN_REPORT_REQUEST_MODE-valid}" == fail ]]; then
+        printf 'mock scan report request failure for %s\n' "${model}" >&2
+        exit 1
+    elif [[ "${MOCK_SCAN_REPORT_REQUEST_MODE-valid}" == never ]]; then
+        emit_mock_invalid_scan_report
+    else
+        emit_mock_scan_report
+    fi
+    exit 0
+fi
+# A same-session request for only the consolidation ledger.
+if grep -Fxq 'RHYOLITE SECURITY CONSOLIDATION LEDGER REQUEST' \
+    "${mock_worker_request}"; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.ledger-request"
+    if [[ "${MOCK_LEDGER_MODE-valid}" == never ]]; then
+        printf '%s\n' 'The ledger is not available.'
+    else
+        printf '%s\n' 'RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+        awk '
+            found && /^[A-C]-[0-9]+$/ { print $0 " | confirmed | Finding 1 in FINDINGS" }
+            $0 == "Scan finding IDs to classify:" { found = 1 }
+        ' "${mock_worker_request}"
+        printf '%s\n' 'END_RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+    fi
+    rm -f -- "${mock_worker_request}"
+    exit 0
+fi
+# MOCK_REFUSE_REVIEW_MODEL names a model whose provider declines the review
+# or consolidation request.
+if [[ "${MOCK_REFUSE_REVIEW_MODEL-}" == "${model}" ]]; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.refused-review-request.${model}"
+    rm -f -- "${mock_worker_request}"
+    mock_emit_transient=refused
+    exit 1
+fi
+cp -- "${mock_worker_request}" "${MOCK_LOG}.review-request"
+if grep -Fxq 'RHYOLITE_SECURITY_CONSOLIDATION_V1' "${mock_worker_request}" &&
+    [[ "${MOCK_LEDGER_MODE-valid}" == valid ]]; then
+    printf '%s\n' 'RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+    awk '
+        found && /^[A-C]-[0-9]+$/ { print $0 " | merged | Finding 1 in FINDINGS" }
+        $0 == "Scan finding IDs to classify:" { found = 1 }
+    ' "${mock_worker_request}"
+    printf '%s\n' 'END_RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
+fi
+rm -f -- "${mock_worker_request}"
 
 emit_security_summary_table() {
     printf '%s\n' \
@@ -10072,7 +10523,6 @@ if ! MOCK_LOG="${mock_log}" \
         --research-cookies ephemeral \
         --output-root "${fixture_dir}/mock&output" \
         --workspace-root "${fixture_dir}/mock&workspace" \
-        --fleet-mode native \
         --remember-preferences \
         --non-interactive \
         --plan-only >"${mock_plan_json}" 2>"${mock_plan_stderr}"; then
@@ -10120,7 +10570,6 @@ if ! MOCK_LOG="${mock_log}" \
         --output-root "${mock_output}" \
         --workspace-root "${mock_workspace}" \
         --expected-plan-hash "${mock_expected_hash}" \
-        --fleet-mode native \
         --remember-preferences \
         --non-interactive >"${mock_run_output}" 2>"${mock_run_stderr}"; then
     cat "${mock_run_stderr}" >&2
@@ -10189,6 +10638,7 @@ grep -Fq \
         "Use the dossier's COMMUNITY HEALTH EVIDENCE, CLAIM VERIFICATION EVIDENCE, and" \
         "${mock_log}.review-request" ||
     fail 'Main review request lost the scope 3 lineage or dossier evidence contract.'
+cp -- "${mock_log}.review-request" "${fixture_dir}/scope-3-review-request.txt"
 grep -Fq \
     'Record code and architecture lineage, license and attribution, and chronology' \
     "${mock_log}.research-request" ||
@@ -10226,7 +10676,7 @@ mock_run="$(find "${mock_output}" -mindepth 1 -maxdepth 1 -type d |
 [[ -n "${mock_run}" ]] || fail 'Mock Bash run did not create an output bundle.'
 grep -Fq 'EFFECTIVE REVIEW PLAN' "${mock_run_output}" ||
     fail 'Mock Bash run did not print the effective review plan.'
-grep -Fq 'Remembered approved fleet/model/effort/context settings for 1 repositories.' \
+grep -Fq 'Remembered approved model/effort/context settings for 1 repositories.' \
     "${mock_run_output}" ||
     fail 'Mock Bash run did not report saved launcher preferences.'
 if ! rhyolite_read_preference \
@@ -10236,7 +10686,6 @@ if ! rhyolite_read_preference \
     fail 'Mock Bash run did not persist readable launcher preferences.'
 fi
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
-    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol ]] ||
     fail 'Mock Bash run persisted incorrect launcher preferences.'
 grep -Fxq \
@@ -10434,7 +10883,6 @@ if (expectedPriorArtStartDate === expectedProvenanceStartDate) {
 assertKeys(reviewPlan, [
   "ApprovalHash",
   "ContextTier",
-  "FleetMode",
   "GeneratedAt",
   "Harness",
   "MaxRepositories",
@@ -10446,6 +10894,7 @@ assertKeys(reviewPlan, [
   "Provider",
   "ProvenanceWindow",
   "ReasoningEffort",
+  "RefusalPolicy",
   "ReportRepairPolicy",
   "ResearchTransport",
   "ReviewDate",
@@ -10453,6 +10902,7 @@ assertKeys(reviewPlan, [
   "RunId",
   "SchemaVersion",
   "Scope",
+  "SecurityScans",
   "SessionTimeoutMinutes",
   "Sources",
   "StartedAt",
@@ -10505,7 +10955,6 @@ if (reviewPlan.SchemaVersion !== 5 ||
     reviewPlan.ThrottleLimit !== 2 ||
     reviewPlan.MaxRepositories !== 5 ||
     reviewPlan.Model !== "gpt-5.6-sol" ||
-    reviewPlan.FleetMode !== "native" ||
     reviewPlan.RememberPreferences !== true ||
     reviewPlan.OpenHtmlPolicy !== "never" ||
     reviewPlan.ReportRepairPolicy?.Mode !== "isolated-confidence-edit" ||
@@ -13308,6 +13757,21 @@ grep -Fq \
         'Do not emit the CODE AND ARCHITECTURE PROVENANCE ASSESSMENT or' \
         "${mock_log}.review-request" ||
     fail 'Scope 1 review request lost the local claims/community or no-lineage contract.'
+# The rendered security pass, from its scope-invariance rule through the
+# remediation rule, is byte-identical in the scope 1 and scope 3 requests.
+extract_security_pass_block() {
+    sed -n '/^The dedicated security pass is identical for every scope\./,/^Keep remediation as written recommendations under `PRIORITIZED REMEDIATION`\.$/p' \
+        "$1"
+}
+scope_one_security_block="$(
+    extract_security_pass_block "${mock_log}.review-request"
+)"
+scope_three_security_block="$(
+    extract_security_pass_block "${fixture_dir}/scope-3-review-request.txt"
+)"
+[[ "${scope_one_security_block}" == *'END SECURITY PASS RETURN SELF-CHECK'* &&
+    "${scope_one_security_block}" == "${scope_three_security_block}" ]] ||
+    fail 'Scope 1 and scope 3 review requests do not carry the same security pass.'
 
 production_repair_confidence='High for counts and Medium for adoption interpretation.'
 for repair_scope in 1 2 3; do
@@ -15916,6 +16380,49 @@ fi
     "RHYOLITE STOP | not-running | Interrupted; ${hard_kill_run}" ]] ||
     fail 'Request-stop did not treat the record of a killed runner as not running.'
 
+# The hard kill left both review runtime homes with their authentication
+# bridges. Once no process holds their locks and they are older than the stale
+# age, the next runner start removes them and leaves unrelated entries.
+mapfile -t hard_kill_homes < <(
+    find "${hard_kill_root}/tmp" -mindepth 1 -maxdepth 1 -type d \
+        -name 'rhyolite-repo-review-copilot.*' | sort
+)
+((${#hard_kill_homes[@]} == 2)) ||
+    fail 'The hard-kill fixture did not leave its two review runtime homes.'
+for hard_kill_home in "${hard_kill_homes[@]}"; do
+    for attempt in $(seq 1 50); do
+        flock -n -x "${hard_kill_home}" -c true && break
+        sleep 0.1
+    done
+done
+mkdir -m 700 -- "${hard_kill_root}/tmp/unrelated-directory"
+find "${hard_kill_root}/tmp" -exec touch -h -d '-2 hours' {} +
+MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${hard_kill_root}/tmp" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --output-root "${hard_kill_root}/sweep-output" \
+        --workspace-root "${hard_kill_root}/sweep-workspace" \
+        --non-interactive \
+        --no-open-html >"${hard_kill_root}/sweep.stdout" 2>&1 ||
+    {
+        cat -- "${hard_kill_root}/sweep.stdout" >&2
+        fail 'The runner after a hard kill did not complete its review.'
+    }
+for hard_kill_home in "${hard_kill_homes[@]}"; do
+    [[ ! -e "${hard_kill_home}" ]] ||
+        fail "The next runner start left the hard-killed runtime home ${hard_kill_home}."
+done
+[[ -d "${hard_kill_root}/tmp/unrelated-directory" ]] ||
+    fail 'The stale runtime-home sweep removed an unrelated directory.'
+
 # Parent death: a SIGKILL of the whole runner process group, as a harness
 # shell kill may send, must not orphan a review worker. Workers run under
 # `timeout` in their own process group, which that kill does not reach.
@@ -15972,6 +16479,904 @@ if [[ -n "${orphan_survivor}" ]]; then
     stop_mock_workers "${orphan_ready}"
     fail "A SIGKILL of the runner left review worker process ${orphan_survivor} running."
 fi
+
+
+# Multi-model security scans: up to three isolated security-only scans run
+# in parallel with an identical request, then the consolidation worker writes
+# the canonical report with a machine-validated ledger. Every case uses the
+# fixture Copilot home, so no real login reaches a runtime home.
+security_scan_root="${fixture_dir}/security-scans"
+mkdir -p -- "${security_scan_root}"
+security_scan_plan="${security_scan_root}/plan.json"
+
+expect_security_scan_rejection() {
+    local name="$1"
+    local summary="$2"
+    shift 2
+    local stderr_path="${security_scan_root}/${name}.stderr"
+    local status=0
+
+    PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World --scope 1 \
+        --plan-only --non-interactive \
+        --output-root "${security_scan_root}/rejected" "$@" \
+        >/dev/null 2>"${stderr_path}" || status=$?
+    [[ "${status}" -eq 2 ]] && grep -Fq -- "${summary}" "${stderr_path}" ||
+        fail "Security scan option case ${name} was not rejected with: ${summary}"
+}
+expect_security_scan_rejection count \
+    'The security scan count is invalid.' --security-scans 4
+expect_security_scan_rejection duplicate \
+    'Every security scan must use a different model.' \
+    --security-scans 2 --scan-model gpt-5.6-sol
+expect_security_scan_rejection single-consolidation \
+    'A consolidation model requires multiple security scans.' \
+    --security-scans 1 --consolidation-model claude-opus-5.5
+expect_security_scan_rejection quorum \
+    'The minimum successful security scans exceeds the scan count.' \
+    --security-scans 2 --min-successful-scans 3
+expect_security_scan_rejection too-many \
+    'Too many security scan models were requested.' \
+    --security-scans 2 --scan-model claude-opus-5.5 \
+    --scan-model claude-fable-5.1
+expect_security_scan_rejection too-many-derived \
+    'Too many security scan models were requested.' \
+    --scan-model claude-opus-5.5 --scan-model claude-fable-5.1 \
+    --scan-model gpt-6-sol
+expect_security_scan_rejection empty-effort \
+    'The security scan B model specification has an empty reasoning effort.' \
+    --security-scans 2 --scan-model claude-opus-5.5:
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    --security-scans 3 --scan-model claude-opus-5.5:high --scan-model default \
+    --consolidation-model default --min-successful-scans 2 \
+    --plan-only --non-interactive \
+    --output-root "${security_scan_root}/output" >"${security_scan_plan}" ||
+    fail 'Security scan plan-only resolution failed.'
+node - "${security_scan_plan}" <<'JS'
+const fs = require("fs");
+const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const scans = plan.SecurityScans;
+const models = scans.Scans.map((scan) => scan.Model);
+if (scans.Mode !== "multi-model" || scans.Count !== 3 ||
+    scans.ScanProtocol !== "RHYOLITE_SECURITY_SCAN_V1" ||
+    scans.IdenticalScanPrompt !== true || scans.ScanRelaunchLimit !== 1 ||
+    models[0] !== plan.Model || models[1] !== "claude-opus-5.5" ||
+    models[2] !== "claude-fable-5.1" ||
+    scans.Scans[1].ReasoningEffort !== "high" ||
+    scans.MinimumSuccessfulScans !== 2 ||
+    scans.MaxConcurrentWorkers !== 3 * plan.ThrottleLimit ||
+    JSON.stringify(scans.ScanReportRecovery) !==
+      JSON.stringify({ Mode: "same-session-continuation", Available: true, AttemptLimit: 1 }) ||
+    scans.Consolidation?.Model !== plan.Model ||
+    scans.Consolidation?.Protocol !== "RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1" ||
+    JSON.stringify(scans.Consolidation?.LedgerRecovery) !==
+      JSON.stringify({ Mode: "same-session-continuation", Available: true, AttemptLimit: 1 })) {
+  throw new Error(`unexpected SecurityScans plan: ${JSON.stringify(scans)}`);
+}
+const refusal = plan.RefusalPolicy;
+const writers = refusal?.ReportWriterCandidates ?? [];
+if (refusal?.Mode !== "report-and-continue" || refusal.ProtocolVersion !== 1 ||
+    refusal.UnapprovedModelFallback !== "never" || refusal.RefusingModelRetries !== 0 ||
+    refusal.RefusedModelReuse !== "never-for-the-same-repository" ||
+    refusal.ScanRefusal !== "skip-and-exclude-from-required-scans" ||
+    refusal.Handover !== "fresh-session-and-runtime-home" ||
+    JSON.stringify(writers.map((item) => [item.Model, item.Source])) !==
+      JSON.stringify([[plan.Model, "consolidation"], ["claude-opus-5.5", "scan-b"],
+        ["claude-fable-5.1", "scan-c"]]) ||
+    writers[1].ReasoningEffort !== "high" ||
+    JSON.stringify(refusal.ResearchCandidates) !== "[]") {
+  throw new Error(`unexpected RefusalPolicy plan: ${JSON.stringify(refusal)}`);
+}
+JS
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    --plan-only --non-interactive \
+    --output-root "${security_scan_root}/output" \
+    >"${security_scan_root}/single-plan.json" ||
+    fail 'Default single-scan plan-only resolution failed.'
+# Three scans tolerate one failed scan by default; two scans require both.
+for security_scan_quorum_case in '3 2' '2 2'; do
+    read -r security_scan_quorum_count security_scan_quorum_expected \
+        <<< "${security_scan_quorum_case}"
+    PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World --scope 1 \
+        --security-scans "${security_scan_quorum_count}" \
+        --plan-only --non-interactive \
+        --output-root "${security_scan_root}/output" \
+        >"${security_scan_root}/quorum-default-plan.json" ||
+        fail "Default quorum plan-only resolution failed for ${security_scan_quorum_count} scans."
+    node -e '
+const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (plan.SecurityScans.MinimumSuccessfulScans !== Number(process.argv[2])) {
+  throw new Error(`unexpected default quorum: ${plan.SecurityScans.MinimumSuccessfulScans}`);
+}' "${security_scan_root}/quorum-default-plan.json" "${security_scan_quorum_expected}" ||
+        fail "The default quorum for ${security_scan_quorum_count} scans is not ${security_scan_quorum_expected}."
+done
+node -e '
+const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const scans = plan.SecurityScans;
+if (scans.Mode !== "integrated" || scans.Count !== 1 ||
+    scans.ScanRelaunchLimit !== 0 || scans.Consolidation !== null ||
+    JSON.stringify(scans.ScanReportRecovery) !==
+      JSON.stringify({ Mode: "same-session-continuation", Available: false, AttemptLimit: 0 }) ||
+    scans.Scans.length !== 1 || scans.Scans[0].Model !== plan.Model) {
+  throw new Error("default plan is not one integrated security pass");
+}
+const writers = plan.RefusalPolicy.ReportWriterCandidates;
+if (writers.length !== 1 || writers[0].Model !== plan.Model || writers[0].Source !== "review") {
+  throw new Error("a single-model plan names a report-writer successor");
+}' "${security_scan_root}/single-plan.json"
+# Suggestions add vendor, then family diversity from the offline catalog and
+# never repeat the review model, with or without an explicit --model.
+for suggestion_arguments in '--model gpt-5.6-sol' ''; do
+    # shellcheck disable=SC2086
+    [[ "$(PATH="${mock_bin}:${PATH}" "${RUNNER}" --harness copilot \
+        --suggest-scan-models ${suggestion_arguments})" == \
+        $'claude-opus-5.5 anthropic\nclaude-fable-5.1 anthropic' ]] ||
+        fail "Security scan suggestions changed for: ${suggestion_arguments:-no model}"
+done
+[[ "$(PATH="${mock_bin}:${PATH}" "${RUNNER}" --harness copilot \
+    --suggest-scan-models --model gpt-5.6-sol --scan-model claude-opus-5.5:high)" == \
+    'claude-fable-5.1 anthropic' ]] ||
+    fail 'Security scan suggestions did not exclude a chosen scan model.'
+
+SECURITY_SCAN_CASE_SCOPE=1
+SECURITY_SCAN_CASE_DEFAULT_SCANS=(
+    --security-scans 3
+    --scan-model claude-opus-5.5
+    --scan-model claude-fable-5.1
+)
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
+run_security_scan_case() {
+    local name="$1"
+    shift
+    local case_root="${security_scan_root}/${name}"
+    local -a case_environment=()
+
+    while (($# > 0)) && [[ "$1" != -- ]]; do
+        case_environment+=("$1")
+        shift
+    done
+    (($# == 0)) || shift
+    mkdir -p -- "${case_root}/tmp"
+    : > "${mock_log}"
+    rm -f -- "${mock_log}".scan-request.* "${mock_log}.review-request" \
+        "${mock_log}.ledger-request" "${mock_log}".refused-* \
+        "${mock_log}".scan-report-request.*
+    set +e
+    env "${case_environment[@]}" \
+        RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
+        MOCK_EXPECT_USER='keychain-user' \
+        MOCK_EXPECT_PLAINTEXT=0 \
+        MOCK_RUNTIME_LOG="${runtime_log}" \
+        MOCK_LOG="${mock_log}" \
+        MOCK_GIT_LOG="${mock_git_log}" \
+        COPILOT_GITHUB_TOKEN=mock-token \
+        COPILOT_HOME="${metadata_copilot_home}" \
+        TMPDIR="${case_root}/tmp" \
+        GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+        GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+        PATH="${mock_bin}:${PATH}" \
+        "${RUNNER}" \
+            --repo https://github.com/octocat/Hello-World \
+            --scope "${SECURITY_SCAN_CASE_SCOPE}" \
+            "${SECURITY_SCAN_CASE_SCANS[@]}" \
+            --output-root "${case_root}/output" \
+            --workspace-root "${case_root}/workspace" \
+            --non-interactive \
+            --no-open-html "$@" >"${case_root}/stdout" 2>&1
+    SECURITY_SCAN_CASE_EXIT=$?
+    set -e
+    SECURITY_SCAN_CASE_REPOSITORY="$(
+        find "${case_root}/output" -mindepth 1 -maxdepth 1 -type d | head -n 1
+    )/github--octocat--hello-world"
+    if find "${case_root}/tmp" -mindepth 1 -maxdepth 1 \
+        -name 'rhyolite-*' -print -quit | grep -q .; then
+        fail "Security scan case ${name} left a runtime home behind."
+    fi
+}
+
+# Three scans: B writes loosely formatted findings and C reports none. A
+# commit subject with braces reaches every scan request unchanged.
+run_security_scan_case success \
+    MOCK_SCAN_LOOSE_MODEL=claude-opus-5.5 \
+    MOCK_SCAN_EMPTY_MODEL=claude-fable-5.1 \
+    'MOCK_GIT_SUBJECT=Render {{template}} blocks'
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/success/stdout" >&2
+    fail "Multi-model security scan run failed with exit ${SECURITY_SCAN_CASE_EXIT}."
+fi
+security_scan_requests=("${mock_log}".scan-request.*)
+((${#security_scan_requests[@]} == 3)) ||
+    fail 'Multi-model run did not start three scan workers.'
+for security_scan_request in "${security_scan_requests[@]}"; do
+    cmp -s -- "${security_scan_requests[0]}" "${security_scan_request}" ||
+        fail 'Security scan workers did not receive identical requests.'
+done
+grep -Fq 'Render {{template}} blocks' "${security_scan_requests[0]}" &&
+    ! grep -Eq '\{\{(REPOSITORY_URL|REPOSITORY_PATH|COMMIT|REVIEW_DATE|OUTPUT_DIRECTORY|REPOSITORY_METADATA)\}\}|REPOSITORY REVIEW REPORT$|claude-opus|gpt-5' \
+        "${security_scan_requests[0]}" ||
+    fail 'Security scan request lost the metadata, kept a placeholder, or named a model.'
+grep -Fxq 'RHYOLITE_SECURITY_CONSOLIDATION_V1' "${mock_log}.review-request" &&
+    grep -Eq 'Scan A: .*/security-scan-evidence/scan-a\.txt$' \
+        "${mock_log}.review-request" &&
+    grep -Fxq 'A-1' "${mock_log}.review-request" &&
+    grep -Fxq 'B-1' "${mock_log}.review-request" &&
+    grep -Fxq 'B-2' "${mock_log}.review-request" &&
+    ! grep -Fxq 'C-1' "${mock_log}.review-request" &&
+    ! grep -Fq 'claude-fable' "${mock_log}.review-request" ||
+    fail 'Consolidation request lost its scan evidence, finding IDs, or model blinding.'
+[[ ! -e "${mock_log}.ledger-request" ]] ||
+    fail 'A valid initial ledger still triggered a ledger request.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" "${security_scan_root}/success/workspace" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [repository, workspace] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "security-scans.json"), "utf8"));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const run = fs.readdirSync(workspace)[0];
+const evidence = fs.readFileSync(path.join(workspace, run,
+  "github--octocat--hello-world-session", "security-scan-evidence", "scan-b.txt"), "utf8");
+if (state.Status !== "Completed" || summary.SuccessfulScans !== 3 ||
+    summary.Scans.some((scan) => scan.Status !== "Completed" || scan.Attempts !== 1) ||
+    summary.Scans[1].FindingCount !== 2 || summary.Scans[2].FindingCount !== 0 ||
+    summary.Ledger.Status !== "Validated" || summary.Ledger.Request !== "NotNeeded" ||
+    summary.Ledger.Counts.merged !== 3 ||
+    !report.includes("REPOSITORY REVIEW REPORT") ||
+    !evidence.includes("- Finding B-1: Unchecked index") ||
+    !evidence.includes("- Finding B-2: Length arithmetic") ||
+    fs.existsSync(path.join(repository, "security-scans", "consolidation-final-reply.txt")) ||
+    fs.readdirSync(path.join(repository, "security-scans", "scan-a")).includes(".runtime-home")) {
+  throw new Error(`unexpected multi-scan result: ${JSON.stringify(summary)}`);
+}
+JS
+
+# In scope 2 every scan finishes before research starts, so no scan session
+# can see research evidence (the mock fails a scan that can), and research
+# and consolidation still run afterward.
+SECURITY_SCAN_CASE_SCOPE=2
+run_security_scan_case scope-two MOCK_SCAN_EMPTY_MODEL=claude-fable-5.1
+SECURITY_SCAN_CASE_SCOPE=1
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scope-two/stdout" >&2
+    fail "Scope 2 multi-model run failed with exit ${SECURITY_SCAN_CASE_EXIT}."
+fi
+[[ "$(sed -n 's/^PHASE=//p' "${mock_log}" | tr '\n' ' ')" == \
+    'rhyolite:repo-review-worker rhyolite:repo-review-worker rhyolite:repo-review-worker rhyolite:repo-research-worker rhyolite:repo-review-worker ' ]] ||
+    fail 'Scope 2 security scans did not all finish before research and consolidation.'
+grep -Fxq 'RHYOLITE_SECURITY_CONSOLIDATION_V1' "${mock_log}.review-request" &&
+    grep -Fq '/research-evidence/' "${mock_log}.review-request" ||
+    fail 'Scope 2 consolidation lost its research evidence or scan addendum.'
+
+# Scan B's first attempt ends with a transient model-service failure and scan
+# C's with a blocked automatic fallback that exits with status 0; each is
+# relaunched once with a fresh session and runtime home. The consolidation
+# reply has no ledger, so the same session is asked once for only the ledger.
+security_scan_transient_marker="${security_scan_root}/transient-once"
+security_scan_fallback_marker="${security_scan_root}/fallback-once"
+run_security_scan_case recovered \
+    MOCK_SCAN_TRANSIENT_MODEL=claude-opus-5.5 \
+    "MOCK_SCAN_TRANSIENT_MARKER=${security_scan_transient_marker}" \
+    MOCK_SCAN_FALLBACK_MODEL=claude-fable-5.1 \
+    "MOCK_SCAN_FALLBACK_MARKER=${security_scan_fallback_marker}" \
+    MOCK_LEDGER_MODE=missing
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/recovered/stdout" >&2
+    fail "Recovered multi-model run failed with exit ${SECURITY_SCAN_CASE_EXIT}."
+fi
+[[ "$(wc -l < "${security_scan_transient_marker}.attempts")" -eq 2 &&
+    "$(sort -u -- "${security_scan_transient_marker}.attempts" | wc -l)" -eq 2 ]] ||
+    fail 'A transient scan failure was not relaunched once with a fresh runtime home.'
+[[ "$(wc -l < "${security_scan_fallback_marker}.attempts")" -eq 2 &&
+    "$(sort -u -- "${security_scan_fallback_marker}.attempts" | wc -l)" -eq 2 ]] ||
+    fail 'A blocked scan fallback was not relaunched once with a fresh runtime home.'
+grep -Fq 'automatic fallback from the approved model' \
+    "${SECURITY_SCAN_CASE_REPOSITORY}/security-scans/scan-c/attempts/1/errors.txt" &&
+    ! grep -Fq 'automatic fallback' "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" ||
+    fail 'A blocked scan fallback was not archived with its scan or reached the repository errors.'
+grep -Fxq 'RHYOLITE SECURITY CONSOLIDATION LEDGER REQUEST' \
+    "${mock_log}.ledger-request" &&
+    grep -Fxq 'A-1' "${mock_log}.ledger-request" &&
+    grep -Fxq 'C-1' "${mock_log}.ledger-request" ||
+    fail 'The missing consolidation ledger was not requested for every scan finding ID.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scans = path.join(repository, "security-scans");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(path.join(scans, "security-scans.json"), "utf8"));
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "Completed" || summary.SuccessfulScans !== 3 ||
+    summary.Scans[1].Status !== "Completed" || summary.Scans[1].Attempts !== 2 ||
+    summary.Scans[2].Status !== "Completed" || summary.Scans[2].Attempts !== 2 ||
+    summary.Scans[0].Attempts !== 1 ||
+    !fs.existsSync(path.join(scans, "scan-b", "attempts", "1", "errors.txt")) ||
+    !fs.existsSync(path.join(scans, "evidence", "scan-c.txt")) ||
+    summary.Ledger.Status !== "Validated" || summary.Ledger.Request !== "Recovered" ||
+    summary.Ledger.Counts.confirmed !== 3 ||
+    state.WorkerRecovery.Continuations !== 1 ||
+    !report.includes("REPOSITORY REVIEW REPORT") ||
+    fs.existsSync(path.join(scans, "consolidation-report-unverified.txt"))) {
+  throw new Error(`unexpected recovery result: ${JSON.stringify(summary)}`);
+}
+JS
+
+# Scan B fails transiently twice, so its one relaunch is exhausted. Scan C's
+# first attempt records a blocked fallback and must be force-stopped by the
+# live monitor; it is relaunched, not treated as a timeout. Two of three
+# scans still satisfy the default quorum of two for three scans, and the
+# failed scan's evidence never reaches consolidation.
+security_scan_transient_always="${security_scan_root}/transient-always"
+printf 'always\n' > "${security_scan_transient_always}"
+run_security_scan_case quorum \
+    MOCK_SCAN_TRANSIENT_MODEL=claude-opus-5.5 \
+    "MOCK_SCAN_TRANSIENT_MARKER=${security_scan_transient_always}" \
+    MOCK_SCAN_EMPTY_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_STUBBORN_FALLBACK_MODEL=claude-fable-5.1 \
+    "MOCK_SCAN_STUBBORN_FALLBACK_MARKER=${security_scan_root}/stubborn-once"
+[[ "${SECURITY_SCAN_CASE_EXIT}" -eq 0 ]] ||
+    fail 'One failed scan of three violated the default two-scan quorum.'
+grep -Eq '^Security scan B \(claude-opus-5\.5 at [a-z]+\) did not complete: the model service failed and one fresh relaunch did not recover the scan\. See security-scans/scan-b/errors\.txt\.$' \
+    "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" &&
+    grep -Fxq 'Scan B: did not complete; no evidence from this scan is available' \
+        "${mock_log}.review-request" &&
+    ! grep -Fxq 'B-1' "${mock_log}.review-request" ||
+    fail 'A failed scan was not recorded or its evidence reached consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const scan = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-b", "scan-state.json"), "utf8"));
+const stopped = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "scan-state.json"), "utf8"));
+const stoppedErrors = fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "attempts", "1", "errors.txt"), "utf8");
+if (state.Status !== "Completed" || scan.Status !== "Failed" ||
+    scan.FailureClass !== "model-service" || scan.Attempts !== 2 ||
+    stopped.Status !== "Completed" || stopped.Attempts !== 2 ||
+    !stoppedErrors.includes("harness_detect_worker_violation")) {
+  throw new Error(`unexpected quorum scan states: ${JSON.stringify([scan, stopped])}`);
+}
+JS
+
+# Below the approved quorum, consolidation never starts and the repository
+# fails with a model-free failure analysis of the scan phase.
+run_security_scan_case quorum-failed MOCK_SCAN_FAIL_MODEL=claude-opus-5.5 \
+    -- --min-successful-scans 3
+[[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]] ||
+    fail 'A run below the approved scan quorum succeeded.'
+[[ ! -e "${mock_log}.review-request" ]] ||
+    fail 'Consolidation ran although the scan quorum failed.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+const scan = read("security-scans/scan-b/scan-state.json");
+const analysis = read("failure-analysis.json");
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "ReviewFailed" || summary.SuccessfulScans !== 2 ||
+    summary.MinimumSuccessfulScans !== 3 ||
+    summary.Ledger.Status !== "NotReached" ||
+    scan.Status !== "Failed" || scan.FailureClass !== "worker-failed" ||
+    analysis.Stage !== "security scans" ||
+    analysis.FailureClass !== "security-scans" ||
+    !analysis.RootCause.includes("scan B (claude-opus-5.5 at ") ||
+    !analysis.Artifacts.includes("security-scans/security-scans.json") ||
+    !report.includes("Only 2 of 3 security scans completed")) {
+  throw new Error(`scan quorum failure was not finalized truthfully: ${JSON.stringify(analysis)}`);
+}
+JS
+
+# --reuse-scans: a later plan reuses the validated reports of the completed
+# scans A and C of that failed run. It pins the earlier commit, binds each
+# report's SHA-256 digest into the approval hash, runs only scan B again,
+# and verifies every reused report again before consolidation.
+security_scan_reuse_folder="$(
+    find "${security_scan_root}/quorum-failed/output" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+grep -Fq -- "--reuse-scans ${security_scan_reuse_folder};" \
+    "${SECURITY_SCAN_CASE_REPOSITORY}/failure-analysis.md" ||
+    fail 'The failure analysis of a failed scan quorum does not recommend reusing the completed scans.'
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_reuse_folder}" \
+    --plan-only --non-interactive \
+    --output-root "${security_scan_root}/reuse-output" \
+    >"${security_scan_root}/reuse-plan.json" ||
+    fail 'A plan that reuses completed scans could not be resolved.'
+node - "${security_scan_root}/reuse-plan.json" "${security_scan_reuse_folder}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [planPath, folder] = process.argv.slice(2);
+const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+const scans = plan.SecurityScans;
+const labels = scans.Scans.map((scan) => (scan.Reuse ? scan.Reuse.Label : null));
+if (JSON.stringify(labels) !== JSON.stringify(["A", null, "C"]) ||
+    scans.ReuseSource?.RunFolder !== folder ||
+    scans.ReuseSource.RunId !== path.basename(folder) ||
+    !/^[0-9a-f]{40}$/.test(scans.ReuseSource.Commit) ||
+    plan.Sources[0].RequestedCommit !== scans.ReuseSource.Commit ||
+    !/^[0-9a-f]{64}$/.test(scans.Scans[0].Reuse.ReportSha256) ||
+    scans.Scans[0].Reuse.FindingCount !== 1 ||
+    scans.Scans[0].Reuse.RunId !== scans.ReuseSource.RunId) {
+  throw new Error(`unexpected reuse plan: ${JSON.stringify(scans)}`);
+}
+JS
+expect_security_scan_rejection reuse-single \
+    'Reusing security scans requires multiple security scans.' \
+    --security-scans 1 --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-not-run \
+    'The folder is not a Rhyolite run output folder.' \
+    --security-scans 2 --reuse-scans "${security_scan_root}/quorum-failed"
+expect_security_scan_rejection reuse-commit \
+    'The requested commit differs from the commit of the earlier run.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --commit 0000000000000000000000000000000000000001 \
+    --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-context \
+    'The earlier run used another harness, context tier, or scan protocol.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" --context default \
+    --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-models \
+    'No completed scan of the earlier run matches this plan.' \
+    --model gpt-6-sol --security-scans 2 --scan-model claude-opus-5.5 \
+    --reuse-scans "${security_scan_reuse_folder}"
+ln -s -- "${security_scan_reuse_folder}" "${security_scan_root}/reuse-link"
+expect_security_scan_rejection reuse-link \
+    'The earlier run output folder was not found.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_root}/reuse-link"
+security_scan_untrusted_folder="${security_scan_root}/untrusted/$(basename -- "${security_scan_reuse_folder}")"
+mkdir -p -- "${security_scan_root}/untrusted"
+cp -a -- "${security_scan_reuse_folder}" "${security_scan_untrusted_folder}"
+chmod g+w -- "${security_scan_untrusted_folder}"
+expect_security_scan_rejection reuse-untrusted \
+    'The earlier run output folder is not trusted.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_untrusted_folder}"
+run_security_scan_case scan-reuse -- --reuse-scans "${security_scan_reuse_folder}"
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-reuse/stdout" >&2
+    fail "A review that reuses completed scans failed (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+security_scan_reuse_requests=("${mock_log}".scan-request.*)
+((${#security_scan_reuse_requests[@]} == 1)) &&
+    [[ -f "${mock_log}.scan-request.claude-opus-5.5" ]] &&
+    grep -Fxq 'Scan A: completed; its validated report was reused from an earlier run of the same commit' \
+        "${mock_log}.review-request" &&
+    grep -Fxq 'Scan B: completed' "${mock_log}.review-request" &&
+    grep -Fxq 'A-1' "${mock_log}.review-request" &&
+    grep -Fxq 'B-1' "${mock_log}.review-request" &&
+    grep -Fxq 'C-1' "${mock_log}.review-request" ||
+    fail 'Reused scans started a worker or their evidence missed consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" "${security_scan_reuse_folder}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [repository, folder] = process.argv.slice(2);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+const [first, second, third] = summary.Scans;
+if (state.Status !== "Completed" || state.Commit !== state.RequestedCommit ||
+    summary.SuccessfulScans !== 3 ||
+    first.Status !== "Completed" || first.Attempts !== 0 ||
+    first.Reused?.RunId !== path.basename(folder) || first.Reused.Label !== "A" ||
+    second.Status !== "Completed" || second.Attempts !== 1 || second.Reused !== null ||
+    third.Reused?.Label !== "C" ||
+    fs.readFileSync(path.join(repository, "security-scans", "scan-a", "scan-report.txt"), "utf8") !==
+      fs.readFileSync(path.join(folder, "github--octocat--hello-world", "security-scans",
+        "scan-a", "scan-report.txt"), "utf8")) {
+  throw new Error(`reused scans were not imported truthfully: ${JSON.stringify(summary.Scans)}`);
+}
+JS
+# The reused report digests are approval-bound: a reused report that changes
+# after approval changes the plan, so execution stops before any scan runs.
+security_scan_reuse_hash="$(
+    node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).ApprovalHash)' \
+        "${security_scan_root}/reuse-plan.json"
+)"
+sed -i 's/^Fixture scan; no code was executed\.$/Fixture scan; no code was run./' \
+    "${security_scan_reuse_folder}/github--octocat--hello-world/security-scans/scan-c/scan-report.txt"
+security_scan_reuse_status=0
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_reuse_folder}" \
+    --expected-plan-hash "${security_scan_reuse_hash}" --non-interactive \
+    --output-root "${security_scan_root}/reuse-output" \
+    >/dev/null 2>"${security_scan_root}/reuse-tampered.stderr" ||
+    security_scan_reuse_status=$?
+[[ "${security_scan_reuse_status}" -eq 2 ]] &&
+    grep -Fq 'approved plan changed; regenerate and reconfirm' \
+        "${security_scan_root}/reuse-tampered.stderr" ||
+    fail 'A reused scan report that changed after approval did not invalidate the approved plan.'
+
+# Scan C's context is compacted and it answers in its own layout, as in run
+# 20261026-170519. The runner asks the same session once, with the exact
+# validator diagnostic and the full scan report contract, for only its
+# report; the conforming resend completes the scan without a relaunch.
+run_security_scan_case scan-report-recovered \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_COMPACT_MODEL=claude-fable-5.1
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-recovered/stdout" >&2
+    fail "A same-session scan report request did not recover scan C (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+security_scan_report_request="${mock_log}.scan-report-request.claude-fable-5.1"
+[[ -f "${security_scan_report_request}" ]] &&
+    grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${security_scan_report_request}" &&
+    grep -Fxq 'The trusted runner could not accept your security scan report: The scan report must contain the section SCAN CONTEXT exactly once.' \
+        "${security_scan_report_request}" &&
+    [[ "$(sed -n '/^RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/,/^END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/p' \
+        "${security_scan_report_request}")" == "${scan_report_contract}" ]] &&
+    [[ "$(grep -c '^AGENT=rhyolite:repo-review-worker CONTINUATION$' "${mock_log}")" -eq 1 ]] &&
+    grep -Fxq 'C-1' "${mock_log}.review-request" ||
+    fail 'The scan report request lost its diagnostic or contract, or its findings missed consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scanDirectory = path.join(repository, "security-scans", "scan-c");
+const scan = JSON.parse(fs.readFileSync(path.join(scanDirectory, "scan-state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "security-scans.json"), "utf8"));
+const timeline = fs.readFileSync(path.join(scanDirectory, "analysis-timeline.txt"), "utf8");
+if (scan.Status !== "Completed" || scan.Attempts !== 1 || scan.FindingCount !== 1 ||
+    scan.ReportRequest !== "Recovered" || scan.Compactions !== 1 ||
+    summary.Scans[0].ReportRequest !== "NotNeeded" || summary.SuccessfulScans !== 3 ||
+    !timeline.includes("=== Rhyolite security scan C: same-session scan report request ===") ||
+    !fs.existsSync(path.join(scanDirectory, "report-request-reply.txt")) ||
+    fs.existsSync(path.join(scanDirectory, "attempts"))) {
+  throw new Error(`the scan report request did not recover scan C: ${JSON.stringify(scan)}`);
+}
+JS
+
+# A resend that still breaks the contract fails the scan without a fresh
+# relaunch; the default quorum of two of three scans still consolidates the
+# other two, and the diagnostic names the report request and the compaction.
+run_security_scan_case scan-report-never \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_COMPACT_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_REPORT_REQUEST_MODE=never
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-never/stdout" >&2
+    fail "One invalid scan report of three failed the default two-scan quorum (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scan = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "scan-state.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (scan.Status !== "Failed" || scan.FailureClass !== "invalid-report" ||
+    scan.Attempts !== 1 || scan.ReportRequest !== "Failed" || scan.Compactions !== 1 ||
+    !scan.Diagnostic.includes("one same-session request for only the report did not correct it") ||
+    !scan.Diagnostic.includes("compacted the scan context 1 time,") ||
+    !errors.includes("Security scan C (claude-fable-5.1 at ")) {
+  throw new Error(`an uncorrected scan report was not reported truthfully: ${JSON.stringify(scan)}`);
+}
+JS
+
+# A continuation that itself fails, before any reply, is classified by its
+# own failure, never as a report the model declined to correct.
+run_security_scan_case scan-report-continuation-failed \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_REPORT_REQUEST_MODE=fail
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-continuation-failed/stdout" >&2
+    fail "A failed scan report continuation failed the default two-scan quorum (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scan = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "scan-state.json"), "utf8"));
+if (scan.Status !== "Failed" || scan.FailureClass !== "worker-failed" ||
+    scan.Attempts !== 1 || scan.ReportRequest !== "NotCompleted" ||
+    !scan.Diagnostic.includes("the same-session request for only its report did not complete") ||
+    scan.Diagnostic.includes("did not correct it")) {
+  throw new Error(`a failed scan report continuation was misclassified: ${JSON.stringify(scan)}`);
+}
+JS
+
+# A consolidation session that never returns a valid ledger keeps its report
+# only as non-canonical evidence.
+run_security_scan_case ledger-never MOCK_LEDGER_MODE=never
+[[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]] ||
+    fail 'A consolidation report without a valid ledger was accepted.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scans = path.join(repository, "security-scans");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(path.join(scans, "security-scans.json"), "utf8"));
+const analysis = JSON.parse(fs.readFileSync(path.join(repository, "failure-analysis.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+const unverified = fs.readFileSync(path.join(scans, "consolidation-report-unverified.txt"), "utf8");
+if (state.Status !== "ReviewFailed" || summary.Ledger.Status !== "Invalid" ||
+    summary.Ledger.Request !== "Failed" ||
+    !errors.includes("Security consolidation ledger validation failed") ||
+    analysis.FailureClass !== "security-consolidation" ||
+    !report.includes("did not account for every security scan finding") ||
+    !unverified.includes("REPOSITORY REVIEW REPORT")) {
+  throw new Error("an invalid consolidation ledger did not fail the repository review");
+}
+JS
+
+# Contract v9 provider refusals (RefusalPolicy). A scan whose model the
+# provider declines is skipped without a relaunch and does not count against
+# the required scans; its evidence never reaches consolidation, and the
+# refusal, with the approved prompt budget and largest prompt, is reported.
+run_security_scan_case scan-refused MOCK_REFUSE_SCAN_MODELS=claude-opus-5.5
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-refused/stdout" >&2
+    fail "A declined security scan failed the review (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+[[ "$(wc -l < "${mock_log}.refused-scan.claude-opus-5.5")" -eq 1 ]] &&
+    grep -Fxq 'Scan B: declined by its model provider (content refusal); no evidence from this scan is available' \
+        "${mock_log}.review-request" &&
+    ! grep -Fxq 'B-1' "${mock_log}.review-request" &&
+    grep -Eq '^Security scan B \(claude-opus-5\.5 at [a-z]+\) was declined by its model provider \(content refusal\)' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" &&
+    grep -Fxq 'Worker prompt size: largest recorded prompt 185172 tokens; approved prompt budget 968000 tokens.' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/security-scans/scan-b/errors.txt" ||
+    fail 'A declined scan was retried, not reported, or its evidence reached consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const run = path.dirname(repository);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+const scan = summary.Scans[1];
+const refusals = state.ProviderRefusals;
+const event = refusals?.Events?.[0] ?? {};
+const runState = JSON.parse(fs.readFileSync(path.join(run, "state.json"), "utf8"));
+const index = fs.readFileSync(path.join(run, "index.html"), "utf8");
+const handoff = fs.readFileSync(path.join(repository, "handoff.md"), "utf8");
+const line = "1 provider refusal (security-scan B on claude-opus-5.5)";
+if (state.Status !== "Completed" || scan.Status !== "Refused" ||
+    scan.FailureClass !== "provider-refusal" || scan.Attempts !== 1 ||
+    summary.RefusedScans !== 1 || summary.EffectiveMinimumSuccessfulScans !== 2 ||
+    summary.SuccessfulScans !== 2 || summary.Ledger.Status !== "Validated" ||
+    refusals.Count !== 1 || event.Phase !== "security-scan" || event.Label !== "B" ||
+    event.Model !== "claude-opus-5.5" || event.PromptBudget !== 968000 ||
+    event.PeakPromptTokens !== 185172 || event.FallbackModel !== "" ||
+    refusals.ReportWriter?.Model !== state.Model || refusals.ReportWriter.Handovers !== 0 ||
+    runState.Repositories[0].ProviderRefusals?.Count !== 1 ||
+    runState.RefusalPolicy?.Mode !== "report-and-continue" ||
+    !index.includes("<th>Provider refusals</th>") || !index.includes(line) ||
+    !handoff.includes(`Provider refusals:\n\n    ${line}`) ||
+    fs.existsSync(path.join(repository, "security-scans", "scan-b", "attempts"))) {
+  throw new Error(`a declined scan was not skipped truthfully: ${JSON.stringify([summary, refusals])}`);
+}
+JS
+
+# Every scan declined: no scan evidence remains, the required scans drop to
+# zero, and the consolidation pass, on a model that no scan used, still runs
+# its own complete security pass.
+run_security_scan_case scans-all-refused \
+    MOCK_REFUSE_SCAN_MODELS=gpt-5.6-sol,claude-opus-5.5,claude-fable-5.1 \
+    -- --model gpt-5.6-sol --consolidation-model gpt-6-sol
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scans-all-refused/stdout" >&2
+    fail "Declining every scan model stopped the consolidation pass (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+grep -Fxq 'None. No security scan completed, so no scan evidence is available.' \
+    "${mock_log}.review-request" &&
+    grep -Fxq 'None. No scan reported a finding, so no ledger is required.' \
+        "${mock_log}.review-request" ||
+    fail 'A consolidation request without scan evidence did not say so.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+if (state.Status !== "Completed" || state.Model !== "gpt-6-sol" ||
+    summary.SuccessfulScans !== 0 || summary.RefusedScans !== 3 ||
+    summary.EffectiveMinimumSuccessfulScans !== 0 ||
+    state.ProviderRefusals.Count !== 3 ||
+    state.ProviderRefusals.ReportWriter?.Source !== "consolidation" ||
+    state.ProviderRefusals.ReportWriter.Handovers !== 0) {
+  throw new Error(`declined scans did not leave a consolidation pass: ${JSON.stringify([summary, state.ProviderRefusals])}`);
+}
+JS
+
+# A declined report writer hands the same request over, in a fresh session,
+# to the next approved candidate (the scan B model); the refused attempt is
+# archived and never reaches the canonical report.
+run_security_scan_case writer-refused MOCK_REFUSE_REVIEW_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/writer-refused/stdout" >&2
+    fail "A declined report writer was not handed over (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+cmp -s -- "${mock_log}.refused-review-request.gpt-5.6-sol" \
+    "${mock_log}.review-request" &&
+    grep -Fq 'Report writer handover: the model provider declined gpt-5.6-sol at max (content refusal), so the review continued with claude-opus-5.5 at max (scan B model), an approved model, in a fresh session.' \
+        "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" ||
+    fail 'The handover did not reuse the exact request or report the declined model.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const attempt = read("report-writer/attempts/1/attempt.json");
+const summary = read("security-scans/security-scans.json");
+const refusals = state.ProviderRefusals;
+const report = fs.readFileSync(path.join(repository, "review.txt"), "utf8");
+if (state.Status !== "Completed" || state.Model !== "claude-opus-5.5" ||
+    refusals.Count !== 1 || refusals.Events[0].Phase !== "report-writer" ||
+    refusals.Events[0].Label !== "attempt 1" || refusals.Events[0].Model !== "gpt-5.6-sol" ||
+    refusals.ReportWriter?.Model !== "claude-opus-5.5" ||
+    refusals.ReportWriter.Source !== "scan-b" || refusals.ReportWriter.Handovers !== 1 ||
+    attempt.Outcome !== "refused" || attempt.Model !== "gpt-5.6-sol" ||
+    attempt.Source !== "consolidation" ||
+    !fs.existsSync(path.join(repository, "report-writer", "attempts", "1", "errors.txt")) ||
+    summary.Ledger.Status !== "Validated" ||
+    !report.includes("REPOSITORY REVIEW REPORT") ||
+    fs.existsSync(path.join(repository, "failure-analysis.json")) ||
+    fs.existsSync(path.join(repository, ".refused-outcome.json"))) {
+  throw new Error(`a declined report writer was not handed over truthfully: ${JSON.stringify(refusals)}`);
+}
+JS
+
+# With no other approved model, a declined report writer fails the review
+# with a provider-refusal analysis that explains the harness's prompt-budget
+# error as the fallback model's limit, not the approved model's.
+SECURITY_SCAN_CASE_SCANS=(--security-scans 1)
+run_security_scan_case writer-refused-alone MOCK_REFUSE_REVIEW_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
+[[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]] ||
+    fail 'A declined review without another approved model succeeded.'
+grep -Fq 'Stage: provider refusal' "${security_scan_root}/writer-refused-alone/stdout" ||
+    fail 'The runner did not report the provider-refusal stage.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const analysis = read("failure-analysis.json");
+if (state.Status !== "ReviewFailed" || state.ProviderRefusals.Count !== 1 ||
+    analysis.Stage !== "provider refusal" || analysis.FailureClass !== "provider-refusal" ||
+    analysis.ProviderRefusals !== 1 || analysis.PromptBudget !== 968000 ||
+    analysis.PeakPromptTokens !== 185172 ||
+    !analysis.RootCause.includes("does not describe the approved model, whose budget was 968000 tokens with a largest recorded prompt of 185172 tokens") ||
+    fs.existsSync(path.join(repository, "report-writer", "attempts"))) {
+  throw new Error(`a declined review was not analyzed truthfully: ${JSON.stringify(analysis)}`);
+}
+JS
+
+# A declined research worker hands research over to the next approved model
+# with a fresh broker and network log; that model also writes the report,
+# because the declined model is never used again for the repository.
+SECURITY_SCAN_CASE_SCOPE=2
+SECURITY_SCAN_CASE_SCANS=(--security-scans 2 --scan-model claude-opus-5.5)
+run_security_scan_case research-refused MOCK_REFUSE_RESEARCH_MODEL=gpt-5.6-sol \
+    -- --model gpt-5.6-sol
+SECURITY_SCAN_CASE_SCOPE=1
+SECURITY_SCAN_CASE_SCANS=("${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}")
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/research-refused/stdout" >&2
+    fail "A declined research worker was not handed over (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+[[ "$(wc -l < "${mock_log}.refused-research")" -eq 1 ]] ||
+    fail 'The declined research model was retried.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const research = read("research/research-state.json");
+const attempt = read("research/attempts/1/attempt.json");
+const refusals = state.ProviderRefusals;
+if (state.Status !== "Completed" || state.Model !== "claude-opus-5.5" ||
+    refusals.Count !== 1 || refusals.Events[0].Phase !== "research" ||
+    refusals.Events[0].Model !== "gpt-5.6-sol" ||
+    refusals.Research?.Model !== "claude-opus-5.5" || refusals.Research.Handovers !== 1 ||
+    refusals.ReportWriter?.Model !== "claude-opus-5.5" || refusals.ReportWriter.Handovers !== 1 ||
+    research.Status !== "Completed" || research.Model !== "claude-opus-5.5" ||
+    research.Attempts.Count !== 2 || research.Attempts.RefusalHandovers !== 1 ||
+    research.Attempts.Relaunches !== 0 || research.Attempts.Archived.length !== 1 ||
+    attempt.Outcome !== "refused" || attempt.Model !== "gpt-5.6-sol") {
+  throw new Error(`a declined research worker was not handed over truthfully: ${JSON.stringify([research, refusals])}`);
+}
+JS
+
+# Stopping the runner during parallel scans stops every scan worker, records
+# each scan as Interrupted, and removes every scan runtime home.
+security_scan_interrupt_root="${security_scan_root}/interrupt"
+security_scan_interrupt_pids="${security_scan_interrupt_root}/pids"
+mkdir -p -- "${security_scan_interrupt_pids}" "${security_scan_interrupt_root}/tmp"
+MOCK_SCAN_BLOCK_PID_DIRECTORY="${security_scan_interrupt_pids}" \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    COPILOT_GITHUB_TOKEN=mock-token \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    TMPDIR="${security_scan_interrupt_root}/tmp" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 1 \
+        --security-scans 2 \
+        --output-root "${security_scan_interrupt_root}/output" \
+        --workspace-root "${security_scan_interrupt_root}/workspace" \
+        --non-interactive \
+        --no-open-html >"${security_scan_interrupt_root}/stdout" 2>&1 &
+security_scan_interrupt_runner=$!
+for attempt in $(seq 1 120); do
+    [[ "$(find "${security_scan_interrupt_pids}" -type f | wc -l)" -ge 2 ]] && break
+    kill -0 "${security_scan_interrupt_runner}" 2>/dev/null || break
+    sleep 0.5
+done
+[[ "$(find "${security_scan_interrupt_pids}" -type f | wc -l)" -ge 2 ]] || {
+    kill "${security_scan_interrupt_runner}" 2>/dev/null || true
+    cat -- "${security_scan_interrupt_root}/stdout" >&2
+    fail 'Security scan interrupt fixture did not start two blocked scans.'
+}
+kill -TERM "${security_scan_interrupt_runner}"
+set +e
+wait "${security_scan_interrupt_runner}"
+security_scan_interrupt_exit=$?
+set -e
+for security_scan_pid_file in "${security_scan_interrupt_pids}"/*; do
+    if kill -0 "$(cat -- "${security_scan_pid_file}")" 2>/dev/null; then
+        kill -KILL "$(cat -- "${security_scan_pid_file}")" 2>/dev/null || true
+        fail 'Stopping the runner left a security scan worker running.'
+    fi
+done
+[[ "${security_scan_interrupt_exit}" -eq 143 ]] ||
+    fail "Interrupted multi-scan runner exited ${security_scan_interrupt_exit}, expected 143."
+if find "${security_scan_interrupt_root}/tmp" -mindepth 1 -maxdepth 1 \
+    -name 'rhyolite-*' -print -quit | grep -q .; then
+    fail 'Stopping the runner left a security scan runtime home behind.'
+fi
+security_scan_interrupt_run="$(
+    find "${security_scan_interrupt_root}/output" -mindepth 1 -maxdepth 1 -type d | head -n 1
+)"
+node - "${security_scan_interrupt_run}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = path.join(process.argv[2], "github--octocat--hello-world");
+const scans = path.join(repository, "security-scans");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(path.join(scans, "security-scans.json"), "utf8"));
+for (const slug of ["a", "b"]) {
+  const scan = JSON.parse(fs.readFileSync(
+    path.join(scans, `scan-${slug}`, "scan-state.json"), "utf8"));
+  if (scan.Status !== "Interrupted" || scan.FailureClass !== "interrupted" ||
+      fs.existsSync(path.join(scans, `scan-${slug}`, ".runtime-home"))) {
+    throw new Error(`scan ${slug} recorded ${scan.Status}, expected Interrupted without a runtime home`);
+  }
+}
+if (state.Status !== "Interrupted" || summary.Ledger.Status !== "NotReached") {
+  throw new Error(`interrupted multi-scan repository recorded ${state.Status}`);
+}
+JS
 
 while IFS= read -r -d '' path; do
     if head -c 3 "${path}" | grep -q $'^\xEF\xBB\xBF'; then

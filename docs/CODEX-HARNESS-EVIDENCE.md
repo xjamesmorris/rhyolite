@@ -10,7 +10,9 @@ the tested shell-free Codex configuration. Advertising those tools in a
 local model catalog did not add them. On October 20, 2026 the maintainer
 approved a separate offline snapshot-read MCP mode in the existing bundled
 Python broker. Its runtime, bounded grants, negative tests, and shared
-Contract-v9 seam are implemented on the development branch. On October 21,
+snapshot-transport seam (first numbered Contract v9 on the development branch,
+now Contract v11 after the merge of the shipped refusal and compaction
+contracts) are implemented on the development branch. On October 21,
 credential-free probes captured the complete Codex inventory with that
 transport and exercised its read/search and denial boundaries. The
 same day's additional synthetic probes verified exact final-message bytes,
@@ -18,7 +20,7 @@ explicit-thread history restoration, and a fresh zero-tool session. These
 are bounded interface proofs, not completed review/recovery/repair protocols.
 A single maintainer-run authenticated call then returned the exact expected
 reply without a timeout, rate limit, quota error, or reroute warning. An
-unregistered adapter candidate now implements the Contract-v9 functions and
+unregistered adapter candidate now implements the Contract-v11 functions and
 passes focused fixture validation plus an exact pinned-CLI snapshot integration.
 The remaining live eligibility and product-integration gates are still
 unverified.
@@ -119,6 +121,7 @@ broker lifecycle and removed its transient runtime.
 | Staged native setup/approval and controller | An unregistered Codex manifest contains only two setup skills. The setup skill collects output/scope/provenance/cookie choices through `request_user_input`; the approval skill returns only run/edit/explain/cancel. One Bash helper installs those assets into a private per-stage Codex home, validates the exact native session record and strict JSON result, then destroys the home. A pinned-CLI PTY probe installed the actual staged plugin, loaded the real setup skill, rendered two native pickers in Default mode with only `request_user_input`, selected output and scope, and verified the final setup JSON/session. A second Bash controller generates the authoritative plan, displays it, preserves setup across edit or date/hash rollover, owns execution, accepts exact `/rhyolite:status`, `stop`, and `cancel`, and uses only the runner's verified `--request-stop` path after the run folder exists. The shared launcher's Codex branch is tested only in a copied plugin whose fixed registry is modified for that fixture. | The recommended two-stage native setup plus Bash-owned execution design is implemented without shell/MCP runner authority. No root Codex marketplace manifest or production registry entry exists, so the branch remains unreachable in production. |
 | Staged controller terminal handoff | On October 22, a connected controller/stage-helper PTY regression reproduced setup failure when the controller discarded helper stdout: the native CLI no longer had terminal stdout. The stage helper now routes native UI stdout to its terminal stderr, reserving helper stdout for the validated result path. A terminal-checking fixture CLI exercises both setup and approval, plan-hash execution, and per-stage runtime removal with controller stdout captured separately. | This closes the deterministic terminal-descriptor handoff regression. The fixture is not a real Codex CLI or an authenticated staged controller review. |
 | Current native API-key readiness | On October 23 (UTC), the installed 0.163.0 CLI was verified and the supplied credential was compared locally with its saved API-key-only login without displaying either value. A fresh owner-only runtime with only that API-key credential passed native login-status inspection, recorded the requested `gpt-5.6-sol`/`max` and 828,400-token usable context, and made no tool calls, but the actual model request returned HTTP 401 from the native default OpenAI endpoint. Local effective-config inspection found no selected custom provider or Azure endpoint. A subsequent metadata-only capture from the working terminal confirmed the same native-default provider and no API-key environment variables or routing overrides. Transient credentials and raw output were removed. | Local credential loading is proven; current backend authorization is not. This does not invalidate the earlier explicitly configured-provider smoke, establish a bad key, or justify guessing another endpoint. Establish the intended provider and successful backend authorization before another live gate; another context capture is not required. |
+| Contract-v11 outcome classification | On October 27, the merged branch moved the candidate to Contract v11 and outcome schema 3. Pinned 0.163.0 source fixes the evidence: exec JSON reports a reroute only as `model rerouted: FROM -> TO (REASON)`, whose only reason is `HighRiskCyberActivity`; a `response.incomplete` with reason `content_filter` surfaces as the fixed message `stream disconnected before completion: Incomplete response returned, reason: content_filter`; cyber, bio, and misalignment policy errors fall back to fixed messages and HTTP 400 bodies keep their error code; error events are never written to the session rollout; and the rollout records `token_count` usage per response plus one `compacted` record per compaction window. Synthetic fixtures cover a refusal reroute, a content-filter turn, a policy fallback, a transient 429 retry-limit failure, a quota failure, prompt budget and peak, and deduplicated compactions. | A refusal of the approved model is `refused`, detected live and after exit, never retried, and its fallback output is never accepted. A policy message worded by the server without those forms stays an ordinary failure. This is pinned-source and fixture evidence, not a live refusal. |
 
 Confidence is **High** for the captured pinned-CLI request inventories and
 configuration results: they came from the pinned executable, not a model's
@@ -144,6 +147,15 @@ At the pinned commit:
   MCP servers rather than reading local filesystem URIs directly.
 - `codex-rs/rmcp-client/src/stdio_server_launcher.rs` sends `SIGTERM` to the
   owned MCP process group and escalates to a kill after two seconds.
+- `codex-rs/protocol/src/protocol.rs` defines `HighRiskCyberActivity` as the
+  only `ModelRerouteReason`; `codex-rs/exec/src/event_processor_with_jsonl_output.rs`
+  renders a reroute as an `error` item and drops structured error information
+  from exec JSON.
+- `codex-rs/codex-api/src/sse/responses.rs`, `sse/responses_error.rs`, and
+  `api_bridge.rs` map content-filter, cyber, bio, and misalignment refusals;
+  `codex-rs/protocol/src/error.rs` fixes their messages.
+- `codex-rs/rollout/src/policy.rs` keeps `token_count`, `compacted`, and turn
+  context records and omits error events from the rollout.
 
 Official source references:
 

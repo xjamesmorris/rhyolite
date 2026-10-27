@@ -10,6 +10,8 @@ model=''
 reasoning_effort=''
 context_tier=''
 initial_output=''
+commit=''
+auto_defaults=0
 declare -a repositories=()
 
 fail_controller() {
@@ -59,6 +61,18 @@ while (($# > 0)); do
             repositories+=("$2")
             shift 2
             ;;
+        --commit)
+            [[ $# -ge 2 && -z "${commit}" &&
+                "$2" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] ||
+                fail_controller arguments
+            commit="$2"
+            shift 2
+            ;;
+        --auto-defaults)
+            ((auto_defaults == 0)) || fail_controller arguments
+            auto_defaults=1
+            shift
+            ;;
         *)
             fail_controller arguments
             ;;
@@ -73,6 +87,8 @@ done
     "${model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
     "${reasoning_effort}" =~ ^[a-z]{1,32}$ &&
     ${#repositories[@]} -gt 0 ]] || fail_controller validation
+[[ -z "${commit}" || ${#repositories[@]} -eq 1 ]] ||
+    fail_controller validation
 
 stage_helper="${plugin_root}/scripts/run-codex-guided-stage.sh"
 runner="${plugin_root}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
@@ -130,9 +146,10 @@ PY
 
 print_scope_explanation() {
     printf '%s\n' \
-        'Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.' \
+        'Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.' \
         'Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.' \
-        'Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.' \
+        'Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.' \
+        'Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.' \
         'All timing ranges are rough and can increase substantially for large repositories or broad topics.'
 }
 
@@ -173,43 +190,53 @@ PY
 
 while true; do
     setup_sequence=$((setup_sequence + 1))
-    setup_input="${session_directory}/codex-setup-${setup_sequence}.txt"
-    setup_result="${session_directory}/codex-setup-${setup_sequence}.json"
-    rm -f -- "${setup_result}"
-    {
-        printf '%s\n' 'RHYOLITE_CODEX_SETUP_INPUT_V1'
-        printf 'CurrentDirectoryOutput=%s/rhyolite-output/repo-review\n' \
-            "${working_directory%/}"
-        printf 'HomeDirectoryOutput=%s/rhyolite-output/repo-review\n' \
-            "${HOME%/}"
-        printf 'CurrentOutput=%s\n' "${current_output}"
-        printf 'CurrentScope=%s\n' "${current_scope}"
-        printf 'CurrentProvenanceLookbackMonths=%s\n' "${current_lookback}"
-        printf 'CurrentResearchCookies=%s\n' "${current_cookies}"
-        printf '%s\n' 'END_RHYOLITE_CODEX_SETUP_INPUT_V1'
-    } > "${setup_input}"
-    chmod 600 -- "${setup_input}"
-    "${stage_helper}" \
-        --stage setup \
-        --plugin-root "${plugin_root}" \
-        --working-directory "${working_directory}" \
-        --input "${setup_input}" \
-        --result "${setup_result}" \
-        --model "${model}" \
-        --reasoning-effort "${reasoning_effort}" \
-        --context "${context_tier}" >/dev/null ||
-        fail_controller setup
-    read_setup_result "${setup_result}" || fail_controller setup-result
-    [[ "${setup_values[0]}" != cancel ]] || exit 0
-    [[ "${setup_values[0]}" == continue ]] || fail_controller setup-action
-    current_output="${setup_values[1]}"
-    current_scope="${setup_values[2]}"
-    current_lookback="${setup_values[3]}"
-    current_cookies="${setup_values[4]}"
+    if ((auto_defaults && setup_sequence == 1)); then
+        # --auto-defaults accepts the home output and scope 1 without a setup
+        # question; the effective plan still needs explicit approval.
+        current_output="${HOME%/}/rhyolite-output/repo-review"
+        current_scope=1
+        current_lookback=NULL
+        current_cookies=NULL
+    else
+        setup_input="${session_directory}/codex-setup-${setup_sequence}.txt"
+        setup_result="${session_directory}/codex-setup-${setup_sequence}.json"
+        rm -f -- "${setup_result}"
+        {
+            printf '%s\n' 'RHYOLITE_CODEX_SETUP_INPUT_V1'
+            printf 'CurrentDirectoryOutput=%s/rhyolite-output/repo-review\n' \
+                "${working_directory%/}"
+            printf 'HomeDirectoryOutput=%s/rhyolite-output/repo-review\n' \
+                "${HOME%/}"
+            printf 'CurrentOutput=%s\n' "${current_output}"
+            printf 'CurrentScope=%s\n' "${current_scope}"
+            printf 'CurrentProvenanceLookbackMonths=%s\n' "${current_lookback}"
+            printf 'CurrentResearchCookies=%s\n' "${current_cookies}"
+            printf '%s\n' 'END_RHYOLITE_CODEX_SETUP_INPUT_V1'
+        } > "${setup_input}"
+        chmod 600 -- "${setup_input}"
+        "${stage_helper}" \
+            --stage setup \
+            --plugin-root "${plugin_root}" \
+            --working-directory "${working_directory}" \
+            --input "${setup_input}" \
+            --result "${setup_result}" \
+            --model "${model}" \
+            --reasoning-effort "${reasoning_effort}" \
+            --context "${context_tier}" >/dev/null ||
+            fail_controller setup
+        read_setup_result "${setup_result}" || fail_controller setup-result
+        [[ "${setup_values[0]}" != cancel ]] || exit 0
+        [[ "${setup_values[0]}" == continue ]] || fail_controller setup-action
+        current_output="${setup_values[1]}"
+        current_scope="${setup_values[2]}"
+        current_lookback="${setup_values[3]}"
+        current_cookies="${setup_values[4]}"
+    fi
 
+    # The offline snapshot transport keeps the integrated security pass.
     declare -a runner_arguments=(
         --harness codex
-        --fleet-mode standard
+        --security-scans 1
         --model "${model}"
         --reasoning-effort "${reasoning_effort}"
         --context "${context_tier}"
@@ -222,6 +249,9 @@ while true; do
     for repository in "${repositories[@]}"; do
         runner_arguments+=(--repo "${repository}")
     done
+    if [[ -n "${commit}" ]]; then
+        runner_arguments+=(--commit "${commit}")
+    fi
     if [[ "${current_scope}" == 3 ]]; then
         runner_arguments+=(--provenance-lookback-months "${current_lookback}")
     fi

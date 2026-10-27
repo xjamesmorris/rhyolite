@@ -73,6 +73,17 @@ case "${stage}" in setup|approval) ;; *) fail_stage stage ;; esac
     "${result_path}" == /* && ! -e "${result_path}" &&
     "${model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
     "${reasoning_effort}" =~ ^[a-z]{1,32}$ ]] || fail_stage validation
+# The native questions need the user's terminal: input on stdin and the
+# Codex UI on stderr, because stdout is reserved for the result path.
+[[ -t 0 && -t 2 ]] || fail_stage terminal
+# Workers run with TERM=dumb; only this interactive session keeps a usable
+# terminal type.
+stage_terminal_type="${TERM-}"
+case "${stage_terminal_type}" in
+    '' | dumb | unknown) stage_terminal_type='xterm-256color' ;;
+esac
+[[ "${stage_terminal_type}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]] ||
+    stage_terminal_type='xterm-256color'
 
 common="${plugin_root}/lib/harness/common.sh"
 adapter="${plugin_root}/lib/harness/codex.sh"
@@ -170,7 +181,7 @@ printf '%s\n' \
     'Complete the native Rhyolite questions. After the one-line JSON result appears, press Ctrl-D to return to the launcher.' >&2
 set +e
 # Keep the native UI on the terminal when the controller discards result stdout.
-env "${stage_environment[@]}" \
+env "${stage_environment[@]}" "TERM=${stage_terminal_type}" \
     "${codex_bin}" \
     --no-daemon \
     --no-alt-screen \

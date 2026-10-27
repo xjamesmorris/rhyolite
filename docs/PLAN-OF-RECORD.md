@@ -34,9 +34,9 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
   harnesses. Claude Code was approved after the evidence recorded in
   [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md). The fixed harness
   registry remains limited to those two IDs. The Codex workstream now has an
-  unregistered Contract-v9 adapter candidate and focused synthetic integration
+  unregistered Contract-v11 adapter candidate and focused synthetic integration
   evidence; that does not change production support or launcher choices.
-  The Contract-v9 seam does not advertise or imply support for other CLIs.
+  The Contract-v11 seam does not advertise or imply support for other CLIs.
 
 Contributions and test reports for other Linux flavors can help establish
 compatibility evidence, but do not replace the Fedora Linux 44 release gate.
@@ -65,9 +65,9 @@ decision; compatibility must not be preserved speculatively.
   and LLM development contract. Tool-specific files point to it rather than
   maintaining divergent policy copies.
 - [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) describes the implemented
-  Contract-v9 seam.
+  Contract-v11 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
-  playbook for Contract v9 and any future production adapter.
+  playbook for Contract v11 and any future production adapter.
 - The contract retains approval-bound harness execution identity and validated runtime
   selection into approval-bound data using plan schema 5 and state schema 6.
   Its provider summary is a validated
@@ -106,7 +106,22 @@ decision; compatibility must not be preserved speculatively.
   assembled report passes unchanged strict finalization. Every failed
   repository gets a deterministic `failure-analysis.md` and
   `failure-analysis.json`.
-- Contract v9 adds the explicit `harness_snapshot_transport` and
+- Contract v9 makes a provider refusal of the approved model its own
+  `refused` worker outcome, detected live and after exit in any event order,
+  with the approved prompt budget and largest prompt recorded. The
+  approval-bound `RefusalPolicy` never retries a refusing model or accepts a
+  model outside the plan: a declined security scan is skipped and excluded
+  from the required scans, and a declined report writer or research worker
+  hands over, in a fresh session, to the next approved model that the
+  provider has not declined for the repository.
+- Contract v10 adds the context compactions recorded in each worker session
+  to the worker outcome (schema 3). Both worker agents repeat the security
+  scan report contract in their own instructions, which compaction keeps;
+  a scan session that ends without a valid report is asked once, in the same
+  session, for only its report; three-scan plans require two scans by
+  default; and `--reuse-scans` reuses the verified reports of completed scans
+  from an earlier run of the same repository and commit.
+- Contract v11 adds the explicit `harness_snapshot_transport` and
   `harness_configure_snapshot_transport` seam, keeping native Copilot/Claude
   readers and introducing approval-bound `SnapshotTransport` only for the
   fixed offline MCP protocol. [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md)

@@ -43,12 +43,15 @@ other Linux flavors are welcome; see [Contributing](CONTRIBUTING.md).
    To review several repositories in one run, list every URL, for example
    `./rhyolite --repo https://github.com/owner/one https://github.com/owner/two`.
 
-3. Press Enter at each launcher prompt to accept the default execution
-   mode, model, reasoning effort, and context. Copilot CLI then opens with
+3. Press Enter at each launcher prompt to accept the default model,
+   reasoning effort, context, and
+   [security scans](#multi-model-security-scans), or add `--auto-defaults`
+   to accept every default without a prompt. Copilot CLI then opens with
    the `repo-review` agent selected and starts guided setup, as in the
    screenshot above.
-4. Answer the numbered setup questions for the output location and review
-   scope. Choose `Scope 1 - Core repository review` for your first run.
+4. If you did not use `--auto-defaults`, answer the numbered setup questions
+   for the output location and review scope. Choose
+   `Scope 1 - Core repository review` for your first run.
 5. Check the `EFFECTIVE REVIEW PLAN`, then select `Run review`.
 6. While the review runs, type `/rhyolite:status` to check progress, or
    `stop` to cancel it.
@@ -79,8 +82,8 @@ The current plugin combines:
   are available.
 - Claude Code agents, commands, and display-only hooks registered by
   `plugins/rhyolite/.claude-plugin/plugin.json`.
-- A Linux Bash launcher that collects public sources, native fleet mode
-  (Copilot CLI only), and the review model before selecting the restricted
+- A Linux Bash launcher that collects public sources and the review model
+  before selecting the restricted
   agent from a clean non-Git orchestration directory.
 - The `readonly-repository-review` skill.
 - A private `research-source-assessment` skill that maps fresh,
@@ -146,6 +149,19 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
 - **Strongly recommended:** select `1 - Core repository review` for the
   first run; broader scopes can be resource-intensive and long-running.
 
+## Known limitations
+
+- **Security-file coverage:** the security pass must inspect every
+  security-relevant tracked file, but the runner does not independently
+  verify which files the worker opened. Reports may omit unopened files
+  from their limitations. A clean report means no qualifying defects were
+  identified, not proof of exhaustive coverage or absence of vulnerabilities.
+- **Host sleep:** Rhyolite does not keep the host awake. Sleep pauses model
+  work, but counts against the wall-clock time remaining for same-session
+  recovery and consolidation-ledger requests. Keep the host awake during a
+  review; otherwise recovery can run out of time even when little model work
+  has occurred.
+
 ## Install from a published marketplace
 
 Register the marketplace repository:
@@ -202,8 +218,7 @@ non-Git directory. It passes `--plugin-dir`, selects the
 `rhyolite:repo-review` agent, uses `--strict-mcp-config`, and adds a
 permission rule that allows only the bundled runner. The outer session keeps
 Claude Code's normal permission prompts; `--yolo` maps to
-`--dangerously-skip-permissions` for that launch only. Claude Code has no
-native fleet mode, so `--fleet-mode native` is rejected.
+`--dangerously-skip-permissions` for that launch only.
 
 The guided setup, effective plan, approval, scopes 1-3, research questions,
 progress, and completion summary match the Copilot experience. The setup
@@ -224,9 +239,12 @@ shorthand is a Copilot extension and does not exist in Claude Code. Exact
 - **Model substitution:** Claude Code safeguards can stop a response and
   continue with another model, for example from Fable 5.1 to Opus 4.8, or
   from Opus 5.5 to Opus 5 on security-heavy content. Rhyolite checks every
-  worker turn in the session record and fails the review rather than accept
-  output from a model or effort other than the approved one. Rerun with
-  another model, such as `claude-opus-5`.
+  worker turn in the session record and never accepts output from a model or
+  effort other than the approved one. It reports such a safeguard handover
+  as a provider refusal, stops the worker, and continues only with another
+  model in your approved plan (see
+  [Provider refusals](#provider-refusals)); with no other approved model, the
+  review fails. Rerun with another model, such as `claude-opus-5`.
 - **Authentication:** run `claude auth login` from a clean non-Git
   directory, or export `CLAUDE_CODE_OAUTH_TOKEN` (from
   `claude setup-token`) or `ANTHROPIC_API_KEY`. When no supported
@@ -300,7 +318,10 @@ writes, prompt mutation, or environment/auth inspection.
 
 After `/rhyolite:start`, compatible `/rhyolite:repo-review`, or the
 `/repo-review` shorthand, a display-only prompt hook recognizes only the
-exact manual start command and emits the large plaque. It ignores
+exact manual start command and emits the large plaque. Copilot CLI hands a
+prompt command to that hook inside its fixed skill-invocation sentence,
+`The user explicitly invoked the "/rhyolite:start" skill.`; the hook
+recognizes that sentence only at the start of the prompt. It ignores
 internal resumes, marker-bearing continuations, launcher prompts, and
 unrelated user text; it does not modify the prompt or persist state. The
 visual treatment is limited to
@@ -341,10 +362,9 @@ if that fails, run `copilot login` from a clean non-Git directory,
 complete sign-in, and retry.
 
 Launcher-guided setup collects one or more anonymously readable public
-HTTPS Git repository URLs, fleet mode, and model before Copilot starts.
-Manual in-session setup asks for the same source and model information;
-because native fleet mode is process-level, choosing it from a manual
-session requires restarting through the launcher. Rhyolite does not
+HTTPS Git repository URLs and the model before Copilot starts.
+Manual in-session setup asks for the same source and model information.
+Rhyolite does not
 discover local repositories, inspect local origins, or offer filesystem
 paths as review sources. If the orchestration directory is inside a Git
 worktree, the runner stops and requires a clean restart before planning
@@ -355,8 +375,8 @@ stage without resetting collected answers:
 
 - `help` **without a leading slash** reruns the full static panel, then
   immediately shows a
-  `CURRENT SETUP STATUS` block with live `Source`, `Fleet mode`,
-  `Model`, `Remember settings`, `Output`, `Scope`, and
+  `CURRENT SETUP STATUS` block with live `Source`,
+  `Model`, `Security scans`, `Remember settings`, `Output`, `Scope`, and
   `Provenance lookback months` and `Research cookies` values or
   `NOT SELECTED`.
 - `status` **without a leading slash** shows the same live
@@ -381,16 +401,16 @@ analysis.
 The agent asks one question at a time:
 
 1. Which source to review.
-2. Whether to continue in standard mode or restart through the launcher
-   for native fleet mode when setup did not come from the launcher.
-3. Which available review model to use, with an option to list model IDs from
+2. Which available review model to use, with an option to list model IDs from
    Copilot's offline catalog.
-4. Which reasoning effort to use.
-5. Which context tier to use.
-6. Whether to confirm the validated harness/model/effort/context settings or
+3. Which reasoning effort to use.
+4. Which context tier to use.
+5. Whether to confirm the validated harness/model/effort/context settings or
    modify one of them.
-7. Whether to remember fleet/model/effort/context settings for the selected
-   repositories after plan approval.
+6. How many [security scans](#multi-model-security-scans) to run, which
+   model each extra scan uses, and which model consolidates them.
+7. Whether to remember model/effort/context and security scan settings for
+   the selected repositories after plan approval.
 8. Whether the output parent is the current directory, home directory,
    or a custom location.
 9. Which review scope to use.
@@ -400,6 +420,10 @@ The agent asks one question at a time:
 12. After those answers are collected, the agent requests the runner's
    authoritative planning output and presents an `EFFECTIVE REVIEW PLAN`.
    It then asks whether to `Run review`, `Edit setup`, or `Explain scope`.
+
+The launcher answers the runtime and security scan questions before Copilot
+starts, and `--auto-defaults` answers every question that the command line
+left open, so guided setup goes straight to the `EFFECTIVE REVIEW PLAN`.
 
 Every finite setup or confirmation decision uses Copilot CLI's native
 numbered `ask_user` picker rather than a prose list. The CLI adds the
@@ -439,9 +463,10 @@ subdirectories.
 The scope UI first prints these as separate lines:
 
 ```text
-Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.
+Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.
 Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.
-Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.
+Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.
+Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.
 All timing ranges are rough and can increase substantially for large repositories or broad topics.
 ```
 
@@ -534,6 +559,16 @@ paywalls, authentication, robots restrictions, removals, or network
 policy. Inaccessible resources and ranked retrieval priorities stay in
 the report; completion does not ask the user to retrieve, copy, or re-fetch
 them.
+
+Every scope runs the same full, dedicated security pass in the review
+worker, with the same approved model, reasoning effort, context tier, and
+session time limit. The pass maps trust boundaries, privilege transitions,
+externally reachable entry points, and untrusted-input parsers, then inspects
+every security-relevant tracked file instead of sampling, and records any
+area it could not cover as a limitation. Scopes `2` and `3` add research and
+provenance work around it; they never deepen or shorten it. Scope `1`
+therefore suits reviews that need the complete security pass and core review
+without public research or provenance analysis.
 
 Every scope includes an exact
 `AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT`. It covers prompt
@@ -650,7 +685,7 @@ The plan JSON also supplies an `ApprovalHash`, which the agent must
 retain and pass back unchanged to the actual runner with
 `--expected-plan-hash`. The actual review must reuse
 the same resolved inputs that were accepted in the `EFFECTIVE REVIEW
-PLAN`. Fleet mode, model, whether settings will be remembered, and
+PLAN`. The model, whether settings will be remembered, and
 `OpenHtmlPolicy` are part of the plan and approval hash. Guided plan-only and
 execution calls both pass `--no-open-html`, so that policy remains `never`
 without changing between approval and execution. The `EFFECTIVE REVIEW PLAN` summary
@@ -664,8 +699,7 @@ for other scopes, provenance window is shown as disabled. If the user
 selects `Edit setup`, the agent uses another numbered picker for
 `Source`, `Model`, `Output`, `Scope`, or `Research cookies`, re-asks
 only that field, preserves the others, clears provenance when scope is
-not `3`, clears cookies for scope `1`, and regenerates the plan. Fleet
-mode cannot change in an already-running process.
+not `3`, clears cookies for scope `1`, and regenerates the plan.
 Exact `Change scope` is still accepted as a shortcut into editing `Scope`.
 
 Scope 2/3 plans also surface and hash `ResearchTransport`:
@@ -710,6 +744,144 @@ For programmatic invocation, installed plugin agents are namespaced:
 copilot --agent rhyolite:repo-review --prompt "..."
 ```
 
+## Multi-model security scans
+
+Different models reviewing the same commit report materially different
+security defects, and one run can confidently clear an area that another
+run shows to be broken. Rhyolite can therefore run up to three independent
+security scans of each repository, each on a different model, and
+consolidate them into the one canonical report.
+
+- Scan A always uses the review model, reasoning effort, and context.
+  Scans B and C use other models, preferably from another vendor or model
+  family. The scans run in parallel, each in its own isolated session and
+  runtime home, with the identical security-only request and the same
+  read-only tools; no scan sees another scan's work.
+- Scans run right after the read-only snapshot is prepared and before any
+  research, so they never see research evidence, and their request is the
+  same in every scope. Their findings reach the reviewer's working directory
+  only when the consolidation review starts, so the research worker, the
+  only session with public network access, never sees them.
+- The consolidation review then runs on the consolidation model, by
+  default the review model. It performs its own complete security pass and
+  the normal review, verifies every scan finding at its cited `path:line`,
+  merges duplicates, decides severity disagreements from the evidence, and
+  treats one scan's clearance of an area as unverified when another scan
+  reports a finding there. Scans are labelled only A, B, and C, never by
+  model.
+- The runner requires a consolidation ledger that classifies every scan
+  finding exactly once as `confirmed`, `merged`, `refined`, or `rejected`.
+  If the reply has no valid ledger, the runner asks the same session once
+  for only the ledger. A report whose ledger still fails is kept only as
+  `security-scans/consolidation-report-unverified.txt`, and the review
+  fails.
+- A scan that ends with a transient model-service failure or a blocked
+  automatic model fallback is relaunched once with a fresh session. A scan
+  whose session ends normally without a valid scan report is asked once, in
+  the same session, for only its report, with the exact problem and the full
+  report contract. Both worker agents also repeat that contract in their own
+  instructions, because automatic context compaction can replace the scan
+  request with a summary during a long scan. A scan
+  whose model provider declines the request (a content refusal) is reported,
+  skipped, and never relaunched on that model, and it does not count against
+  the required scans. The review fails before consolidation when fewer than
+  the approved minimum of the remaining scans succeed; by default two of
+  three scans, or both of two scans, must succeed. When every scan is
+  declined, the consolidation review still runs its own complete security
+  pass.
+- To avoid repeating completed scans after a failed run, approve a new plan
+  with `--reuse-scans <run output folder>`. Rhyolite reuses the validated
+  report of each completed scan whose repository, commit, harness, context
+  tier, model, and reasoning effort match the new plan, pins the earlier
+  commit, and runs only the other scans and the consolidation. Each reused
+  report's SHA-256 digest is part of the approved plan and is verified again
+  before the consolidation review reads it. The folder and its files must
+  belong to you, must not be symbolic links, and must not be writable by
+  other users. `failure-analysis.md` names the folder when completed scans
+  can be reused.
+- Each repository uses one model session per scan plus the consolidation
+  review, so two scans use about three times the model sessions of a single
+  integrated security pass. With Copilot CLI, the launcher also checks each
+  additional model with one short request (one premium request each).
+
+The scan count, every scan model and effort, the consolidation model, the
+minimum successful scans, the same-session scan report request, and any
+reused scan reports are part of the approved `EFFECTIVE REVIEW PLAN`, so
+changing any of them requires a new approval.
+
+### Provider refusals
+
+A model provider can decline a request (a content refusal), most often on
+security-heavy content. Copilot CLI and Claude Code then try an automatic
+fallback to another model. Rhyolite never accepts that fallback: it stops the
+worker as soon as the refusal is recorded, reports it, and never retries the
+declined model for the same repository. The approval-bound `RefusalPolicy`
+in the effective plan lists what happens next:
+
+- A declined security scan is skipped and excluded from the required scans.
+- A declined report writer hands the same request over, in a fresh session,
+  to the next approved model that has not been declined: the consolidation
+  model, the review model, then the scan B and scan C models. A declined
+  research worker hands over the same way with a fresh broker and network
+  log.
+- When no approved model remains, the review fails at stage
+  `provider refusal`.
+
+`state.json`, `manifest.json`, the handoffs, and the HTML index record every
+refusal under `ProviderRefusals`, and the executive summary names the
+declined model and the model that wrote the report. After a refusal, Copilot
+CLI may report "Request exceeds the model's prompt budget" with a small
+limit such as 128,000 tokens. That limit belongs to the fallback model it
+tried, not to your approved model; `failure-analysis.md` shows the approved
+prompt budget and the largest recorded prompt.
+
+### Choose scan models
+
+After you confirm the review runtime, the interactive launcher asks for the
+scan count (two by default), each extra scan model, and the consolidation
+model. It first offers the choices approved last time for the same
+repositories; otherwise it suggests models from another vendor or model
+family. Every choice can also be given on the command line:
+
+```text
+--security-scans 1|2|3|default         Number of scans; 1 keeps the
+                                       single integrated security pass.
+--scan-model MODEL[:EFFORT]|default    Model for scan B; repeat for scan C.
+--consolidation-model MODEL[:EFFORT]|default
+--min-successful-scans N|default       Scans that must succeed (default:
+                                       2 of 3, otherwise every scan).
+--reuse-scans RUN_FOLDER               Reuse the completed scans of an
+                                       earlier run of the same commit.
+--commit SHA                           Review this exact commit.
+--model default                        Review model without a prompt.
+--reasoning-effort default             Review effort without a prompt.
+--auto-defaults                        Accept the default for every choice
+                                       not given on the command line.
+```
+
+`default` selects without a prompt: the remembered choice when one exists,
+otherwise a suggested model from another vendor or family for a scan and
+the review model for consolidation. A model without `:EFFORT` uses the
+review reasoning effort. `--context` has no such keyword, because `default`
+is itself a context tier. `--auto-defaults` also answers the guided-setup
+questions with their defaults (output `~/rhyolite-output/repo-review` and
+scope `1`), so the only remaining step is approving the
+`EFFECTIVE REVIEW PLAN`:
+
+```bash
+./rhyolite --repo https://github.com/owner/repository --auto-defaults
+```
+
+Without a terminal and without `--auto-defaults` or a scan option, the
+launcher leaves the scan questions to guided setup. `--commit` and
+`--reuse-scans` apply to exactly one repository. When you edit the security
+scans at plan approval, guided setup also asks how many must succeed. The
+direct runner accepts the same `--security-scans`, `--scan-model`,
+`--consolidation-model`, `--min-successful-scans`, `--reuse-scans`, and
+`--commit` options and defaults to one scan plus one per `--scan-model`.
+`run-parallel-reviews.sh --harness copilot --suggest-scan-models --model
+<review model>` prints up to three suggested `MODEL VENDOR` lines.
+
 ## Conference and CFP review triage
 
 Program committees and other reviewers can use Rhyolite to triage projects
@@ -736,8 +908,9 @@ acting on it.
 ```
 
 For one exact commit, add `--commit <full-sha>`. Session timeouts
-default by scope to 60, 120, and 240 minutes respectively;
-`--timeout-minutes` overrides the default up to 720 minutes.
+default to 240 minutes for every scope, so scope never shortens the review
+or its security pass; `--timeout-minutes` overrides the default up to 720
+minutes.
 
 Repository-list files must contain only public HTTPS URLs, one per line.
 Local paths are rejected explicitly. The global commit option is valid
@@ -758,7 +931,16 @@ unique user-only temporary runtime home, never into the read-only
 checkout. Authentication variables are marked secret for child tools.
 After the child exits, the runner persists only sanitized settings and
 allowlisted session-state/session-store files, then deletes the temporary
-runtime home.
+runtime home. A runner stopped with `SIGKILL` cannot delete it, so each
+later review start removes your `rhyolite-*` runtime homes under `TMPDIR`
+that no running process holds and that have not changed for 60 minutes;
+the launcher does the same for `model-check-<n>` homes in its session
+directories. To clean up sooner, first make sure no Rhyolite review or
+launcher is running, then delete the leftover
+`${TMPDIR:-/tmp}/rhyolite-repo-*` and
+`${TMPDIR:-/tmp}/rhyolite-report-repair*` directories and any
+`${XDG_STATE_HOME:-~/.local/state}/rhyolite/launcher/sessions/*/model-check-*`
+directories.
 
 Add `--harness claude` to run Claude Code workers instead. The runner then
 uses the Claude Code authentication described in
@@ -862,6 +1044,22 @@ Each repository output directory creates:
   - mode-0700 `network/private/` with mode-0600 `cookies.jsonl`,
     `body-manifest.jsonl`, and content-addressed
     `bodies/<sha256>.bin`.
+- `security-scans/`, only with two or three
+  [security scans](#multi-model-security-scans):
+  - `security-scans.json`: every scan's model, effort, status, attempts,
+    finding count, failure class, same-session report request result
+    (`ReportRequest`), context compactions, and reuse source (`Reused`),
+    plus the consolidation ledger status.
+  - `scan-a/`, `scan-b/`, and `scan-c/`: the scan report, sanitized
+    timeline, transcript, errors, `scan-state.json`, agent state, any
+    same-session report request with its reply, and any relaunched attempt
+    under `attempts/1/`.
+  - `evidence/`: each completed scan report with its findings relabelled
+    `A-1`, `B-2`, and so on, exactly as the consolidation review read it.
+  - `request.txt`, the identical scan request; `finding-ids.txt`; the
+    rendered `consolidation-addendum.txt`; `consolidation-ledger.json`; and,
+    when the ledger failed, the non-canonical
+    `consolidation-report-unverified.txt`.
 - `review-plan.json` and companion review-plan artifacts, when produced
   by the installed runner's plan-only mode, containing the authoritative
   pre-run plan shown as `EFFECTIVE REVIEW PLAN`.
@@ -893,7 +1091,9 @@ evidence, and recommended repair actions. When the approved model rejects
 only the approved reasoning effort, that analysis names the next highest
 effort, never below `high`, and the guided agent asks whether to use it,
 choose another model, or stop; either change regenerates the effective plan,
-which you approve again before anything runs.
+which you approve again before anything runs. The analysis distinguishes a
+provider refusal (`provider-refusal`) from a genuine overflow of the approved
+model's prompt budget (`context-limit`).
 
 The runners anonymously clone every target into a separate workspace, pin
 the reviewed commit, and create a read-only `.git`-free source snapshot
@@ -1064,7 +1264,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v8 implementation playbook is in
+Contract-v10 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
@@ -1157,7 +1357,7 @@ outside every Git worktree, pass `--plugin-dir`, preselect
 preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
-endpoint, ask whether to use native Copilot fleet mode, and confirm the
+endpoint and confirm the
 validated review runtime. Known model choices are `gpt-5.6-sol`
 (recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
 list the model IDs in Copilot's offline catalog, as reported by
@@ -1182,9 +1382,13 @@ unchanged.
 Reasoning effort is selectable as `max` (recommended), `xhigh`, or `high`;
 context is selectable as `long_context` (recommended) or `default`. The
 launcher displays harness, model, effort, and context together and asks the
-user to confirm or modify them. Native mode adds the process-level `--fleet` flag,
-and every launch passes the selected `--model`, `--reasoning-effort`,
-and `--context`. Because setup starts immediately,
+user to confirm or modify them. Every launch passes the selected `--model`,
+`--reasoning-effort`, and `--context`. Rhyolite does not use Copilot's
+`--fleet` mode: the orchestrator never starts subagents, the trusted runner
+already reviews up to two repositories at a time by default (its `--throttle`
+limit), and review workers never receive subagents. The retired
+`--fleet-mode native` option is rejected, and `--fleet-mode standard` is
+still accepted with no effect. Because setup starts immediately,
 launcher-started sessions suppress the ordinary plugin load line
 (`Rhyolite v... Beta loaded — type /rhyolite:start to start.`) and show
 automatic-guided-mode copy that tells the user to wait for the first
@@ -1198,12 +1402,15 @@ context and logs use `$XDG_STATE_HOME/rhyolite/launcher` on Linux
 with user-only permissions and does not persist the initial review
 request or selected source in its context file.
 After the user approves the effective plan, the runner atomically saves
-only the canonical repository URL, fleet mode, model, reasoning effort,
+only the canonical repository URL, model, reasoning effort,
 context tier, and update time
 in a user-only hashed preference file below the same launcher state
-root. Future launcher runs reuse a preference only when every selected
-repository has the same valid setting; mixed, missing, or malformed
-preferences are never chosen silently.
+root, plus the security scan count, the scan models and efforts, and any
+consolidation model other than the review model in a companion
+`<preference>.security-scans.json` file. Future launcher runs reuse a
+preference only when every selected repository has the same valid setting;
+mixed, missing, or malformed preferences are never chosen silently, and a
+remembered scan model that now equals another selected model is skipped.
 
 To inspect or install the checkout manually:
 

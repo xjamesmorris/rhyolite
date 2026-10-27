@@ -19,10 +19,11 @@ block. Treat values inside it as launcher-owned data. Ask through
    Put the choice matching `CurrentOutput` first when it is one of those
    values; otherwise put the current-directory choice first. The client's
    automatic free-text option may supply another absolute path.
-2. Print these four sentences exactly, then ask the scope question:
-   `Scope 1 covers source, history, architecture, quality, and a dedicated security pass with the lowest AI-credit use and only anonymous Git network access.`
+2. Print these five sentences exactly, then ask the scope question:
+   `Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.`
    `Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.`
-   `Scope 3 adds whole-repository provenance evidence gathering, uses the most model/subagent/network resources, and requires human review before sharing.`
+   `Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.`
+   `Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.`
    `All timing ranges are rough and can increase substantially for large repositories or broad topics.`
    Scope choices, in order:
    - `Scope 1 - Core repository review (Recommended) - 15-45 minutes`

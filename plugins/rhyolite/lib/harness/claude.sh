@@ -244,7 +244,7 @@ def bounded(text):
 
 def escalate(new_status):
     global status
-    if status == "verified":
+    if status == "verified" or (new_status == "refused" and status == "substituted"):
         status = new_status
 
 
@@ -315,8 +315,10 @@ for index, raw_line in enumerate(raw_lines):
         escalate("subagent")
     if record_type == "system":
         flush_resume()
+        # A safeguard handover means the provider declined the approved
+        # model; the fallback model's turns that follow are never accepted.
         if record.get("subtype") == "model_refusal_fallback":
-            escalate("substituted")
+            escalate("refused")
         content = record.get("content")
         if content:
             blocks.append(("### Claude Code notice", indent(content)))
@@ -352,6 +354,8 @@ for index, raw_line in enumerate(raw_lines):
         cut_message = None
     elif record_type == "assistant":
         used_model = message.get("model")
+        if used_model == model and message.get("stop_reason") == "refusal":
+            escalate("refused")
         if used_model not in (model, "<synthetic>"):
             escalate("substituted")
         if record.get("advisorModel"):
@@ -565,7 +569,7 @@ harness_capability() {
         shell_denial|structured_questions|web_research|builtin_research_specialist)
             printf '%s\n' 'yes'
             ;;
-        fleet|subagents|builtin_security_specialist|final_message_file)
+        subagents|builtin_security_specialist|final_message_file)
             printf '%s\n' 'no'
             ;;
         # Verified live with Claude Code 2.1.303: a print-mode review worker
@@ -1248,6 +1252,10 @@ harness_finalize_research_session() {
             rhyolite_harness_set_error \
                 'Claude Code answered the research phase with a model other than the approved model; Rhyolite does not accept substituted research.'
             ;;
+        refused)
+            rhyolite_harness_set_error \
+                'The model provider declined a research request to the approved model (Claude Code recorded a content refusal); Rhyolite never accepts research from a model outside the approved plan.'
+            ;;
         effort-changed)
             rhyolite_harness_set_error \
                 'Claude Code recorded a research reasoning effort other than the approved effort.'
@@ -1273,8 +1281,8 @@ harness_normalize_worker_output() {
 
 # Scan the complete session records appended since the saved cursor for the
 # same evidence the post-exit verification rejects. Prints one status token
-# (clean, substituted, effort-changed, subagent, unreadable, or unwritable)
-# followed by one safe detail line.
+# (clean, refused, substituted, effort-changed, subagent, unreadable, or
+# unwritable) followed by one safe detail line.
 claude_scan_session_record() {
     local session_jsonl="$1"
     local approved_model="$2"
@@ -1328,11 +1336,15 @@ lines = raw_bytes.split(b"\n")
 lines = lines[:-1]
 consumed = sum(len(line) + 1 for line in lines)
 violation = None
+refusal = None
 
 
 def escalate(status, detail=""):
-    global violation
-    if violation is None:
+    global violation, refusal
+    if status == "refused":
+        if refusal is None:
+            refusal = (status, detail)
+    elif violation is None or (status == "subagent" and violation[0] != "subagent"):
         violation = (status, detail)
 
 
@@ -1350,7 +1362,7 @@ for raw_line in lines:
     record_type = record.get("type")
     if record_type == "system":
         if record.get("subtype") == "model_refusal_fallback":
-            escalate("substituted", "model_refusal_fallback")
+            escalate("refused", "model_refusal_fallback")
         continue
     if record_type != "assistant":
         continue
@@ -1358,6 +1370,8 @@ for raw_line in lines:
     if not isinstance(message, dict):
         continue
     used_model = message.get("model")
+    if used_model == model and message.get("stop_reason") == "refusal":
+        escalate("refused", "refusal")
     if used_model not in (model, "<synthetic>"):
         escalate("substituted", safe_token(used_model))
     if record.get("advisorModel"):
@@ -1372,6 +1386,10 @@ try:
     cursor_path.chmod(0o600)
 except OSError:
     finish("unwritable", "The Claude Code session cursor could not be written.")
+if violation is not None and violation[0] == "subagent":
+    finish(*violation)
+if refusal is not None:
+    finish(*refusal)
 if violation is None:
     finish("clean")
 finish(*violation)
@@ -1381,10 +1399,11 @@ PY
 # Live enforcement while a worker runs. Claude Code print mode writes only the
 # final reply to stdout, so the private session record under the isolated
 # runtime home is scanned incrementally for another model, an advisor model,
-# another effort, a model-refusal fallback notice, or a sidechain (subagent)
-# record. Until the record exists there is nothing to check, and the
-# report-repair child persists no session, so those cases are verified once
-# the worker exits.
+# another effort, or a sidechain (subagent) record, and for a provider refusal
+# of the approved model: a `refusal` stop or a model-refusal fallback notice.
+# Until the record exists there is nothing to check, and the report-repair
+# child persists no session, so those cases are verified once the worker
+# exits.
 harness_detect_worker_violation() {
     local phase="$1"
     local raw_output="$2"
@@ -1435,6 +1454,11 @@ harness_detect_worker_violation() {
     case "${status}" in
         clean)
             return 0
+            ;;
+        refused)
+            rhyolite_harness_set_error \
+                "The model provider declined a request to the approved model in the ${phase} phase (Claude Code recorded a content refusal); Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan."
+            return "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}"
             ;;
         substituted)
             rhyolite_harness_set_error \
@@ -1532,9 +1556,27 @@ substituted = False
 limit_hits = 0
 last_stop = None
 last_error = False
+refusals = 0
+unapproved_models = []
+peak_prompt = None
+compactions = set()
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def prompt_tokens(usage):
+    if not isinstance(usage, dict):
+        return None
+    total = 0
+    for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+        value = usage.get(key)
+        if type(value) is int and value > 0:
+            total += value
+    return total if 0 < total <= 100000000 else None
+
+
 path = pathlib.Path(record_name) if record_name else None
 if path is not None and path.is_file() and not path.is_symlink():
-    for raw_line in path.read_bytes().split(b"\n"):
+    for line_number, raw_line in enumerate(path.read_bytes().split(b"\n")):
         if not raw_line.strip():
             continue
         try:
@@ -1545,16 +1587,39 @@ if path is not None and path.is_file() and not path.is_symlink():
             continue
         if record.get("isSidechain") is True:
             substituted = True
+        # A safeguard handover records the provider's refusal of the
+        # approved model; the fallback model's turns follow it.
         if record.get("type") == "system" and record.get("subtype") == "model_refusal_fallback":
-            substituted = True
+            refusals += 1
+        # Claude Code records each context compaction, which replaces earlier
+        # conversation, including the request, with a summary, as a
+        # compact_boundary system record.
+        if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
+            identity = record.get("uuid")
+            compactions.add(identity if isinstance(identity, str) and identity
+                            else f"line:{line_number}")
         if record.get("type") != "assistant":
             continue
         message = record.get("message") if isinstance(record.get("message"), dict) else {}
-        if message.get("model") not in (approved_model, "<synthetic>") or record.get("advisorModel"):
+        used_model = message.get("model")
+        approved_turn = used_model in (approved_model, "<synthetic>")
+        if record.get("advisorModel"):
             substituted = True
-        for key in ("effort", "perTurnEffort"):
-            if record.get(key) is not None and record.get(key) != approved_effort:
-                substituted = True
+        if not approved_turn:
+            unapproved_models.append(
+                used_model if isinstance(used_model, str)
+                and SAFE_TOKEN.fullmatch(used_model) else "unrecognized"
+            )
+        else:
+            for key in ("effort", "perTurnEffort"):
+                if record.get(key) is not None and record.get(key) != approved_effort:
+                    substituted = True
+            if used_model == approved_model:
+                prompt = prompt_tokens(message.get("usage"))
+                if prompt is not None and (peak_prompt is None or prompt > peak_prompt):
+                    peak_prompt = prompt
+                if message.get("stop_reason") == "refusal":
+                    refusals += 1
         last_stop = message.get("stop_reason")
         last_error = record.get("isApiErrorMessage") is True
         if last_stop == "max_tokens":
@@ -1563,18 +1628,30 @@ if path is not None and path.is_file() and not path.is_symlink():
             text = clean(text_of(message.get("content")))
             if text and text not in errors and len(errors) < 5:
                 errors.append(text)
+completed_cleanly = (
+    last_stop in ("end_turn", "stop_sequence") and not last_error
+    and not unapproved_models
+)
+fallback_model = unapproved_models[0] if unapproved_models else ""
 if substituted:
+    outcome = "substituted"
+elif refusals and (unapproved_models or not completed_cleanly):
+    # The provider declined the approved model. A safeguard handover is the
+    # only recorded way to another model after a refusal, so its turns, in
+    # any order, are never accepted.
+    outcome = "refused"
+elif unapproved_models:
     outcome = "substituted"
 elif last_error and any(TRANSIENT.search(e) and not PERMANENT.search(e) for e in errors):
     outcome = "transient-failure"
-elif last_stop in ("end_turn", "stop_sequence") and not last_error:
+elif completed_cleanly:
     outcome = "completed"
 elif errors:
     outcome = "failed"
 else:
     outcome = "unknown"
 pathlib.Path(output_name).write_text(json.dumps({
-    "Schema": 1,
+    "Schema": 3,
     "Phase": phase,
     "Outcome": outcome,
     "Retryable": outcome == "transient-failure",
@@ -1585,7 +1662,11 @@ pathlib.Path(output_name).write_text(json.dumps({
     "OutputLimitHits": min(limit_hits, 1000000),
     "OutputTokenLimit": None,
     "FinalReplyAtOutputLimit": last_stop == "max_tokens",
-    "FallbackModel": "",
+    "FallbackModel": fallback_model if outcome == "refused" else "",
+    "ContentRefusals": min(refusals, 1000000),
+    "PromptBudget": None,
+    "PeakPromptTokens": peak_prompt,
+    "Compactions": min(len(compactions), 1000000),
 }, sort_keys=True) + "\n", encoding="utf-8")
 PY
     ); then
@@ -1853,6 +1934,10 @@ harness_verify_isolation() {
             rhyolite_harness_set_error \
                 'Claude Code answered with a model other than the approved model; Rhyolite does not accept a substituted review.'
             ;;
+        refused)
+            rhyolite_harness_set_error \
+                'The model provider declined a request to the approved model (Claude Code recorded a content refusal); Rhyolite never accepts output from a model outside the approved plan.'
+            ;;
         effort-changed)
             rhyolite_harness_set_error \
                 'Claude Code recorded a reasoning effort other than the approved effort; Rhyolite does not accept a downgraded review.'
@@ -1958,7 +2043,7 @@ harness_persist_agent_state() {
         return 1
     fi
     case "${CLAUDE_TRANSCRIPT_STATUS}" in
-        verified|substituted|effort-changed|subagent|unreadable) ;;
+        verified|refused|substituted|effort-changed|subagent|unreadable) ;;
         *) CLAUDE_TRANSCRIPT_STATUS='unreadable' ;;
     esac
 

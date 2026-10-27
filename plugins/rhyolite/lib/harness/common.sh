@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=9
+RHYOLITE_HARNESS_CONTRACT_VERSION=11
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -11,12 +11,21 @@ RHYOLITE_HARNESS_MODEL_UNLISTED_STATUS=3
 # or subagent other than the approved plan; the runner then terminates the
 # worker instead of waiting for it to finish.
 RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS=4
+# harness_detect_worker_violation returns this status when the model provider
+# has declined a request to the approved model (a content refusal). The
+# runner then terminates the worker before any automatic harness fallback can
+# answer, never retries the refusing model, and never accepts another
+# model's output.
+RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5
 # harness_worker_outcome writes one JSON object with exactly these keys so the
 # runner can decide, deterministically, whether a worker invocation may be
 # continued in the same session (transient model-service failure, or an
-# automatic model fallback that was blocked before it produced any output).
-RHYOLITE_HARNESS_OUTCOME_SCHEMA=1
-RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked substituted failed unknown)
+# automatic model fallback that was blocked before it produced any output) or
+# was declined by the model provider (refused), which is never retried on the
+# refusing model. Schema 3 adds Compactions, the automatic or manual context
+# compactions that the harness recorded in the session so far.
+RHYOLITE_HARNESS_OUTCOME_SCHEMA=3
+RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked refused substituted failed unknown)
 # Exact phase names accepted by harness_normalize_worker_output and
 # harness_detect_worker_violation.
 RHYOLITE_HARNESS_WORKER_PHASES=(review research report-repair)
@@ -168,8 +177,11 @@ rhyolite_harness_normalize_worker_output_identity() {
 # The adapter scans only the complete lines appended since the offset saved in
 # the runner-owned cursor file, returns 0 when nothing is recorded yet, returns
 # RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS with a sanitized detail on the first
-# violation, and returns 1 for any other failure, which the runner treats as a
-# monitor warning; the post-exit normalization remains authoritative.
+# violation, returns RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS with a sanitized
+# detail when the model provider declined a request to the approved model
+# before any violation, and returns 1 for any other failure, which the runner
+# treats as a monitor warning; the post-exit normalization and worker outcome
+# remain authoritative.
 rhyolite_harness_validate_violation_arguments() {
     local phase="$1"
     local raw_output="$2"
@@ -253,7 +265,7 @@ rhyolite_harness_worker_outcome_unknown() {
     rhyolite_harness_validate_outcome_arguments "$@" || return 1
     (
         umask 077
-        printf '{"Schema":1,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}\n' \
+        printf '{"Schema":3,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}\n' \
             "${phase}" > "${outcome_output}"
     ) || {
         rhyolite_harness_set_error 'Could not write the worker outcome.'
@@ -262,7 +274,15 @@ rhyolite_harness_worker_outcome_unknown() {
 }
 
 # Strictly validate an adapter-written worker outcome before the runner uses
-# it. Prints the validated outcome token on success.
+# it. Prints the validated outcome token on success. ContentRefusals counts
+# the approved-model requests that the model provider declined; a `refused`
+# outcome requires at least one. PromptBudget is the approved session's
+# prompt-token budget and PeakPromptTokens its largest recorded prompt, each
+# null when the harness did not record it. FallbackModel names the model of an
+# automatic harness fallback and may be set only for a blocked fallback, which
+# requires it, or a refusal. Compactions counts the context compactions that
+# the harness recorded in the session, each of which replaces earlier
+# conversation, including the request, with a summary.
 rhyolite_harness_validate_outcome_json() {
     local outcome_path="$1"
     local expected_phase="$2"
@@ -277,11 +297,12 @@ path, phase = sys.argv[1:3]
 keys = {
     "Schema", "Phase", "Outcome", "Retryable", "ExitCode", "SessionErrors",
     "ModelCallFailures", "TurnRetries", "OutputLimitHits", "OutputTokenLimit",
-    "FinalReplyAtOutputLimit", "FallbackModel",
+    "FinalReplyAtOutputLimit", "FallbackModel", "ContentRefusals",
+    "PromptBudget", "PeakPromptTokens", "Compactions",
 }
 outcomes = {
-    "completed", "transient-failure", "fallback-blocked", "substituted",
-    "failed", "unknown",
+    "completed", "transient-failure", "fallback-blocked", "refused",
+    "substituted", "failed", "unknown",
 }
 try:
     with open(path, encoding="utf-8") as stream:
@@ -294,10 +315,14 @@ def count(value):
     return type(value) is int and 0 <= value <= 1000000
 
 
+def tokens(value):
+    return value is None or (type(value) is int and 0 < value <= 100000000)
+
+
 if (
     not isinstance(data, dict)
     or set(data) != keys
-    or data["Schema"] != 1
+    or data["Schema"] != 3
     or data["Phase"] != phase
     or data["Outcome"] not in outcomes
     or type(data["Retryable"]) is not bool
@@ -311,12 +336,16 @@ if (
         or re.search(r"[\x00-\x1f\x7f]", item)
         for item in data["SessionErrors"]
     )
-    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits"))
+    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits", "ContentRefusals", "Compactions"))
     or not (data["OutputTokenLimit"] is None or count(data["OutputTokenLimit"]))
     or type(data["FinalReplyAtOutputLimit"]) is not bool
     or not isinstance(data["FallbackModel"], str)
     or not re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?", data["FallbackModel"])
-    or (data["Outcome"] == "fallback-blocked") != bool(data["FallbackModel"])
+    or (data["Outcome"] == "fallback-blocked" and not data["FallbackModel"])
+    or (data["Outcome"] not in ("fallback-blocked", "refused") and data["FallbackModel"])
+    or (data["Outcome"] == "refused" and data["ContentRefusals"] < 1)
+    or not tokens(data["PromptBudget"])
+    or not tokens(data["PeakPromptTokens"])
 ):
     raise SystemExit(1)
 print(data["Outcome"])
@@ -498,7 +527,6 @@ rhyolite_harness_load() {
     fi
 
     for capability in \
-        fleet \
         structured_questions \
         subagents \
         builtin_security_specialist \
@@ -525,4 +553,191 @@ rhyolite_harness_load() {
 
     RHYOLITE_HARNESS_LOADED_ID="${selected_harness}"
     RHYOLITE_HARNESS_LOADED_PATH="${adapter_path}"
+}
+
+# A hard-killed runner or launcher cannot run its exit trap, so a runtime home
+# it created keeps its ephemeral authentication bridge. Every owner therefore
+# holds an exclusive flock(1) lock on its runtime home, which every child that
+# inherits the descriptor keeps holding, and a later start removes a matching
+# home only when that lock is free and nothing in the home changed within
+# RHYOLITE_STALE_RUNTIME_HOME_MINUTES. The age check also keeps any home that
+# an older, lock-unaware Rhyolite is still actively writing.
+RHYOLITE_STALE_RUNTIME_HOME_MINUTES=60
+RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN='^rhyolite-((repo-review|repo-research|report-repair)-[a-z][a-z0-9-]{0,31}|report-repair)\.[A-Za-z0-9]{8}$'
+RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN='^model-check-[0-9]+$'
+
+rhyolite_runtime_home_locking_available() {
+    ((BASH_VERSINFO[0] > 4 ||
+        (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 1))) &&
+        command -v flock >/dev/null 2>&1
+}
+
+# Usage: rhyolite_lock_runtime_home <directory> <descriptor_variable>
+# Sets the variable to the open locked descriptor, or to empty when locking is
+# unavailable, in which case no sweep removes anything either.
+rhyolite_lock_runtime_home() {
+    local directory="$1"
+    local descriptor_name="$2"
+    local descriptor
+
+    [[ "${descriptor_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+    printf -v "${descriptor_name}" '%s' ''
+    rhyolite_runtime_home_locking_available || return 0
+    [[ -d "${directory}" && ! -L "${directory}" ]] || return 1
+    exec {descriptor}<"${directory}" || return 1
+    if ! flock -n -x "${descriptor}"; then
+        exec {descriptor}<&-
+        return 1
+    fi
+    printf -v "${descriptor_name}" '%s' "${descriptor}"
+}
+
+# Usage: rhyolite_unlock_runtime_home <descriptor>
+rhyolite_unlock_runtime_home() {
+    local descriptor="${1-}"
+
+    [[ "${descriptor}" =~ ^[0-9]+$ ]] || return 0
+    exec {descriptor}<&-
+}
+
+# Usage: rhyolite_sweep_stale_runtime_homes <parent_directory> <name_pattern>
+#     [depth]
+# Best effort: removes only the current user's real directories exactly
+# <depth> levels (1 by default, at most 2) below the parent, reached without
+# following a symbolic link, whose names match the pattern, whose lock is
+# free, and whose whole tree is older than the stale age. One find(1) lists
+# every candidate. It never fails its caller.
+rhyolite_sweep_stale_runtime_homes() {
+    local parent="$1"
+    local pattern="$2"
+    local depth="${3:-1}"
+    local candidate
+    local name
+    local recent
+    local descriptor
+
+    rhyolite_runtime_home_locking_available || return 0
+    [[ "${depth}" == 1 || "${depth}" == 2 ]] || return 0
+    [[ -n "${parent}" && -d "${parent}" && ! -L "${parent}" ]] || return 0
+    while IFS= read -r -d '' candidate; do
+        name="${candidate##*/}"
+        [[ "${name}" =~ ${pattern} ]] || continue
+        [[ -d "${candidate}" && ! -L "${candidate}" && -O "${candidate}" ]] ||
+            continue
+        recent="$(
+            find "${candidate}" \
+                -mmin "-${RHYOLITE_STALE_RUNTIME_HOME_MINUTES}" \
+                -print -quit 2>/dev/null
+        )" || continue
+        [[ -z "${recent}" ]] || continue
+        { exec {descriptor}<"${candidate}"; } 2>/dev/null || continue
+        if flock -n -x "${descriptor}"; then
+            rm -rf --one-file-system -- "${candidate}" 2>/dev/null || true
+        fi
+        exec {descriptor}<&-
+    done < <(
+        find "${parent}" -mindepth "${depth}" -maxdepth "${depth}" -type d \
+            -user "$(id -u)" -print0 2>/dev/null
+    )
+    return 0
+}
+
+# Ranked, Rhyolite-owned suggestions of current frontier reasoning models for
+# additional security scans. A suggestion is only used when the harness's
+# offline model catalog lists it, so the adapter still owns model validity.
+rhyolite_security_scan_model_suggestions() {
+    case "$1" in
+        copilot)
+            printf '%s\n' \
+                claude-opus-5.5 \
+                gemini-4-argon \
+                gpt-5.6-sol \
+                gpt-6-astra \
+                claude-fable-5.1 \
+                grok-4.7 \
+                gpt-6.1-sol
+            ;;
+        claude)
+            printf '%s\n' \
+                claude-opus-5-5 \
+                claude-fable-5-1 \
+                claude-opus-5 \
+                claude-fable-5
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+rhyolite_model_vendor() {
+    case "$1" in
+        claude-*) printf '%s\n' anthropic ;;
+        gpt-* | o[0-9]* | codex-*) printf '%s\n' openai ;;
+        gemini-*) printf '%s\n' google ;;
+        grok-*) printf '%s\n' xai ;;
+        mai-*) printf '%s\n' microsoft ;;
+        kimi-*) printf '%s\n' moonshot ;;
+        *) printf '%s\n' "${1%%-*}" ;;
+    esac
+}
+
+# The model family is the ID without its version tokens, for example
+# claude-opus-5.5 -> claude-opus and gpt-5.6-sol -> gpt-sol.
+rhyolite_model_family() {
+    local token
+    local family=''
+    local -a tokens=()
+
+    IFS=- read -r -a tokens <<< "$1"
+    for token in "${tokens[@]}"; do
+        [[ "${token}" =~ ^[0-9] ]] && continue
+        family="${family:+${family}-}${token}"
+    done
+    printf '%s\n' "${family:-$1}"
+}
+
+# Print the first suggestion that the catalog lists and that adds the most
+# diversity to the selected models: a new vendor first, then a new model
+# family, then any model not yet selected.
+#   rhyolite_select_diverse_model <harness> <catalog> [selected-model ...]
+rhyolite_select_diverse_model() {
+    local harness="$1"
+    local catalog="$2"
+    shift 2
+    local suggestions candidate selected pass listed
+    local -A selected_models=()
+    local -A selected_vendors=()
+    local -A selected_families=()
+
+    suggestions="$(rhyolite_security_scan_model_suggestions "${harness}")" ||
+        return 1
+    for selected in "$@"; do
+        [[ -n "${selected}" ]] || continue
+        selected_models["${selected}"]=1
+        selected_vendors["$(rhyolite_model_vendor "${selected}")"]=1
+        selected_families["$(rhyolite_model_family "${selected}")"]=1
+    done
+    for pass in vendor family model; do
+        while IFS= read -r candidate; do
+            [[ -n "${candidate}" && -z "${selected_models[${candidate}]-}" ]] ||
+                continue
+            listed=0
+            while IFS= read -r selected; do
+                [[ "${selected}" == "${candidate}" ]] && listed=1 && break
+            done <<< "${catalog}"
+            ((listed)) || continue
+            case "${pass}" in
+                vendor)
+                    [[ -z "${selected_vendors[$(rhyolite_model_vendor "${candidate}")]-}" ]] ||
+                        continue
+                    ;;
+                family)
+                    [[ -z "${selected_families[$(rhyolite_model_family "${candidate}")]-}" ]] ||
+                        continue
+                    ;;
+            esac
+            printf '%s\n' "${candidate}"
+            return 0
+        done <<< "${suggestions}"
+    done
+    return 1
 }

@@ -62,7 +62,7 @@ node - "${snapshot_plan}" "${snapshot_native_plan}" <<'JS'
 const fs = require("fs");
 const [mcp, native] = process.argv.slice(2).map(p => JSON.parse(fs.readFileSync(p, "utf8")));
 const transport = mcp.SnapshotTransport;
-if (mcp.SchemaVersion !== 5 || transport.ContractVersion !== 9 ||
+if (mcp.SchemaVersion !== 5 || transport.ContractVersion !== 11 ||
     transport.Policy.Network !== "disabled" || transport.Policy.Resources !== "none" ||
     transport.Policy.ToolSchemas.length !== 4 || !/^[0-9a-f]{64}$/.test(transport.PolicyDigest) ||
     native.SnapshotTransport !== undefined || mcp.ApprovalHash === native.ApprovalHash ||
@@ -95,6 +95,22 @@ for snapshot_retry_delay in '' 301 999 -1 1.5 030 invalid; do
 done
 [[ ! -e "${snapshot_workspace}" && ! -e "${snapshot_output}" ]] ||
     fail 'Invalid retry policy created execution paths.'
+
+# Scan reports are outside the offline snapshot grants, so an offline-reader
+# harness keeps the integrated security pass.
+if env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+    PATH="${snapshot_cli_path}" "${snapshot_runner}" \
+    "${snapshot_run_arguments[@]}" --security-scans 2 \
+    --scan-model noop-fixture-alternate --plan-only \
+    > "${fixture_root}/snapshot-scans.stdout" \
+    2> "${fixture_root}/snapshot-scans.stderr"; then
+    fail 'Offline snapshot transport accepted independent security scans.'
+fi
+assert_contains "${fixture_root}/snapshot-scans.stderr" \
+    'Independent security scans are unavailable for this harness.' \
+    'Offline snapshot scan rejection'
+[[ ! -e "${snapshot_workspace}" && ! -e "${snapshot_output}" ]] ||
+    fail 'Offline snapshot scan rejection created execution paths.'
 
 snapshot_stdout="${fixture_root}/snapshot-run.stdout"
 snapshot_stderr="${fixture_root}/snapshot-run.stderr"
@@ -150,7 +166,7 @@ node - "${snapshot_failed_run}/github--octocat--hello-world/state.json" <<'JS'
 const fs = require("fs");
 const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (state.Status !== "ReviewFailed" || state.Session.Id || state.Session.Name ||
-    state.SnapshotTransport.ContractVersion !== 9) {
+    state.SnapshotTransport.ContractVersion !== 11) {
   throw new Error("snapshot configuration failure lost truthful state");
 }
 JS

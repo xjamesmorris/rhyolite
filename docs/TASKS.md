@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-23 (UTC)
+**Last updated:** 2026-10-27
 
 ## Priorities
 
@@ -29,48 +29,28 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T12 | P2 | Open | Keep the launcher setup block intact in native fleet mode |
-| T16 | P2 | Open | Remove runtime homes left by a hard-killed runner |
+| T25 | P2 | Verify | Observe a reused-scan review and a scan report request live |
 | T17 | P2 | Open | Complete Codex harness gates after the offline snapshot proof |
+| T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
 
-### T12 (P2, Open): Keep the launcher setup block intact in native fleet mode
+### T25 (P2, Verify): Observe a reused-scan review and a scan report request live
 
-- **Problem:** With `--fleet-mode native`, Copilot CLI delivered the
-  launcher's first turn as a single line prefixed with `Fleet deployed:` and
-  added fleet instructions to dispatch subagents and track todos. The
-  orchestrators expect the exact multi-line `RHYOLITE_LAUNCHER_SETUP_V1`
-  block and must not start subagents of their own, so they have to tolerate
-  a flattened block and conflicting instructions. The observed sessions,
-  including a 2026-10-14 run, still recognized the block. On 2026-10-20,
-  Copilot CLI 1.0.101-0 still flattened the block in native mode, and the
-  orchestrator still recognized it, kept the launcher source unchanged, and
-  started no subagents.
-- **Next step:** decide whether the launcher should deliver the setup block
-  another way in native mode or whether the orchestrators should explicitly
-  accept the flattened form and ignore fleet dispatch instructions.
-- **Source:** the 2026-10-13, 2026-10-14, and 2026-10-20 native-fleet
-  sessions.
-
-### T16 (P2, Open): Remove runtime homes left by a hard-killed runner
-
-- **Problem:** A runner stopped with `SIGKILL` cannot run its exit trap, so
-  each isolated harness runtime home under `TMPDIR` keeps its ephemeral
-  authentication bridge, for Copilot a copy of the login token entries from
-  `config.json`, until something removes the directory. The homes are mode
-  0700, so only the same user can read them. Until 2026-10-19 the validation
-  suite's hard-kill fixtures also left such homes, with the contributor's
-  real Copilot token entries, in `/tmp`; they now use fixture authentication
-  and a fixture `TMPDIR`. A launcher stopped the same way during its
-  pre-launch model check leaves its `model-check-<n>` home, with the same
-  bridge, in that launch's session directory under launcher state.
-- **Next step:** design a safe sweep, for example at the next runner or
-  launcher start, that removes only the current user's stale
-  `rhyolite-repo-*` runtime homes and launcher `model-check-*` homes whose
-  recorded process is gone, and document the manual cleanup.
-- **Source:** 2026-10-19 validation run.
+- **Problem:** Run `20261027-000751-3702922ead504995` verified live that a
+  compacted scan keeps its report contract: scan C was compacted and still
+  returned a valid report. `--reuse-scans` and the same-session scan report
+  request are verified with mocked harnesses only; that run did not need the
+  report request, and a report request cannot be forced on demand.
+- **Next step:** approve a plan with `--reuse-scans` and the folder of a
+  failed or interrupted multi-scan run, and confirm that only the missing
+  scans ran. In later multi-scan reviews, check `ReportRequest` in each
+  `scan-state.json` and record any value other than `NotNeeded`.
+- **Done when:** a live reused-scan review completes with the reused
+  reports' digests verified, and a live scan report request is recorded or
+  the project records that none has occurred.
+- **Source:** [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
 
 ### T17 (P2, Open): Complete Codex harness gates after the offline snapshot proof
 
@@ -82,7 +62,7 @@ Status values:
   granting shell access or adding an unapproved broker.
 - **Progress:** the maintainer approved the existing broker's separate
   offline snapshot MCP mode. The bounded runtime, Bash grants/lifecycle,
-  Contract-v9 seam, and negative tests are implemented on the development
+  Contract-v11 seam, and negative tests are implemented on the development
   branch; [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines the contract.
   On 2026-10-21, credential-free Codex 0.163.0 captures proved the complete
   seven-tool inventory and twelve scripted read/search/resource/denial
@@ -126,6 +106,14 @@ Status values:
   key-file access, and context capture are no longer blockers; backend
   authorization for the intended provider remains unresolved. No credential
   values were added to repository artifacts or documentation.
+  On 2026-10-27 the branch merged the 0.9.0 release line. The shared seam is
+  now Contract v11 (the shipped Contract-v10 refusal and compaction outcomes
+  plus the snapshot functions), and the Codex adapter writes outcome schema 3:
+  pinned 0.163.0 source fixes its refusal evidence (the `HighRiskCyberActivity`
+  reroute, content-filter stops, and policy errors) and its rollout records
+  for prompt sizes and compactions. Codex has one verified model, so it keeps
+  the integrated security pass; offline-transport plans with more than one
+  security scan fail before planning.
 - **Next step:** establish the intended provider and obtain a successful
   API-key-authenticated isolated model response, then run the native
   setup/approval/controller path from a private
@@ -136,6 +124,19 @@ Status values:
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness
   playbook and Fedora validation without regressing existing harnesses.
 - **Source:** [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md).
+
+### T20 (P3, Open): Report security-relevant files that the security pass did not open
+
+- **Problem:** In the T18 comparison neither review opened every
+  security-relevant file, and neither report listed the unopened files as a
+  limitation, although the security pass requires both. The README now
+  documents this limitation; per-report disclosure remains open.
+- **Next step:** decide whether the runner can derive a trusted list of
+  opened files from the worker session record and compare it with a
+  deterministic list of security-relevant tracked files.
+- **Done when:** a review discloses security-relevant files that its
+  security pass did not open, or the project records why it cannot.
+- **Source:** 2026-10-25 T18 comparison.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 

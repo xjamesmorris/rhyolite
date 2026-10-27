@@ -27,7 +27,10 @@
 - Repository URLs supplied to the runner.
 - User-selected trusted research policy files and advanced provider/cookie
   settings.
-- User-local launcher fleet/model/reasoning/context preference files.
+- User-local launcher model/reasoning/context and security scan preference
+  files.
+- Security scan reports, which models produced from untrusted repository
+  content.
 - User-selected output workspace paths and generated artifact paths.
 
 ## Primary threats
@@ -65,8 +68,8 @@
     contract rejects it.
 19. The onboarding hook inspects credentials, mutates local state, or
     hijacks unrelated sessions before the user invokes the review agent.
-20. A tampered or mismatched launcher preference silently changes fleet
-    mode or model, leaks a selected source, or bypasses review approval.
+20. A tampered or mismatched launcher preference silently changes the
+    model, leaks a selected source, or bypasses review approval.
 21. An explicit `--yolo` launch broadens the outer Copilot orchestrator
     to all permissions for that launch, or allow-all state is incorrectly
     coupled to report opening instead of requiring explicit `--open-html`.
@@ -108,6 +111,19 @@
     Claude Code worker.
 34. A Claude Code worker reply that reached the output token limit and was
     resumed is promoted as a partial or spliced report.
+35. A poisoned or hallucinated security scan report steers the consolidation
+    review, one scan reads another scan's work, a consolidation report
+    silently drops scan findings, or a failed scan is misreported as the
+    consolidation model's failure.
+36. Repository content provokes a model provider's content refusal, so that a
+    harness's automatic refusal fallback answers with an unapproved model, a
+    refusal is misread as a context overflow or an enforcement failure, or
+    selected security scans are silently suppressed.
+37. Automatic context compaction replaces a long scan's request with a
+    summary, so the scan answers in another layout and its findings are
+    lost; or a scan report reused from an earlier run is altered after
+    approval, comes from another repository, commit, harness, or model, or
+    is read from a folder that another user controls.
 
 ## Controls
 
@@ -158,14 +174,15 @@
 - A local plugin `sessionStart` hook emits one plain version/start line
   for ordinary loads or the exactly-once launcher plaque. A display-only
   `userPromptSubmitted` command hook emits a plaque only for exact manual
-  review-start commands and ignores internal resumes, marker-bearing
-  continuations, launcher prompts, and unrelated text. Neither hook
-  performs network access, Git commands, writes, prompt mutation, or
-  environment/auth inspection.
-- Native fleet mode and the outer model, reasoning effort, and context tier
+  review-start commands, including Copilot CLI's fixed skill-invocation
+  sentence for one at the start of the prompt, and ignores internal
+  resumes, marker-bearing continuations, launcher prompts, and unrelated
+  text. Neither hook performs network access, Git commands, writes,
+  prompt mutation, or environment/auth inspection.
+- The outer model, reasoning effort, and context tier
   are selected before Copilot starts. The trusted launcher setup block
   contains only canonical source URLs plus constrained
-  fleet/model/reasoning/context/remember fields; sources
+  model/reasoning/context/remember fields; sources
   remain untrusted data rather than prompt instructions.
 - Before a Copilot session starts, the launcher checks that the account
   accepts the selected model, reasoning effort, and context with one
@@ -206,13 +223,13 @@
   artifacts. Workers start under util-linux `setpriv --pdeathsig TERM` when
   available, so a SIGKILL of the runner cannot leave a worker running with
   its credentials and network access after the run has stopped.
-- Per-repository fleet/model/reasoning/context preferences are keyed by a
+- Per-repository model/reasoning/context preferences are keyed by a
   SHA-256 hash of the selected canonical public URL, including its terminal
   `.git` endpoint when present, stored under user-only launcher state, and
   parsed against a versioned fixed schema. Missing, mixed, malformed, or
   mismatched preferences are ignored rather than silently applied.
 - Preferences are written atomically only after effective-plan approval.
-  Fleet mode, model, and remember state are included in `ApprovalHash`;
+  The model and remember state are included in `ApprovalHash`;
   preferences never grant source access or bypass runner validation.
 - Launcher context and logs do not persist the selected source or
   arbitrary initial request.
@@ -345,7 +362,8 @@
   revalidated before child sessions start.
 - Bash containment checks walk filesystem identities, including on
   case-insensitive mounted filesystems.
-- Scope-based default timeouts match the published planning ranges.
+- The default per-session timeout is the same for every scope, so scope
+  never shortens the core review or its dedicated security pass.
 - Reports require exact source references and evidence/confidence
   separation.
 - A malformed confidence field can trigger only the approval-bound, single
@@ -498,6 +516,83 @@
   repository output directory, redacts email addresses, writes mode-0600
   files, and never changes the run outcome.
 
+### Multi-model security scans
+
+- Every security scan is a separate review-worker session with its own
+  mode-0700 runtime home and lock, the approved scan model and effort, the
+  review worker's read-only tools, and live and post-exit approved-model
+  enforcement. Scans run before any research, so no research evidence
+  exists under the session root while they run, and the runner keeps each
+  scan's artifacts in its own directory outside the session root. Scan
+  requests are identical, contain no model names, and are never searched
+  for placeholders after rendering, because untrusted Git metadata in them
+  may contain braces.
+- The runner validates every scan report against its fixed contract, bounds
+  it to 60 findings, and copies it read-only (mode 0400 in a mode-0500
+  directory) under the session root only after every scan has stopped and
+  any research phase has finished, right before the consolidation review
+  starts, so neither another scan nor the network-enabled research worker
+  can read scan findings or send them to a public endpoint. The
+  consolidation request names scans only by letter and treats their reports
+  as untrusted evidence that the consolidation review must verify against
+  the snapshot.
+- The consolidation ledger must classify every scan finding ID exactly once
+  before the report delimiters. A missing or invalid ledger gets one fixed
+  same-session request that contains only runner text, the validator
+  diagnostic, and the scan finding IDs; a report whose ledger still fails is
+  kept only as non-canonical evidence.
+- A scan is relaunched at most once, with a fresh session and runtime home,
+  only after a transient model-service failure or a blocked automatic
+  fallback, and never after substituted output, a timeout, or a failed
+  adapter function other than the monitor and normalizer failures that a
+  blocked fallback itself causes. Scan failures reach the repository errors
+  only as fixed
+  paraphrases, so failure analysis never attributes them to the
+  consolidation model. A stop request signals every scan's process tree,
+  records each scan as `Interrupted`, and removes every scan runtime home.
+- Both worker agents carry the scan report contract, byte-for-byte as
+  `security-scan-prompt.txt` defines it, in their own instructions, which
+  context compaction keeps; validation keeps the copies identical. A scan
+  whose session ended normally on the approved model without a valid report
+  gets one fixed same-session request that contains only runner text, the
+  runner's own validator diagnostic, and the contract read from the scan
+  prompt. The continuation uses the adapter's continuation argv with the
+  same environment, runtime home, tools, model, effort, context, and live
+  and post-exit enforcement; its reply passes the same validator; and the
+  runtime home is removed only afterward. No request follows a timeout, an
+  interruption, a refusal, substituted output, or an adapter failure.
+- `--reuse-scans` reads only an earlier run folder, repository folder, scan
+  folders, and files that the current user owns, that are not symbolic
+  links, and that other users cannot write. It reuses a report only for the
+  same canonical repository, commit, harness, context tier, scan protocol,
+  model, and reasoning effort; revalidates it against the current scan
+  contract; binds its SHA-256 digest into the approval hash; and, before
+  consolidation, copies it and verifies the digest and contract again, so a
+  report changed after approval fails that scan without a worker. Reused
+  reports are untrusted evidence exactly like fresh scan reports.
+
+### Provider refusals
+
+- A provider refusal is detected only from structured, provider-originated
+  evidence: an approved-model usage record whose finish reason is
+  `content_filter`, a refusal-fallback model change, a harness notice that
+  names the approved model, or a Claude Code `refusal` stop or
+  `model_refusal_fallback` handover. Model-written text is never evidence of
+  a refusal.
+- The live monitor stops a refused worker within one poll, before the
+  harness's automatic refusal fallback can answer, and every output from a
+  model outside the approved plan is discarded. A refused session is never
+  continued, a refusing model is never retried for the same repository, and
+  a handover goes only to the next approved candidate named in the
+  approval-bound `RefusalPolicy`, in a fresh session and runtime home with
+  the same request and the same live and post-exit enforcement.
+- A declined security scan is skipped and excluded from the required scans
+  rather than failing the review, so a repository that provokes refusals can
+  remove individual scans. Every refusal is recorded in `ProviderRefusals`,
+  surfaced in the consolidation request, handoffs, HTML index, and executive
+  summary, and the consolidation review always runs its own complete security
+  pass; a refusal of every runnable approved model fails the repository.
+
 ## Residual risks
 
 - Copilot, Claude Code's model provider, and public search services process
@@ -510,7 +605,18 @@
   home. Whether that can invalidate the user's original login is unproven.
   Exporting `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` avoids the
   copy.
-- Read-only analysis can still be inaccurate or incomplete.
+- Read-only analysis can still be inaccurate or incomplete. Multi-model
+  security scans reduce, but cannot eliminate, findings that every selected
+  model misses, and a consolidation review can still reject a valid scan
+  finding with a stated reason.
+- A repository can provoke content refusals in some models, which removes
+  their scans or moves the report to another approved model. Rhyolite
+  discloses every refusal and handover and never weakens the remaining
+  security pass, but the review then reflects fewer independent models.
+- A reused scan report reflects the scan prompt of the Rhyolite release that
+  produced it; reuse requires the same scan protocol name, not an identical
+  prompt. With the default two-of-three quorum, a review can consolidate two
+  scans when the third fails, and discloses the failed scan.
 - Claims, reputation, community, prior-art, and provenance indicators can be
   false positives or miss context. They are advisory, never verdicts about
   people, and require human review before they are shared or acted on.
@@ -536,7 +642,11 @@
   under `TMPDIR`, and a launcher stopped that way during its model check
   cannot remove the mode-0700 `model-check-<n>` home in its private session
   directory under launcher state, so their ephemeral authentication bridge
-  remains until the directory is deleted.
+  remains until the directory is deleted. Each owner holds a util-linux
+  `flock` lock on its home, which every child that inherits it keeps, and
+  the next runner or launcher start removes the current user's matching
+  homes whose lock is free and whose whole tree is unchanged for 60 minutes.
+  Without `flock`, nothing is locked or removed.
 - Public DNS classification and pinning reduce, but cannot eliminate,
   risks from a compromised DNS resolver, transparent network
   interception, or a malicious public endpoint sharing infrastructure

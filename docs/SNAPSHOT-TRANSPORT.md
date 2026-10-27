@@ -8,7 +8,7 @@ snapshot readers.
 
 ## Ownership and approval
 
-Harness Contract v9 adds two required functions:
+Harness Contract v11 adds two required functions:
 
 | Function | Exact interface |
 | --- | --- |
@@ -31,7 +31,7 @@ resource, prompt, or tool. A CLI's automatically exposed MCP resource
 helpers must be proven unable to grant wider authority.
 
 The plan's `SnapshotTransport` object is present only for offline MCP.
-It contains `ContractVersion` (9), `Policy`, and `PolicyDigest`. `Policy`
+It contains `ContractVersion` (11), `Policy`, and `PolicyDigest`. `Policy`
 includes the exact tools and input schemas, fixed limits, phase grant
 profiles, network/environment constraints, and path rules. `PolicyDigest`
 is SHA-256 of canonical ASCII JSON with sorted keys and compact separators,
@@ -66,6 +66,12 @@ control characters, backslashes, or paths outside the approved depth/size
 limits. Reads open each component relative to held directory descriptors
 with `O_NOFOLLOW`; ordinary-file checks use nonblocking opens so a FIFO
 cannot stall validation.
+
+Independent security scans and their consolidation read relabelled scan
+reports that no snapshot grant covers. A plan that combines this transport
+with more than one security scan therefore fails before planning, and the
+harness keeps the integrated security pass, which is identical in every
+scope.
 
 Research receives the tree alone. A review after successful research may
 also receive the complete pair `research-dossier` and

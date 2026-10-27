@@ -279,12 +279,18 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '9' \
+assert_equal '11' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 assert_equal '4' \
     "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
     'Harness worker violation status'
+assert_equal '5' \
+    "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+    'Harness worker refusal status'
+assert_equal '3' \
+    "${RHYOLITE_HARNESS_OUTCOME_SCHEMA}" \
+    'Harness worker outcome schema'
 production_registry_path=''
 rhyolite_harness_registry_lookup \
     production_registry_path "${PLUGIN_ROOT}" copilot ||
@@ -510,7 +516,6 @@ assert_adapter_model_status 1 example-unlisted-model '' 1 \
     'Copilot model-catalog discovery failed during model validation.'
 
 declare -A expected_capabilities=(
-    [fleet]=yes
     [structured_questions]=yes
     [subagents]=no
     [builtin_security_specialist]=no
@@ -592,7 +597,6 @@ preference_contract_repository='https://github.com/octocat/Hello-World.git'
 rhyolite_write_preference \
     "${preference_contract_repository}" \
     copilot \
-    native \
     gpt-5.6-sol \
     max \
     long_context \
@@ -614,7 +618,6 @@ preference_contract_peer_path="$(
 rhyolite_write_preference \
     "${preference_contract_peer}" \
     copilot \
-    standard \
     gpt-6-sol \
     xhigh \
     default \
@@ -630,24 +633,22 @@ if set(preference) != {
     "schemaVersion",
     "canonicalRepository",
     "harness",
-    "fleetMode",
     "model",
     "reasoningEffort",
     "contextTier",
     "updatedAt",
 }:
-    raise SystemExit("preference schema 3 keys are invalid")
+    raise SystemExit("preference schema 4 keys are invalid")
 if (
-    preference["schemaVersion"] != 3
+    preference["schemaVersion"] != 4
     or preference["canonicalRepository"] !=
         "https://github.com/octocat/Hello-World.git"
     or preference["harness"] != "copilot"
-    or preference["fleetMode"] != "native"
     or preference["model"] != "gpt-5.6-sol"
     or preference["reasoningEffort"] != "max"
     or preference["contextTier"] != "long_context"
 ):
-    raise SystemExit("preference schema 3 values are invalid")
+    raise SystemExit("preference schema 4 values are invalid")
 PY
 rhyolite_read_preference \
     "${preference_contract_repository}" \
@@ -655,7 +656,6 @@ rhyolite_read_preference \
     "${preference_contract_root}" ||
     fail 'Contract-v4 preference read failed.'
 [[ "${RHYOLITE_PREFERENCE_HARNESS}" == copilot &&
-    "${RHYOLITE_PREFERENCE_FLEET_MODE}" == native &&
     "${RHYOLITE_PREFERENCE_MODEL}" == gpt-5.6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == max &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == long_context ]] ||
@@ -665,8 +665,7 @@ rhyolite_read_preference \
     copilot \
     "${preference_contract_root}" ||
     fail 'Contract-v4 non-.git peer preference read failed.'
-[[ "${RHYOLITE_PREFERENCE_FLEET_MODE}" == standard &&
-    "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
+[[ "${RHYOLITE_PREFERENCE_MODEL}" == gpt-6-sol &&
     "${RHYOLITE_PREFERENCE_REASONING_EFFORT}" == xhigh &&
     "${RHYOLITE_PREFERENCE_CONTEXT_TIER}" == default ]] ||
     fail 'Contract-v4 .git and non-.git preferences were not independent.'
@@ -873,7 +872,7 @@ expected_worker_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools "${base_available_tools}"
     --allow-tool read
@@ -903,7 +902,7 @@ expected_research_worker_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools "${research_available_tools}"
     --allow-tool read
@@ -962,7 +961,7 @@ expected_repair_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --no-bash-env
     --no-auto-update
     --no-experimental
@@ -1086,7 +1085,7 @@ expected_copilot_research_arguments=(
     --disable-builtin-mcps
     --additional-mcp-config "@${research_mcp_config_path}"
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools 'view,glob,rg,skill,rhyolite-research-research_capabilities,rhyolite-research-fetch_public_url,rhyolite-research-search_public_github,rhyolite-research-search_public_web,rhyolite-research-research_network_summary'
     --allow-tool read
@@ -1504,12 +1503,218 @@ assert data["FinalReplyAtOutputLimit"] is True, data
 PY
 rm -f -- "${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
 
+# Contract v9: a provider refusal of the approved model is its own outcome,
+# whatever automatic fallback Copilot CLI attempted afterward and in whatever
+# order the events arrived. In run 20261025-125439 the refused call's usage
+# record (finishReason content_filter) was persisted, and the CLI's pre-flight
+# check of its refusal fallback then failed against the fallback model's
+# smaller prompt budget; no fallback call was recorded.
+copilot_v9_events="${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
+node - "${copilot_v9_events}" <<'JS'
+const fs = require("fs");
+const usage = (input, finish, filtered) => JSON.stringify({type: "session.usage_record",
+  data: {usage: {model: "claude-opus-5.5", inputTokens: input, outputTokens: 2837,
+    maxPromptTokens: 968000, maxOutputTokens: 32000, finishReason: finish,
+    contentFilterTriggered: filtered, apiCallId: `msg_${input}`}}});
+fs.writeFileSync(process.argv[2],
+  [usage(178113, "tool_calls", false), usage(185172, "content_filter", true)].join("\n") + "\n");
+JS
+copilot_v9_budget_error='session.error|{"errorType":"query","message":"Execution failed: Request exceeds the model prompt budget after reserving output (134437 tokens; limit 128000). Reduce context or compact before continuing."}'
+copilot_v8_stream "${copilot_v8_raw}" \
+    'model.call_start|{"turnId":"18","model":"claude-opus-5.5"}' \
+    "${copilot_v9_budget_error}" \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 1 and data["Retryable"] is False, data
+assert data["PromptBudget"] == 968000 and data["PeakPromptTokens"] == 185172, data
+assert data["FallbackModel"] == "" and data["ExitCode"] == 1, data
+PY2
+rm -f -- "${copilot_v9_events}"
+
+# The October 13 pattern with the refusal streamed: the refused call's usage,
+# then the CLI's refusal fallback, in either order. Normalization and live
+# detection report a refusal, never an enforcement violation.
+copilot_v9_refusal='assistant.usage|{"model":"claude-opus-5.5","inputTokens":90000,"maxPromptTokens":968000,"finishReason":"content_filter","contentFilterTriggered":true,"apiCallId":"msg_refused"}'
+for copilot_v9_order in refusal-first fallback-first; do
+    if [[ "${copilot_v9_order}" == refusal-first ]]; then
+        copilot_v8_stream "${copilot_fallback_output}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-5.5"}' \
+            "${copilot_v9_refusal}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-4.8"}' \
+            'model.call_failure|{"model":"claude-opus-4.8","statusCode":400,"failureKind":"api"}' \
+            'agent.interrupted|{"model":"claude-opus-4.8","cancelPhase":"pre_first_token"}' \
+            'result|{"exitCode":0}'
+    else
+        copilot_v8_stream "${copilot_fallback_output}" \
+            'model.call_start|{"turnId":"5","model":"claude-opus-5.5"}' \
+            'model.call_start|{"turnId":"5","model":"claude-opus-4.8"}' \
+            "${copilot_v9_refusal}" \
+            'agent.interrupted|{"model":"claude-opus-4.8","cancelPhase":"pre_first_token"}' \
+            'result|{"exitCode":0}'
+    fi
+    rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+    if rhyolite_harness_invoke harness_normalize_worker_output \
+        review "${copilot_fallback_output}" claude-opus-5.5 max \
+        "${copilot_normalized_output}" "${copilot_exact_reply}"; then
+        fail "Copilot normalization accepted a refused session (${copilot_v9_order})."
+    fi
+    assert_equal \
+        "The model provider declined a request to the approved model 'claude-opus-5.5' in the review phase (content refusal), and Copilot then tried its automatic refusal fallback to model 'claude-opus-4.8'; Rhyolite never retries a refusing model and never accepts output from a model outside the approved plan." \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        "Copilot refusal diagnostic (${copilot_v9_order})"
+    rm -f -- "${copilot_watch_cursor}"
+    if rhyolite_harness_invoke harness_detect_worker_violation \
+        review "${copilot_fallback_output}" claude-opus-5.5 max "${copilot_watch_cursor}"; then
+        fail "Copilot live detection missed a provider refusal (${copilot_v9_order})."
+    fi
+    assert_equal "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+        "${RHYOLITE_HARNESS_LAST_STATUS}" \
+        "Copilot live refusal status (${copilot_v9_order})"
+    rm -f -- "${copilot_watch_cursor}"
+    copilot_v8_outcome "${copilot_fallback_output}" refused
+    python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["FallbackModel"] == "claude-opus-4.8" and data["ContentRefusals"] == 1, data
+assert data["Retryable"] is False and data["PromptBudget"] == 968000, data
+PY2
+done
+
+# A refusal followed by a clean finish on the approved model is not a
+# refused outcome, although the live monitor stops on the first refusal.
+copilot_v8_stream "${copilot_v8_raw}" \
+    "${copilot_v9_refusal}" \
+    'assistant.usage|{"model":"claude-opus-5.5","inputTokens":95000,"maxPromptTokens":968000,"finishReason":"stop","contentFilterTriggered":false,"apiCallId":"msg_after"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 1 and data["PeakPromptTokens"] == 95000, data
+PY2
+rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}"
+rhyolite_harness_invoke harness_normalize_worker_output \
+    review "${copilot_v8_raw}" claude-opus-5.5 max \
+    "${copilot_normalized_output}" "${copilot_exact_reply}" ||
+    fail "Copilot normalization rejected a session that finished on the approved model: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+rm -f -- "${copilot_watch_cursor}"
+if rhyolite_harness_invoke harness_detect_worker_violation \
+    review "${copilot_v8_raw}" claude-opus-5.5 max "${copilot_watch_cursor}"; then
+    fail 'Copilot live detection ignored a streamed provider refusal.'
+fi
+assert_equal "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
+    "${RHYOLITE_HARNESS_LAST_STATUS}" \
+    'Copilot live refusal status before a clean finish'
+rm -f -- "${copilot_watch_cursor}"
+
+# A genuine overflow of the approved model's own prompt budget, with no
+# refusal, stays an ordinary failure that records the budget and peak.
+copilot_v8_stream "${copilot_v8_raw}" \
+    'assistant.usage|{"model":"claude-opus-5.5","inputTokens":127000,"maxPromptTokens":128000,"finishReason":"tool_calls","contentFilterTriggered":false,"apiCallId":"msg_large"}' \
+    "${copilot_v9_budget_error}" \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" failed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["ContentRefusals"] == 0 and data["FallbackModel"] == "", data
+assert data["PromptBudget"] == 128000 and data["PeakPromptTokens"] == 127000, data
+PY2
+
+# A refusal-fallback model change or a CLI refusal notice that names the
+# approved model also records the refusal and the fallback model; a startup
+# selection of the approved model is not a model change.
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.model_change|{"newModel":"claude-opus-5.5","source":"startup"}' \
+    'session.model_change|{"previousModel":"claude-opus-5.5","newModel":"claude-opus-4.8","cause":"refusal_fallback","source":"automatic"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["FallbackModel"] == "claude-opus-4.8" and data["ContentRefusals"] == 1, data
+PY2
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.info|{"infoType":"model","message":"Model '"'"'claude-opus-5.5'"'"' declined the request (content refusal); re-issuing on fallback model '"'"'claude-opus-4.8'"'"'"}' \
+    'result|{"exitCode":1}'
+copilot_v8_outcome "${copilot_v8_raw}" refused
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.model_change|{"newModel":"claude-opus-5.5","source":"startup"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+
+# Contract v10: Compactions counts each applied context compaction once,
+# whether the stream, the persisted session events, or both recorded it, as
+# Copilot CLI 1.0.104-4 did in run 20261026-170519. A compaction that did not
+# apply is not counted.
+copilot_v10_events="${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
+node - "${copilot_v10_events}" <<'JS'
+const fs = require("fs");
+const compaction = (id, success, outcome) => JSON.stringify({type: "session.compaction_complete",
+  data: {success, outcome, compactionAttemptId: id, messagesRemoved: 315,
+    tokenLimit: 983040, trigger: "threshold"}});
+fs.writeFileSync(process.argv[2], [compaction("attempt-1", true, "applied"),
+  compaction("attempt-2", true, "applied"), compaction("attempt-3", false, "failed")].join("\n") + "\n");
+JS
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.compaction_complete|{"success":true,"outcome":"applied","compactionAttemptId":"attempt-1","trigger":"threshold"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["Schema"] == 3 and data["Compactions"] == 2, data
+PY2
+rm -f -- "${copilot_v10_events}"
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+assert json.load(open(sys.argv[1], encoding="utf-8"))["Compactions"] == 1
+PY2
+
+# Contract v10 outcome schema 3: a refusal needs a recorded refusal, a
+# fallback model belongs only to a blocked fallback or a refusal, token
+# counts are positive integers or null, and Compactions is a count.
+copilot_v9_valid_refusal='{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":32000,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":1,"PromptBudget":968000,"PeakPromptTokens":185172,"Compactions":0}'
+printf '%s\n' "${copilot_v9_valid_refusal}" > "${copilot_v8_root}/good-outcome.json"
+assert_equal refused \
+    "$(rhyolite_harness_validate_outcome_json "${copilot_v8_root}/good-outcome.json" review)" \
+    'Valid refused worker outcome'
 for copilot_v8_bad_outcome in \
-    'extra|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","Extra":1}' \
-    'retryable|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'fallback|{"Schema":1,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'control|{"Schema":1,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'phase|{"Schema":1,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}'; do
+    'extra|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0,"Extra":1}' \
+    'schema|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
+    'retryable|{"Schema":3,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'fallback|{"Schema":3,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'control|{"Schema":3,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'phase|{"Schema":3,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'refused-without-refusal|{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'refused-retryable|{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":1,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'completed-fallback|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'zero-budget|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":0,"PeakPromptTokens":null,"Compactions":0}' \
+    'schema-2|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'negative-compactions|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":-1}' \
+    'text-compactions|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":"1"}' \
+    'text-peak|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":"185172","Compactions":0}'; do
     printf '%s\n' "${copilot_v8_bad_outcome#*|}" > "${copilot_v8_root}/bad-outcome.json"
     if rhyolite_harness_validate_outcome_json \
         "${copilot_v8_root}/bad-outcome.json" review >/dev/null; then
@@ -1650,40 +1855,31 @@ for path_isolation_fragment in \
         "${path_isolation_fragment}" \
         'Report-repair runtime path isolation'
 done
+# Each fragment is located inside run_report_repair itself, so the same
+# calls elsewhere in the runner cannot satisfy or break this ordering check.
+repair_fragment_line() {
+    REPAIR_FRAGMENT="$1" awk '
+        /^run_report_repair\(\) \{$/ { inside = 1 }
+        inside && index($0, ENVIRON["REPAIR_FRAGMENT"]) { print NR; exit }
+        inside && /^\}$/ { exit }
+    ' "${RUNNER}"
+}
 repair_path_validation_line="$(
-    grep -nF \
-        'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line \
+        'directory_contains_physical "${RUN_RESULTS}" "${report_repair_runtime_home}"'
 )"
 repair_home_preparation_line="$(
-    grep -nF \
-        '! rhyolite_harness_invoke harness_prepare_worker_home \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line \
+        '! rhyolite_harness_invoke harness_prepare_worker_home \'
 )"
 repair_environment_application_line="$(
-    grep -nF \
-        'env "${repair_environment[@]}" \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line 'env "${repair_environment[@]}" \'
 )"
 repair_timeout_invocation_line="$(
-    grep -nF \
-        'timeout --signal=TERM --kill-after=30s \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line 'timeout --signal=TERM --kill-after=30s \'
 )"
 repair_worker_invocation_line="$(
-    grep -nF \
-        '"${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \' \
-        "${RUNNER}" |
-        head -n 1 |
-        cut -d: -f1
+    repair_fragment_line '"${HARNESS_CLI_NAME}" "${repair_arguments[@]}" \'
 )"
 [[ "${repair_path_validation_line}" =~ ^[0-9]+$ &&
     "${repair_home_preparation_line}" =~ ^[0-9]+$ &&
@@ -2982,9 +3178,14 @@ if listed != listed_with_flag:
     raise SystemExit("The opt-in flag changed a listed-model plan")
 if unlisted["ApprovalHash"] == listed["ApprovalHash"]:
     raise SystemExit("ModelCatalogMembership is not approval-hash material")
+# Security scan A runs on the review model and discloses the same membership.
+if [plan["SecurityScans"]["Scans"][0]["ModelCatalogMembership"]
+        for plan in (unlisted, listed)] != ["unlisted", "listed"]:
+    raise SystemExit("Security scan A did not disclose the review model's membership")
 for plan in (unlisted, listed):
     del plan["ApprovalHash"]
     del plan["ModelCatalogMembership"]
+    del plan["SecurityScans"]["Scans"][0]["ModelCatalogMembership"]
 if unlisted != listed:
     raise SystemExit("Plans differ beyond catalog membership and approval hash")
 PY
@@ -4068,7 +4269,7 @@ JS
         --no-custom-instructions
         --disable-builtin-mcps
         --disallow-temp-dir
-        --no-remote-export
+        --sync-session=off
         --secret-env-vars "${authentication_variables_csv}"
         --available-tools "${available_tools}"
         --allow-tool read
@@ -4388,7 +4589,6 @@ done
         fail 'No-op model choices are not deterministic.'
 
     declare -A noop_expected_capabilities=(
-        [fleet]=no
         [structured_questions]=no
         [subagents]=no
         [builtin_security_specialist]=no
@@ -6409,7 +6609,6 @@ assert_launcher_state_path_failure() {
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \
-                --fleet-mode standard \
                 --model gpt-5.6-sol
     ) >"${stdout_path}" 2>"${stderr_path}"
     status=$?
@@ -6452,6 +6651,8 @@ assert_launcher_state_path_failure \
     fail 'Symlinked launcher state target was modified before rejection.'
 
 launcher_default_check_capture="${fixture_root}/launcher-default.check-capture"
+# The retired --fleet-mode standard spelling stays accepted with no effect:
+# this launch must still match the golden outer-launcher vector exactly.
 (
     cd "${launcher_caller}"
     env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
@@ -6478,7 +6679,6 @@ launcher_default_check_capture="${fixture_root}/launcher-default.check-capture"
         "${LAUNCHER}" \
             --harness copilot \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) 2>"${fixture_root}/launcher-explicit.stderr"
 
@@ -6526,7 +6726,6 @@ expected_prompt="$(
 RHYOLITE_START_COMMAND_V1
 RHYOLITE_LAUNCHER_SETUP_V1
 Source=https://example.com/owner/repository.git
-FleetMode=standard
 Model=gpt-5.6-sol
 ReasoningEffort=max
 ContextTier=long_context
@@ -6576,7 +6775,6 @@ ln -s -- "${launcher_caller}" "${launcher_linked_parent}/caller"
         PATH="${launcher_mock_bin}:/usr/bin:/bin" \
         "${launcher_linked_parent}/plugin/bin/rhyolite" \
             --repo https://example.com/owner/repository.git \
-            --fleet-mode standard \
             --model gpt-5.6-sol
 ) 2>"${fixture_root}/launcher-linked.stderr"
 normalize_launcher_capture \
@@ -6610,7 +6808,7 @@ expected_check_arguments=(
     --no-custom-instructions
     --disable-builtin-mcps
     --disallow-temp-dir
-    --no-remote-export
+    --sync-session=off
     --secret-env-vars "${authentication_variables_csv}"
     --available-tools view
     --deny-tool write
@@ -6638,7 +6836,6 @@ run_launcher_model_check_case() {
     local -a check_environment=()
     local -a launcher_arguments=(
         --repo https://example.com/owner/repository.git
-        --fleet-mode standard
         --model gpt-5.6-sol
     )
 
@@ -6735,6 +6932,98 @@ for launcher_check_unverified in \
         fail "${launcher_check_name}: an unverifiable model check changed the launch."
 done
 
+# Stale runtime homes: a sweep removes only the current user's real
+# directories with an exact runtime-home name whose lock is free and whose
+# whole tree is older than the stale age. A home that a live process holds
+# locked, a recently changed home, an unrelated name, and a symlink stay.
+sweep_root="${fixture_root}/runtime-home-sweep"
+mkdir -m 700 -p -- "${sweep_root}/tmp" "${sweep_root}/target"
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000001 \
+    rhyolite-repo-research-claude.Aa000002 \
+    rhyolite-report-repair-copilot.Aa000003 \
+    rhyolite-report-repair.Aa000004 \
+    rhyolite-repo-review-copilot.Aa000005 \
+    rhyolite-repo-review-copilot.Aa000006 \
+    rhyolite-repo-review-copilot.too-long-suffix \
+    rhyolite-other.Aa000007; do
+    mkdir -m 700 -- "${sweep_root}/tmp/${sweep_name}"
+    printf 'bridge\n' > "${sweep_root}/tmp/${sweep_name}/config.json"
+done
+printf 'target\n' > "${sweep_root}/target/config.json"
+ln -s -- "${sweep_root}/target" \
+    "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000008"
+find "${sweep_root}" -exec touch -h -d '-2 hours' {} +
+touch -- "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000006/config.json"
+sweep_ready="${sweep_root}/locked"
+(
+    # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
+    source "${HARNESS_COMMON}"
+    rhyolite_lock_runtime_home \
+        "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000005" sweep_lock
+    [[ "${sweep_lock}" =~ ^[0-9]+$ ]] || exit 1
+    # The lock passes to a child that outlives the owner.
+    sleep 30 >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "${sweep_ready}"
+) || fail 'A runtime home could not be locked.'
+[[ -s "${sweep_ready}" ]] || fail 'The runtime-home lock fixture did not start.'
+(
+    # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
+    source "${HARNESS_COMMON}"
+    rhyolite_sweep_stale_runtime_homes \
+        "${sweep_root}/tmp" "${RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN}"
+    printf 'stderr-still-open\n' >&2
+) 2> "${sweep_root}/sweep.stderr" || fail 'The runtime-home sweep failed.'
+kill "$(cat -- "${sweep_ready}")" 2>/dev/null || true
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000001 \
+    rhyolite-repo-research-claude.Aa000002 \
+    rhyolite-report-repair-copilot.Aa000003 \
+    rhyolite-report-repair.Aa000004; do
+    [[ ! -e "${sweep_root}/tmp/${sweep_name}" ]] ||
+        fail "The runtime-home sweep kept the stale home ${sweep_name}."
+done
+for sweep_name in \
+    rhyolite-repo-review-copilot.Aa000005 \
+    rhyolite-repo-review-copilot.Aa000006 \
+    rhyolite-repo-review-copilot.too-long-suffix \
+    rhyolite-other.Aa000007; do
+    [[ -f "${sweep_root}/tmp/${sweep_name}/config.json" ]] ||
+        fail "The runtime-home sweep removed the protected entry ${sweep_name}."
+done
+[[ -L "${sweep_root}/tmp/rhyolite-repo-review-copilot.Aa000008" &&
+    -f "${sweep_root}/target/config.json" ]] ||
+    fail 'The runtime-home sweep followed or removed a symlink.'
+[[ "$(cat -- "${sweep_root}/sweep.stderr")" == 'stderr-still-open' ]] ||
+    fail 'The runtime-home sweep changed or wrote to standard error.'
+
+# The next launch removes a model-check home that a killed launcher left in
+# an earlier session directory and keeps that session's other files.
+sweep_launcher_session="${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions/20260101T000000Z-1"
+mkdir -m 700 -p -- "${sweep_launcher_session}/model-check-1/home"
+chmod 700 -- \
+    "${fixture_root}/launcher-check-sweep-state" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions"
+printf 'bridge\n' > "${sweep_launcher_session}/model-check-1/home/config.json"
+printf 'context\n' > "${sweep_launcher_session}/launch-context.txt"
+find "${sweep_launcher_session}" -exec touch -h -d '-2 hours' {} +
+# A model-check home reachable only through a symbolic link stays.
+sweep_launcher_outside="${fixture_root}/launcher-check-sweep-outside"
+mkdir -m 700 -p -- "${sweep_launcher_outside}/model-check-1/home"
+printf 'bridge\n' > "${sweep_launcher_outside}/model-check-1/home/config.json"
+find "${sweep_launcher_outside}" -exec touch -h -d '-2 hours' {} +
+ln -s -- "${sweep_launcher_outside}" \
+    "${fixture_root}/launcher-check-sweep-state/rhyolite/launcher/sessions/20260101T000000Z-2"
+run_launcher_model_check_case launcher-check-sweep
+((launcher_check_case_status == 0)) ||
+    fail 'launcher-check-sweep: the launcher did not start.'
+[[ -f "${sweep_launcher_session}/launch-context.txt" ]] ||
+    fail 'launcher-check-sweep: the sweep removed an earlier session file.'
+[[ -f "${sweep_launcher_outside}/model-check-1/home/config.json" ]] ||
+    fail 'launcher-check-sweep: the sweep followed a symlinked session directory.'
+
 # Interactively, a rejected effort or model asks for the next highest effort,
 # another model, or quit. There is no default answer, the effort never drops
 # below high, and end of input quits.
@@ -6822,7 +7111,6 @@ run_unlisted_launcher() {
             PATH="${launcher_mock_bin}:/usr/bin:/bin" \
             "${LAUNCHER}" \
                 --repo https://example.com/owner/repository.git \
-                --fleet-mode standard \
                 "$@"
     ) >"${fixture_root}/${name}.launcher.stdout" \
         2>"${launcher_unlisted_stderr}"
@@ -6846,7 +7134,6 @@ assert_unlisted_launcher_vector() {
     prompt="RHYOLITE_START_COMMAND_V1"$'\n'
     prompt+="RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
     prompt+="Source=https://example.com/owner/repository.git"$'\n'
-    prompt+="FleetMode=standard"$'\n'
     prompt+="Model=${expected_model}"$'\n'
     if [[ -n "${expected_allow_line}" ]]; then
         prompt+="${expected_allow_line}"$'\n'
@@ -6922,7 +7209,6 @@ chmod 0700 -- "${launcher_unlisted_preference_state}"
 rhyolite_write_preference \
     https://example.com/owner/repository.git \
     copilot \
-    standard \
     example-unlisted-model \
     max \
     long_context \
@@ -6947,6 +7233,291 @@ assert_unlisted_launcher_vector \
     launcher-unlisted-preference-flag \
     example-unlisted-model \
     'AllowUnlistedModel=true'
+
+# Multi-model security scans on the launcher command line: every selection
+# can be explicit or default, --auto-defaults resolves every unspecified
+# selection without a prompt, and the setup block carries the result. Each
+# scan and consolidation model gets its own pre-launch model check.
+run_scan_launcher() {
+    local name="$1"
+    local state_path="$2"
+    shift 2
+
+    launcher_scan_capture="${fixture_root}/${name}.launcher.capture"
+    launcher_scan_stderr="${fixture_root}/${name}.launcher.stderr"
+    launcher_scan_checks="${fixture_root}/${name}.checks"
+    rm -f -- "${launcher_scan_capture}" "${launcher_scan_checks}"
+    set +e
+    (
+        cd "${launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            NO_COLOR=1 \
+            XDG_STATE_HOME="${state_path}" \
+            RHYOLITE_LAUNCHER_CAPTURE="${launcher_scan_capture}" \
+            RHYOLITE_LAUNCHER_CHECK_LOG="${launcher_scan_checks}" \
+            COPILOT_HOME="${launcher_copilot_home}" \
+            TMPDIR="${launcher_check_tmp}" \
+            PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            "${LAUNCHER}" \
+                --repo https://example.com/owner/repository.git \
+                "$@"
+    ) >"${fixture_root}/${name}.launcher.stdout" \
+        2>"${launcher_scan_stderr}"
+    launcher_scan_status=$?
+    set -e
+}
+
+assert_scan_launcher_block() {
+    local name="$1"
+    local expected_checks="$2"
+    shift 2
+    local -a fields=()
+    local index prompt='' expected
+
+    ((launcher_scan_status == 0)) ||
+        fail "${name}: launcher returned ${launcher_scan_status}, expected 0."
+    mapfile -d '' -t fields < "${launcher_scan_capture}"
+    for ((index = 0; index + 1 < ${#fields[@]}; index++)); do
+        [[ "${fields[index]}" == -i ]] && prompt="${fields[index + 1]}"
+    done
+    expected="RHYOLITE_START_COMMAND_V1"$'\n'
+    expected+="RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    expected+="Source=https://example.com/owner/repository.git"$'\n'
+    expected+="Model=gpt-5.6-sol"$'\n'
+    expected+="ReasoningEffort=max"$'\n'
+    expected+="ContextTier=long_context"$'\n'
+    for index in "$@"; do
+        expected+="${index}"$'\n'
+    done
+    expected+="RememberPreferences=true"$'\n'
+    expected+="END_RHYOLITE_LAUNCHER_SETUP_V1"$'\n'
+    expected+="Begin Rhyolite's guided repository-review setup now."
+    assert_equal "${expected}" "${prompt}" "${name} setup block"
+    assert_equal "${expected_checks}" \
+        "$(tr '\n' ' ' < "${launcher_scan_checks}")" "${name} model checks"
+}
+
+assert_scan_launcher_rejected() {
+    local name="$1"
+    local summary="$2"
+
+    ((launcher_scan_status == 2)) ||
+        fail "${name}: launcher returned ${launcher_scan_status}, expected 2."
+    assert_contains "${launcher_scan_stderr}" "${summary}" "${name}"
+    [[ ! -e "${launcher_scan_capture}" ]] ||
+        fail "${name}: the launcher started Copilot after rejecting its scan options."
+}
+
+launcher_scan_state="${fixture_root}/launcher-scan-state"
+mkdir -p -- "${launcher_scan_state}"
+chmod 0700 -- "${launcher_scan_state}"
+run_scan_launcher launcher-scan-auto "${launcher_scan_state}" --auto-defaults
+assert_scan_launcher_block launcher-scan-auto \
+    'gpt-5.6-sol:max claude-opus-5.5:max ' \
+    SecurityScans=2 \
+    ScanModel=claude-opus-5.5:max \
+    ConsolidationModel=gpt-5.6-sol:max \
+    AutoDefaults=true
+assert_contains "${launcher_scan_stderr}" \
+    'Security scans: 2 (scan A gpt-5.6-sol:max; claude-opus-5.5:max); consolidation gpt-5.6-sol:max.' \
+    'Launcher auto-default security scans'
+grep -R -F -x -q 'SecurityScans=2' \
+    --include=launch-context.txt "${launcher_scan_state}" ||
+    fail 'Launcher context did not record the security scan count.'
+
+# A default scan model never takes the model requested for a later scan.
+run_scan_launcher launcher-scan-explicit "${launcher_scan_state}" \
+    --model gpt-5.6-sol --security-scans 3 \
+    --scan-model default --scan-model claude-opus-5.5:high \
+    --consolidation-model claude-fable-5.1
+assert_scan_launcher_block launcher-scan-explicit \
+    'gpt-5.6-sol:max claude-fable-5.1:max claude-opus-5.5:high ' \
+    SecurityScans=3 \
+    ScanModel=claude-fable-5.1:max \
+    ScanModel=claude-opus-5.5:high \
+    ConsolidationModel=claude-fable-5.1:max
+run_scan_launcher launcher-scan-single "${launcher_scan_state}" \
+    --security-scans 1 --consolidation-model default
+assert_scan_launcher_block launcher-scan-single 'gpt-5.6-sol:max ' \
+    SecurityScans=1
+
+run_scan_launcher launcher-scan-count "${launcher_scan_state}" \
+    --security-scans 4
+assert_scan_launcher_rejected launcher-scan-count \
+    'The requested security scan count is invalid.'
+run_scan_launcher launcher-scan-duplicate "${launcher_scan_state}" \
+    --scan-model gpt-5.6-sol:high
+assert_scan_launcher_rejected launcher-scan-duplicate \
+    'Every security scan must use a different model.'
+run_scan_launcher launcher-scan-single-consolidation "${launcher_scan_state}" \
+    --security-scans 1 --consolidation-model claude-opus-5.5
+assert_scan_launcher_rejected launcher-scan-single-consolidation \
+    'A consolidation model requires multiple security scans.'
+run_scan_launcher launcher-scan-too-many "${launcher_scan_state}" \
+    --scan-model claude-opus-5.5 --scan-model claude-fable-5.1 \
+    --scan-model gpt-6-sol
+assert_scan_launcher_rejected launcher-scan-too-many \
+    'Too many security scan models were requested.'
+run_scan_launcher launcher-scan-low-effort "${launcher_scan_state}" \
+    --scan-model claude-opus-5.5:low
+assert_scan_launcher_rejected launcher-scan-low-effort \
+    'The requested security scan model is invalid.'
+run_scan_launcher launcher-scan-unlisted "${launcher_scan_state}" \
+    --scan-model example-unlisted-model
+assert_scan_launcher_rejected launcher-scan-unlisted \
+    'The model for security scan B is not available.'
+
+# The launcher passes an approved quorum, an exact commit, and an earlier run
+# output folder whose completed scans the runner may reuse; the commit is
+# lowercased and the folder resolved to its canonical absolute path.
+launcher_reuse_folder="${fixture_root}/launcher reuse/20261026-170519-4448ff3f62cd4db9"
+mkdir -p -- "${launcher_reuse_folder}"
+run_scan_launcher launcher-scan-quorum-commit-reuse "${launcher_scan_state}" \
+    --security-scans 3 --scan-model claude-opus-5.5 \
+    --scan-model claude-fable-5.1 --consolidation-model default \
+    --min-successful-scans 2 \
+    --commit 7FD1A60B01F91B314F59955A4E4D4E80D8EDF11D \
+    --reuse-scans "${launcher_reuse_folder}/"
+assert_scan_launcher_block launcher-scan-quorum-commit-reuse \
+    'gpt-5.6-sol:max claude-opus-5.5:max claude-fable-5.1:max ' \
+    Commit=7fd1a60b01f91b314f59955a4e4d4e80d8edf11d \
+    SecurityScans=3 \
+    ScanModel=claude-opus-5.5:max \
+    ScanModel=claude-fable-5.1:max \
+    ConsolidationModel=gpt-5.6-sol:max \
+    MinimumSuccessfulScans=2 \
+    "ReuseScans=$(realpath -e -- "${launcher_reuse_folder}")"
+run_scan_launcher launcher-scan-quorum-invalid "${launcher_scan_state}" \
+    --min-successful-scans 4
+assert_scan_launcher_rejected launcher-scan-quorum-invalid \
+    'The requested minimum successful security scans is invalid.'
+run_scan_launcher launcher-scan-quorum-count "${launcher_scan_state}" \
+    --security-scans 2 --min-successful-scans 3
+assert_scan_launcher_rejected launcher-scan-quorum-count \
+    'The minimum successful security scans exceeds the scan count.'
+run_scan_launcher launcher-scan-commit-invalid "${launcher_scan_state}" \
+    --commit 7fd1a60b
+assert_scan_launcher_rejected launcher-scan-commit-invalid \
+    'The requested commit is invalid.'
+run_scan_launcher launcher-scan-commit-two-repositories "${launcher_scan_state}" \
+    --repo https://example.com/owner/other.git \
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+assert_scan_launcher_rejected launcher-scan-commit-two-repositories \
+    '--commit and --reuse-scans apply to exactly one repository.'
+run_scan_launcher launcher-scan-reuse-missing "${launcher_scan_state}" \
+    --reuse-scans "${fixture_root}/no-such-run-folder"
+assert_scan_launcher_rejected launcher-scan-reuse-missing \
+    'The earlier run output folder was not found or has an unsupported path.'
+ln -s -- "${launcher_reuse_folder}" "${fixture_root}/launcher-reuse-link"
+run_scan_launcher launcher-scan-reuse-link "${launcher_scan_state}" \
+    --reuse-scans "${fixture_root}/launcher-reuse-link"
+assert_scan_launcher_rejected launcher-scan-reuse-link \
+    'The earlier run output folder was not found or has an unsupported path.'
+run_scan_launcher launcher-scan-reuse-single "${launcher_scan_state}" \
+    --security-scans 1 --reuse-scans "${launcher_reuse_folder}"
+assert_scan_launcher_rejected launcher-scan-reuse-single \
+    'Reusing security scans requires multiple security scans.'
+
+# Remembered scan choices come first, and an explicit option still wins.
+launcher_scan_remembered_state="${fixture_root}/launcher-scan-remembered-state"
+mkdir -p -- "${launcher_scan_remembered_state}"
+chmod 0700 -- "${launcher_scan_remembered_state}"
+rhyolite_write_security_scan_preference \
+    https://example.com/owner/repository.git \
+    copilot \
+    3 \
+    claude-opus-5.5:max \
+    "${launcher_scan_remembered_state}/rhyolite/launcher" \
+    claude-fable-5.1:high \
+    gpt-6-sol:xhigh ||
+    fail 'Could not seed a security scan launcher preference.'
+run_scan_launcher launcher-scan-remembered \
+    "${launcher_scan_remembered_state}" --auto-defaults
+assert_scan_launcher_block launcher-scan-remembered \
+    'gpt-5.6-sol:max claude-fable-5.1:high gpt-6-sol:xhigh claude-opus-5.5:max ' \
+    SecurityScans=3 \
+    ScanModel=claude-fable-5.1:high \
+    ScanModel=gpt-6-sol:xhigh \
+    ConsolidationModel=claude-opus-5.5:max \
+    AutoDefaults=true
+run_scan_launcher launcher-scan-remembered-override \
+    "${launcher_scan_remembered_state}" --auto-defaults --security-scans 2 \
+    --consolidation-model default
+assert_scan_launcher_block launcher-scan-remembered-override \
+    'gpt-5.6-sol:max claude-fable-5.1:high claude-opus-5.5:max ' \
+    SecurityScans=2 \
+    ScanModel=claude-fable-5.1:high \
+    ConsolidationModel=claude-opus-5.5:max \
+    AutoDefaults=true
+
+# The interactive pickers offer remembered choices first, otherwise suggest
+# models from other vendors or families, and reject a model already used.
+launcher_prompt_library="${fixture_root}/launcher-scan-prompts.sh"
+sed '/^main "\$@"$/d' "${LAUNCHER}" > "${launcher_prompt_library}"
+cat >> "${launcher_prompt_library}" <<'SH'
+source "${1}/lib/harness/common.sh"
+source "${1}/scripts/launcher-preferences.sh"
+rhyolite_harness_load "$1" copilot
+shift
+"$@"
+SH
+assert_scan_prompt() {
+    local name="$1"
+    local answers="$2"
+    local expected="$3"
+    shift 3
+    local result
+
+    result="$(
+        env PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+            bash "${launcher_prompt_library}" "${PLUGIN_ROOT}" "$@" \
+            <<< "${answers}" 2>"${fixture_root}/${name}.stderr"
+    )" || fail "${name}: the security scan picker failed."
+    assert_equal "${expected}" "${result}" "${name} result"
+}
+assert_scan_prompt launcher-scan-count-fresh '' 2 \
+    prompt_for_security_scan_count '' gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-count-fresh.stderr" \
+    '  1. Two scans (Recommended) - 2' 'Fresh scan count picker'
+assert_scan_prompt launcher-scan-count-remembered '' 3 \
+    prompt_for_security_scan_count 3 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-count-remembered.stderr" \
+    '  1. Keep previously used (3)' 'Remembered scan count picker'
+assert_scan_prompt launcher-scan-model-fresh '' claude-opus-5.5 \
+    prompt_for_scan_model 'Security scan B model' '' 0 1 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    '  1. claude-opus-5.5 (Recommended) - vendor anthropic' \
+    'Fresh scan model picker'
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    '  2. claude-fable-5.1 - vendor anthropic' \
+    'Fresh scan model picker family suggestion'
+assert_contains "${fixture_root}/launcher-scan-model-fresh.stderr" \
+    'Models from different vendors or families give the most independent results.' \
+    'Fresh scan model picker guidance'
+assert_scan_prompt launcher-scan-model-remembered '' claude-fable-5.1:high \
+    prompt_for_scan_model 'Security scan B model' claude-fable-5.1:high 0 1 \
+    gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-remembered.stderr" \
+    '  1. Keep previously used (claude-fable-5.1:high)' \
+    'Remembered scan model picker'
+assert_scan_prompt launcher-scan-model-duplicate $'4\ngpt-5.6-sol\n2' \
+    claude-fable-5.1 \
+    prompt_for_scan_model 'Security scan B model' '' 0 1 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-duplicate.stderr" \
+    'Model gpt-5.6-sol is already used by another scan; choose a different model.' \
+    'Scan model picker duplicate rejection'
+if env PATH="${launcher_mock_bin}:/usr/bin:/bin" \
+    bash "${launcher_prompt_library}" "${PLUGIN_ROOT}" \
+        prompt_for_scan_model 'Security scan C model' '' 0 1 \
+        gpt-6-sol gpt-5.6-sol claude-opus-5.5 claude-fable-5.1 \
+    </dev/null >/dev/null 2>&1; then
+    fail 'The scan model picker selected a model at end of input with none to offer.'
+fi
+assert_scan_prompt launcher-scan-consolidation '' gpt-5.6-sol:max \
+    prompt_for_consolidation_model gpt-5.6-sol:max '' 0
+assert_contains "${fixture_root}/launcher-scan-consolidation.stderr" \
+    '  1. Same as the review model (Recommended) - gpt-5.6-sol:max' \
+    'Consolidation model picker'
 
 # shellcheck source=harness-contract-claude.sh
 source "${ROOT}/tests/harness-contract-claude.sh"

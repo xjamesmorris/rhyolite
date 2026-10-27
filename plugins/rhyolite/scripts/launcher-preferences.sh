@@ -427,14 +427,13 @@ rhyolite_read_preference() {
     local schema
     local stored_repository
     local stored_harness
-    local fleet_mode
+    local legacy_fleet_mode
     local model
     local reasoning_effort
     local context_tier
 
     RHYOLITE_PREFERENCE_STATUS='missing'
     RHYOLITE_PREFERENCE_HARNESS=''
-    RHYOLITE_PREFERENCE_FLEET_MODE=''
     RHYOLITE_PREFERENCE_MODEL=''
     RHYOLITE_PREFERENCE_REASONING_EFFORT=''
     RHYOLITE_PREFERENCE_CONTEXT_TIER=''
@@ -613,6 +612,58 @@ rhyolite_read_preference() {
                 rhyolite_read_json_string "${preference_path}" contextTier
             )" || context_tier=''
             ;;
+        4)
+            awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function starts_with(value, prefix) {
+                return substr(value, 1, length(prefix)) == prefix
+            }
+            function ends_with(value, suffix) {
+                return substr(value, length(value) - length(suffix) + 1) == suffix
+            }
+            NF {
+                count++
+                lines[count] = trim($0)
+            }
+            END {
+                if (count != 9 ||
+                    lines[1] != "{" ||
+                    lines[2] !~ /^"schemaVersion":[[:space:]]*4,$/ ||
+                    !starts_with(lines[3], "\"canonicalRepository\": \"") ||
+                    !ends_with(lines[3], "\",") ||
+                    !starts_with(lines[4], "\"harness\": \"") ||
+                    !ends_with(lines[4], "\",") ||
+                    !starts_with(lines[5], "\"model\": \"") ||
+                    !ends_with(lines[5], "\",") ||
+                    !starts_with(lines[6], "\"reasoningEffort\": \"") ||
+                    !ends_with(lines[6], "\",") ||
+                    !starts_with(lines[7], "\"contextTier\": \"") ||
+                    !ends_with(lines[7], "\",") ||
+                    !starts_with(lines[8], "\"updatedAt\": \"") ||
+                    !ends_with(lines[8], "\"") ||
+                    lines[9] != "}") {
+                    exit 1
+                }
+            }
+        ' "${preference_path}" || {
+                RHYOLITE_PREFERENCE_STATUS='invalid'
+                return 1
+            }
+            stored_harness="$(
+                rhyolite_read_json_string "${preference_path}" harness
+            )" || stored_harness=''
+            reasoning_effort="$(
+                rhyolite_read_json_string \
+                    "${preference_path}" reasoningEffort
+            )" || reasoning_effort=''
+            context_tier="$(
+                rhyolite_read_json_string "${preference_path}" contextTier
+            )" || context_tier=''
+            ;;
         *)
             RHYOLITE_PREFERENCE_STATUS='invalid'
             return 1
@@ -622,16 +673,20 @@ rhyolite_read_preference() {
     stored_repository="$(
         rhyolite_read_json_string "${preference_path}" canonicalRepository
     )" || stored_repository=''
-    fleet_mode="$(
+    # Schemas 1-3 still carry the retired fleetMode field; it is validated
+    # as part of their format and otherwise ignored.
+    legacy_fleet_mode="$(
         rhyolite_read_json_string "${preference_path}" fleetMode
-    )" || fleet_mode=''
+    )" || legacy_fleet_mode=''
     model="$(
         rhyolite_read_json_string "${preference_path}" model
     )" || model=''
 
     if [[ "${stored_repository}" != "${canonical_repository}" ]] ||
         ! rhyolite_valid_harness_id "${stored_harness}" ||
-        [[ "${fleet_mode}" != native && "${fleet_mode}" != standard ]] ||
+        [[ "${schema}" != 4 &&
+            "${legacy_fleet_mode}" != native &&
+            "${legacy_fleet_mode}" != standard ]] ||
         ! rhyolite_valid_model_id "${model}" ||
         ! rhyolite_valid_reasoning_effort "${reasoning_effort}" ||
         ! rhyolite_valid_context_tier "${context_tier}"; then
@@ -645,7 +700,6 @@ rhyolite_read_preference() {
 
     RHYOLITE_PREFERENCE_STATUS='valid'
     RHYOLITE_PREFERENCE_HARNESS="${stored_harness}"
-    RHYOLITE_PREFERENCE_FLEET_MODE="${fleet_mode}"
     RHYOLITE_PREFERENCE_MODEL="${model}"
     RHYOLITE_PREFERENCE_REASONING_EFFORT="${reasoning_effort}"
     RHYOLITE_PREFERENCE_CONTEXT_TIER="${context_tier}"
@@ -655,11 +709,10 @@ rhyolite_read_preference() {
 rhyolite_write_preference() {
     local canonical_repository="$1"
     local harness="$2"
-    local fleet_mode="$3"
-    local model="$4"
-    local reasoning_effort="$5"
-    local context_tier="$6"
-    local launcher_home="${7:-$(rhyolite_launcher_home)}"
+    local model="$3"
+    local reasoning_effort="$4"
+    local context_tier="$5"
+    local launcher_home="${6:-$(rhyolite_launcher_home)}"
     local preference_anchor
     local preference_path
     local preference_dir
@@ -667,8 +720,6 @@ rhyolite_write_preference() {
     local updated_at
 
     rhyolite_valid_harness_id "${harness}" || return 1
-    [[ "${fleet_mode}" == native || "${fleet_mode}" == standard ]] ||
-        return 1
     rhyolite_valid_model_id "${model}" || return 1
     rhyolite_valid_reasoning_effort "${reasoning_effort}" || return 1
     rhyolite_valid_context_tier "${context_tier}" || return 1
@@ -697,10 +748,9 @@ rhyolite_write_preference() {
         umask 077
         cat <<EOF
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "canonicalRepository": "$(rhyolite_json_escape "${canonical_repository}")",
   "harness": "$(rhyolite_json_escape "${harness}")",
-  "fleetMode": "$(rhyolite_json_escape "${fleet_mode}")",
   "model": "$(rhyolite_json_escape "${model}")",
   "reasoningEffort": "$(rhyolite_json_escape "${reasoning_effort}")",
   "contextTier": "$(rhyolite_json_escape "${context_tier}")",
@@ -724,4 +774,207 @@ EOF
     chmod 600 -- "${preference_path}" || return 1
     rhyolite_secure_user_path \
         "${preference_anchor}" "${preference_path}"
+}
+
+# Multi-model security scan choices live in a sidecar next to the schema-4
+# runtime preference, so that file's exact format stays unchanged. A scan
+# model spec is MODEL or MODEL:EFFORT.
+rhyolite_valid_security_scan_model_spec() {
+    local spec="$1"
+
+    case "${spec}" in
+        *:*)
+            rhyolite_valid_model_id "${spec%%:*}" &&
+                rhyolite_valid_reasoning_effort "${spec#*:}"
+            ;;
+        *) rhyolite_valid_model_id "${spec}" ;;
+    esac
+}
+
+rhyolite_security_scan_preference_path() {
+    local preference_path
+
+    preference_path="$(rhyolite_preference_path "$1" "$2")" || return 1
+    printf '%s\n' "${preference_path%.json}.security-scans.json"
+}
+
+# Sets RHYOLITE_SCAN_PREFERENCE_STATUS (missing, invalid, mismatch, valid),
+# RHYOLITE_SCAN_PREFERENCE_COUNT, RHYOLITE_SCAN_PREFERENCE_MODELS (an array
+# of specs for scans B and C), and RHYOLITE_SCAN_PREFERENCE_CONSOLIDATION
+# (a spec, or empty for the review model).
+rhyolite_read_security_scan_preference() {
+    local canonical_repository="$1"
+    local selected_harness="$2"
+    local launcher_home="${3:-$(rhyolite_launcher_home)}"
+    local preference_path preference_anchor spec
+    local stored_repository stored_harness count models consolidation
+    local -a specs=()
+
+    RHYOLITE_SCAN_PREFERENCE_STATUS='missing'
+    RHYOLITE_SCAN_PREFERENCE_COUNT=''
+    RHYOLITE_SCAN_PREFERENCE_MODELS=()
+    RHYOLITE_SCAN_PREFERENCE_CONSOLIDATION=''
+    rhyolite_valid_harness_id "${selected_harness}" || {
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    }
+    preference_path="$(
+        rhyolite_security_scan_preference_path \
+            "${canonical_repository}" "${launcher_home}"
+    )" || {
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    }
+    rhyolite_path_has_no_symlink_components "${preference_path}" || {
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    }
+    [[ -e "${preference_path}" || -L "${preference_path}" ]] || return 1
+    preference_anchor="$(rhyolite_preference_anchor "${launcher_home}")"
+    if [[ ! -f "${preference_path}" || -L "${preference_path}" ]] ||
+        ! rhyolite_secure_user_path \
+            "${preference_anchor}" "${preference_path}" ||
+        (( $(wc -c < "${preference_path}") > 4096 )); then
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    fi
+    awk '
+        function trim(value) {
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            return value
+        }
+        NF {
+            count++
+            lines[count] = trim($0)
+        }
+        END {
+            if (count != 9 ||
+                lines[1] != "{" ||
+                lines[2] != "\"schemaVersion\": 1," ||
+                lines[3] !~ /^"canonicalRepository": ".*",$/ ||
+                lines[4] !~ /^"harness": "[a-z][a-z0-9-]*",$/ ||
+                lines[5] !~ /^"securityScans": [123],$/ ||
+                lines[6] !~ /^"scanModels": "[A-Za-z0-9._:,-]*",$/ ||
+                lines[7] !~ /^"consolidationModel": "[A-Za-z0-9._:-]*",$/ ||
+                lines[8] !~ /^"updatedAt": "[0-9TZ:-]+"$/ ||
+                lines[9] != "}") {
+                exit 1
+            }
+        }
+    ' "${preference_path}" || {
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    }
+    stored_repository="$(
+        rhyolite_read_json_string "${preference_path}" canonicalRepository
+    )" || stored_repository=''
+    stored_harness="$(
+        rhyolite_read_json_string "${preference_path}" harness
+    )" || stored_harness=''
+    count="$(
+        sed -nE 's/^[[:space:]]*"securityScans": ([123]),[[:space:]]*$/\1/p' \
+            "${preference_path}"
+    )"
+    models="$(
+        sed -nE 's/^[[:space:]]*"scanModels": "([^"]*)",[[:space:]]*$/\1/p' \
+            "${preference_path}"
+    )"
+    consolidation="$(
+        sed -nE 's/^[[:space:]]*"consolidationModel": "([^"]*)",[[:space:]]*$/\1/p' \
+            "${preference_path}"
+    )"
+    if [[ -n "${models}" ]]; then
+        IFS=, read -r -a specs <<< "${models}"
+    fi
+    if [[ "${stored_repository}" != "${canonical_repository}" ]] ||
+        ((${#specs[@]} != count - 1)) ||
+        { [[ -n "${consolidation}" ]] && ((count == 1)); } ||
+        { [[ -n "${consolidation}" ]] &&
+            ! rhyolite_valid_security_scan_model_spec "${consolidation}"; }; then
+        RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+        return 1
+    fi
+    for spec in "${specs[@]}"; do
+        rhyolite_valid_security_scan_model_spec "${spec}" || {
+            RHYOLITE_SCAN_PREFERENCE_STATUS='invalid'
+            return 1
+        }
+    done
+    if [[ "${stored_harness}" != "${selected_harness}" ]]; then
+        RHYOLITE_SCAN_PREFERENCE_STATUS='mismatch'
+        return 1
+    fi
+    RHYOLITE_SCAN_PREFERENCE_STATUS='valid'
+    RHYOLITE_SCAN_PREFERENCE_COUNT="${count}"
+    RHYOLITE_SCAN_PREFERENCE_MODELS=("${specs[@]}")
+    RHYOLITE_SCAN_PREFERENCE_CONSOLIDATION="${consolidation}"
+    return 0
+}
+
+#   rhyolite_write_security_scan_preference <repository> <harness> <count>
+#       <consolidation-spec-or-empty> <launcher-home> [scan-spec ...]
+rhyolite_write_security_scan_preference() {
+    local canonical_repository="$1"
+    local harness="$2"
+    local count="$3"
+    local consolidation="$4"
+    local launcher_home="${5:-$(rhyolite_launcher_home)}"
+    shift 5
+    local preference_anchor preference_path preference_dir temporary_path
+    local spec models=''
+
+    rhyolite_valid_harness_id "${harness}" || return 1
+    [[ "${count}" =~ ^[123]$ ]] || return 1
+    (($# == count - 1)) || return 1
+    for spec in "$@"; do
+        rhyolite_valid_security_scan_model_spec "${spec}" || return 1
+        models="${models:+${models},}${spec}"
+    done
+    if [[ -n "${consolidation}" ]]; then
+        ((count > 1)) || return 1
+        rhyolite_valid_security_scan_model_spec "${consolidation}" ||
+            return 1
+    fi
+    preference_path="$(
+        rhyolite_security_scan_preference_path \
+            "${canonical_repository}" "${launcher_home}"
+    )" || return 1
+    preference_anchor="$(rhyolite_preference_anchor "${launcher_home}")"
+    preference_dir="$(dirname "${preference_path}")"
+    rhyolite_prepare_secure_user_directory \
+        "${preference_anchor}" "${preference_dir}" || return 1
+    chmod 700 -- "${launcher_home}" "${preference_dir}" 2>/dev/null ||
+        return 1
+    rhyolite_secure_user_path \
+        "${preference_anchor}" "${preference_dir}" || return 1
+    if [[ -e "${preference_path}" || -L "${preference_path}" ]]; then
+        [[ -f "${preference_path}" && ! -L "${preference_path}" ]] ||
+            return 1
+        rhyolite_secure_user_path \
+            "${preference_anchor}" "${preference_path}" || return 1
+    fi
+    temporary_path="${preference_path}.tmp.$$"
+    [[ ! -e "${temporary_path}" && ! -L "${temporary_path}" ]] || return 1
+    if ! (
+        umask 077
+        printf '{\n'
+        printf '  "schemaVersion": 1,\n'
+        printf '  "canonicalRepository": "%s",\n' \
+            "$(rhyolite_json_escape "${canonical_repository}")"
+        printf '  "harness": "%s",\n' "${harness}"
+        printf '  "securityScans": %s,\n' "${count}"
+        printf '  "scanModels": "%s",\n' "${models}"
+        printf '  "consolidationModel": "%s",\n' "${consolidation}"
+        printf '  "updatedAt": "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '}\n'
+    ) > "${temporary_path}" ||
+        ! chmod 600 -- "${temporary_path}" ||
+        ! mv -f -- "${temporary_path}" "${preference_path}"; then
+        rm -f -- "${temporary_path}"
+        return 1
+    fi
+    [[ -f "${preference_path}" && ! -L "${preference_path}" ]] &&
+        rhyolite_secure_user_path \
+            "${preference_anchor}" "${preference_path}"
 }

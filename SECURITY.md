@@ -29,10 +29,12 @@ The supported runner path:
 - Contributes local, display-only outer-session hooks. `sessionStart`
   emits one plain version/start line for ordinary loads or the
   exactly-once launcher plaque. The `userPromptSubmitted` command hook
-  emits a plaque only for exact manual review-start commands and ignores
-  internal resumes, marker-bearing continuations, launcher prompts, and
-  unrelated text. Neither hook performs network access, Git commands,
-  writes, prompt mutation, or environment/auth inspection.
+  emits a plaque only for exact manual review-start commands, including
+  Copilot CLI's fixed skill-invocation sentence for one at the start of
+  the prompt, and ignores internal resumes, marker-bearing continuations,
+  launcher prompts, and unrelated text. Neither hook performs network
+  access, Git commands, writes, prompt mutation, or environment/auth
+  inspection.
 - Runs clone/fetch in a process-local empty home, removes inherited Git,
   Copilot, GitHub, credential-manager, SSH-agent, `_netrc`/`.netrc`,
   and proxy inputs, clears credential helpers and HTTP headers, requires
@@ -247,10 +249,14 @@ the Claude Code adapter enforces these worker controls:
   session persistence in an empty working directory. Its JSON result is
   accepted only when `modelUsage` lists only the approved model.
 - Rhyolite never passes `--fallback-model`. After each worker, it reads the
-  session record and fails the review if any main-thread turn came from
-  another model (including a safeguard `model_refusal_fallback` or an
-  advisor model) or another effort, if a subagent turn appears, if the record
-  is unreadable, or if a report arrives without its record.
+  session record and rejects the session if any main-thread turn came from
+  another model (including the model of a safeguard `model_refusal_fallback`
+  or an advisor model) or another effort, if a subagent turn appears, if the
+  record is unreadable, or if a report arrives without its record. A
+  `refusal` stop or safeguard handover is a provider refusal: the runner
+  stops the worker, never accepts the fallback model's output, never retries
+  the declined model, and continues only with another approved model under
+  the plan's `RefusalPolicy`.
 - Persisted agent state is the worker settings plus a filtered, redacted
   session record that keeps only user, assistant, system, title, and
   agent-name records. Attachments such as the account email and organization

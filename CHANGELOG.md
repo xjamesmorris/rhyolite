@@ -2,6 +2,114 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-27
+
+### Added
+
+- Multi-model security scans: up to three independent, isolated scans of
+  the same read-only snapshot, followed by a consolidation review that runs
+  its own complete security pass, verifies every scan finding, and returns
+  a validated ledger. Scans run before research; the research worker never
+  sees their findings. Scan models, efforts, consolidation settings, and the
+  minimum successful scans are approval-bound as `SecurityScans`.
+- Launcher options `--security-scans`, `--scan-model`, and
+  `--consolidation-model`, with remembered choices and suggestions from
+  another vendor or model family. The launcher defaults to two scans; the
+  direct runner defaults to one integrated security pass. Two scans use
+  three base model sessions per repository, before any research or recovery,
+  and Copilot checks each additional selected model with one short request.
+  The direct runner also adds `--min-successful-scans` and
+  `--suggest-scan-models`.
+- `--auto-defaults` accepts every unspecified launcher and guided-setup
+  default, including home output and scope 1, while preserving explicit
+  effective-plan approval. `default` also selects remembered or suggested
+  values without a prompt for the review model, reasoning effort, scan
+  models, and consolidation model.
+- `--reuse-scans RUN_FOLDER`, in the launcher and the direct runner, reuses
+  the validated reports of completed scans from an earlier run of the same
+  repository and commit when the harness, context tier, scan model, and
+  effort match, so only the other scans and the consolidation run again.
+  Each reused report's SHA-256 digest is approval-bound and verified again
+  before consolidation, and failure analysis names the run folder whenever
+  completed scans can be reused.
+- Launcher options `--min-successful-scans` and `--commit`. Editing the
+  security scans at plan approval also asks how many must succeed.
+
+### Changed
+
+- Three-scan plans require two successful scans by default; two-scan plans
+  still require both. One failed scan of three no longer discards the other
+  two.
+- Harness Contract v10: worker outcome schema 3 adds `Compactions`, the
+  context compactions recorded in the session. Scan state records them, and
+  failure analysis names a compaction before a scan or review report that
+  failed its contract.
+
+- Every scope now requires the same complete security pass under the same
+  approved model, reasoning effort, context, and 240-minute default session
+  timeout. Dedicated research retains its separate 60- and 120-minute
+  limits. The shared checklist covers untrusted arithmetic and bounds,
+  privilege checks including update paths, time-of-check to time-of-use
+  gaps, privileged error paths, and malformed input.
+- Security requests ask for source-level attacker position, preconditions,
+  trust boundaries, and triggering input, without exploit code, payloads,
+  shellcode, or step-by-step attack instructions.
+- Native fleet mode is retired. The launcher no longer passes Copilot's
+  `--fleet`; `--fleet-mode native` is rejected and
+  `--fleet-mode standard` remains a no-op compatibility spelling. Plan
+  schema 5 omits `FleetMode`, and launcher preferences use schema 4 while
+  preserving model, effort, and context from schemas 1-3. State schema 6
+  is unchanged.
+
+### Fixed
+
+- A long security scan no longer loses its report contract to automatic
+  context compaction, which replaces the scan request with a summary. Both
+  worker agents repeat the scan report contract in their own instructions,
+  and a scan session that ends without a valid report is asked once, in the
+  same session, for only its report (approval-bound `ScanReportRecovery`);
+  scan state records the result as `ReportRequest`. See the
+  [October 26 incident](docs/RUN-FAILURE-INCIDENT-2026-10-26.md).
+- Provider refusals no longer discard work that other approved models can
+  finish. Harness Contract v9 recognizes a `refused` outcome live and after
+  exit, in any event order. The approval-bound `RefusalPolicy` skips
+  declined scans and excludes them from the required minimum; consolidation
+  still runs when every scan is declined. A declined report writer or
+  research worker hands over in a fresh session to the next approved model
+  that has not been declined. Rhyolite never retries the declined model for
+  that repository or accepts an automatic fallback outside the plan.
+- Refusals and handovers are disclosed as `ProviderRefusals` in state,
+  manifests, handoffs, the HTML index, and the executive summary. Worker
+  outcome schema 2 records the approved prompt budget and largest prompt.
+  Failure analysis distinguishes `provider-refusal` from genuine
+  `context-limit` failures instead of attributing a fallback model's small
+  prompt budget to the approved model. See the
+  [October 25 incident and live verification](docs/RUN-FAILURE-INCIDENT-2026-10-25.md).
+- Copilot CLI 1.0.103 compatibility: every child and launcher model check
+  now use `--sync-session=off` instead of the removed
+  `--no-remote-export`, keeping account session-history sync off.
+- Abandoned runtime homes from hard-killed runners and launcher model checks
+  are swept on later starts. Inherited util-linux `flock` locks protect
+  active homes; only the current user's exact-name, unlocked homes whose
+  whole tree has been unchanged for 60 minutes are removed. Without `flock`,
+  no sweep occurs.
+- The large plaque now appears after a manual `/rhyolite:start` or
+  `/rhyolite:repo-review` in Copilot CLI. Copilot CLI hands a plugin prompt
+  command to the `userPromptSubmitted` hook inside its fixed
+  skill-invocation sentence rather than as the literal command (recorded
+  since Copilot CLI 1.0.79), so the display-only hook never matched. It now
+  also recognizes that exact sentence for a review-start command at the
+  start of the prompt. Launcher starts were not affected.
+
+### Known limitations
+
+- Host sleep pauses model work but consumes the wall-clock recovery budget.
+  Keep the host awake during reviews.
+- The runner does not independently audit security-file coverage, and
+  reports may omit unopened files from their limitations. A clean report
+  is not proof of exhaustive coverage. See
+  [Known limitations](README.md#known-limitations).
+
 ## 0.8.4 - 2026-10-20
 
 - The launcher now rejects an unknown or mistyped option before any state,
