@@ -162,7 +162,40 @@ at `max`, both with `long_context`, at OpenSBI commit
   declined Claude Opus 5.5 for scan B; GPT-5.6 Sol wrote the canonical
   consolidation report."
 
-`claude-opus-5.5` has declined both security scans of this repository, so
-this run consolidated one scan's findings; a live review in which two scans
-both contribute findings has not been observed yet. The live refusal stop
-was not exercised, because the CLI ended both refused sessions itself.
+At this point, `claude-opus-5.5` had declined both security scans of this
+repository, so the run consolidated one scan's findings; a live review in
+which two scans both contributed findings had not yet been observed.
+The live refusal stop was not exercised, because the CLI ended both refused
+sessions itself.
+
+## Follow-up: 0.9.0 live release verification (2026-10-26)
+
+Two scope 1 reviews exercised the local 0.9.0 runtime candidate
+`59be9fa9049712407e5999d6633af977e8e24031` on Fedora Linux 44 through
+GitHub Copilot CLI. Both reviewed the public `xjamesmorris/rhyolite-test-1`
+repository at commit `a91e8de960a3343a126ae7c5603ada1b90473310`, with
+maximum reasoning effort, `long_context`, and research disabled. Each plan
+was explicitly approved before execution.
+
+- Run `20261026-164429-29405e429bd3d20f` used `gpt-6.1-sol` for scan A and
+  consolidation, and `claude-fable-5.1` for scan B. Scan B was recorded as
+  refused after 20 seconds; it was skipped without retry, and the required
+  scans were reduced from two to one. Scan A contributed four findings,
+  all confirmed in a validated ledger. The canonical report passed without
+  repair, and the repository completed in 20 minutes 55 seconds. This
+  verified refusal recovery, not the two-contributing-scan path.
+- Run `20261026-172136-a99c97c89ae64581` explicitly pinned the same source
+  commit and used `gpt-6.1-sol` for scan A and consolidation, with
+  `gpt-6-sol` for scan B. Both scans completed in one attempt: A contributed
+  three finding IDs and B contributed four. The validated ledger classified
+  all seven IDs exactly once: one confirmed, five merged, one refined, and
+  none rejected. Each entry referenced a numbered finding in the canonical
+  report. The report passed unchanged with 14 findings, including four
+  security findings, and the repository completed in 21 minutes 43 seconds.
+  No refusal, relaunch, continuation, or report-repair invocation was needed.
+
+The second run closes the live two-contributing-scan release verification
+gap. Its two models are in the same GPT family; this establishes the live
+collection and consolidation path, not cross-vendor coverage or exhaustive
+defect detection. The documented host-sleep and security-file-coverage
+limitations remain unchanged.

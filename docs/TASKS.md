@@ -29,26 +29,10 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T23 | P1 | Verify | Verify two contributing scans before the 0.9.0 release |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T23 (P1, Verify): Verify two contributing scans before the 0.9.0 release
-
-- **Problem:** The October 25 live verification completed consolidation
-  after one scan was refused. It did not exercise a live run in which two
-  successful scans both contributed findings.
-- **Next step:** from an interactive session, approve a scope 1 plan for a
-  public test repository with two distinct current frontier models at maximum
-  reasoning effort and context. Keep the host awake, complete both scans,
-  and check the canonical report and consolidation ledger.
-- **Done when:** both scan reports validate, the ledger classifies every
-  finding from both scans, the canonical report validates, and the exact
-  source commit, candidate commit, models, and result are recorded.
-- **Source:** [October 25 live verification](RUN-FAILURE-INCIDENT-2026-10-25.md#follow-up-live-verification-2026-10-25)
-  and the October 26 local 0.9.0 release preparation.
 
 ### T20 (P3, Open): Report security-relevant files that the security pass did not open
 
