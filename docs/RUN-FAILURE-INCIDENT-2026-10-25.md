@@ -199,3 +199,30 @@ gap. Its two models are in the same GPT family; this establishes the live
 collection and consolidation path, not cross-vendor coverage or exhaustive
 defect detection. The documented host-sleep and security-file-coverage
 limitations remain unchanged.
+
+## Follow-up: 0.9.0 release candidate re-verification (2026-10-26)
+
+The October 26 compaction fixes changed the runner, both adapters, the
+launcher, and both orchestrators, so the two-contributing-scan release
+review was repeated on candidate
+`a574d7697b3ce26d6246b124544f9587f3aeb223` on Fedora Linux 44 through
+GitHub Copilot CLI. It reviewed `xjamesmorris/rhyolite-test-1` at commit
+`a91e8de960a3343a126ae7c5603ada1b90473310` with maximum reasoning effort,
+`long_context`, and research disabled, and the plan was explicitly approved
+before execution.
+
+- Run `20261026-225502-5ce5c28e919d3ae0` used `gpt-6.1-sol` for scan A and
+  consolidation and `gpt-6-sol` for scan B, with the new default of two
+  required scans. Both scans completed in one attempt: A contributed three
+  finding IDs and B four. Each scan state recorded `ReportRequest` as
+  `NotNeeded` and `Compactions` as 0. The validated ledger classified all
+  seven IDs exactly once: six merged, one refined, and none confirmed or
+  rejected, each referencing a numbered finding in the canonical report.
+  The report passed unchanged with 12 findings, including four security
+  findings, and the repository completed in 22 minutes 1 second. No
+  refusal, relaunch, continuation, scan report request, or report-repair
+  invocation was needed.
+
+This repeats the release verification on the candidate that includes the
+compaction fixes. A live compaction and a live reused-scan review remain
+open; see [TASKS.md](TASKS.md).

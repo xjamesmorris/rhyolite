@@ -29,28 +29,11 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T24 | P1 | Verify | Repeat the 0.9.0 live release checks on the new candidate |
 | T25 | P2 | Verify | Observe a compacted scan and a reused-scan review live |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
-
-### T24 (P1, Verify): Repeat the 0.9.0 live release checks on the new candidate
-
-- **Problem:** The 0.9.0 live release checks passed on candidate
-  `59be9fa9049712407e5999d6633af977e8e24031`. The fixes for the October 26
-  compaction failure change the runner, both adapters (Harness Contract
-  v10), the launcher, and both orchestrators, so that evidence no longer
-  covers the release candidate.
-- **Next step:** after the fixes merge into `release/0.9.0`, rerun the
-  two-contributing-scan release review of `xjamesmorris/rhyolite-test-1`
-  on the new candidate and record the result in
-  [RUN-FAILURE-INCIDENT-2026-10-25.md](RUN-FAILURE-INCIDENT-2026-10-25.md).
-- **Done when:** the release review completes on the new candidate with
-  every scan finding ID classified exactly once and `ReportRequest` and
-  `Compactions` recorded in each scan state.
-- **Source:** [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
 
 ### T25 (P2, Verify): Observe a compacted scan and a reused-scan review live
 

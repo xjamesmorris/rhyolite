@@ -176,3 +176,15 @@ run only scan C and the consolidation.
 
 Live verification of a compacted scan's report request and of a reused-scan
 review remains open; see [TASKS.md](TASKS.md).
+
+## Follow-up: libsignal review on the fixed runner (2026-10-26)
+
+Run `20261026-225132-482122841a28901c` repeated the libsignal review at the
+same commit on candidate `a574d7697b3ce26d6246b124544f9587f3aeb223` with two
+scans: `example-unlisted-model` (scan A and the review model) and
+`gpt-6-astra` (scan B), consolidated by `claude-fable-5.1`. Both scans
+completed in one attempt with 2 and 5 finding IDs. Neither was compacted,
+so no scan report request was needed. The validated ledger confirmed 2,
+refined 4, and rejected 1 of the 7 IDs, and the report passed with 8
+findings; the repository completed in 45 minutes 25 seconds. This exercises
+the fixed scan path on the same large repository, but not a compaction.
