@@ -6943,6 +6943,7 @@ for sweep_name in \
     rhyolite-repo-research-claude.Aa000002 \
     rhyolite-report-repair-copilot.Aa000003 \
     rhyolite-report-repair.Aa000004 \
+    rhyolite-snapshot-read.Aa000009 \
     rhyolite-repo-review-copilot.Aa000005 \
     rhyolite-repo-review-copilot.Aa000006 \
     rhyolite-repo-review-copilot.too-long-suffix \
@@ -6979,7 +6980,8 @@ for sweep_name in \
     rhyolite-repo-review-copilot.Aa000001 \
     rhyolite-repo-research-claude.Aa000002 \
     rhyolite-report-repair-copilot.Aa000003 \
-    rhyolite-report-repair.Aa000004; do
+    rhyolite-report-repair.Aa000004 \
+    rhyolite-snapshot-read.Aa000009; do
     [[ ! -e "${sweep_root}/tmp/${sweep_name}" ]] ||
         fail "The runtime-home sweep kept the stale home ${sweep_name}."
 done

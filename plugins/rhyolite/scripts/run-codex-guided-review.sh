@@ -100,6 +100,8 @@ current_lookback='NOT SELECTED'
 current_cookies='NOT SELECTED'
 setup_sequence=0
 approval_sequence=0
+# A plan mismatch regenerates the plan from the preserved setup answers.
+reuse_setup=0
 
 read_setup_result() {
     local path="$1"
@@ -190,7 +192,9 @@ PY
 
 while true; do
     setup_sequence=$((setup_sequence + 1))
-    if ((auto_defaults && setup_sequence == 1)); then
+    if ((reuse_setup)); then
+        reuse_setup=0
+    elif ((auto_defaults && setup_sequence == 1)); then
         # --auto-defaults accepts the home output and scope 1 without a setup
         # question; the effective plan still needs explicit approval.
         current_output="${HOME%/}/rhyolite-output/repo-review"
@@ -412,6 +416,7 @@ PY
                     "${execution_stderr}"; then
                     printf '%s\n' \
                         'The approved effective plan changed; regenerating it with the preserved setup.' >&2
+                    reuse_setup=1
                     break
                 fi
                 exit "${execution_status}"

@@ -5465,8 +5465,12 @@ cleanup_snapshot_transports_on_exit() {
             2>> "${RHYOLITE_REPOSITORY_ERROR_PATH:-/dev/null}"; then
             if [[ "${snapshot_phase}" == review ]]; then
                 REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
+                rhyolite_unlock_runtime_home "${REVIEW_SNAPSHOT_RUNTIME_LOCK-}"
+                REVIEW_SNAPSHOT_RUNTIME_LOCK=''
             else
                 RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
+                rhyolite_unlock_runtime_home "${RESEARCH_SNAPSHOT_RUNTIME_LOCK-}"
+                RESEARCH_SNAPSHOT_RUNTIME_LOCK=''
             fi
         fi
     done
@@ -5479,10 +5483,17 @@ prepare_worker_snapshot_transport() {
     [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]] || return 0
     broker_root="$(mktemp -d "${TMPDIR:-/tmp}/rhyolite-snapshot-read.XXXXXXXX")" || return 1
     broker_root="$(canonicalize_directory_path "${broker_root}")" || return 1
+    # Like a runtime home, the broker runtime stays locked by the runner and
+    # every child that inherits the descriptor, so a later runner start
+    # removes it only after a hard kill left it stale and unlocked.
     if [[ "${phase}" == review ]]; then
         REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN="${broker_root}"
+        rhyolite_lock_runtime_home "${broker_root}" REVIEW_SNAPSHOT_RUNTIME_LOCK ||
+            return 1
     else
         RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN="${broker_root}"
+        rhyolite_lock_runtime_home "${broker_root}" RESEARCH_SNAPSHOT_RUNTIME_LOCK ||
+            return 1
     fi
     chmod 700 -- "${broker_root}" || return 1
     snapshot_transport_prepare snapshot_broker_arguments \
@@ -5538,6 +5549,8 @@ finalize_review_runtime_home() {
         if snapshot_transport_cleanup "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN}" \
             "${SNAPSHOT_POLICY_DIGEST}" review 2>> "${error_path}"; then
             REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
+            rhyolite_unlock_runtime_home "${REVIEW_SNAPSHOT_RUNTIME_LOCK-}"
+            REVIEW_SNAPSHOT_RUNTIME_LOCK=''
         else
             printf '%s\n' 'Snapshot transport cleanup failed; report promotion is blocked.' \
                 >> "${error_path}"
@@ -11500,6 +11513,8 @@ process_repository() {
     local RHYOLITE_REPOSITORY_ERROR_PATH="${error_path}"
     local REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN=''
     local RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
+    local REVIEW_SNAPSHOT_RUNTIME_LOCK=''
+    local RESEARCH_SNAPSHOT_RUNTIME_LOCK=''
     local -a RHYOLITE_SCAN_PIDS=()
     local SECURITY_SCANS_DIRECTORY="${result_path}/security-scans"
     local SECURITY_SCAN_REQUEST_PATH=''
@@ -12405,6 +12420,8 @@ EOF
             if snapshot_transport_cleanup "${RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN}" \
                 "${SNAPSHOT_POLICY_DIGEST}" research 2>> "${research_error_path}"; then
                 RESEARCH_SNAPSHOT_RUNTIME_TO_CLEAN=''
+                rhyolite_unlock_runtime_home "${RESEARCH_SNAPSHOT_RUNTIME_LOCK-}"
+                RESEARCH_SNAPSHOT_RUNTIME_LOCK=''
             else
                 research_cleanup_failed=1
             fi

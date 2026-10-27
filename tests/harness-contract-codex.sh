@@ -128,6 +128,8 @@ case "${prompt}" in
         exit 2
         ;;
 esac
+final="${RHYOLITE_CODEX_FAKE_FINAL:-${final}}"
+native_tool="${RHYOLITE_CODEX_FAKE_TOOL:-request_user_input}"
 if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
     printf 'RHYOLITE_CODEX_NATIVE_UI %s TERM=%s\n' "${native_stage}" "${TERM-}"
 fi
@@ -140,7 +142,7 @@ cat > "${session_dir}/rollout.jsonl" <<EOF
 {"type":"session_meta","payload":{"session_id":"${session_id}","id":"${session_id}","originator":"codex_cli","cli_version":"0.163.0","source":"cli"}}
 {"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}
 {"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"read-only"},"model":"gpt-5.6-sol","effort":"max","multi_agent_version":"disabled","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.6-sol","reasoning_effort":"max"}}}}
-{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"fixture-call"}}
+{"type":"response_item","payload":{"type":"function_call","name":"${native_tool}","arguments":"{}","call_id":"fixture-call"}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"${escaped_final}"}]}}
 EOF
 exit 0
@@ -616,18 +618,20 @@ harness_allow_all_detected &&
 codex_guided_work="${fixture_root}/codex-guided-work"
 mkdir -- "${codex_guided_work}"
 # Run one command with a pseudo-terminal on stdin and stderr, where the
-# native Codex questions appear, and its stdout in the named file.
+# native Codex questions appear, its stdout in the first named file, and the
+# terminal output in the second.
 codex_run_with_terminal() {
     local stdout_path="$1"
-    shift
-    python3 -I - "${stdout_path}" "$@" <<'PY'
+    local terminal_path="$2"
+    shift 2
+    python3 -I - "${stdout_path}" "${terminal_path}" "$@" <<'PY'
 import errno
 import os
 import pty
 import subprocess
 import sys
 
-stdout_path, command = sys.argv[1], sys.argv[2:]
+stdout_path, terminal_path, command = sys.argv[1], sys.argv[2], sys.argv[3:]
 master, slave = pty.openpty()
 with open(stdout_path, "wb") as stdout:
     process = subprocess.Popen(
@@ -636,15 +640,20 @@ with open(stdout_path, "wb") as stdout:
     )
     status = process.wait(timeout=60)
 os.close(slave)
+terminal = bytearray()
 while True:
     try:
-        if not os.read(master, 65536):
-            break
+        chunk = os.read(master, 65536)
     except OSError as error:
         if error.errno != errno.EIO:
             raise
         break
+    if not chunk:
+        break
+    terminal.extend(chunk)
 os.close(master)
+with open(terminal_path, "wb") as output:
+    output.write(bytes(terminal))
 sys.exit(status)
 PY
 }
@@ -677,6 +686,7 @@ assert_contains "${fixture_root}/codex-stage-no-terminal.stderr" \
 [[ ! -e "${codex_setup_result}" ]] ||
     fail 'Codex guided setup wrote a result without a terminal.'
 codex_run_with_terminal "${fixture_root}/codex-setup.stdout" \
+    "${fixture_root}/codex-setup.terminal" \
     "${CODEX_GUIDED_STAGE}" \
     --stage setup \
     --plugin-root "${PLUGIN_ROOT}" \
@@ -708,6 +718,7 @@ END_RHYOLITE_CODEX_APPROVAL_INPUT_V1
 EOF
 codex_approval_result="${fixture_root}/codex-approval-result.json"
 codex_run_with_terminal "${fixture_root}/codex-approval.stdout" \
+    "${fixture_root}/codex-approval.terminal" \
     "${CODEX_GUIDED_STAGE}" \
     --stage approval \
     --plugin-root "${PLUGIN_ROOT}" \
@@ -727,6 +738,45 @@ if (value.Protocol !== "RHYOLITE_CODEX_APPROVAL_V1" ||
   throw new Error("Codex guided approval result changed");
 }
 JS
+# A native reply outside the strict stage contract, or any tool other than
+# the native question tool, writes no result.
+codex_invalid_stage_case() {
+    local name="$1"
+    local stage="$2"
+    local input="$3"
+    local final="$4"
+    local tool="$5"
+    local result="${fixture_root}/codex-invalid-${name}.json"
+
+    if RHYOLITE_CODEX_FAKE_FINAL="${final}" RHYOLITE_CODEX_FAKE_TOOL="${tool}" \
+        codex_run_with_terminal "${fixture_root}/codex-invalid-${name}.stdout" \
+        "${fixture_root}/codex-invalid-${name}.terminal" \
+        "${CODEX_GUIDED_STAGE}" \
+        --stage "${stage}" \
+        --plugin-root "${PLUGIN_ROOT}" \
+        --working-directory "${codex_guided_work}" \
+        --input "${input}" \
+        --result "${result}" \
+        --model gpt-5.6-sol \
+        --reasoning-effort max \
+        --context long_context; then
+        fail "Codex guided stage accepted the invalid ${name} reply."
+    fi
+    assert_contains "${fixture_root}/codex-invalid-${name}.terminal" \
+        'Codex guided stage failed: result' "Codex invalid ${name} reply"
+    [[ ! -e "${result}" ]] ||
+        fail "Codex guided stage wrote a result for the invalid ${name} reply."
+}
+codex_invalid_stage_case setup-scope setup "${codex_setup_input}" \
+    '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":4,"ProvenanceLookbackMonths":null,"ResearchCookies":null}' \
+    request_user_input
+codex_invalid_stage_case setup-extra setup "${codex_setup_input}" \
+    '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":1,"ProvenanceLookbackMonths":null,"ResearchCookies":null,"Shell":"allowed"}' \
+    request_user_input
+codex_invalid_stage_case setup-tool setup "${codex_setup_input}" '' shell
+codex_invalid_stage_case approval-action approval "${codex_approval_input}" \
+    "{\"Protocol\":\"RHYOLITE_CODEX_APPROVAL_V1\",\"Action\":\"execute\",\"ApprovalHash\":\"${codex_approval_hash}\"}" \
+    request_user_input
 
 codex_controller_plugin="${fixture_root}/codex-controller-plugin"
 codex_controller_session="${fixture_root}/codex-controller-session"
@@ -762,7 +812,7 @@ case "${stage}" in
         ;;
     approval)
         hash="$(
-            grep -Eo '[0-9a-f]{64}' "${RHYOLITE_CODEX_CONTROLLER_SESSION:?}"/codex-approval-*.txt |
+            grep -h -Eo '[0-9a-f]{64}' "${RHYOLITE_CODEX_CONTROLLER_SESSION:?}"/codex-approval-*.txt |
                 tail -n 1
         )"
         printf '{"Action":"run","ApprovalHash":"%s","Protocol":"RHYOLITE_CODEX_APPROVAL_V1"}\n' \
@@ -800,6 +850,12 @@ if [[ " $* " == *' --plan-only '* ]]; then
     exit 0
 fi
 [[ " $* " == *' --expected-plan-hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '* ]]
+if [[ "${RHYOLITE_CODEX_CONTROLLER_MODE:-}" == mismatch &&
+    ! -e "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/mismatch-reported" ]]; then
+    touch "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/mismatch-reported"
+    printf '%s\n' 'Review execution did not start: the approved plan changed; regenerate and reconfirm.' >&2
+    exit 2
+fi
 if [[ "${RHYOLITE_CODEX_CONTROLLER_MODE:-}" == stop ]]; then
     run_folder="${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/live-run"
     mkdir -p -- "${run_folder}"
@@ -923,6 +979,34 @@ if "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
     >/dev/null 2>&1; then
     fail 'Codex guided controller pinned one commit for several repositories.'
 fi
+
+# A plan mismatch keeps the setup answers: the controller regenerates the
+# plan and asks only for approval again.
+codex_mismatch_session="${fixture_root}/codex-controller-mismatch-session"
+codex_mismatch_capture="${fixture_root}/codex-controller-mismatch-capture"
+mkdir -p -- "${codex_mismatch_session}" "${codex_mismatch_capture}"
+RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
+RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_mismatch_session}" \
+RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_mismatch_capture}" \
+RHYOLITE_CODEX_CONTROLLER_MODE=mismatch \
+HOME="${fixture_root}/codex-controller-home" \
+"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+    --plugin-root "${codex_controller_plugin}" \
+    --working-directory "${codex_controller_work}" \
+    --session-directory "${codex_mismatch_session}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context \
+    --repo https://github.com/octocat/Hello-World \
+    > "${fixture_root}/codex-controller-mismatch.stdout" \
+    2> "${fixture_root}/codex-controller-mismatch.stderr" ||
+    fail 'Codex guided controller did not recover from a plan mismatch.'
+assert_contains "${fixture_root}/codex-controller-mismatch.stderr" \
+    'regenerating it with the preserved setup' 'Codex plan mismatch notice'
+[[ "$(find "${codex_mismatch_session}" -name 'codex-setup-*.json' | wc -l)" == 1 &&
+    "$(find "${codex_mismatch_session}" -name 'codex-approval-*.json' | wc -l)" == 2 &&
+    "$(find "${codex_mismatch_capture}" -name 'call-*.nul' | wc -l)" == 4 ]] ||
+    fail 'Codex plan mismatch did not regenerate the plan from preserved setup answers.'
 
 codex_controller_stop_session="${fixture_root}/codex-controller-stop-session"
 codex_controller_stop_capture="${fixture_root}/codex-controller-stop-capture"

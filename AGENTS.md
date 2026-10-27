@@ -365,8 +365,9 @@ supported and must not drive new work.
   still leaves truthful state. Every worker starts under util-linux
   `setpriv --pdeathsig TERM` when available, so a hard kill of the runner
   stops the worker's `timeout` process group instead of orphaning it.
-  Every runner runtime home under `TMPDIR` and every launcher
-  `model-check-<n>` home is held under a util-linux `flock` lock that its
+  Every runner runtime home and offline snapshot broker runtime under
+  `TMPDIR` and every launcher `model-check-<n>` home is held under a
+  util-linux `flock` lock that its
   children inherit. Each execution start of the runner, and each launcher
   start, removes only the current user's exact-name homes whose lock is free
   and whose whole tree is unchanged for 60 minutes, so a hard kill does not

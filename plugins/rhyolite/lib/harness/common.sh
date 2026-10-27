@@ -561,9 +561,10 @@ rhyolite_harness_load() {
 # inherits the descriptor keeps holding, and a later start removes a matching
 # home only when that lock is free and nothing in the home changed within
 # RHYOLITE_STALE_RUNTIME_HOME_MINUTES. The age check also keeps any home that
-# an older, lock-unaware Rhyolite is still actively writing.
+# an older, lock-unaware Rhyolite is still actively writing. The runner
+# holds an offline snapshot broker runtime the same way.
 RHYOLITE_STALE_RUNTIME_HOME_MINUTES=60
-RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN='^rhyolite-((repo-review|repo-research|report-repair)-[a-z][a-z0-9-]{0,31}|report-repair)\.[A-Za-z0-9]{8}$'
+RHYOLITE_RUNNER_RUNTIME_HOME_PATTERN='^rhyolite-((repo-review|repo-research|report-repair)-[a-z][a-z0-9-]{0,31}|report-repair|snapshot-read)\.[A-Za-z0-9]{8}$'
 RHYOLITE_LAUNCHER_RUNTIME_HOME_PATTERN='^model-check-[0-9]+$'
 
 rhyolite_runtime_home_locking_available() {

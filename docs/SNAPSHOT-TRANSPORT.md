@@ -149,5 +149,7 @@ broker; this lets normal Codex shutdown reach a clean broker exit without
 allowing a detached process to survive loss of its runner owner. Copilot and
 Claude Code retain the direct launcher path. Cleanup removes transient grants
 and configuration, preserves the read-only snapshot/evidence, and is
-idempotent. Hard-kill residual sweeping remains the separately tracked cleanup
-workstream.
+idempotent. The runner holds each broker runtime under the same inherited
+`flock` lock as its runtime homes, so after a hard kill a later runner start
+removes a `rhyolite-snapshot-read.*` runtime only when its lock is free and
+its whole tree is unchanged for 60 minutes.
