@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-26
+**Last updated:** 2026-10-27
 
 ## Priorities
 
@@ -29,24 +29,26 @@ Status values:
 
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
-| T25 | P2 | Verify | Observe a compacted scan and a reused-scan review live |
+| T25 | P2 | Verify | Observe a reused-scan review and a scan report request live |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
 
-### T25 (P2, Verify): Observe a compacted scan and a reused-scan review live
+### T25 (P2, Verify): Observe a reused-scan review and a scan report request live
 
-- **Problem:** The same-session scan report request, the compaction-proof
-  scan contract, and `--reuse-scans` are verified with mocked harnesses
-  only. A compaction cannot be forced on demand.
-- **Next step:** run a three-scan review of a large repository, such as
-  `signalapp/libsignal`, and check `Compactions` and `ReportRequest` in each
-  `scan-state.json`; then approve a plan with `--reuse-scans` and a failed
-  or interrupted run's folder and confirm that only the missing scans ran.
-- **Done when:** a live compacted scan returns a valid report, directly or
-  through a `Recovered` report request, and a live reused-scan review
-  completes with the reused reports' digests verified.
+- **Problem:** Run `20261027-000751-3702922ead504995` verified live that a
+  compacted scan keeps its report contract: scan C was compacted and still
+  returned a valid report. `--reuse-scans` and the same-session scan report
+  request are verified with mocked harnesses only; that run did not need the
+  report request, and a report request cannot be forced on demand.
+- **Next step:** approve a plan with `--reuse-scans` and the folder of a
+  failed or interrupted multi-scan run, and confirm that only the missing
+  scans ran. In later multi-scan reviews, check `ReportRequest` in each
+  `scan-state.json` and record any value other than `NotNeeded`.
+- **Done when:** a live reused-scan review completes with the reused
+  reports' digests verified, and a live scan report request is recorded or
+  the project records that none has occurred.
 - **Source:** [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
 
 ### T20 (P3, Open): Report security-relevant files that the security pass did not open

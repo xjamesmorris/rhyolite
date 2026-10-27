@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-26 (local time)
 **Status:** Root cause confirmed; fixes implemented for 0.9.0 (Harness
-Contract v10); live verification pending
+Contract v10). A compacted scan returned a valid report live on 2026-10-27;
+the scan report request and scan reuse await live verification
 **Severity:** Medium (review reliability; two completed scans and a third
 scan's findings were not consolidated)
 **Security impact:** None observed. No output from a model outside the
@@ -186,5 +187,35 @@ scans: `example-unlisted-model` (scan A and the review model) and
 completed in one attempt with 2 and 5 finding IDs. Neither was compacted,
 so no scan report request was needed. The validated ledger confirmed 2,
 refined 4, and rejected 1 of the 7 IDs, and the report passed with 8
-findings; the repository completed in 45 minutes 25 seconds. This exercises
+findings; the run completed in 45 minutes 25 seconds. This exercises
 the fixed scan path on the same large repository, but not a compaction.
+
+## Follow-up: live compaction on the fixed runner (2026-10-27)
+
+Run `20261027-000751-3702922ead504995` repeated the libsignal review at the
+same commit with the runtime of candidate
+`a574d7697b3ce26d6246b124544f9587f3aeb223` and three scans:
+`example-unlisted-model` at `max` (scan A and the review model),
+`grok-4.7` at `xhigh` (scan B), and `gemini-4-argon` at `high` (scan C), all
+with `long_context`. The plan used the new default of two required scans and
+`claude-fable-5.1` at `max` for consolidation.
+
+- Scan C was compacted after 38 model turns at 802,422 of 983,040 prompt
+  tokens (82%), close to where the original scan C was compacted (809,055).
+  Copilot CLI removed 295 of 324 messages. As before, the summary omitted
+  the report's section names; this time it named the
+  `RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1` contract, and the worker
+  instructions in its system prompt, which compaction keeps, were 4,301
+  tokens with the contract, up from 3,732. After 43 more turns its first
+  reply was a valid scan report with 4 findings: `Compactions` 1,
+  `ReportRequest` `NotNeeded`.
+- Scan A was also compacted once, at 737,762 of 922,000 tokens, and returned
+  a valid report with 3 findings. Scan B was not compacted and reported no
+  qualifying findings.
+- The validated ledger confirmed 2 and refined 5 of the 7 finding IDs. The
+  report passed with 9 findings and needed no repair, recovery, or refusal
+  handling, and the run completed in 58 minutes 52 seconds.
+
+This verifies live that a compacted scan keeps its report contract. The
+same-session scan report request was not needed, and no reused-scan review
+has run live; both remain open in [TASKS.md](TASKS.md).

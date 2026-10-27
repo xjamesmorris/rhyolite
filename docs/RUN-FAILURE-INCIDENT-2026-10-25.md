@@ -219,7 +219,7 @@ before execution.
   seven IDs exactly once: six merged, one refined, and none confirmed or
   rejected, each referencing a numbered finding in the canonical report.
   The report passed unchanged with 12 findings, including four security
-  findings, and the repository completed in 22 minutes 1 second. No
+  findings, and the run completed in 22 minutes 1 second. No
   refusal, relaunch, continuation, scan report request, or report-repair
   invocation was needed.
 
