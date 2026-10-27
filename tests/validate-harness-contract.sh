@@ -277,7 +277,7 @@ fi
 # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
 unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
 source "${HARNESS_COMMON}"
-assert_equal '9' \
+assert_equal '10' \
     "${RHYOLITE_HARNESS_CONTRACT_VERSION}" \
     'Harness contract version'
 assert_equal '4' \
@@ -286,7 +286,7 @@ assert_equal '4' \
 assert_equal '5' \
     "${RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS}" \
     'Harness worker refusal status'
-assert_equal '2' \
+assert_equal '3' \
     "${RHYOLITE_HARNESS_OUTCOME_SCHEMA}" \
     'Harness worker outcome schema'
 production_registry_path=''
@@ -1652,26 +1652,63 @@ copilot_v8_stream "${copilot_v8_raw}" \
     'result|{"exitCode":0}'
 copilot_v8_outcome "${copilot_v8_raw}" completed
 
-# Contract v9 outcome schema 2: a refusal needs a recorded refusal, a
-# fallback model belongs only to a blocked fallback or a refusal, and token
-# counts are positive integers or null.
-copilot_v9_valid_refusal='{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":32000,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":1,"PromptBudget":968000,"PeakPromptTokens":185172}'
+# Contract v10: Compactions counts each applied context compaction once,
+# whether the stream, the persisted session events, or both recorded it, as
+# Copilot CLI 1.0.104-4 did in run 20261026-170519. A compaction that did not
+# apply is not counted.
+copilot_v10_events="${copilot_v8_home}/session-state/${copilot_v8_session}/events.jsonl"
+node - "${copilot_v10_events}" <<'JS'
+const fs = require("fs");
+const compaction = (id, success, outcome) => JSON.stringify({type: "session.compaction_complete",
+  data: {success, outcome, compactionAttemptId: id, messagesRemoved: 315,
+    tokenLimit: 983040, trigger: "threshold"}});
+fs.writeFileSync(process.argv[2], [compaction("attempt-1", true, "applied"),
+  compaction("attempt-2", true, "applied"), compaction("attempt-3", false, "failed")].join("\n") + "\n");
+JS
+copilot_v8_stream "${copilot_v8_raw}" \
+    'session.compaction_complete|{"success":true,"outcome":"applied","compactionAttemptId":"attempt-1","trigger":"threshold"}' \
+    'assistant.message|{"model":"claude-opus-5.5","content":"Report text."}' \
+    'result|{"exitCode":0}'
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["Schema"] == 3 and data["Compactions"] == 2, data
+PY2
+rm -f -- "${copilot_v10_events}"
+copilot_v8_outcome "${copilot_v8_raw}" completed
+python3 - "${copilot_v8_root}/outcome.json" <<'PY2'
+import json
+import sys
+
+assert json.load(open(sys.argv[1], encoding="utf-8"))["Compactions"] == 1
+PY2
+
+# Contract v10 outcome schema 3: a refusal needs a recorded refusal, a
+# fallback model belongs only to a blocked fallback or a refusal, token
+# counts are positive integers or null, and Compactions is a count.
+copilot_v9_valid_refusal='{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":32000,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":1,"PromptBudget":968000,"PeakPromptTokens":185172,"Compactions":0}'
 printf '%s\n' "${copilot_v9_valid_refusal}" > "${copilot_v8_root}/good-outcome.json"
 assert_equal refused \
     "$(rhyolite_harness_validate_outcome_json "${copilot_v8_root}/good-outcome.json" review)" \
     'Valid refused worker outcome'
 for copilot_v8_bad_outcome in \
-    'extra|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Extra":1}' \
+    'extra|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0,"Extra":1}' \
     'schema|{"Schema":1,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":""}' \
-    'retryable|{"Schema":2,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'fallback|{"Schema":2,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'control|{"Schema":2,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'phase|{"Schema":2,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'refused-without-refusal|{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'refused-retryable|{"Schema":2,"Phase":"review","Outcome":"refused","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":1,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'completed-fallback|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
-    'zero-budget|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":0,"PeakPromptTokens":null}' \
-    'text-peak|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":"185172"}'; do
+    'retryable|{"Schema":3,"Phase":"review","Outcome":"failed","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'fallback|{"Schema":3,"Phase":"review","Outcome":"fallback-blocked","Retryable":true,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'control|{"Schema":3,"Phase":"review","Outcome":"failed","Retryable":false,"ExitCode":1,"SessionErrors":["bad\u001b[31m"],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'phase|{"Schema":3,"Phase":"research","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'refused-without-refusal|{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":false,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'refused-retryable|{"Schema":3,"Phase":"review","Outcome":"refused","Retryable":true,"ExitCode":1,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":1,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'completed-fallback|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"claude-opus-4.8","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}' \
+    'zero-budget|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":0,"PeakPromptTokens":null,"Compactions":0}' \
+    'schema-2|{"Schema":2,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}' \
+    'negative-compactions|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":-1}' \
+    'text-compactions|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":"1"}' \
+    'text-peak|{"Schema":3,"Phase":"review","Outcome":"completed","Retryable":false,"ExitCode":0,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":"185172","Compactions":0}'; do
     printf '%s\n' "${copilot_v8_bad_outcome#*|}" > "${copilot_v8_root}/bad-outcome.json"
     if rhyolite_harness_validate_outcome_json \
         "${copilot_v8_root}/bad-outcome.json" review >/dev/null; then
@@ -7314,6 +7351,57 @@ run_scan_launcher launcher-scan-unlisted "${launcher_scan_state}" \
     --scan-model example-unlisted-model
 assert_scan_launcher_rejected launcher-scan-unlisted \
     'The model for security scan B is not available.'
+
+# The launcher passes an approved quorum, an exact commit, and an earlier run
+# output folder whose completed scans the runner may reuse; the commit is
+# lowercased and the folder resolved to its canonical absolute path.
+launcher_reuse_folder="${fixture_root}/launcher reuse/20261026-170519-4448ff3f62cd4db9"
+mkdir -p -- "${launcher_reuse_folder}"
+run_scan_launcher launcher-scan-quorum-commit-reuse "${launcher_scan_state}" \
+    --security-scans 3 --scan-model claude-opus-5.5 \
+    --scan-model claude-fable-5.1 --consolidation-model default \
+    --min-successful-scans 2 \
+    --commit 7FD1A60B01F91B314F59955A4E4D4E80D8EDF11D \
+    --reuse-scans "${launcher_reuse_folder}/"
+assert_scan_launcher_block launcher-scan-quorum-commit-reuse \
+    'gpt-5.6-sol:max claude-opus-5.5:max claude-fable-5.1:max ' \
+    Commit=7fd1a60b01f91b314f59955a4e4d4e80d8edf11d \
+    SecurityScans=3 \
+    ScanModel=claude-opus-5.5:max \
+    ScanModel=claude-fable-5.1:max \
+    ConsolidationModel=gpt-5.6-sol:max \
+    MinimumSuccessfulScans=2 \
+    "ReuseScans=$(realpath -e -- "${launcher_reuse_folder}")"
+run_scan_launcher launcher-scan-quorum-invalid "${launcher_scan_state}" \
+    --min-successful-scans 4
+assert_scan_launcher_rejected launcher-scan-quorum-invalid \
+    'The requested minimum successful security scans is invalid.'
+run_scan_launcher launcher-scan-quorum-count "${launcher_scan_state}" \
+    --security-scans 2 --min-successful-scans 3
+assert_scan_launcher_rejected launcher-scan-quorum-count \
+    'The minimum successful security scans exceeds the scan count.'
+run_scan_launcher launcher-scan-commit-invalid "${launcher_scan_state}" \
+    --commit 7fd1a60b
+assert_scan_launcher_rejected launcher-scan-commit-invalid \
+    'The requested commit is invalid.'
+run_scan_launcher launcher-scan-commit-two-repositories "${launcher_scan_state}" \
+    --repo https://example.com/owner/other.git \
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+assert_scan_launcher_rejected launcher-scan-commit-two-repositories \
+    '--commit and --reuse-scans apply to exactly one repository.'
+run_scan_launcher launcher-scan-reuse-missing "${launcher_scan_state}" \
+    --reuse-scans "${fixture_root}/no-such-run-folder"
+assert_scan_launcher_rejected launcher-scan-reuse-missing \
+    'The earlier run output folder was not found or has an unsupported path.'
+ln -s -- "${launcher_reuse_folder}" "${fixture_root}/launcher-reuse-link"
+run_scan_launcher launcher-scan-reuse-link "${launcher_scan_state}" \
+    --reuse-scans "${fixture_root}/launcher-reuse-link"
+assert_scan_launcher_rejected launcher-scan-reuse-link \
+    'The earlier run output folder was not found or has an unsupported path.'
+run_scan_launcher launcher-scan-reuse-single "${launcher_scan_state}" \
+    --security-scans 1 --reuse-scans "${launcher_reuse_folder}"
+assert_scan_launcher_rejected launcher-scan-reuse-single \
+    'Reusing security scans requires multiple security scans.'
 
 # Remembered scan choices come first, and an explicit option still wins.
 launcher_scan_remembered_state="${fixture_root}/launcher-scan-remembered-state"

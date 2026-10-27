@@ -1551,6 +1551,7 @@ last_error = False
 refusals = 0
 unapproved_models = []
 peak_prompt = None
+compactions = set()
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
@@ -1567,7 +1568,7 @@ def prompt_tokens(usage):
 
 path = pathlib.Path(record_name) if record_name else None
 if path is not None and path.is_file() and not path.is_symlink():
-    for raw_line in path.read_bytes().split(b"\n"):
+    for line_number, raw_line in enumerate(path.read_bytes().split(b"\n")):
         if not raw_line.strip():
             continue
         try:
@@ -1582,6 +1583,13 @@ if path is not None and path.is_file() and not path.is_symlink():
         # approved model; the fallback model's turns follow it.
         if record.get("type") == "system" and record.get("subtype") == "model_refusal_fallback":
             refusals += 1
+        # Claude Code records each context compaction, which replaces earlier
+        # conversation, including the request, with a summary, as a
+        # compact_boundary system record.
+        if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
+            identity = record.get("uuid")
+            compactions.add(identity if isinstance(identity, str) and identity
+                            else f"line:{line_number}")
         if record.get("type") != "assistant":
             continue
         message = record.get("message") if isinstance(record.get("message"), dict) else {}
@@ -1635,7 +1643,7 @@ elif errors:
 else:
     outcome = "unknown"
 pathlib.Path(output_name).write_text(json.dumps({
-    "Schema": 2,
+    "Schema": 3,
     "Phase": phase,
     "Outcome": outcome,
     "Retryable": outcome == "transient-failure",
@@ -1650,6 +1658,7 @@ pathlib.Path(output_name).write_text(json.dumps({
     "ContentRefusals": min(refusals, 1000000),
     "PromptBudget": None,
     "PeakPromptTokens": peak_prompt,
+    "Compactions": min(len(compactions), 1000000),
 }, sort_keys=True) + "\n", encoding="utf-8")
 PY
     ); then

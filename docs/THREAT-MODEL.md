@@ -119,6 +119,11 @@
     harness's automatic refusal fallback answers with an unapproved model, a
     refusal is misread as a context overflow or an enforcement failure, or
     selected security scans are silently suppressed.
+37. Automatic context compaction replaces a long scan's request with a
+    summary, so the scan answers in another layout and its findings are
+    lost; or a scan report reused from an earlier run is altered after
+    approval, comes from another repository, commit, harness, or model, or
+    is read from a folder that another user controls.
 
 ## Controls
 
@@ -544,6 +549,26 @@
   paraphrases, so failure analysis never attributes them to the
   consolidation model. A stop request signals every scan's process tree,
   records each scan as `Interrupted`, and removes every scan runtime home.
+- Both worker agents carry the scan report contract, byte-for-byte as
+  `security-scan-prompt.txt` defines it, in their own instructions, which
+  context compaction keeps; validation keeps the copies identical. A scan
+  whose session ended normally on the approved model without a valid report
+  gets one fixed same-session request that contains only runner text, the
+  runner's own validator diagnostic, and the contract read from the scan
+  prompt. The continuation uses the adapter's continuation argv with the
+  same environment, runtime home, tools, model, effort, context, and live
+  and post-exit enforcement; its reply passes the same validator; and the
+  runtime home is removed only afterward. No request follows a timeout, an
+  interruption, a refusal, substituted output, or an adapter failure.
+- `--reuse-scans` reads only an earlier run folder, repository folder, scan
+  folders, and files that the current user owns, that are not symbolic
+  links, and that other users cannot write. It reuses a report only for the
+  same canonical repository, commit, harness, context tier, scan protocol,
+  model, and reasoning effort; revalidates it against the current scan
+  contract; binds its SHA-256 digest into the approval hash; and, before
+  consolidation, copies it and verifies the digest and contract again, so a
+  report changed after approval fails that scan without a worker. Reused
+  reports are untrusted evidence exactly like fresh scan reports.
 
 ### Provider refusals
 
@@ -587,6 +612,10 @@
   their scans or moves the report to another approved model. Rhyolite
   discloses every refusal and handover and never weakens the remaining
   security pass, but the review then reflects fewer independent models.
+- A reused scan report reflects the scan prompt of the Rhyolite release that
+  produced it; reuse requires the same scan protocol name, not an identical
+  prompt. With the default two-of-three quorum, a review can consolidate two
+  scans when the third fails, and discloses the failed scan.
 - Claims, reputation, community, prior-art, and provenance indicators can be
   false positives or miss context. They are advisory, never verdicts about
   people, and require human review before they are shared or acted on.

@@ -1,6 +1,6 @@
 # Harness architecture
 
-**Contract version:** 5
+**Contract version:** 10
 
 **Initial implementation:** I1a
 
@@ -16,7 +16,7 @@ only harness-specific identity, model and capability metadata, authentication
 bridging, worker process construction, runtime-home handling, final-response
 extraction, and harness-specific isolation checks.
 
-Contract v9 is a fail-closed data-contract and lifecycle seam. It keeps the
+Contract v10 is a fail-closed data-contract and lifecycle seam. It keeps the
 Contract-v3 plan/state identity and the Contract-v4 bounded, isolated
 report-repair invocation, which can return only a compact confidence-edit
 descriptor. Contract v5 moved the dedicated scope 2/3 research worker behind
@@ -65,10 +65,14 @@ model's output; under the approval-bound `RefusalPolicy` a refused security
 scan is skipped and excluded from the required scans, and a refused report
 writer or research worker hands over, in a fresh session and runtime home,
 to the next approved model that the provider has not declined for the
-repository.
+repository. Contract v10 adds `Compactions` to the worker outcome (schema 3):
+the number of context compactions that the harness recorded in the session,
+each of which replaces earlier conversation, including the request, with a
+model-written summary. The runner records it for every security scan and
+names it in failure analysis when a report then fails its contract.
 
 [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the normative implementation
-playbook for Contract v9 and any future production adapter.
+playbook for Contract v10 and any future production adapter.
 
 ## I1a invariants
 
@@ -152,7 +156,7 @@ order:
 3. Validate the selected ID as a safe identifier.
 4. Resolve the ID through the fixed adapter map.
 5. Source the mapped adapter file.
-6. Assert every required Contract-v9 function exists.
+6. Assert every required Contract-v10 function exists.
 7. Invoke adapter functions only through the guarded contract boundary.
 
 The common boundary captures scalar output without exposing adapter stderr and
@@ -189,7 +193,7 @@ harness <id> <function>
 Diagnostics at all three harness stages pass through Rhyolite's normal
 sanitization boundary before they reach stderr.
 
-## Contract-v9 functions
+## Contract-v10 functions
 
 Every mapped adapter must define all functions below.
 
@@ -807,6 +811,25 @@ model was recorded, the scan was classified as an ordinary failure, and the
 review failed below its required scans. See
 [RUN-FAILURE-INCIDENT-2026-10-25.md](RUN-FAILURE-INCIDENT-2026-10-25.md).
 
+Contract v10 keeps the same functions, statuses, and registry. It adds
+worker-outcome schema 3, which adds the key `Compactions`, a non-negative
+count. Copilot counts each `session.compaction_complete` event with
+`success: true` and outcome `applied` once by its `compactionAttemptId`,
+whether the event stream, the persisted session events, or both recorded it.
+Claude Code counts each `compact_boundary` system record of the session
+record once by its UUID. A continuation reports the session's cumulative
+count.
+
+The live failure that motivated Contract v10 was a security scan on
+`gemini-4-argon` with a 983,040-token long-context prompt budget. Copilot CLI
+compacted the session at 82% of that budget and replaced the scan request,
+the only definition of the scan report contract, with a summary; the scan
+then returned a report in a layout of its own, and the review failed below
+its required scans. Both worker agents now repeat the scan report contract in
+their own instructions, which compaction keeps, and the runner asks the same
+scan session once for a conforming report. See
+[RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
+
 ## Adding a future adapter
 
 A future adapter is a separate implementation phase. It must be added without
@@ -814,7 +837,7 @@ weakening the fail-closed boundary:
 
 1. Assign a safe canonical ID.
 2. Add one explicit ID-to-file entry to the fixed registry.
-3. Implement every Contract-v9 function; do not inherit missing behavior from
+3. Implement every Contract-v10 function; do not inherit missing behavior from
    Copilot or Claude Code.
 4. Return only tri-state capability values and document any `unverified`
    result.

@@ -75,7 +75,25 @@ SECURITY_SCAN_PROTOCOL='RHYOLITE_SECURITY_SCAN_V1'
 SECURITY_CONSOLIDATION_PROTOCOL='RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1'
 SECURITY_SCAN_FINDING_LIMIT=60
 SECURITY_SCAN_RELAUNCH_LIMIT=1
+# A scan session that ends normally without a valid scan report is asked,
+# in the same session, at most this many times for only its report.
+SECURITY_SCAN_REPORT_REQUEST_LIMIT=1
+SECURITY_SCAN_REPORT_CONTRACT_START='RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1'
+SECURITY_SCAN_REPORT_CONTRACT_END='END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1'
 SECURITY_LEDGER_REQUEST_LIMIT=1
+# --reuse-scans: validated reports of completed scans from an earlier run of
+# the same repository and commit, reused by scan index when the harness,
+# context tier, scan protocol, model, and effort match. Each digest is
+# approval-bound and verified again when the scan phase copies the report.
+REUSE_SCANS_INPUT=""
+REUSE_SCANS_FOLDER=""
+REUSE_SCANS_RUN_ID=""
+REUSE_SCANS_COMMIT=""
+REUSE_SCANS_REPORT_BYTE_LIMIT=4194304
+declare -a SECURITY_SCAN_REUSE_LABELS=()
+declare -a SECURITY_SCAN_REUSE_SESSIONS=()
+declare -a SECURITY_SCAN_REUSE_COUNTS=()
+declare -a SECURITY_SCAN_REUSE_SHA256=()
 # Provider refusals (RefusalPolicy): see refusal_policy_json.
 REFUSAL_POLICY_PROTOCOL_VERSION=1
 ENABLE_PUBLIC_RESEARCH=0
@@ -185,7 +203,12 @@ Options:
                                    Model that consolidates the scans and writes
                                    the canonical report (default: --model)
   --min-successful-scans N|default Scans that must succeed before consolidation
-                                   (default: every scan)
+                                   (default: 2 of 3 scans, otherwise every scan)
+  --reuse-scans RUN_FOLDER         Reuse the validated reports of completed
+                                   scans from an earlier run output folder of
+                                   the same repository and commit when the
+                                   harness, context, scan model, and effort
+                                   match; only the other scans run again
   --fleet-mode standard            Retired; accepted with no effect for compatibility
   --enable-public-research         Legacy alias for --scope 2; never combine with --scope
   --enable-provenance-research     Legacy alias for --scope 3 with
@@ -1102,7 +1125,7 @@ repository_failure_remediation() {
                     ;;
                 'security scans')
                     printf '%s' \
-                        'Read failure-analysis.md and security-scans/scan-*/errors.txt. Choose an available scan model or a supported scan effort (never below high) in a new approved plan, or rerun after a model-service failure. Lower --min-successful-scans only if fewer independent scans are acceptable.'
+                        'Read failure-analysis.md and security-scans/scan-*/errors.txt. Choose an available scan model or a supported scan effort (never below high) in a new approved plan, or rerun after a model-service failure. Lower --min-successful-scans only if fewer independent scans are acceptable, and add --reuse-scans with this run output folder to keep the completed scans.'
                     ;;
                 'security consolidation')
                     printf '%s' \
@@ -1626,24 +1649,58 @@ worker_recovery_policy_json() {
         "${WORKER_RECOVERY_RESEARCH_RELAUNCH_LIMIT}"
 }
 
+# The approval-bound reuse record of one scan, or null when it runs again.
+security_scan_reuse_json() {
+    local index="$1"
+
+    if [[ -z "${SECURITY_SCAN_REUSE_SHA256[index]-}" ]]; then
+        printf 'null'
+        return 0
+    fi
+    printf '{"RunId":"%s","Label":"%s","SessionId":%s,"FindingCount":%s,"ReportSha256":"%s"}' \
+        "${REUSE_SCANS_RUN_ID}" \
+        "${SECURITY_SCAN_REUSE_LABELS[index]}" \
+        "$(json_string_or_null "${SECURITY_SCAN_REUSE_SESSIONS[index]}")" \
+        "${SECURITY_SCAN_REUSE_COUNTS[index]}" \
+        "${SECURITY_SCAN_REUSE_SHA256[index]}"
+}
+
 security_scans_json() {
     local index label
     local mode='integrated'
     local consolidation='null'
+    local reuse_source='null'
+    local report_recovery_available=0
+    local report_recovery_limit=0
 
     ((SECURITY_SCAN_COUNT > 1)) && mode='multi-model'
-    printf '{"Mode":"%s","Count":%s,"Isolation":"separate-session-and-runtime-home-per-scan","ScanProtocol":"%s","IdenticalScanPrompt":true,"ScanRelaunchLimit":%s,"Scans":[' \
+    if ((SECURITY_SCAN_COUNT > 1)); then
+        report_recovery_available="${WORKER_CONTINUATION_AVAILABLE}"
+        report_recovery_limit="${SECURITY_SCAN_REPORT_REQUEST_LIMIT}"
+    fi
+    printf '{"Mode":"%s","Count":%s,"Isolation":"separate-session-and-runtime-home-per-scan","ScanProtocol":"%s","IdenticalScanPrompt":true,"ScanRelaunchLimit":%s,"ScanReportRecovery":{"Mode":"same-session-continuation","Available":%s,"AttemptLimit":%s},"Scans":[' \
         "${mode}" "${SECURITY_SCAN_COUNT}" "${SECURITY_SCAN_PROTOCOL}" \
-        "$(( SECURITY_SCAN_COUNT > 1 ? SECURITY_SCAN_RELAUNCH_LIMIT : 0 ))"
+        "$(( SECURITY_SCAN_COUNT > 1 ? SECURITY_SCAN_RELAUNCH_LIMIT : 0 ))" \
+        "$(json_boolean "${report_recovery_available}")" \
+        "${report_recovery_limit}"
     for index in "${!SECURITY_SCAN_MODELS[@]}"; do
         label="$(printf '%s' ABC | cut -c "$((index + 1))")"
         ((index > 0)) && printf ','
-        printf '{"Label":"%s","Model":"%s","ReasoningEffort":"%s","ModelCatalogMembership":"%s"}' \
+        printf '{"Label":"%s","Model":"%s","ReasoningEffort":"%s","ModelCatalogMembership":"%s","Reuse":%s}' \
             "${label}" \
             "$(json_escape "${SECURITY_SCAN_MODELS[index]}")" \
             "$(json_escape "${SECURITY_SCAN_EFFORTS[index]}")" \
-            "$(json_escape "${SECURITY_SCAN_MEMBERSHIPS[index]}")"
+            "$(json_escape "${SECURITY_SCAN_MEMBERSHIPS[index]}")" \
+            "$(security_scan_reuse_json "${index}")"
     done
+    if [[ -n "${REUSE_SCANS_RUN_ID}" ]]; then
+        reuse_source="$(
+            printf '{"RunFolder":"%s","RunId":"%s","Commit":"%s"}' \
+                "$(json_escape "${REUSE_SCANS_FOLDER}")" \
+                "${REUSE_SCANS_RUN_ID}" \
+                "${REUSE_SCANS_COMMIT}"
+        )"
+    fi
     if ((SECURITY_SCAN_COUNT > 1)); then
         consolidation="$(
             printf '{"Model":"%s","ReasoningEffort":"%s","ModelCatalogMembership":"%s","Protocol":"%s","FindingLimitPerScan":%s,"LedgerRecovery":{"Mode":"same-session-continuation","Available":%s,"AttemptLimit":%s}}' \
@@ -1656,7 +1713,8 @@ security_scans_json() {
                 "${SECURITY_LEDGER_REQUEST_LIMIT}"
         )"
     fi
-    printf '],"MinimumSuccessfulScans":%s,"MaxConcurrentWorkers":%s,"ScanTimeoutMinutes":%s,"Consolidation":%s}' \
+    printf '],"ReuseSource":%s,"MinimumSuccessfulScans":%s,"MaxConcurrentWorkers":%s,"ScanTimeoutMinutes":%s,"Consolidation":%s}' \
+        "${reuse_source}" \
         "${MIN_SUCCESSFUL_SCANS}" \
         "$((THROTTLE_LIMIT * SECURITY_SCAN_COUNT))" \
         "${SESSION_TIMEOUT_MINUTES}" \
@@ -1665,6 +1723,9 @@ security_scans_json() {
 
 security_scans_text() {
     local index label
+    local reused
+
+    reused="$(security_scan_reused_count)"
 
     if ((SECURITY_SCAN_COUNT == 1)); then
         printf '%-20s %s\n' 'Security scans:' \
@@ -1675,12 +1736,25 @@ security_scans_text() {
         "${SECURITY_SCAN_COUNT} isolated security-only scans in parallel, identical prompt, then consolidation"
     for index in "${!SECURITY_SCAN_MODELS[@]}"; do
         label="$(printf '%s' ABC | cut -c "$((index + 1))")"
-        printf '  Scan %s:            %s at %s (%s)\n' \
+        printf '  Scan %s:            %s at %s (%s)%s\n' \
             "${label}" \
             "${SECURITY_SCAN_MODELS[index]}" \
             "${SECURITY_SCAN_EFFORTS[index]}" \
-            "${SECURITY_SCAN_MEMBERSHIPS[index]}"
+            "${SECURITY_SCAN_MEMBERSHIPS[index]}" \
+            "$(
+                [[ -z "${SECURITY_SCAN_REUSE_SHA256[index]-}" ]] ||
+                    printf '; reused: scan %s of run %s, %s finding(s), report SHA-256 %s' \
+                        "${SECURITY_SCAN_REUSE_LABELS[index]}" \
+                        "${REUSE_SCANS_RUN_ID}" \
+                        "${SECURITY_SCAN_REUSE_COUNTS[index]}" \
+                        "${SECURITY_SCAN_REUSE_SHA256[index]}"
+            )"
     done
+    if [[ -n "${REUSE_SCANS_RUN_ID}" ]]; then
+        printf '  %-18s %s scan report(s) from run %s at commit %s, verified again before consolidation: %s\n' \
+            'Scan reuse:' "${reused}" "${REUSE_SCANS_RUN_ID}" \
+            "${REUSE_SCANS_COMMIT}" "${REUSE_SCANS_FOLDER}"
+    fi
     printf '  %-18s %s at %s (%s); writes the canonical report\n' \
         'Consolidation:' \
         "${CONSOLIDATION_MODEL}" \
@@ -1691,6 +1765,13 @@ security_scans_text() {
     printf '  %-18s %s fresh relaunch per scan after a transient model-service failure\n' \
         'Scan relaunch:' "${SECURITY_SCAN_RELAUNCH_LIMIT}"
     if ((WORKER_CONTINUATION_AVAILABLE)); then
+        printf '  %-18s %s same-session request for a missing or invalid scan report\n' \
+            'Report recovery:' "${SECURITY_SCAN_REPORT_REQUEST_LIMIT}"
+    else
+        printf '  %-18s %s\n' 'Report recovery:' \
+            'unavailable; a missing or invalid scan report fails the scan'
+    fi
+    if ((WORKER_CONTINUATION_AVAILABLE)); then
         printf '  %-18s %s same-session request for a missing or invalid ledger\n' \
             'Ledger recovery:' "${SECURITY_LEDGER_REQUEST_LIMIT}"
     else
@@ -1699,8 +1780,14 @@ security_scans_text() {
     fi
     printf '  %-18s %s (throttle x scans)\n' 'Max model workers:' \
         "$((THROTTLE_LIMIT * SECURITY_SCAN_COUNT))"
-    printf '  %-18s %s per repository (%s security scans, then 1 consolidation review); AI credit use grows with each session\n' \
-        'Model sessions:' "$((SECURITY_SCAN_COUNT + 1))" "${SECURITY_SCAN_COUNT}"
+    if ((reused > 0)); then
+        printf '  %-18s %s per repository (%s security scan(s), %s reused, then 1 consolidation review); AI credit use grows with each session\n' \
+            'Model sessions:' "$((SECURITY_SCAN_COUNT - reused + 1))" \
+            "$((SECURITY_SCAN_COUNT - reused))" "${reused}"
+    else
+        printf '  %-18s %s per repository (%s security scans, then 1 consolidation review); AI credit use grows with each session\n' \
+            'Model sessions:' "$((SECURITY_SCAN_COUNT + 1))" "${SECURITY_SCAN_COUNT}"
+    fi
 }
 
 # Approved models that may write the canonical report, in handover order:
@@ -2330,6 +2417,11 @@ while (($# > 0)); do
             MIN_SUCCESSFUL_SCANS_INPUT="$2"
             shift 2
             ;;
+        --reuse-scans)
+            require_value "$1" "${2-}"
+            REUSE_SCANS_INPUT="$2"
+            shift 2
+            ;;
         --enable-public-research)
             ENABLE_PUBLIC_RESEARCH=1
             shift
@@ -2865,6 +2957,333 @@ resolve_security_model_spec() {
             'Select high, xhigh, or max and retry.'
 }
 
+# A scan report is intermediate evidence for the consolidation pass, so its
+# parser accepts harmless formatting variation (indentation, a list marker,
+# words after a severity or confidence level) but requires every structural
+# element. `validate` prints the finding count. `evidence` also writes a copy
+# whose finding headers read `Finding <label>-<n>:` and appends those IDs to
+# the IDs file. On failure it prints one diagnostic and returns 1.
+#   security_scan_report_tool validate <report>
+#   security_scan_report_tool evidence <report> <label> <evidence> <ids-file>
+security_scan_report_tool() {
+    python3 - "${SECURITY_SCAN_FINDING_LIMIT}" "$@" <<'PY'
+import re
+import sys
+
+limit = int(sys.argv[1])
+mode = sys.argv[2]
+report_path = sys.argv[3]
+DELIMITER = re.compile(r"^={80,}$")
+FINDING = re.compile(r"^\s*(?:[-*+]\s+)?Finding\s+([0-9]{1,3})\s*:\s*(\S.*)$")
+FIELD = re.compile(
+    r"^\s*(?:[-*+]\s+)?(Severity|Confidence|Location|Behavior|Exploit path|Impact|Remediation)\s*:\s*(.*)$")
+SECTIONS = ["SCAN CONTEXT", "SECURITY FINDINGS", "COVERAGE", "LIMITATIONS"]
+LABELS = ["Severity", "Confidence", "Location", "Behavior", "Exploit path",
+          "Impact", "Remediation"]
+NO_FINDINGS = re.compile(r"^no qualifying security findings\.?$", re.IGNORECASE)
+LEVELS = {
+    "Severity": re.compile(r"^(critical|high|medium|low)\b", re.IGNORECASE),
+    "Confidence": re.compile(r"^(high|medium|low)\b", re.IGNORECASE),
+}
+
+
+def fail(message):
+    print(message)
+    sys.exit(1)
+
+
+try:
+    with open(report_path, encoding="utf-8") as stream:
+        lines = stream.read().splitlines()
+except (OSError, UnicodeError):
+    fail("The scan report could not be read as UTF-8 text.")
+while lines and not lines[-1].strip():
+    lines.pop()
+if len(lines) < 3 or not DELIMITER.match(lines[0].strip()):
+    fail("The scan report does not begin with an 80-or-more-character = delimiter.")
+if not DELIMITER.match(lines[-1].strip()):
+    fail("The scan report is missing its closing delimiter.")
+first = 1
+while first < len(lines) - 1 and not lines[first].strip():
+    first += 1
+if lines[first].strip() != "REPOSITORY SECURITY SCAN REVIEW REPORT":
+    fail("The scan report heading is not REPOSITORY SECURITY SCAN REVIEW REPORT.")
+for index in range(1, len(lines) - 1):
+    stripped = lines[index].strip()
+    if DELIMITER.match(stripped):
+        fail("The scan report contains a delimiter inside the report.")
+    if len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|"):
+        fail("The scan report contains a Markdown table line.")
+positions = []
+for section in SECTIONS:
+    found = [i for i in range(first + 1, len(lines) - 1) if lines[i].strip() == section]
+    if len(found) != 1:
+        fail(f"The scan report must contain the section {section} exactly once.")
+    positions.append(found[0])
+if positions != sorted(positions):
+    fail("The scan report sections are not in the required order.")
+ends = positions[1:] + [len(lines) - 1]
+for number in (0, 2, 3):
+    if not any(lines[i].strip() for i in range(positions[number] + 1, ends[number])):
+        fail(f"The scan report section {SECTIONS[number]} is empty.")
+finding_range = range(positions[1] + 1, positions[2])
+content = [lines[i].strip() for i in finding_range if lines[i].strip()]
+blocks = []
+if not (len(content) == 1 and NO_FINDINGS.match(content[0])):
+    for index in finding_range:
+        line = lines[index]
+        header = FINDING.match(line)
+        if header:
+            blocks.append({"line": index, "number": int(header.group(1)),
+                           "fields": {}, "last": None})
+            continue
+        if not line.strip():
+            continue
+        if not blocks:
+            fail("SECURITY FINDINGS must begin with Finding 1 or state No qualifying security findings.")
+        block = blocks[-1]
+        field = FIELD.match(line)
+        if field:
+            label = field.group(1)
+            if label in block["fields"]:
+                fail(f"Finding {block['number']} repeats the {label} field.")
+            block["fields"][label] = field.group(2).strip()
+            block["last"] = label
+        elif block["last"]:
+            block["fields"][block["last"]] += " " + line.strip()
+        else:
+            fail(f"Finding {block['number']} has text before its first field.")
+    if not blocks:
+        fail("SECURITY FINDINGS contains no finding blocks.")
+    if len(blocks) > limit:
+        fail(f"The scan report has {len(blocks)} findings; the limit is {limit}.")
+    numbers = [block["number"] for block in blocks]
+    if 0 in numbers or len(set(numbers)) != len(numbers):
+        fail("Finding numbers must be unique positive integers.")
+    for block in blocks:
+        for label in LABELS:
+            if not block["fields"].get(label):
+                fail(f"Finding {block['number']} is missing a non-empty {label} field.")
+        for label, pattern in LEVELS.items():
+            if not pattern.match(block["fields"][label]):
+                fail(f"Finding {block['number']} has an unrecognized {label} level.")
+if mode == "evidence":
+    label, evidence_path, ids_path = sys.argv[4:7]
+    for block in blocks:
+        lines[block["line"]] = re.sub(
+            r"Finding\s+([0-9]{1,3})\s*:", f"Finding {label}-\\1:",
+            lines[block["line"]], count=1)
+    with open(evidence_path, "w", encoding="utf-8") as stream:
+        stream.write("\n".join(lines) + "\n")
+    with open(ids_path, "a", encoding="utf-8") as stream:
+        for block in blocks:
+            stream.write(f"{label}-{block['number']}\n")
+elif mode != "validate":
+    fail("Unknown scan report tool mode.")
+print(len(blocks))
+PY
+}
+
+security_scan_reuse_error() {
+    print_runner_error \
+        "$1" \
+        'security scan reuse' \
+        "Run folder ${REUSE_SCANS_INPUT}" \
+        "$2" \
+        'Review planning and execution did not start.' \
+        "$3"
+    exit 2
+}
+
+# Resolve --reuse-scans against an earlier run output folder of the same one
+# repository. A scan of this plan reuses an earlier report only when the
+# earlier run used the same harness, context tier, and scan protocol,
+# reviewed the same canonical source, and completed a scan on the same model
+# and reasoning effort whose report still passes the current scan report
+# validator. Every folder and file on the way must be owned by the current
+# user, must not be a symbolic link, and must not be writable by others. The
+# earlier commit becomes the requested commit, and each reused report's
+# SHA-256 digest is approval-bound plan data.
+resolve_security_scan_reuse() {
+    local resolved kind field_one field_two field_three report count digest
+    local index matched=0
+    local -a scan_specs=()
+
+    ((SECURITY_SCAN_COUNT > 1)) ||
+        security_scan_reuse_error \
+            'Reusing security scans requires multiple security scans.' \
+            'With one security scan the review worker performs the integrated security pass, so no scan report can be reused.' \
+            'Pass --security-scans 2 or 3 with the scan models of the earlier run, or remove --reuse-scans.'
+    ((${#canonical_urls[@]} == 1)) ||
+        security_scan_reuse_error \
+            '--reuse-scans can be used only with one repository.' \
+            "${#canonical_urls[@]} repositories were requested." \
+            'Review the repository of the earlier run on its own.'
+    if [[ -L "${REUSE_SCANS_INPUT%/}" ]] ||
+        ! resolved="$(realpath -e -- "${REUSE_SCANS_INPUT}" 2>/dev/null)" ||
+        [[ ! -d "${resolved}" || "${resolved}" =~ [[:cntrl:]] ]]; then
+        security_scan_reuse_error \
+            'The earlier run output folder was not found.' \
+            "Folder: ${REUSE_SCANS_INPUT}" \
+            'Pass the path of an earlier Rhyolite run output folder, <output root>/<run id>, that is not a symbolic link.'
+    fi
+    for index in "${!SECURITY_SCAN_MODELS[@]}"; do
+        scan_specs+=("${SECURITY_SCAN_MODELS[index]}:${SECURITY_SCAN_EFFORTS[index]}")
+        SECURITY_SCAN_REUSE_LABELS[index]=''
+        SECURITY_SCAN_REUSE_SESSIONS[index]=''
+        SECURITY_SCAN_REUSE_COUNTS[index]=''
+        SECURITY_SCAN_REUSE_SHA256[index]=''
+    done
+    REUSE_SCANS_FOLDER="${resolved}"
+    while IFS=$'\t' read -r kind field_one field_two field_three; do
+        case "${kind}" in
+            ERROR)
+                security_scan_reuse_error \
+                    "${field_one}" "${field_two}" "${field_three}"
+                ;;
+            RUN)
+                REUSE_SCANS_RUN_ID="${field_one}"
+                REUSE_SCANS_COMMIT="${field_two}"
+                ;;
+            SCAN)
+                index="${field_one}"
+                report="${REUSE_SCANS_FOLDER}/${slugs[0]}/security-scans/scan-${field_two,,}/scan-report.txt"
+                if [[ ! -f "${report}" || -L "${report}" ]] ||
+                    ! count="$(security_scan_report_tool validate "${report}")"; then
+                    continue
+                fi
+                digest="$(sha256_hex < "${report}")"
+                SECURITY_SCAN_REUSE_LABELS[index]="${field_two}"
+                SECURITY_SCAN_REUSE_SESSIONS[index]="${field_three#-}"
+                SECURITY_SCAN_REUSE_COUNTS[index]="${count}"
+                SECURITY_SCAN_REUSE_SHA256[index]="${digest}"
+                matched=$((matched + 1))
+                ;;
+        esac
+    done < <(
+        python3 - "${REUSE_SCANS_FOLDER}" "${slugs[0]}" \
+            "${canonical_urls[0]}" "${HARNESS}" "${CONTEXT_TIER}" \
+            "${SECURITY_SCAN_PROTOCOL}" "${REUSE_SCANS_REPORT_BYTE_LIMIT}" \
+            "${scan_specs[@]}" <<'PY'
+import json
+import os
+import re
+import stat
+import sys
+
+folder, slug, url, harness, context, protocol, limit = sys.argv[1:8]
+specs = sys.argv[8:]
+SESSION = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def clean(text):
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", str(text))[:400]
+
+
+def fail(summary, detail, remediation):
+    print("ERROR\t" + "\t".join(clean(part) for part in (summary, detail, remediation)))
+    sys.exit(0)
+
+
+def trusted(path, directory):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    kind = stat.S_ISDIR if directory else stat.S_ISREG
+    return (kind(info.st_mode) and info.st_uid == os.getuid()
+            and not info.st_mode & 0o022)
+
+
+def load(path):
+    if not trusted(path, False):
+        return None
+    try:
+        with open(path, encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+run_id = os.path.basename(folder)
+if not trusted(folder, True):
+    fail("The earlier run output folder is not trusted.", f"Folder: {folder}",
+         "Use a run output folder that you own and that other users cannot write.")
+plan = load(os.path.join(folder, "review-plan.json"))
+if (plan is None or plan.get("RunId") != run_id
+        or not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{16}", run_id)):
+    fail("The folder is not a Rhyolite run output folder.", f"Folder: {folder}",
+         "Pass the run output folder, <output root>/<run id>, that holds review-plan.json.")
+scans_plan = plan.get("SecurityScans") if isinstance(plan.get("SecurityScans"), dict) else {}
+if (plan.get("Harness") != harness or plan.get("ContextTier") != context
+        or scans_plan.get("ScanProtocol") != protocol):
+    fail("The earlier run used another harness, context tier, or scan protocol.",
+         f"Run {run_id}: {plan.get('Harness')}, {plan.get('ContextTier')}, "
+         f"{scans_plan.get('ScanProtocol')}; this plan: {harness}, {context}, {protocol}.",
+         "Approve the harness and context tier of the earlier run, or run every scan again.")
+repository = os.path.join(folder, slug)
+state = load(os.path.join(repository, "state.json")) if trusted(repository, True) else None
+if state is None or state.get("Repository") != url:
+    fail("The earlier run did not review this repository.", f"Repository: {url}; run: {run_id}.",
+         "Pass the run output folder of an earlier review of the same repository.")
+commit = str(state.get("Commit") or "").lower()
+if not re.fullmatch(r"[0-9a-f]{40}", commit):
+    fail("The earlier run did not resolve a commit for this repository.", f"Run: {run_id}.",
+         "Reuse scans only from a run that resolved the reviewed commit.")
+candidates = []
+scans = os.path.join(repository, "security-scans")
+for label in "abc" if trusted(scans, True) else "":
+    directory = os.path.join(scans, f"scan-{label}")
+    if not trusted(directory, True):
+        continue
+    scan = load(os.path.join(directory, "scan-state.json"))
+    report = os.path.join(directory, "scan-report.txt")
+    if not scan or scan.get("Status") != "Completed" or not trusted(report, False):
+        continue
+    if not 0 < os.lstat(report).st_size <= int(limit):
+        continue
+    session = scan.get("SessionId") if isinstance(scan.get("SessionId"), str) else ""
+    candidates.append({
+        "Label": label.upper(),
+        "Spec": f"{scan.get('Model')}:{scan.get('ReasoningEffort')}",
+        "Session": session if SESSION.fullmatch(session) else "-",
+    })
+print(f"RUN\t{run_id}\t{commit}")
+used = set()
+for index, spec in enumerate(specs):
+    match = next((c for c in candidates if c["Spec"] == spec and c["Label"] not in used), None)
+    if match:
+        used.add(match["Label"])
+        print(f"SCAN\t{index}\t{match['Label']}\t{match['Session']}")
+PY
+    )
+    ((matched > 0)) ||
+        security_scan_reuse_error \
+            'No completed scan of the earlier run matches this plan.' \
+            "Run ${REUSE_SCANS_RUN_ID:-unknown} has no completed, still-valid scan report on the same model and reasoning effort as a scan in this plan." \
+            'Approve the scan models and efforts of the earlier run, or run every scan again without --reuse-scans.'
+    if [[ -n "${REQUESTED_COMMIT}" &&
+        "${REQUESTED_COMMIT,,}" != "${REUSE_SCANS_COMMIT}" ]]; then
+        security_scan_reuse_error \
+            'The requested commit differs from the commit of the earlier run.' \
+            "Requested ${REQUESTED_COMMIT}; run ${REUSE_SCANS_RUN_ID} reviewed ${REUSE_SCANS_COMMIT}." \
+            'Reuse scans only for the commit that the earlier run reviewed, or remove --commit.'
+    fi
+    REQUESTED_COMMIT="${REUSE_SCANS_COMMIT}"
+    requested_commits[0]="${REUSE_SCANS_COMMIT}"
+}
+
+# Print the number of scans that this plan reuses from an earlier run.
+security_scan_reused_count() {
+    local index count=0
+
+    for index in "${!SECURITY_SCAN_MODELS[@]}"; do
+        [[ -z "${SECURITY_SCAN_REUSE_SHA256[index]-}" ]] || count=$((count + 1))
+    done
+    printf '%s' "${count}"
+}
+
 # Scan A always uses --model, so at most two extra scan models exist, even
 # when the count is derived from the --scan-model values.
 if ((${#SECURITY_SCAN_SPECS[@]} > 2)); then
@@ -2964,7 +3383,12 @@ if ((SECURITY_SCAN_COUNT > 1)); then
 fi
 case "${MIN_SUCCESSFUL_SCANS_INPUT}" in
     ''|default)
+        # Three scans tolerate one failed scan by default; one or two scans
+        # require every scan.
         MIN_SUCCESSFUL_SCANS="${SECURITY_SCAN_COUNT}"
+        if ((SECURITY_SCAN_COUNT == 3)); then
+            MIN_SUCCESSFUL_SCANS=2
+        fi
         ;;
     1|2|3)
         if ((MIN_SUCCESSFUL_SCANS_INPUT > SECURITY_SCAN_COUNT)); then
@@ -3979,6 +4403,9 @@ for repository in "${repositories[@]}"; do
     canonicalize_repository "${repository}"
 done
 initialize_harness_data_contract
+if [[ -n "${REUSE_SCANS_INPUT}" ]]; then
+    resolve_security_scan_reuse
+fi
 
 if ((ENABLE_PUBLIC_RESEARCH)); then
     PUBLIC_RESEARCH_INSTRUCTIONS=$'ENABLED. Dedicated research completed before this review. Consume only the\nvalidated sanitized dossier and network summary supplied by the trusted\nwrapper. Do not invoke a research specialist or use any direct network tool.\nUse the dossier\'s COMMUNITY HEALTH EVIDENCE, CLAIM VERIFICATION EVIDENCE, and\nPRIOR ART AND LINEAGE EVIDENCE sections for the claims, community, and\nprior-art assessments.'
@@ -5026,7 +5453,36 @@ if data["OutputLimitHits"]:
         + f": {data['OutputLimitHits']}"
         + ("; the final reply was cut at that limit." if data["FinalReplyAtOutputLimit"] else ".")
     )
+compactions = data.get("Compactions") or 0
+if compactions:
+    print(
+        f"Worker context compactions: {compactions}; each replaced earlier "
+        "conversation, including the request, with a model-written summary."
+    )
 PY
+}
+
+# Record the review worker's automatic context compactions, from the first
+# readable outcome among the given paths, when its report failed strict
+# validation; a compaction replaces the request with a summary.
+append_worker_compaction_note() {
+    local outcome_path
+
+    for outcome_path in "$@"; do
+        [[ -f "${outcome_path}" ]] || continue
+        python3 - "${outcome_path}" >> "${error_path}" 2>/dev/null <<'PY' || true
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8")).get("Compactions") or 0
+if type(value) is int and 0 < value <= 1000000:
+    print(
+        f"Worker context compactions: {value}; each replaced earlier "
+        "conversation, including the request, with a model-written summary."
+    )
+PY
+        return 0
+    done
 }
 
 security_scan_label() {
@@ -5035,133 +5491,6 @@ security_scan_label() {
 
 security_scan_slug() {
     printf '%s' abc | cut -c "$(($1 + 1))"
-}
-
-# A scan report is intermediate evidence for the consolidation pass, so its
-# parser accepts harmless formatting variation (indentation, a list marker,
-# words after a severity or confidence level) but requires every structural
-# element. `validate` prints the finding count. `evidence` also writes a copy
-# whose finding headers read `Finding <label>-<n>:` and appends those IDs to
-# the IDs file. On failure it prints one diagnostic and returns 1.
-#   security_scan_report_tool validate <report>
-#   security_scan_report_tool evidence <report> <label> <evidence> <ids-file>
-security_scan_report_tool() {
-    python3 - "${SECURITY_SCAN_FINDING_LIMIT}" "$@" <<'PY'
-import re
-import sys
-
-limit = int(sys.argv[1])
-mode = sys.argv[2]
-report_path = sys.argv[3]
-DELIMITER = re.compile(r"^={80,}$")
-FINDING = re.compile(r"^\s*(?:[-*+]\s+)?Finding\s+([0-9]{1,3})\s*:\s*(\S.*)$")
-FIELD = re.compile(
-    r"^\s*(?:[-*+]\s+)?(Severity|Confidence|Location|Behavior|Exploit path|Impact|Remediation)\s*:\s*(.*)$")
-SECTIONS = ["SCAN CONTEXT", "SECURITY FINDINGS", "COVERAGE", "LIMITATIONS"]
-LABELS = ["Severity", "Confidence", "Location", "Behavior", "Exploit path",
-          "Impact", "Remediation"]
-NO_FINDINGS = re.compile(r"^no qualifying security findings\.?$", re.IGNORECASE)
-LEVELS = {
-    "Severity": re.compile(r"^(critical|high|medium|low)\b", re.IGNORECASE),
-    "Confidence": re.compile(r"^(high|medium|low)\b", re.IGNORECASE),
-}
-
-
-def fail(message):
-    print(message)
-    sys.exit(1)
-
-
-try:
-    with open(report_path, encoding="utf-8") as stream:
-        lines = stream.read().splitlines()
-except (OSError, UnicodeError):
-    fail("The scan report could not be read as UTF-8 text.")
-while lines and not lines[-1].strip():
-    lines.pop()
-if len(lines) < 3 or not DELIMITER.match(lines[0].strip()):
-    fail("The scan report does not begin with an 80-or-more-character = delimiter.")
-if not DELIMITER.match(lines[-1].strip()):
-    fail("The scan report is missing its closing delimiter.")
-first = 1
-while first < len(lines) - 1 and not lines[first].strip():
-    first += 1
-if lines[first].strip() != "REPOSITORY SECURITY SCAN REVIEW REPORT":
-    fail("The scan report heading is not REPOSITORY SECURITY SCAN REVIEW REPORT.")
-for index in range(1, len(lines) - 1):
-    stripped = lines[index].strip()
-    if DELIMITER.match(stripped):
-        fail("The scan report contains a delimiter inside the report.")
-    if len(stripped) > 1 and stripped.startswith("|") and stripped.endswith("|"):
-        fail("The scan report contains a Markdown table line.")
-positions = []
-for section in SECTIONS:
-    found = [i for i in range(first + 1, len(lines) - 1) if lines[i].strip() == section]
-    if len(found) != 1:
-        fail(f"The scan report must contain the section {section} exactly once.")
-    positions.append(found[0])
-if positions != sorted(positions):
-    fail("The scan report sections are not in the required order.")
-ends = positions[1:] + [len(lines) - 1]
-for number in (0, 2, 3):
-    if not any(lines[i].strip() for i in range(positions[number] + 1, ends[number])):
-        fail(f"The scan report section {SECTIONS[number]} is empty.")
-finding_range = range(positions[1] + 1, positions[2])
-content = [lines[i].strip() for i in finding_range if lines[i].strip()]
-blocks = []
-if not (len(content) == 1 and NO_FINDINGS.match(content[0])):
-    for index in finding_range:
-        line = lines[index]
-        header = FINDING.match(line)
-        if header:
-            blocks.append({"line": index, "number": int(header.group(1)),
-                           "fields": {}, "last": None})
-            continue
-        if not line.strip():
-            continue
-        if not blocks:
-            fail("SECURITY FINDINGS must begin with Finding 1 or state No qualifying security findings.")
-        block = blocks[-1]
-        field = FIELD.match(line)
-        if field:
-            label = field.group(1)
-            if label in block["fields"]:
-                fail(f"Finding {block['number']} repeats the {label} field.")
-            block["fields"][label] = field.group(2).strip()
-            block["last"] = label
-        elif block["last"]:
-            block["fields"][block["last"]] += " " + line.strip()
-        else:
-            fail(f"Finding {block['number']} has text before its first field.")
-    if not blocks:
-        fail("SECURITY FINDINGS contains no finding blocks.")
-    if len(blocks) > limit:
-        fail(f"The scan report has {len(blocks)} findings; the limit is {limit}.")
-    numbers = [block["number"] for block in blocks]
-    if 0 in numbers or len(set(numbers)) != len(numbers):
-        fail("Finding numbers must be unique positive integers.")
-    for block in blocks:
-        for label in LABELS:
-            if not block["fields"].get(label):
-                fail(f"Finding {block['number']} is missing a non-empty {label} field.")
-        for label, pattern in LEVELS.items():
-            if not pattern.match(block["fields"][label]):
-                fail(f"Finding {block['number']} has an unrecognized {label} level.")
-if mode == "evidence":
-    label, evidence_path, ids_path = sys.argv[4:7]
-    for block in blocks:
-        lines[block["line"]] = re.sub(
-            r"Finding\s+([0-9]{1,3})\s*:", f"Finding {label}-\\1:",
-            lines[block["line"]], count=1)
-    with open(evidence_path, "w", encoding="utf-8") as stream:
-        stream.write("\n".join(lines) + "\n")
-    with open(ids_path, "a", encoding="utf-8") as stream:
-        for block in blocks:
-            stream.write(f"{label}-{block['number']}\n")
-elif mode != "validate":
-    fail("Unknown scan report tool mode.")
-print(len(blocks))
-PY
 }
 
 # Validate the RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1 block in one reply.
@@ -5250,11 +5579,18 @@ PY
 
 #   write_security_scan_state <path> <label> <model> <effort> <status>
 #       <finding-count> <attempts> <session-id> <started> <completed>
-#       <failure-class> <diagnostic>
+#       <failure-class> <diagnostic> [<report-request> [<compactions>
+#       [<reused-json>]]]
+# ReportRequest records the same-session request for a missing or invalid
+# scan report: NotReached, NotNeeded, Recovered, Failed, NotCompleted,
+# Unavailable, or Exhausted. Compactions counts the automatic context compactions that the
+# harness recorded in the scan session. Reused is null, or the approved
+# record of the earlier run whose validated report this scan reused.
 write_security_scan_state() {
-    printf '{"Label":"%s","Model":"%s","ReasoningEffort":"%s","Status":"%s","FindingCount":%s,"Attempts":%s,"SessionId":"%s","StartedAt":"%s","CompletedAt":"%s","FailureClass":"%s","Diagnostic":"%s"}\n' \
+    printf '{"Label":"%s","Model":"%s","ReasoningEffort":"%s","Status":"%s","FindingCount":%s,"Attempts":%s,"SessionId":"%s","StartedAt":"%s","CompletedAt":"%s","FailureClass":"%s","Diagnostic":"%s","ReportRequest":"%s","Compactions":%s,"Reused":%s}\n' \
         "$2" "$(json_escape "$3")" "$(json_escape "$4")" "$5" "$6" "$7" \
         "$(json_escape "$8")" "$9" "${10}" "${11}" "$(json_escape "${12}")" \
+        "${13:-NotReached}" "${14:-0}" "${15:-null}" \
         > "$1.tmp" &&
         chmod 600 -- "$1.tmp" &&
         mv -f -- "$1.tmp" "$1"
@@ -5291,7 +5627,9 @@ security_scan_interrupted() {
         "${REASONING_EFFORT}" Interrupted 0 "${scan_attempt}" \
         "${scan_session_id}" "${scan_started_at}" \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" interrupted \
-        "$(security_scan_failure_text interrupted)" || true
+        "$(security_scan_failure_text interrupted)" \
+        "${SCAN_ATTEMPT_REPORT_REQUEST:-NotReached}" \
+        "${SCAN_ATTEMPT_COMPACTIONS:-0}" || true
     security_scan_cleanup_home || true
     exit 143
 }
@@ -5442,6 +5780,30 @@ security_scan_failure_text() {
     esac
 }
 
+# Append the same-session report request result and any automatic context
+# compactions to the paraphrased diagnostic of a scan without a valid report.
+security_scan_report_problem_detail() {
+    case "${SCAN_ATTEMPT_REPORT_REQUEST}" in
+        Failed)
+            printf '; one same-session request for only the report did not correct it'
+            ;;
+        NotCompleted)
+            printf '; its first reply broke the scan report contract, and the same-session request for only its report did not complete'
+            ;;
+        Unavailable)
+            printf '; the session could not be asked again for only its report'
+            ;;
+        Exhausted)
+            printf '; too little session time remained to ask the same session again for its report'
+            ;;
+    esac
+    if ((SCAN_ATTEMPT_COMPACTIONS > 0)); then
+        printf '; the harness had compacted the scan context %s time%s, which replaces earlier conversation, including the request, with a summary' \
+            "${SCAN_ATTEMPT_COMPACTIONS}" \
+            "$( ((SCAN_ATTEMPT_COMPACTIONS == 1)) || printf s)"
+    fi
+}
+
 # Keep a failed attempt's artifacts under attempts/<n>/ before a relaunch.
 security_scan_archive_attempt() {
     local target="${scan_directory}/attempts/${scan_attempt}"
@@ -5449,26 +5811,315 @@ security_scan_archive_attempt() {
 
     mkdir -p -m 700 -- "${target}" || return 1
     for name in errors.txt analysis-timeline.txt final-reply.txt session.md \
-        outcome.json agent-state; do
+        outcome.json report-request.txt report-request-reply.txt \
+        report-request-outcome.json agent-state; do
         if [[ -e "${scan_directory}/${name}" ]]; then
             mv -- "${scan_directory}/${name}" "${target}/${name}" || return 1
         fi
     done
 }
 
+# Persist the scan session's agent state from its runtime home. The adapter
+# also records what its post-exit verification reads, such as the rendered
+# Claude Code session transcript, so this runs after every scan invocation.
+security_scan_persist_agent_state() {
+    if rhyolite_harness_invoke harness_persist_agent_state \
+        "${runtime_harness_home}" \
+        "${scan_agent_state}" \
+        "${REASONING_EFFORT}" \
+        "${CONTEXT_TIER}" \
+        >/dev/null 2>> "${scan_error}"; then
+        return 0
+    fi
+    printf '%s\n' \
+        "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
+        >> "${scan_error}"
+    return 1
+}
+
+# Normalize one scan invocation's raw output into the scan timeline (appended
+# under a heading for a continuation), the sanitized exact final reply, and
+# the sanitized transcript, then verify isolation. Returns 1 when
+# normalization or isolation verification failed.
+#   security_scan_collect_output <raw> <sanitized-reply> [<continuation-label>]
+security_scan_collect_output() {
+    local raw="$1"
+    local reply_sanitized="$2"
+    local label="${3-}"
+    local normalized="${raw%.raw}.normalized"
+    local reply="${raw%.raw}-final-reply.raw"
+    local status=0
+
+    rm -f -- "${normalized}" "${reply}" "${reply_sanitized}"
+    if ! rhyolite_harness_invoke harness_normalize_worker_output \
+        review \
+        "${raw}" \
+        "${MODEL}" \
+        "${REASONING_EFFORT}" \
+        "${normalized}" \
+        "${reply}" \
+        >/dev/null 2>> "${scan_error}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker output normalization failed.}" \
+            >> "${scan_error}"
+        rm -f -- "${normalized}" "${reply}"
+        status=1
+    fi
+    if [[ -n "${label}" ]]; then
+        {
+            printf '\n=== Rhyolite security scan %s: %s ===\n\n' \
+                "${scan_label}" "${label}"
+            if [[ -f "${normalized}" ]]; then
+                tr -d '\r' < "${normalized}" | sanitize_review_text
+            else
+                tr -d '\r' < "${raw}" | sanitize_review_text
+            fi
+        } >> "${scan_timeline}"
+    elif [[ -f "${normalized}" ]]; then
+        tr -d '\r' < "${normalized}" | sanitize_review_text > "${scan_timeline}"
+    else
+        tr -d '\r' < "${raw}" | sanitize_review_text > "${scan_timeline}"
+    fi
+    rm -f -- "${raw}" "${normalized}"
+    if [[ -f "${reply}" ]]; then
+        tr -d '\r' < "${reply}" | sanitize_review_text > "${reply_sanitized}"
+        rm -f -- "${reply}"
+    fi
+    if [[ -f "${scan_transcript}" ]]; then
+        tr -d '\r' < "${scan_transcript}" |
+            strip_terminal_controls |
+            strip_runner_error_controls |
+            redact_credentials |
+            redact_emails > "${scan_transcript}.tmp" &&
+            mv -f -- "${scan_transcript}.tmp" "${scan_transcript}"
+    fi
+    if ! rhyolite_harness_invoke harness_verify_isolation \
+        "${scan_timeline}" >/dev/null 2>> "${scan_error}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_verify_isolation" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness isolation verification failed.}" \
+            >> "${scan_error}"
+        status=1
+    fi
+    return "${status}"
+}
+
+# Extract and validate a scan report from a sanitized final reply, falling
+# back to the timeline, whose last report is the newest one. On success sets
+# SCAN_ATTEMPT_EXIT to 0 and SCAN_ATTEMPT_COUNT; otherwise sets
+# SCAN_ATTEMPT_PROBLEM to missing-report or invalid-report and
+# SCAN_ATTEMPT_DIAGNOSTIC to the runner's own diagnostic, and returns 1.
+security_scan_accept_report() {
+    local reply="$1"
+    local count=''
+
+    rm -f -- "${scan_report}"
+    if ! {
+        [[ -s "${reply}" ]] &&
+            extract_report "${reply}" "${scan_report}" &&
+            report_has_closing_delimiter "${scan_report}"
+    } && ! {
+        extract_report "${scan_timeline}" "${scan_report}" &&
+            report_has_closing_delimiter "${scan_report}"
+    }; then
+        rm -f -- "${scan_report}"
+        SCAN_ATTEMPT_PROBLEM='missing-report'
+        SCAN_ATTEMPT_DIAGNOSTIC='The reply did not contain a complete REPOSITORY SECURITY SCAN REVIEW REPORT from its opening delimiter line through its closing delimiter line.'
+        printf 'Scan report extraction failed: %s\n' \
+            "${SCAN_ATTEMPT_DIAGNOSTIC}" >> "${scan_error}"
+        return 1
+    fi
+    if ! count="$(security_scan_report_tool validate "${scan_report}")"; then
+        SCAN_ATTEMPT_PROBLEM='invalid-report'
+        SCAN_ATTEMPT_DIAGNOSTIC="${count}"
+        printf 'Scan report contract validation failed: %s\n' "${count}" \
+            >> "${scan_error}"
+        return 1
+    fi
+    SCAN_ATTEMPT_PROBLEM=''
+    SCAN_ATTEMPT_DIAGNOSTIC=''
+    SCAN_ATTEMPT_EXIT=0
+    SCAN_ATTEMPT_COUNT="${count}"
+}
+
+# Print the automatic context compactions recorded in a validated worker
+# outcome, or 0.
+security_scan_outcome_compactions() {
+    [[ -f "$1" ]] || {
+        printf '0'
+        return 0
+    }
+    python3 - "$1" 2>/dev/null <<'PY' || printf '0'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8")).get("Compactions", 0)
+print(value if type(value) is int and 0 <= value <= 1000000 else 0, end="")
+PY
+}
+
+# Ask the scan's own session once, under the adapter's continuation argv and
+# the same environment, runtime home, tools, model, effort, context, and live
+# enforcement, for only a conforming scan report. It runs only after the
+# session ended normally on the approved model without a valid report; the
+# request carries the runner's exact diagnostic and the full report contract
+# from the scan prompt. Sets SCAN_ATTEMPT_REPORT_REQUEST to Recovered, Failed
+# (the continuation completed on the approved model without a valid report),
+# NotCompleted (the continuation itself failed), Unavailable (the request
+# could not be sent), or Exhausted. A continuation that did not complete
+# replaces the attempt's worker status, outcome, and problem, so the scan's
+# failure class comes from the continuation's own failure.
+security_scan_request_report() {
+    local request="${scan_directory}/report-request.txt"
+    local raw="${scan_directory}/${HARNESS}-report-request.raw"
+    local reply_sanitized="${scan_directory}/report-request-reply.txt"
+    local outcome_path="${scan_directory}/report-request-outcome.json"
+    local contract remaining exit_status=0 outcome compactions
+    local -a request_arguments=()
+
+    if ((WORKER_CONTINUATION_AVAILABLE == 0 ||
+        SECURITY_SCAN_REPORT_REQUEST_LIMIT < 1)) ||
+        [[ "${SCAN_ATTEMPT_OUTCOME}" != completed ||
+            -z "${runtime_harness_home}" ]]; then
+        SCAN_ATTEMPT_REPORT_REQUEST='Unavailable'
+        return 0
+    fi
+    remaining=$((SESSION_TIMEOUT_MINUTES * 60 - ($(date +%s) - scan_attempt_started_epoch)))
+    if ((remaining < WORKER_RECOVERY_MINIMUM_SECONDS)); then
+        SCAN_ATTEMPT_REPORT_REQUEST='Exhausted'
+        return 0
+    fi
+    SCAN_ATTEMPT_REPORT_REQUEST='Unavailable'
+    contract="$(
+        sed -n "/^${SECURITY_SCAN_REPORT_CONTRACT_START}\$/,/^${SECURITY_SCAN_REPORT_CONTRACT_END}\$/p" \
+            "${SECURITY_SCAN_PROMPT_PATH}" 2>/dev/null
+    )"
+    if [[ "${contract}" != "${SECURITY_SCAN_REPORT_CONTRACT_START}"$'\n'*$'\n'"${SECURITY_SCAN_REPORT_CONTRACT_END}" ]]; then
+        printf '%s\n' \
+            'The scan report contract could not be read from the scan prompt, so the scan report was not requested again.' \
+            >> "${scan_error}"
+        return 0
+    fi
+    if ! {
+        printf '%s\n' \
+            'RHYOLITE SECURITY SCAN REPORT REQUEST' \
+            "The trusted runner could not accept your security scan report: ${SCAN_ATTEMPT_DIAGNOSTIC}" \
+            'Do not repeat the analysis, and do not open or search any more files.' \
+            'Reply with only the complete security scan report for the findings you' \
+            'already verified in this session, from its opening delimiter line through' \
+            'its closing delimiter line, exactly as the contract below defines. Keep' \
+            'every verified finding with its evidence and location; change only the' \
+            "report's form." \
+            '' \
+            "${contract}" > "${request}" &&
+            chmod 600 -- "${request}"
+    } 2>> "${scan_error}"; then
+        return 0
+    fi
+    if ! rhyolite_harness_invoke harness_worker_continuation_argv \
+        request_arguments arguments \
+        >/dev/null 2>> "${scan_error}"; then
+        printf '%s\n' \
+            "Harness failure stage: harness ${HARNESS} harness_worker_continuation_argv" \
+            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker continuation argument construction failed.}" \
+            >> "${scan_error}"
+        SCAN_ATTEMPT_PROBLEM='harness'
+        return 0
+    fi
+    review_progress "${scan_subject}" 'security-scan' \
+        "scan ${scan_label} returned no valid scan report; asking the same session once for only its report"
+    # Sent from here on: an interruption records the request as not
+    # completed, and its end replaces this with Recovered or Failed.
+    SCAN_ATTEMPT_REPORT_REQUEST='NotCompleted'
+    # The CLI may rewrite the shared transcript for the resumed session; keep
+    # the previous sanitized copy until a fresh export exists.
+    rm -f -- "${scan_transcript}.previous"
+    if [[ -f "${scan_transcript}" ]]; then
+        mv -- "${scan_transcript}" "${scan_transcript}.previous"
+    fi
+    "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
+        --signal=TERM \
+        --kill-after=30s \
+        "${remaining}s" \
+        env \
+        "${environment[@]}" \
+        "${HARNESS_CLI_NAME}" "${request_arguments[@]}" \
+        < "${request}" \
+        > "${raw}" \
+        2>> "${scan_error}" &
+    RHYOLITE_ACTIVE_CHILD_PID=$!
+    wait_for_monitored_worker \
+        "${RHYOLITE_ACTIVE_CHILD_PID}" \
+        "${scan_subject}" \
+        'security-scan' \
+        elapsed \
+        review \
+        "${raw}" \
+        "${raw}.cursor" \
+        "${scan_error}"
+    wait "${RHYOLITE_ACTIVE_CHILD_PID}"
+    exit_status=$?
+    RHYOLITE_ACTIVE_CHILD_PID=''
+    if [[ -n "${WORKER_VIOLATION_DETAIL}${WORKER_REFUSAL_DETAIL}" ]]; then
+        exit_status=1
+    fi
+    outcome="$(security_scan_outcome "${raw}" "${outcome_path}")"
+    compactions="$(security_scan_outcome_compactions "${outcome_path}")"
+    ((compactions > SCAN_ATTEMPT_COMPACTIONS)) &&
+        SCAN_ATTEMPT_COMPACTIONS="${compactions}"
+    if [[ "${outcome}" == refused ]]; then
+        exit_status=1
+    fi
+    if ((exit_status != 0)); then
+        append_worker_session_errors "${outcome_path}" "${scan_error}"
+    fi
+    if ! security_scan_persist_agent_state; then
+        exit_status=1
+        SCAN_ATTEMPT_PROBLEM='harness'
+    fi
+    if [[ -f "${scan_transcript}" ]]; then
+        rm -f -- "${scan_transcript}.previous"
+    elif [[ -f "${scan_transcript}.previous" ]]; then
+        mv -- "${scan_transcript}.previous" "${scan_transcript}"
+    fi
+    if ! security_scan_collect_output "${raw}" "${reply_sanitized}" \
+        'same-session scan report request'; then
+        exit_status=1
+    fi
+    if ((exit_status == 0)) && [[ "${outcome}" == completed ]]; then
+        if security_scan_accept_report "${reply_sanitized}"; then
+            SCAN_ATTEMPT_REPORT_REQUEST='Recovered'
+        else
+            SCAN_ATTEMPT_REPORT_REQUEST='Failed'
+        fi
+        return 0
+    fi
+    # The continuation itself failed, so its own failure decides how the scan
+    # failed: a refusal, a timeout, a transient model-service failure, an
+    # enforcement or adapter failure, or an ordinary worker failure. The
+    # first reply's report problem no longer describes the scan.
+    SCAN_ATTEMPT_REPORT_REQUEST='NotCompleted'
+    SCAN_ATTEMPT_WORKER_STATUS="${exit_status}"
+    ((exit_status != 0)) || SCAN_ATTEMPT_WORKER_STATUS=1
+    SCAN_ATTEMPT_OUTCOME="${outcome}"
+    [[ "${SCAN_ATTEMPT_PROBLEM}" == harness ]] || SCAN_ATTEMPT_PROBLEM=''
+}
+
 # One fresh scan session with its own session ID, runtime home, and worker.
 # Sets SCAN_ATTEMPT_EXIT (0 for a valid scan report in scan_report),
-# SCAN_ATTEMPT_WORKER_STATUS, SCAN_ATTEMPT_OUTCOME, SCAN_ATTEMPT_PROBLEM, and
-# SCAN_ATTEMPT_COUNT.
+# SCAN_ATTEMPT_WORKER_STATUS, SCAN_ATTEMPT_OUTCOME, SCAN_ATTEMPT_PROBLEM,
+# SCAN_ATTEMPT_DIAGNOSTIC, SCAN_ATTEMPT_COUNT, SCAN_ATTEMPT_REPORT_REQUEST,
+# and SCAN_ATTEMPT_COMPACTIONS.
 run_security_scan_attempt() {
     local raw="${scan_directory}/${HARNESS}-output.raw"
-    local normalized="${scan_directory}/${HARNESS}-output.normalized"
-    local reply="${scan_directory}/${HARNESS}-final-reply.raw"
     local reply_sanitized="${scan_directory}/final-reply.txt"
     local outcome_path="${scan_directory}/outcome.json"
     local session_prefix="scan-${scan_slug}${scan_attempt}-"
     local session_suffix="-${RUN_ID}"
-    local session_name exit_status=0 ready=1 count=''
+    local session_name exit_status=0 ready=1
+    local scan_attempt_started_epoch
     local -a arguments=()
     local -a environment=()
 
@@ -5476,13 +6127,19 @@ run_security_scan_attempt() {
     SCAN_ATTEMPT_WORKER_STATUS=1
     SCAN_ATTEMPT_OUTCOME='unknown'
     SCAN_ATTEMPT_PROBLEM=''
+    SCAN_ATTEMPT_DIAGNOSTIC=''
     SCAN_ATTEMPT_COUNT=0
+    SCAN_ATTEMPT_REPORT_REQUEST='NotReached'
+    SCAN_ATTEMPT_COMPACTIONS=0
     scan_session_id="$(new_session_id)"
     session_name="${session_prefix}${slug:0:$((96 - ${#session_prefix} - ${#session_suffix}))}${session_suffix}"
     : > "${scan_error}"
+    rm -f -- "${scan_directory}/report-request.txt" \
+        "${scan_directory}/report-request-reply.txt" \
+        "${scan_directory}/report-request-outcome.json"
     write_security_scan_state "${scan_state}" "${scan_label}" "${MODEL}" \
         "${REASONING_EFFORT}" Running 0 "${scan_attempt}" \
-        "${scan_session_id}" "${scan_started_at}" '' '' ''
+        "${scan_session_id}" "${scan_started_at}" '' '' '' NotReached 0
 
     if ! rhyolite_harness_invoke harness_worker_argv \
         arguments \
@@ -5554,6 +6211,7 @@ run_security_scan_attempt() {
 
     review_progress "${scan_subject}" 'security-scan' \
         "scan ${scan_label} attempt ${scan_attempt} started; ${MODEL} at ${REASONING_EFFORT}"
+    scan_attempt_started_epoch="$(date +%s)"
     "${WORKER_PARENT_DEATH_PREFIX[@]}" timeout \
         --signal=TERM \
         --kill-after=30s \
@@ -5587,6 +6245,7 @@ run_security_scan_attempt() {
     # exist: a blocked automatic fallback can end with exit status 0 and fail
     # only the post-exit normalization.
     SCAN_ATTEMPT_OUTCOME="$(security_scan_outcome "${raw}" "${outcome_path}")"
+    SCAN_ATTEMPT_COMPACTIONS="$(security_scan_outcome_compactions "${outcome_path}")"
     # A refused session is never accepted, whatever the harness's own
     # refusal fallback produced afterward.
     if [[ "${SCAN_ATTEMPT_OUTCOME}" == refused ]]; then
@@ -5595,88 +6254,26 @@ run_security_scan_attempt() {
     if ((exit_status != 0)); then
         append_worker_session_errors "${outcome_path}" "${scan_error}"
     fi
-    if ! rhyolite_harness_invoke harness_persist_agent_state \
-        "${runtime_harness_home}" \
-        "${scan_agent_state}" \
-        "${REASONING_EFFORT}" \
-        "${CONTEXT_TIER}" \
-        >/dev/null 2>> "${scan_error}"; then
-        printf '%s\n' \
-            "Harness failure stage: harness ${HARNESS} harness_persist_agent_state" \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness agent-state persistence failed.}" \
-            >> "${scan_error}"
+    # The runtime home stays until the scan report is validated, so a session
+    # that ended normally without a valid report can be asked, in the same
+    # session, for only its report.
+    if ! security_scan_persist_agent_state; then
         exit_status=1
         SCAN_ATTEMPT_PROBLEM='harness'
+    fi
+    if ! security_scan_collect_output "${raw}" "${reply_sanitized}"; then
+        exit_status=1
+    fi
+    if ((exit_status == 0)); then
+        if security_scan_accept_report "${reply_sanitized}"; then
+            SCAN_ATTEMPT_REPORT_REQUEST='NotNeeded'
+        else
+            security_scan_request_report
+        fi
     fi
     if ! security_scan_cleanup_home; then
-        exit_status=1
+        SCAN_ATTEMPT_EXIT=1
         SCAN_ATTEMPT_PROBLEM='harness'
-    fi
-
-    rm -f -- "${normalized}" "${reply}"
-    if ! rhyolite_harness_invoke harness_normalize_worker_output \
-        review \
-        "${raw}" \
-        "${MODEL}" \
-        "${REASONING_EFFORT}" \
-        "${normalized}" \
-        "${reply}" \
-        >/dev/null 2>> "${scan_error}"; then
-        printf '%s\n' \
-            "Harness failure stage: harness ${HARNESS} harness_normalize_worker_output" \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness worker output normalization failed.}" \
-            >> "${scan_error}"
-        rm -f -- "${normalized}" "${reply}"
-        exit_status=1
-    fi
-    if [[ -f "${normalized}" ]]; then
-        tr -d '\r' < "${normalized}" | sanitize_review_text > "${scan_timeline}"
-    else
-        tr -d '\r' < "${raw}" | sanitize_review_text > "${scan_timeline}"
-    fi
-    rm -f -- "${raw}" "${normalized}"
-    rm -f -- "${reply_sanitized}"
-    if [[ -f "${reply}" ]]; then
-        tr -d '\r' < "${reply}" | sanitize_review_text > "${reply_sanitized}"
-        rm -f -- "${reply}"
-    fi
-    if [[ -f "${scan_transcript}" ]]; then
-        tr -d '\r' < "${scan_transcript}" |
-            strip_terminal_controls |
-            strip_runner_error_controls |
-            redact_credentials |
-            redact_emails > "${scan_transcript}.tmp" &&
-            mv -f -- "${scan_transcript}.tmp" "${scan_transcript}"
-    fi
-    if ! rhyolite_harness_invoke harness_verify_isolation \
-        "${scan_timeline}" >/dev/null 2>> "${scan_error}"; then
-        printf '%s\n' \
-            "Harness failure stage: harness ${HARNESS} harness_verify_isolation" \
-            "${RHYOLITE_HARNESS_ERROR_DETAIL:-Harness isolation verification failed.}" \
-            >> "${scan_error}"
-        exit_status=1
-    fi
-
-    if ((exit_status == 0)); then
-        rm -f -- "${scan_report}"
-        if ! {
-            [[ -s "${reply_sanitized}" ]] &&
-                extract_report "${reply_sanitized}" "${scan_report}" &&
-                report_has_closing_delimiter "${scan_report}"
-        } && ! {
-            extract_report "${scan_timeline}" "${scan_report}" &&
-                report_has_closing_delimiter "${scan_report}"
-        }; then
-            rm -f -- "${scan_report}"
-            SCAN_ATTEMPT_PROBLEM='missing-report'
-        elif ! count="$(security_scan_report_tool validate "${scan_report}")"; then
-            printf 'Scan report contract validation failed: %s\n' "${count}" \
-                >> "${scan_error}"
-            SCAN_ATTEMPT_PROBLEM='invalid-report'
-        else
-            SCAN_ATTEMPT_EXIT=0
-            SCAN_ATTEMPT_COUNT="${count}"
-        fi
     fi
     if [[ -s "${scan_error}" ]] &&
         tr -d '\r' < "${scan_error}" |
@@ -5713,8 +6310,9 @@ run_one_security_scan() {
     local RHYOLITE_ACTIVE_CHILD_PID=''
     local SCAN_ATTEMPT_EXIT=1 SCAN_ATTEMPT_WORKER_STATUS=1
     local SCAN_ATTEMPT_OUTCOME='unknown' SCAN_ATTEMPT_PROBLEM=''
-    local SCAN_ATTEMPT_COUNT=0
-    local failure_class diagnostic
+    local SCAN_ATTEMPT_COUNT=0 SCAN_ATTEMPT_DIAGNOSTIC=''
+    local SCAN_ATTEMPT_REPORT_REQUEST='NotReached' SCAN_ATTEMPT_COMPACTIONS=0
+    local failure_class diagnostic refusal_outcome recovered_note
 
     set +e
     scan_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -5727,9 +6325,13 @@ run_one_security_scan() {
                 "${MODEL}" "${REASONING_EFFORT}" Completed \
                 "${SCAN_ATTEMPT_COUNT}" "${scan_attempt}" \
                 "${scan_session_id}" "${scan_started_at}" \
-                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '' ''
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '' '' \
+                "${SCAN_ATTEMPT_REPORT_REQUEST}" "${SCAN_ATTEMPT_COMPACTIONS}"
+            recovered_note=''
+            [[ "${SCAN_ATTEMPT_REPORT_REQUEST}" != Recovered ]] ||
+                recovered_note=' after one same-session report request'
             review_progress "${scan_subject}" 'security-scan' \
-                "scan ${scan_label} completed; ${SCAN_ATTEMPT_COUNT} $(
+                "scan ${scan_label} completed${recovered_note}; ${SCAN_ATTEMPT_COUNT} $(
                     ((SCAN_ATTEMPT_COUNT == 1)) && printf 'finding' ||
                         printf 'findings'
                 )"
@@ -5747,15 +6349,21 @@ run_one_security_scan() {
             diagnostic="$(security_scan_failure_text "${failure_class}")"
             printf 'Security scan %s was declined: %s.\n' "${scan_label}" \
                 "${diagnostic}" >> "${scan_error}"
+            refusal_outcome="${scan_directory}/outcome.json"
+            if grep -Eq '"Outcome": *"refused"' \
+                "${scan_directory}/report-request-outcome.json" 2>/dev/null; then
+                refusal_outcome="${scan_directory}/report-request-outcome.json"
+            fi
             record_provider_refusal "${scan_directory}/refusal.jsonl" \
                 security-scan "${scan_label}" "${MODEL}" \
                 "${REASONING_EFFORT}" "${scan_session_id}" \
-                "${scan_directory}/outcome.json" 2>> "${scan_error}" || true
+                "${refusal_outcome}" 2>> "${scan_error}" || true
             write_security_scan_state "${scan_state}" "${scan_label}" \
                 "${MODEL}" "${REASONING_EFFORT}" Refused 0 "${scan_attempt}" \
                 "${scan_session_id}" "${scan_started_at}" \
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${failure_class}" \
-                "${diagnostic}"
+                "${diagnostic}" \
+                "${SCAN_ATTEMPT_REPORT_REQUEST}" "${SCAN_ATTEMPT_COMPACTIONS}"
             review_progress "${scan_subject}" 'security-scan' \
                 "scan ${scan_label} declined by the model provider on ${MODEL}; skipped without retrying that model"
             exit 1
@@ -5771,13 +6379,19 @@ run_one_security_scan() {
             continue
         fi
         diagnostic="$(security_scan_failure_text "${failure_class}")"
+        if [[ "${failure_class}" == missing-report ||
+            "${failure_class}" == invalid-report ||
+            "${SCAN_ATTEMPT_REPORT_REQUEST}" == NotCompleted ]]; then
+            diagnostic+="$(security_scan_report_problem_detail)"
+        fi
         printf 'Security scan %s failed: %s.\n' "${scan_label}" \
             "${diagnostic}" >> "${scan_error}"
         write_security_scan_state "${scan_state}" "${scan_label}" \
             "${MODEL}" "${REASONING_EFFORT}" Failed 0 "${scan_attempt}" \
             "${scan_session_id}" "${scan_started_at}" \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${failure_class}" \
-            "${diagnostic}"
+            "${diagnostic}" \
+            "${SCAN_ATTEMPT_REPORT_REQUEST}" "${SCAN_ATTEMPT_COMPACTIONS}"
         review_progress "${scan_subject}" 'security-scan' \
             "scan ${scan_label} failed; ${diagnostic}"
         exit 1
@@ -5891,6 +6505,53 @@ PY
         'The review was interrupted before consolidation.' || true
 }
 
+# Import the approved report of one reused scan instead of running it: copy
+# it from the earlier run, verify the copy against the approval-bound SHA-256
+# digest, and validate it again; otherwise the scan fails without a worker.
+import_reused_security_scan() {
+    local scan_index="$1"
+    local scan_label scan_slug scan_directory source started digest count
+    local reuse_json
+
+    scan_label="$(security_scan_label "${scan_index}")"
+    scan_slug="$(security_scan_slug "${scan_index}")"
+    scan_directory="${SECURITY_SCANS_DIRECTORY}/scan-${scan_slug}"
+    source="${REUSE_SCANS_FOLDER}/${slug}/security-scans/scan-${SECURITY_SCAN_REUSE_LABELS[scan_index],,}/scan-report.txt"
+    started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    reuse_json="$(security_scan_reuse_json "${scan_index}")"
+    : > "${scan_directory}/errors.txt"
+    if [[ -f "${source}" && ! -L "${source}" ]] &&
+        cp -- "${source}" "${scan_directory}/scan-report.txt" 2>/dev/null &&
+        chmod 600 -- "${scan_directory}/scan-report.txt" &&
+        digest="$(sha256_hex < "${scan_directory}/scan-report.txt")" &&
+        [[ "${digest}" == "${SECURITY_SCAN_REUSE_SHA256[scan_index]}" ]] &&
+        count="$(security_scan_report_tool validate "${scan_directory}/scan-report.txt")"; then
+        write_security_scan_state "${scan_directory}/scan-state.json" \
+            "${scan_label}" "${SECURITY_SCAN_MODELS[scan_index]}" \
+            "${SECURITY_SCAN_EFFORTS[scan_index]}" Completed "${count}" 0 \
+            '' "${started}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '' '' \
+            NotNeeded 0 "${reuse_json}"
+        review_progress "${slug}/scan-${scan_slug}" 'security-scan' \
+            "scan ${scan_label} reused the verified report of scan ${SECURITY_SCAN_REUSE_LABELS[scan_index]} from run ${REUSE_SCANS_RUN_ID}; ${count} $(
+                ((count == 1)) && printf 'finding' || printf 'findings'
+            )"
+        return 0
+    fi
+    rm -f -- "${scan_directory}/scan-report.txt"
+    printf 'Security scan %s failed: the report of scan %s from run %s no longer matches its approved SHA-256 digest or the scan report contract.\n' \
+        "${scan_label}" "${SECURITY_SCAN_REUSE_LABELS[scan_index]}" \
+        "${REUSE_SCANS_RUN_ID}" >> "${scan_directory}/errors.txt"
+    write_security_scan_state "${scan_directory}/scan-state.json" \
+        "${scan_label}" "${SECURITY_SCAN_MODELS[scan_index]}" \
+        "${SECURITY_SCAN_EFFORTS[scan_index]}" Failed 0 0 '' "${started}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" reuse-verification \
+        'the reused scan report no longer matched its approved digest or the scan report contract' \
+        NotReached 0 "${reuse_json}"
+    review_progress "${slug}/scan-${scan_slug}" 'security-scan' \
+        "scan ${scan_label} failed; its reused report no longer matched the approved plan"
+    return 1
+}
+
 # Run every approved security scan of one repository in parallel, wait for
 # all of them, enforce MinimumSuccessfulScans, and prepare the read-only scan
 # evidence and the consolidation addendum. A scan that the model provider
@@ -5962,6 +6623,10 @@ run_security_scan_phase() {
     done
     RHYOLITE_SCAN_PIDS=()
     for scan_index in "${!SECURITY_SCAN_MODELS[@]}"; do
+        if [[ -n "${SECURITY_SCAN_REUSE_SHA256[scan_index]-}" ]]; then
+            import_reused_security_scan "${scan_index}" || true
+            continue
+        fi
         (run_one_security_scan "${scan_index}") &
         RHYOLITE_SCAN_PIDS+=("$!")
     done
@@ -6001,7 +6666,11 @@ PY
             chmod 600 -- "${staged_directory}/scan-${scan_slug}.txt"; then
             successful=$((successful + 1))
             evidence_lines+="Scan ${scan_label}: ${evidence_directory}/scan-${scan_slug}.txt"$'\n'
-            status_lines+="Scan ${scan_label}: completed"$'\n'
+            if [[ -n "${SECURITY_SCAN_REUSE_SHA256[scan_index]-}" ]]; then
+                status_lines+="Scan ${scan_label}: completed; its validated report was reused from an earlier run of the same commit"$'\n'
+            else
+                status_lines+="Scan ${scan_label}: completed"$'\n'
+            fi
         elif [[ "${scan_state_fields[0]-Unknown}" == Refused ]]; then
             refused=$((refused + 1))
             REFUSED_MODELS["${SECURITY_SCAN_MODELS[scan_index]}"]=1
@@ -12229,6 +12898,9 @@ EOF
         else
             printf 'Final report contract validation failed: %s\n' \
                 "${report_contract_error}" >> "${error_path}"
+            append_worker_compaction_note \
+                "${result_path}/.initial-worker-outcome.json" \
+                "${WORKER_RECOVERY_DIRECTORY}/initial-outcome.json"
             review_progress "${slug}" 'report validation' \
                 'strict contract rejected a noncanonical candidate; checking bounded repair eligibility'
             if ((post_process_failure == 0)) &&

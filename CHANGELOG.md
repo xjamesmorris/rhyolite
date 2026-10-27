@@ -25,8 +25,25 @@
   effective-plan approval. `default` also selects remembered or suggested
   values without a prompt for the review model, reasoning effort, scan
   models, and consolidation model.
+- `--reuse-scans RUN_FOLDER`, in the launcher and the direct runner, reuses
+  the validated reports of completed scans from an earlier run of the same
+  repository and commit when the harness, context tier, scan model, and
+  effort match, so only the other scans and the consolidation run again.
+  Each reused report's SHA-256 digest is approval-bound and verified again
+  before consolidation, and failure analysis names the run folder whenever
+  completed scans can be reused.
+- Launcher options `--min-successful-scans` and `--commit`. Editing the
+  security scans at plan approval also asks how many must succeed.
 
 ### Changed
+
+- Three-scan plans require two successful scans by default; two-scan plans
+  still require both. One failed scan of three no longer discards the other
+  two.
+- Harness Contract v10: worker outcome schema 3 adds `Compactions`, the
+  context compactions recorded in the session. Scan state records them, and
+  failure analysis names a compaction before a scan or review report that
+  failed its contract.
 
 - Every scope now requires the same complete security pass under the same
   approved model, reasoning effort, context, and 240-minute default session
@@ -46,6 +63,13 @@
 
 ### Fixed
 
+- A long security scan no longer loses its report contract to automatic
+  context compaction, which replaces the scan request with a summary. Both
+  worker agents repeat the scan report contract in their own instructions,
+  and a scan session that ends without a valid report is asked once, in the
+  same session, for only its report (approval-bound `ScanReportRecovery`);
+  scan state records the result as `ReportRequest`. See the
+  [October 26 incident](docs/RUN-FAILURE-INCIDENT-2026-10-26.md).
 - Provider refusals no longer discard work that other approved models can
   finish. Harness Contract v9 recognizes a `refused` outcome live and after
   exit, in any event order. The approval-bound `RefusalPolicy` skips

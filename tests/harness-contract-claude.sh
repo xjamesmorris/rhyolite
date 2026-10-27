@@ -263,6 +263,17 @@ elif mode == "split":
     split_at = report.index("FINDINGS")
     add(assistant([{"type": "text", "text": report[:split_at]}]))
     add(assistant([{"type": "text", "text": report[split_at:]}]))
+elif mode == "compacted":
+    # Claude Code 2.1.304 records an automatic compaction as a
+    # compact_boundary system record before the summarized continuation.
+    add({**base, "type": "system", "subtype": "compact_boundary",
+         "content": "Conversation compacted", "level": "info",
+         "uuid": "00000000-0000-4000-8000-00000000c0de",
+         "compactMetadata": {"trigger": "auto", "preTokens": 809055}})
+    add({**base, "type": "user", "uuid": "u-compact-summary",
+         "isCompactSummary": True,
+         "message": {"role": "user", "content": "Fixture compaction summary."}})
+    add(assistant([{"type": "text", "text": report}]))
 else:
     add(assistant([{"type": "text", "text": report}]))
 add({"type": "last-prompt", "lastPrompt": "Review the read-only snapshot.",
@@ -3467,3 +3478,38 @@ assert_contains "${claude_research_repository}/research/research-session.md" \
     '    ### Tool call: Read' 'Claude Code research transcript content'
 claude_assert_no_credentials "${claude_research_case}/output" \
     'Claude Code research output'
+
+# Contract v10: the Claude Code worker outcome counts the compact_boundary
+# records of the session, each an automatic context compaction that replaced
+# earlier conversation, including the request, with a summary.
+(
+    unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+    # shellcheck source=../plugins/rhyolite/lib/harness/common.sh
+    source "${HARNESS_COMMON}"
+    rhyolite_harness_load "${PLUGIN_ROOT}" claude ||
+        fail 'Claude Code adapter did not load for the compaction outcome.'
+    claude_compaction_root="${fixture_root}/claude-compaction-outcome"
+    claude_compaction_home="${claude_compaction_root}/home"
+    claude_compaction_session='4a3c8e2b-6f1d-4b7a-9c2e-0d5f1a2b3c4d'
+    mkdir -p -m 700 -- "${claude_compaction_home}/projects/fixture-project"
+    printf 'raw\n' > "${claude_compaction_root}/raw"
+    for claude_compaction_case in 'compacted|1' 'complete|0'; do
+        IFS='|' read -r compaction_mode compaction_count <<< "${claude_compaction_case}"
+        claude_write_session_fixture "${compaction_mode}" \
+            "${claude_compaction_home}/projects/fixture-project/${claude_compaction_session}.jsonl" \
+            "${claude_compaction_root}" claude-opus-5-5 max "${claude_compaction_session}"
+        rm -f -- "${claude_compaction_root}/outcome.json"
+        rhyolite_harness_invoke harness_worker_outcome \
+            review "${claude_compaction_root}/raw" "${claude_compaction_home}" \
+            "${claude_compaction_session}" claude-opus-5-5 max \
+            "${claude_compaction_root}/outcome.json" ||
+            fail "Claude Code worker outcome failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+        assert_equal completed \
+            "$(rhyolite_harness_validate_outcome_json "${claude_compaction_root}/outcome.json" review)" \
+            "Claude Code ${compaction_mode} worker outcome"
+        assert_equal "${compaction_count}" \
+            "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["Compactions"])' \
+                "${claude_compaction_root}/outcome.json")" \
+            "Claude Code ${compaction_mode} compaction count"
+    done
+)

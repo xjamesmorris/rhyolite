@@ -138,7 +138,13 @@ supported and must not drive new work.
   repeats a model already selected or requested for a later scan, and
   `--model default` and `--reasoning-effort default` do the same for the
   review runtime. With Copilot, every additional scan or consolidation model
-  gets the same pre-launch model check. `--auto-defaults` accepts the
+  gets the same pre-launch model check. `--min-successful-scans
+  1|2|3|default`, `--commit <full-sha>`, and `--reuse-scans <run output
+  folder>` add `MinimumSuccessfulScans=`, `Commit=`, and `ReuseScans=` to the
+  setup block; `--commit` and `--reuse-scans` require exactly one
+  repository, `--reuse-scans` requires multiple scans and resolves the
+  folder to a canonical absolute path that is not a symbolic link, and the
+  runner verifies the earlier run itself. `--auto-defaults` accepts the
   default for every launcher choice not given on the command line and adds
   `AutoDefaults=true` to the setup block, which makes the orchestrators skip
   every setup question, using home output and scope 1, while still requiring
@@ -178,7 +184,7 @@ supported and must not drive new work.
   `plugins/rhyolite/lib/harness/copilot.sh` and
   `plugins/rhyolite/lib/harness/claude.sh` are the production adapters.
   Production runtime support covers GitHub Copilot CLI and Claude Code.
-- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v9 seam.
+- `docs/HARNESS-ARCHITECTURE.md` describes the implemented Contract-v10 seam.
   `docs/ADDING-A-HARNESS.md` is the canonical implementation playbook. The
   no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures; they must never be entered in the
@@ -367,10 +373,20 @@ supported and must not drive new work.
   fallback, classified from the adapter's worker outcome in the same order
   as same-session recovery; a scan whose model the provider declines is
   recorded as `Refused`, never relaunched, and excluded from the required
-  scans; every other scan failure is final, and live and
+  scans. A scan whose session ends normally on the approved model without a
+  valid report is asked once, in the same session, under the adapter's
+  continuation argv and live enforcement, for only its report
+  (approval-bound `ScanReportRecovery`), with the runner's exact diagnostic
+  and the full report contract; its state records `ReportRequest` and the
+  session's `Compactions`. Because context compaction replaces the request
+  with a summary, both worker agents repeat the scan report contract,
+  between `RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1` and its end marker,
+  byte-for-byte as `security-scan-prompt.txt` defines it. Every other scan
+  failure is final, and live and
   post-exit approved-model enforcement apply to every scan. The runner validates each
   `REPOSITORY SECURITY SCAN REVIEW REPORT`, relabels its findings as `A-1`,
-  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: every scan),
+  `B-2`, and so on, enforces `MinimumSuccessfulScans` (default: two of
+  three scans, otherwise every scan),
   less any declined scans, before consolidation, which therefore runs even
   when every scan was declined, and keeps the relabelled reports outside the session
   root until any research phase has finished, so the network-enabled
@@ -390,6 +406,15 @@ supported and must not drive new work.
   failure analysis never attributes them to the consolidation model.
   Artifacts live under `<repository>/security-scans/`. One scan, the
   direct-runner default, keeps the integrated security pass.
+  `--reuse-scans <run output folder>` reuses the validated reports of
+  completed scans from an earlier run of the same one repository when the
+  harness, context tier, scan protocol, scan model, and effort match. It
+  pins the earlier commit; the earlier run folder and each reused report's
+  SHA-256 digest are approval-bound `SecurityScans` data; and the scan phase
+  copies each reused report and verifies its digest and the scan contract
+  again instead of running that scan. Every folder and file on the way must
+  be owned by the current user, must not be a symbolic link, and must not be
+  writable by others.
 - Scope 3 keeps direct model/effort/harness attribution direct-evidence-only.
   Heuristic model candidates are separate non-attribution about repository
   assets, never people. Prefer family-level identification, cite
@@ -570,7 +595,7 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v9 is implemented. It uses plan schema 5 and state schema
+- Harness Contract v10 is implemented. It uses plan schema 5 and state schema
   6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
@@ -615,7 +640,10 @@ supported and must not drive new work.
   provider refusal of the approved model (Copilot `finishReason`
   `content_filter`, a Claude Code `refusal` stop or `model_refusal_fallback`
   handover) is reported as a refusal, whatever automatic fallback the
-  harness then tried, in any event order. Follow
+  harness then tried, in any event order. Contract v10 adds outcome schema 3
+  with `Compactions`, the context compactions recorded in the session so far
+  (Copilot `session.compaction_complete` events with outcome `applied`,
+  counted once by attempt ID; Claude Code `compact_boundary` records). Follow
   `docs/ADDING-A-HARNESS.md`; do not claim a contract version is implemented
   until runtime and tests land together.
 - Provider refusals are approval-bound as `RefusalPolicy`. When the model
@@ -681,6 +709,9 @@ supported and must not drive new work.
   harness prompt-budget error after a refusal names the limit of the
   harness's fallback model, not the approved model's; the `context-limit`
   class reports a genuine overflow of the approved model's prompt budget.
+  A scan or report that failed its contract after a context compaction names
+  the compaction, and when completed scans exist the analysis recommends a
+  new plan with `--reuse-scans` and the run output folder.
 - No Rhyolite worker receives a subagent tool. Copilot CLI lets a `task`
   argument override every configured `subagents.agents.<name>.model` value
   (verified live: `modelSelectionSource: "explicit_override"`), so a
@@ -764,7 +795,7 @@ supported and must not drive new work.
   failures stop the operation with sanitized nonzero errors.
 - Production support covers exactly the registered `copilot` and `claude`
   adapters. Another production adapter requires a separately approved
-  decision and must satisfy every Contract-v9 requirement, negative test,
+  decision and must satisfy every Contract-v10 requirement, negative test,
   end-to-end test, documentation update, packaging review, and release
   requirement.
 - A review fails when the session record shows that the harness answered with

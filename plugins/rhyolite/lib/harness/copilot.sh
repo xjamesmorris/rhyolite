@@ -1446,6 +1446,7 @@ refused_calls = set()
 prompt_budget = None
 peak_prompt = None
 last_approved_refused = None
+compactions = set()
 
 
 def observe(model, is_content=False):
@@ -1466,6 +1467,18 @@ def note_refusal(identity=None, fallback=""):
         refused_calls.add(identity)
     if fallback and not refusal_fallback:
         refusal_fallback = fallback
+
+
+# An applied context compaction replaces earlier conversation, including the
+# request, with a model-written summary. It counts once by its attempt ID,
+# whether the streamed event, the persisted event, or both recorded it.
+def note_compaction(data, identity):
+    if not isinstance(data, dict) or data.get("success") is not True:
+        return
+    if data.get("outcome") not in (None, "applied"):
+        return
+    attempt = data.get("compactionAttemptId")
+    compactions.add(attempt if isinstance(attempt, str) and attempt else identity)
 
 
 # Approved-model usage records carry the prompt budget, each prompt's size,
@@ -1515,6 +1528,8 @@ for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
         observe(data.get("model"))
     elif kind == "assistant.turn_retry":
         turn_retries += 1
+    elif kind == "session.compaction_complete":
+        note_compaction(data, f"stdout:{line_number}")
     elif kind in ("model.call_start", "agent.interrupted"):
         observe(data.get("model"))
     elif kind == "model.call_final_result":
@@ -1556,6 +1571,14 @@ final_at_limit = False
 events_path = pathlib.Path(events_name)
 if events_path.is_file() and not events_path.is_symlink():
     for index, raw_line in enumerate(events_path.read_bytes().split(b"\n")):
+        if b'"session.compaction_complete"' in raw_line:
+            try:
+                persisted = json.loads(raw_line.decode("utf-8", "replace"))
+                if persisted.get("type") == "session.compaction_complete":
+                    note_compaction(persisted.get("data"), f"events:{index}")
+            except (ValueError, AttributeError):
+                pass
+            continue
         if b'"session.usage_record"' not in raw_line:
             continue
         try:
@@ -1608,7 +1631,7 @@ elif exit_code is not None:
 else:
     outcome = "unknown"
 record = {
-    "Schema": 2,
+    "Schema": 3,
     "Phase": phase,
     "Outcome": outcome,
     "Retryable": outcome in ("transient-failure", "fallback-blocked"),
@@ -1623,6 +1646,7 @@ record = {
     "ContentRefusals": min(refusals, 1000000),
     "PromptBudget": prompt_budget,
     "PeakPromptTokens": peak_prompt,
+    "Compactions": min(len(compactions), 1000000),
 }
 pathlib.Path(output_name).write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
 PY

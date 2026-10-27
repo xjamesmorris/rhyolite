@@ -67,9 +67,13 @@ step-by-step attack instructions. Distinguish exploitable defects from
 design or quality concerns, missing implementation, misleading claims, and
 generic hardening suggestions; do not report those other categories as
 findings. Do not declare an area free of defects unless you inspected it;
-list it under COVERAGE only when you did. Report at most 60 findings,
-ordered by severity.
+list it under COVERAGE only when you did.
 
+The return contract below is fixed. Your worker instructions repeat it word
+for word, so it stays in force after earlier conversation, including this
+request, has been compacted or summarized.
+
+RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1
 Return exactly one security scan report. Begin and end it with a line of at
 least 80 `=` characters; the closing delimiter is mandatory and must be the
 final line. Immediately after the opening delimiter, output this exact
@@ -82,11 +86,15 @@ SECURITY FINDINGS
 COVERAGE
 LIMITATIONS
 
+Use no other section heading, such as a summary, posture, attack-surface, or
+prioritized-remediation section.
+
 Under SCAN CONTEXT, give `Repository:` and `Commit:` lines.
 
 Under SECURITY FINDINGS, either write exactly
-`No qualifying security findings.` or write one block per finding, numbered
-from 1 without gaps, in this exact form:
+`No qualifying security findings.` or write at most 60 findings, ordered by
+severity and numbered from 1 without gaps, as one block per finding in this
+exact form, never as a numbered list or with a bracketed severity:
 
 Finding 1: <one-line title>
 Severity: <Critical, High, Medium, or Low>
@@ -110,3 +118,4 @@ include a follow-up question, menu, action choice, or implementation offer;
 never include `Fix highest severity issues`, `Fix all issues`, or
 `Commit a summary of findings`; never offer to fix, edit, implement, open or
 create a pull request, or commit.
+END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1

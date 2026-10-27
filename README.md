@@ -774,20 +774,37 @@ consolidate them into the one canonical report.
   fails.
 - A scan that ends with a transient model-service failure or a blocked
   automatic model fallback is relaunched once with a fresh session. A scan
+  whose session ends normally without a valid scan report is asked once, in
+  the same session, for only its report, with the exact problem and the full
+  report contract. Both worker agents also repeat that contract in their own
+  instructions, because automatic context compaction can replace the scan
+  request with a summary during a long scan. A scan
   whose model provider declines the request (a content refusal) is reported,
   skipped, and never relaunched on that model, and it does not count against
   the required scans. The review fails before consolidation when fewer than
-  the approved minimum of the remaining scans succeed; by default every scan
-  must succeed. When every scan is declined, the consolidation review still
-  runs its own complete security pass.
+  the approved minimum of the remaining scans succeed; by default two of
+  three scans, or both of two scans, must succeed. When every scan is
+  declined, the consolidation review still runs its own complete security
+  pass.
+- To avoid repeating completed scans after a failed run, approve a new plan
+  with `--reuse-scans <run output folder>`. Rhyolite reuses the validated
+  report of each completed scan whose repository, commit, harness, context
+  tier, model, and reasoning effort match the new plan, pins the earlier
+  commit, and runs only the other scans and the consolidation. Each reused
+  report's SHA-256 digest is part of the approved plan and is verified again
+  before the consolidation review reads it. The folder and its files must
+  belong to you, must not be symbolic links, and must not be writable by
+  other users. `failure-analysis.md` names the folder when completed scans
+  can be reused.
 - Each repository uses one model session per scan plus the consolidation
   review, so two scans use about three times the model sessions of a single
   integrated security pass. With Copilot CLI, the launcher also checks each
   additional model with one short request (one premium request each).
 
-The scan count, every scan model and effort, the consolidation model, and
-the minimum successful scans are part of the approved
-`EFFECTIVE REVIEW PLAN`, so changing any of them requires a new approval.
+The scan count, every scan model and effort, the consolidation model, the
+minimum successful scans, the same-session scan report request, and any
+reused scan reports are part of the approved `EFFECTIVE REVIEW PLAN`, so
+changing any of them requires a new approval.
 
 ### Provider refusals
 
@@ -828,6 +845,11 @@ family. Every choice can also be given on the command line:
                                        single integrated security pass.
 --scan-model MODEL[:EFFORT]|default    Model for scan B; repeat for scan C.
 --consolidation-model MODEL[:EFFORT]|default
+--min-successful-scans N|default       Scans that must succeed (default:
+                                       2 of 3, otherwise every scan).
+--reuse-scans RUN_FOLDER               Reuse the completed scans of an
+                                       earlier run of the same commit.
+--commit SHA                           Review this exact commit.
 --model default                        Review model without a prompt.
 --reasoning-effort default             Review effort without a prompt.
 --auto-defaults                        Accept the default for every choice
@@ -848,10 +870,12 @@ scope `1`), so the only remaining step is approving the
 ```
 
 Without a terminal and without `--auto-defaults` or a scan option, the
-launcher leaves the scan questions to guided setup. The direct runner
-accepts the same `--security-scans`, `--scan-model`, and
-`--consolidation-model` options, defaults to one scan plus one per
-`--scan-model`, and adds `--min-successful-scans N|default`.
+launcher leaves the scan questions to guided setup. `--commit` and
+`--reuse-scans` apply to exactly one repository. When you edit the security
+scans at plan approval, guided setup also asks how many must succeed. The
+direct runner accepts the same `--security-scans`, `--scan-model`,
+`--consolidation-model`, `--min-successful-scans`, `--reuse-scans`, and
+`--commit` options and defaults to one scan plus one per `--scan-model`.
 `run-parallel-reviews.sh --harness copilot --suggest-scan-models --model
 <review model>` prints up to three suggested `MODEL VENDOR` lines.
 
@@ -1020,10 +1044,13 @@ Each repository output directory creates:
 - `security-scans/`, only with two or three
   [security scans](#multi-model-security-scans):
   - `security-scans.json`: every scan's model, effort, status, attempts,
-    finding count, and failure class, plus the consolidation ledger status.
+    finding count, failure class, same-session report request result
+    (`ReportRequest`), context compactions, and reuse source (`Reused`),
+    plus the consolidation ledger status.
   - `scan-a/`, `scan-b/`, and `scan-c/`: the scan report, sanitized
-    timeline, transcript, errors, `scan-state.json`, agent state, and any
-    relaunched attempt under `attempts/1/`.
+    timeline, transcript, errors, `scan-state.json`, agent state, any
+    same-session report request with its reply, and any relaunched attempt
+    under `attempts/1/`.
   - `evidence/`: each completed scan report with its findings relabelled
     `A-1`, `B-2`, and so on, exactly as the consolidation review read it.
   - `request.txt`, the identical scan request; `finding-ids.txt`; the
@@ -1234,7 +1261,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v9 implementation playbook is in
+Contract-v10 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in

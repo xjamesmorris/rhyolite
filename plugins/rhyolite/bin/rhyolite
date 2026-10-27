@@ -602,6 +602,9 @@ build_launcher_setup_block() {
     fi
     printf 'ReasoningEffort=%s\n' "${reasoning_effort}"
     printf 'ContextTier=%s\n' "${context_tier}"
+    if [[ -n "${LAUNCHER_COMMIT}" ]]; then
+        printf 'Commit=%s\n' "${LAUNCHER_COMMIT}"
+    fi
     if [[ -n "${LAUNCHER_SECURITY_SCAN_COUNT}" ]]; then
         printf 'SecurityScans=%s\n' "${LAUNCHER_SECURITY_SCAN_COUNT}"
         for spec in "${LAUNCHER_SCAN_SPECS[@]}"; do
@@ -609,6 +612,12 @@ build_launcher_setup_block() {
         done
         if [[ -n "${LAUNCHER_CONSOLIDATION_SPEC}" ]]; then
             printf 'ConsolidationModel=%s\n' "${LAUNCHER_CONSOLIDATION_SPEC}"
+        fi
+        if [[ -n "${LAUNCHER_MIN_SUCCESSFUL_SCANS}" ]]; then
+            printf 'MinimumSuccessfulScans=%s\n' "${LAUNCHER_MIN_SUCCESSFUL_SCANS}"
+        fi
+        if [[ -n "${LAUNCHER_REUSE_SCANS}" ]]; then
+            printf 'ReuseScans=%s\n' "${LAUNCHER_REUSE_SCANS}"
         fi
     fi
     if ((LAUNCHER_AUTO_DEFAULTS)); then
@@ -963,6 +972,9 @@ ensure_copilot_model_access() {
 LAUNCHER_SECURITY_SCAN_COUNT=''
 LAUNCHER_SCAN_SPECS=()
 LAUNCHER_CONSOLIDATION_SPEC=''
+LAUNCHER_MIN_SUCCESSFUL_SCANS=''
+LAUNCHER_REUSE_SCANS=''
+LAUNCHER_COMMIT=''
 LAUNCHER_AUTO_DEFAULTS=0
 LAUNCHER_SCAN_CATALOG=''
 LAUNCHER_SCAN_CATALOG_LOADED=0
@@ -1192,6 +1204,8 @@ Usage:
            [--security-scans 1|2|3|default]
            [--scan-model MODEL[:EFFORT]|default]...
            [--consolidation-model MODEL[:EFFORT]|default]
+           [--min-successful-scans 1|2|3|default]
+           [--reuse-scans RUN_FOLDER] [--commit SHA]
            [--auto-defaults] [--yolo]
            [--] [URL...] [initial review request...]
 
@@ -1233,6 +1247,16 @@ Options:
                       Model that consolidates the scans and writes the
                       report; default uses the remembered choice, or the
                       review model.
+  --min-successful-scans N
+                      Scans that must succeed before consolidation; default
+                      requires 2 of 3 scans, otherwise every scan.
+  --reuse-scans RUN_FOLDER
+                      Reuse the validated reports of completed scans from an
+                      earlier run output folder of the same one repository
+                      and commit when the harness, context, scan model, and
+                      effort match; only the other scans run again.
+  --commit SHA        Review this exact 40-character commit of the one
+                      repository.
   --auto-defaults     Use the remembered or default value for every setting
                       that is not on the command line, here and in guided
                       setup (output, scope, cookies, and lookback), so the
@@ -1278,6 +1302,9 @@ main() {
     local effort_use_default=0
     local security_scans_input=''
     local consolidation_model_input=''
+    local min_successful_scans_input=''
+    local commit_input=''
+    local reuse_scans_input=''
     local scan_index
     local scan_spec
     local scan_label
@@ -1580,6 +1607,40 @@ main() {
                 consolidation_model_input="$2"
                 shift 2
                 ;;
+            --min-successful-scans)
+                [ "$#" -ge 2 ] &&
+                    [[ "$2" == 1 || "$2" == 2 || "$2" == 3 || "$2" == default ]] ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested minimum successful security scans is invalid.' \
+                        '--min-successful-scans requires 1, 2, 3, or default.' \
+                        'Use --min-successful-scans 2 to tolerate one failed scan of three, or default.' \
+                        2
+                min_successful_scans_input="$2"
+                shift 2
+                ;;
+            --commit)
+                [ "$#" -ge 2 ] && [[ "$2" =~ ^[0-9A-Fa-f]{40}$ ]] ||
+                    fail \
+                        'launcher argument validation' \
+                        'The requested commit is invalid.' \
+                        '--commit requires a full 40-character hexadecimal commit SHA.' \
+                        'Pass the full commit SHA to review, or omit --commit to review the default branch head.' \
+                        2
+                commit_input="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+                shift 2
+                ;;
+            --reuse-scans)
+                [ "$#" -ge 2 ] && [ -n "$2" ] ||
+                    fail \
+                        'launcher argument validation' \
+                        'A run output folder argument is missing.' \
+                        '--reuse-scans requires the path of an earlier Rhyolite run output folder.' \
+                        'Pass --reuse-scans with a folder such as ~/rhyolite-output/repo-review/<run id>.' \
+                        2
+                reuse_scans_input="$2"
+                shift 2
+                ;;
             --auto-defaults)
                 LAUNCHER_AUTO_DEFAULTS=1
                 shift
@@ -1802,6 +1863,31 @@ main() {
             "Only anonymous public HTTPS Git repository URLs are supported: ${invalid_repository:-NONE}" \
             'Correct the repository URL and retry.' \
             2
+    if [[ -n "${commit_input}" || -n "${reuse_scans_input}" ]] &&
+        ((${#repositories[@]} != 1)); then
+        fail \
+            'launcher argument validation' \
+            '--commit and --reuse-scans apply to exactly one repository.' \
+            "${#repositories[@]} repositories were requested." \
+            'Review that repository on its own, or remove --commit and --reuse-scans.' \
+            2
+    fi
+    if [[ -n "${reuse_scans_input}" ]]; then
+        # The orchestrator passes this path to the trusted runner in one
+        # single-quoted shell word, and the setup block is line-oriented.
+        if [[ -L "${reuse_scans_input%/}" || ! -d "${reuse_scans_input}" ]] ||
+            ! LAUNCHER_REUSE_SCANS="$(CDPATH='' cd -P -- "${reuse_scans_input}" 2>/dev/null && pwd)" ||
+            [[ ! -d "${LAUNCHER_REUSE_SCANS}" ||
+                ! "${LAUNCHER_REUSE_SCANS}" =~ ^/[A-Za-z0-9._/@+=,:\ -]+$ ]]; then
+            fail \
+                'launcher argument validation' \
+                'The earlier run output folder was not found or has an unsupported path.' \
+                "Folder: ${reuse_scans_input}" \
+                'Pass an existing run output folder that is not a symbolic link and whose path uses only letters, digits, spaces, and . _ / @ + = , : - characters.' \
+                2
+        fi
+    fi
+    LAUNCHER_COMMIT="${commit_input}"
 
     for repository in "${repositories[@]}"; do
         if rhyolite_read_preference \
@@ -1997,7 +2083,8 @@ main() {
     # any scan option is given, or under --auto-defaults; otherwise guided
     # setup asks for them.
     if ((is_interactive || LAUNCHER_AUTO_DEFAULTS)) ||
-        [[ -n "${security_scans_input}" || -n "${consolidation_model_input}" ]] ||
+        [[ -n "${security_scans_input}" || -n "${consolidation_model_input}" ||
+            -n "${min_successful_scans_input}" || -n "${reuse_scans_input}" ]] ||
         ((${#scan_model_inputs[@]} > 0)); then
         if [[ "${security_scans_input}" =~ ^[123]$ ]]; then
             LAUNCHER_SECURITY_SCAN_COUNT="${security_scans_input}"
@@ -2028,6 +2115,26 @@ main() {
                 'A consolidation model requires multiple security scans.' \
                 'With one security scan the review worker performs the integrated security pass and nothing is consolidated.' \
                 'Pass --security-scans 2 or 3, or remove --consolidation-model.' \
+                2
+        fi
+        if [[ "${min_successful_scans_input}" =~ ^[123]$ ]]; then
+            ((min_successful_scans_input <= LAUNCHER_SECURITY_SCAN_COUNT)) ||
+                fail \
+                    'launcher argument validation' \
+                    'The minimum successful security scans exceeds the scan count.' \
+                    "--min-successful-scans ${min_successful_scans_input} with ${LAUNCHER_SECURITY_SCAN_COUNT} security scans." \
+                    'Choose a value from 1 through the security scan count.' \
+                    2
+            ((LAUNCHER_SECURITY_SCAN_COUNT == 1)) ||
+                LAUNCHER_MIN_SUCCESSFUL_SCANS="${min_successful_scans_input}"
+        fi
+        if [[ -n "${LAUNCHER_REUSE_SCANS}" ]] &&
+            ((LAUNCHER_SECURITY_SCAN_COUNT == 1)); then
+            fail \
+                'launcher argument validation' \
+                'Reusing security scans requires multiple security scans.' \
+                'With one security scan the review worker performs the integrated security pass, so no scan report can be reused.' \
+                'Pass --security-scans 2 or 3 with the scan models of the earlier run, or remove --reuse-scans.' \
                 2
         fi
         selected_scan_models=("${model}")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-RHYOLITE_HARNESS_CONTRACT_VERSION=9
+RHYOLITE_HARNESS_CONTRACT_VERSION=10
 RHYOLITE_HARNESS_ERROR_DETAIL=''
 RHYOLITE_HARNESS_LAST_STATUS=0
 # harness_validate_model_id returns this status only for a safe model ID that
@@ -22,8 +22,9 @@ RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5
 # continued in the same session (transient model-service failure, or an
 # automatic model fallback that was blocked before it produced any output) or
 # was declined by the model provider (refused), which is never retried on the
-# refusing model.
-RHYOLITE_HARNESS_OUTCOME_SCHEMA=2
+# refusing model. Schema 3 adds Compactions, the automatic or manual context
+# compactions that the harness recorded in the session so far.
+RHYOLITE_HARNESS_OUTCOME_SCHEMA=3
 RHYOLITE_HARNESS_OUTCOMES=(completed transient-failure fallback-blocked refused substituted failed unknown)
 # Exact phase names accepted by harness_normalize_worker_output and
 # harness_detect_worker_violation.
@@ -249,7 +250,7 @@ rhyolite_harness_worker_outcome_unknown() {
     rhyolite_harness_validate_outcome_arguments "$@" || return 1
     (
         umask 077
-        printf '{"Schema":2,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null}\n' \
+        printf '{"Schema":3,"Phase":"%s","Outcome":"unknown","Retryable":false,"ExitCode":null,"SessionErrors":[],"ModelCallFailures":0,"TurnRetries":0,"OutputLimitHits":0,"OutputTokenLimit":null,"FinalReplyAtOutputLimit":false,"FallbackModel":"","ContentRefusals":0,"PromptBudget":null,"PeakPromptTokens":null,"Compactions":0}\n' \
             "${phase}" > "${outcome_output}"
     ) || {
         rhyolite_harness_set_error 'Could not write the worker outcome.'
@@ -264,7 +265,9 @@ rhyolite_harness_worker_outcome_unknown() {
 # prompt-token budget and PeakPromptTokens its largest recorded prompt, each
 # null when the harness did not record it. FallbackModel names the model of an
 # automatic harness fallback and may be set only for a blocked fallback, which
-# requires it, or a refusal.
+# requires it, or a refusal. Compactions counts the context compactions that
+# the harness recorded in the session, each of which replaces earlier
+# conversation, including the request, with a summary.
 rhyolite_harness_validate_outcome_json() {
     local outcome_path="$1"
     local expected_phase="$2"
@@ -280,7 +283,7 @@ keys = {
     "Schema", "Phase", "Outcome", "Retryable", "ExitCode", "SessionErrors",
     "ModelCallFailures", "TurnRetries", "OutputLimitHits", "OutputTokenLimit",
     "FinalReplyAtOutputLimit", "FallbackModel", "ContentRefusals",
-    "PromptBudget", "PeakPromptTokens",
+    "PromptBudget", "PeakPromptTokens", "Compactions",
 }
 outcomes = {
     "completed", "transient-failure", "fallback-blocked", "refused",
@@ -304,7 +307,7 @@ def tokens(value):
 if (
     not isinstance(data, dict)
     or set(data) != keys
-    or data["Schema"] != 2
+    or data["Schema"] != 3
     or data["Phase"] != phase
     or data["Outcome"] not in outcomes
     or type(data["Retryable"]) is not bool
@@ -318,7 +321,7 @@ if (
         or re.search(r"[\x00-\x1f\x7f]", item)
         for item in data["SessionErrors"]
     )
-    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits", "ContentRefusals"))
+    or not all(count(data[key]) for key in ("ModelCallFailures", "TurnRetries", "OutputLimitHits", "ContentRefusals", "Compactions"))
     or not (data["OutputTokenLimit"] is None or count(data["OutputTokenLimit"]))
     or type(data["FinalReplyAtOutputLimit"]) is not bool
     or not isinstance(data["FallbackModel"], str)

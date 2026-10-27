@@ -279,7 +279,7 @@ for support_claim_document in \
         fail "Support documentation still claims Copilot-only production support: ${support_claim_document}"
 done
 grep -Fq 'docs/ADDING-A-HARNESS.md' "${README}" &&
-    grep -Fq 'Contract-v9' "${HARNESS_PLAYBOOK}" &&
+    grep -Fq 'Contract-v10' "${HARNESS_PLAYBOOK}" &&
     grep -Fq 'Development-only no-op fixture' "${HARNESS_PLAYBOOK}" ||
     fail 'Harness porting playbook is not discoverable or contractually scoped.'
 for validation_document in \
@@ -1105,6 +1105,39 @@ for security_contract_file in \
         grep -Fq -- "${security_pass_checklist_rule}" ||
         fail "Security pass checklist drifted: ${security_contract_file}"
 done
+# The scan report contract lives in the scan request and, word for word, in
+# both worker agents' own instructions, which stay in the system prompt when
+# automatic context compaction replaces the request with a summary. The
+# runner's scan report validator and finding limit must match it.
+scan_report_contract=''
+for scan_contract_file in \
+    "${SKILL_ROOT}/security-scan-prompt.txt" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    [[ "$(grep -cFx 'RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1' "${scan_contract_file}")" == 1 &&
+        "$(grep -cFx 'END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1' "${scan_contract_file}")" == 1 ]] ||
+        fail "The scan report contract block must appear exactly once: ${scan_contract_file}"
+    scan_contract_block="$(
+        sed -n '/^RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/,/^END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/p' \
+            "${scan_contract_file}"
+    )"
+    if [[ -z "${scan_report_contract}" ]]; then
+        scan_report_contract="${scan_contract_block}"
+    elif [[ "${scan_contract_block}" != "${scan_report_contract}" ]]; then
+        fail "The scan report contract block drifted from security-scan-prompt.txt: ${scan_contract_file}"
+    fi
+done
+grep -Fq 'block; this copy keeps it in force after earlier conversation, including the' \
+    "${WORKER_AGENT}" &&
+    grep -Fq 'block; this copy keeps it in force after earlier conversation, including the' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md" ||
+    fail 'A worker agent does not say that its scan report contract survives compaction.'
+grep -Fq "write at most $(sed -n 's/^SECURITY_SCAN_FINDING_LIMIT=//p' "${RUNNER}") findings, ordered by" \
+    <<< "${scan_report_contract}" ||
+    fail 'The scan report contract finding limit does not match SECURITY_SCAN_FINDING_LIMIT.'
+grep -Fq 'SECTIONS = ["SCAN CONTEXT", "SECURITY FINDINGS", "COVERAGE", "LIMITATIONS"]' "${RUNNER}" &&
+    [[ "${scan_report_contract}" == *$'\nSCAN CONTEXT\nSECURITY FINDINGS\nCOVERAGE\nLIMITATIONS\n'* ]] ||
+    fail 'The scan report contract sections do not match the runner scan report validator.'
 security_pass_explanation_rule='every scope, including scope `1`, runs the same full dedicated security pass with the same approved model, reasoning effort, context tier, and session time limit; scope adds only research and provenance work.'
 for scope_explanation_file in \
     "${AGENT}" \
@@ -2500,8 +2533,13 @@ grep -Fq 'PLAN_SCHEMA_VERSION=5' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware plan schema version 5.'
 grep -Fq 'STATE_SCHEMA_VERSION=6' "${RUNNER}" ||
     fail 'Bash runner does not emit harness-aware state schema version 6.'
-grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=9' "${HARNESS_COMMON}" ||
-    fail 'Harness common module does not declare contract version 9.'
+grep -Fq 'RHYOLITE_HARNESS_CONTRACT_VERSION=10' "${HARNESS_COMMON}" ||
+    fail 'Harness common module does not declare contract version 10.'
+grep -Fq 'RHYOLITE_HARNESS_OUTCOME_SCHEMA=3' "${HARNESS_COMMON}" &&
+    grep -Fq '"Compactions": min(len(compactions), 1000000),' "${COPILOT_HARNESS}" &&
+    grep -Fq '"Compactions": min(len(compactions), 1000000),' \
+        "${PLUGIN_ROOT}/lib/harness/claude.sh" ||
+    fail 'Worker outcome schema 3 does not report context compactions from both adapters.'
 grep -Fq 'RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS=5' "${HARNESS_COMMON}" &&
     grep -Fq 'RefusalPolicy=%s' "${RUNNER}" &&
     grep -Fq '"UnapprovedModelFallback":"never"' "${RUNNER}" ||
@@ -4198,6 +4236,7 @@ for plan_flag in \
     --output-root --scope --provenance-lookback-months --research-cookies \
     --remember-preferences --allow-unlisted-model --no-open-html \
     --security-scans --scan-model --consolidation-model \
+    --min-successful-scans --commit --reuse-scans \
     --plan-only --non-interactive --expected-plan-hash; do
     plan_flag_pattern="(^|[^-[:alnum:]])${plan_flag}([^-[:alnum:]]|\$)"
     grep -Eq -- "${plan_flag_pattern}" <<< "${runner_help}" ||
@@ -7602,7 +7641,8 @@ mock_continuation=0
 if [[ "${agent}" == rhyolite:repo-review-worker ]]; then
     mock_review_request="$(mktemp "${TMPDIR:-/tmp}/mock-review-request.XXXXXXXX")"
     cat > "${mock_review_request}"
-    if grep -Fxq 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_review_request}"; then
+    if grep -Fxq 'RHYOLITE REPORT DELIVERY REQUEST' "${mock_review_request}" ||
+        grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${mock_review_request}"; then
         mock_continuation=1
     fi
     # Re-provide the same request on stdin for the review-request capture.
@@ -7797,6 +7837,7 @@ for argument in "$@"; do
 done
 [[ "${output_format}" == json ]] || exit 120
 mock_emit_transient=0
+mock_compactions=0
 mock_structured_capture="$(
     mktemp "${TMPDIR:-/tmp}/mock-copilot-stdout.XXXXXXXX"
 )"
@@ -7809,7 +7850,8 @@ emit_structured_events() {
         "${mock_structured_capture}" \
         "${MOCK_REPLY_MODEL:-${model}}" \
         "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" \
-        "${mock_emit_transient}" <<'EVENTS'
+        "${mock_emit_transient}" \
+        "${mock_compactions}" <<'EVENTS'
 import json
 import pathlib
 import sys
@@ -7825,6 +7867,17 @@ def event(kind, data):
 
 
 event("model.call_start", {"turnId": "0", "model": model})
+# Automatic context compaction, as Copilot CLI 1.0.104-4 recorded it in run
+# 20261026-170519.
+for number in range(int(sys.argv[5])):
+    event("session.compaction_start", {
+        "compactionAttemptId": f"mock-compaction-{number}", "model": model,
+        "currentTokens": 809055, "tokenLimit": 983040, "trigger": "threshold"})
+    event("session.compaction_complete", {
+        "success": True, "outcome": "applied",
+        "compactionAttemptId": f"mock-compaction-{number}",
+        "preCompactionMessagesLength": 353, "messagesRemoved": 315,
+        "tokenLimit": 983040, "trigger": "threshold"})
 if sys.argv[4] == "fallback":
     # An automatic fallback to another model that never produced output, as
     # recorded by Copilot CLI 1.0.98; the worker still exits with status 0.
@@ -8797,6 +8850,76 @@ fi
 mock_worker_request="$(mktemp "${TMPDIR:-/tmp}/mock-worker-request.XXXXXXXX")"
 cat > "${mock_worker_request}"
 printf '# Mock Copilot session\n' > "${share_path}"
+emit_mock_scan_report() {
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
+        'SCAN CONTEXT' \
+        'Repository: https://github.com/octocat/Hello-World' \
+        'Commit: 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
+        '' \
+        'SECURITY FINDINGS'
+    if [[ "${MOCK_SCAN_EMPTY_MODEL-}" == "${model}" ]]; then
+        printf '%s\n' 'No qualifying security findings'
+    elif [[ "${MOCK_SCAN_LOOSE_MODEL-}" == "${model}" ]]; then
+        # Indented, list-marked fields and a qualified severity are accepted.
+        printf '%s\n' \
+            '- Finding 1: Unchecked index reaches the table lookup' \
+            '  - Severity: High (reachable from untrusted input)' \
+            '  - Confidence: high' \
+            '  - Location: src/table.c:41' \
+            '  - Behavior: The index is used before any bounds check.' \
+            '  - Exploit path: A crafted request supplies a large index.' \
+            '  - Impact: Out-of-bounds read.' \
+            '  - Remediation: Check the index against the table size.' \
+            '' \
+            '- Finding 2: Length arithmetic overflows before the bounds check' \
+            '  - Severity: Medium' \
+            '  - Confidence: Medium' \
+            '  - Location: src/parser.c:203-207' \
+            '  - Behavior: A 32-bit length sum wraps before it is compared.' \
+            '  - Exploit path: A crafted record passes the wrapped check.' \
+            '  - Impact: Out-of-bounds read of adjacent memory.' \
+            '  - Remediation: Check the sum for overflow before comparing.'
+    else
+        printf '%s\n' \
+            'Finding 1: Length arithmetic overflows before the bounds check' \
+            'Severity: Medium' \
+            'Confidence: High' \
+            'Location: src/parser.c:203-207' \
+            'Behavior: A 32-bit length sum wraps before it is compared.' \
+            'Exploit path: A crafted record reaches the parser and passes the' \
+            'wrapped check.' \
+            'Impact: Out-of-bounds read of adjacent memory.' \
+            'Remediation: Check the sum for overflow before comparing.'
+    fi
+    printf '%s\n' \
+        '' \
+        'COVERAGE' \
+        'src/parser.c and the build configuration.' \
+        '' \
+        'LIMITATIONS' \
+        'Fixture scan; no code was executed.' \
+        '================================================================================'
+}
+emit_mock_invalid_scan_report() {
+    printf '%s\n' \
+        '================================================================================' \
+        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
+        'Repository: https://github.com/octocat/Hello-World' \
+        '' \
+        'SECURITY POSTURE SUMMARY' \
+        'One length-arithmetic defect.' \
+        '' \
+        'SECURITY FINDINGS' \
+        '1. [MEDIUM] Length arithmetic overflows before the bounds check' \
+        '  Severity: Medium' \
+        '  Location: src/parser.c:203-207' \
+        '' \
+        'PRIORITIZED REMEDIATION' \
+        'Check the sum for overflow before comparing.' \
+        '================================================================================'
+}
 # A parallel security-only scan answers with one scan report and exits.
 if grep -Fxq 'RHYOLITE_SECURITY_SCAN_V1' "${mock_worker_request}"; then
     cp -- "${mock_worker_request}" "${MOCK_LOG}.scan-request.${model}"
@@ -8865,56 +8988,33 @@ EVENTS
         wait "$!"
         exit 96
     fi
-    printf '%s\n' \
-        '================================================================================' \
-        'REPOSITORY SECURITY SCAN REVIEW REPORT' \
-        'SCAN CONTEXT' \
-        'Repository: https://github.com/octocat/Hello-World' \
-        'Commit: 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
-        '' \
-        'SECURITY FINDINGS'
-    if [[ "${MOCK_SCAN_EMPTY_MODEL-}" == "${model}" ]]; then
-        printf '%s\n' 'No qualifying security findings'
-    elif [[ "${MOCK_SCAN_LOOSE_MODEL-}" == "${model}" ]]; then
-        # Indented, list-marked fields and a qualified severity are accepted.
-        printf '%s\n' \
-            '- Finding 1: Unchecked index reaches the table lookup' \
-            '  - Severity: High (reachable from untrusted input)' \
-            '  - Confidence: high' \
-            '  - Location: src/table.c:41' \
-            '  - Behavior: The index is used before any bounds check.' \
-            '  - Exploit path: A crafted request supplies a large index.' \
-            '  - Impact: Out-of-bounds read.' \
-            '  - Remediation: Check the index against the table size.' \
-            '' \
-            '- Finding 2: Length arithmetic overflows before the bounds check' \
-            '  - Severity: Medium' \
-            '  - Confidence: Medium' \
-            '  - Location: src/parser.c:203-207' \
-            '  - Behavior: A 32-bit length sum wraps before it is compared.' \
-            '  - Exploit path: A crafted record passes the wrapped check.' \
-            '  - Impact: Out-of-bounds read of adjacent memory.' \
-            '  - Remediation: Check the sum for overflow before comparing.'
-    else
-        printf '%s\n' \
-            'Finding 1: Length arithmetic overflows before the bounds check' \
-            'Severity: Medium' \
-            'Confidence: High' \
-            'Location: src/parser.c:203-207' \
-            'Behavior: A 32-bit length sum wraps before it is compared.' \
-            'Exploit path: A crafted record reaches the parser and passes the' \
-            'wrapped check.' \
-            'Impact: Out-of-bounds read of adjacent memory.' \
-            'Remediation: Check the sum for overflow before comparing.'
+    # MOCK_SCAN_COMPACT_MODEL records one automatic context compaction.
+    if [[ "${MOCK_SCAN_COMPACT_MODEL-}" == "${model}" ]]; then
+        mock_compactions=1
     fi
-    printf '%s\n' \
-        '' \
-        'COVERAGE' \
-        'src/parser.c and the build configuration.' \
-        '' \
-        'LIMITATIONS' \
-        'Fixture scan; no code was executed.' \
-        '================================================================================'
+    # MOCK_SCAN_INVALID_MODEL answers in its own layout, as scan C of run
+    # 20261026-170519 did after compaction removed the request.
+    if [[ "${MOCK_SCAN_INVALID_MODEL-}" == "${model}" ]]; then
+        emit_mock_invalid_scan_report
+        exit 0
+    fi
+    emit_mock_scan_report
+    exit 0
+fi
+# A same-session request for only the scan report. MOCK_SCAN_REPORT_REQUEST_MODE
+# `never` answers in the invalid layout again; `fail` ends the continuation
+# with an error before any reply.
+if grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${mock_worker_request}"; then
+    cp -- "${mock_worker_request}" "${MOCK_LOG}.scan-report-request.${model}"
+    rm -f -- "${mock_worker_request}"
+    if [[ "${MOCK_SCAN_REPORT_REQUEST_MODE-valid}" == fail ]]; then
+        printf 'mock scan report request failure for %s\n' "${model}" >&2
+        exit 1
+    elif [[ "${MOCK_SCAN_REPORT_REQUEST_MODE-valid}" == never ]]; then
+        emit_mock_invalid_scan_report
+    else
+        emit_mock_scan_report
+    fi
     exit 0
 fi
 # A same-session request for only the consolidation ledger.
@@ -16365,6 +16465,8 @@ if (scans.Mode !== "multi-model" || scans.Count !== 3 ||
     scans.Scans[1].ReasoningEffort !== "high" ||
     scans.MinimumSuccessfulScans !== 2 ||
     scans.MaxConcurrentWorkers !== 3 * plan.ThrottleLimit ||
+    JSON.stringify(scans.ScanReportRecovery) !==
+      JSON.stringify({ Mode: "same-session-continuation", Available: true, AttemptLimit: 1 }) ||
     scans.Consolidation?.Model !== plan.Model ||
     scans.Consolidation?.Protocol !== "RHYOLITE_SECURITY_CONSOLIDATION_LEDGER_V1" ||
     JSON.stringify(scans.Consolidation?.LedgerRecovery) !==
@@ -16392,11 +16494,31 @@ PATH="${mock_bin}:${PATH}" "${RUNNER}" \
     --output-root "${security_scan_root}/output" \
     >"${security_scan_root}/single-plan.json" ||
     fail 'Default single-scan plan-only resolution failed.'
+# Three scans tolerate one failed scan by default; two scans require both.
+for security_scan_quorum_case in '3 2' '2 2'; do
+    read -r security_scan_quorum_count security_scan_quorum_expected \
+        <<< "${security_scan_quorum_case}"
+    PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World --scope 1 \
+        --security-scans "${security_scan_quorum_count}" \
+        --plan-only --non-interactive \
+        --output-root "${security_scan_root}/output" \
+        >"${security_scan_root}/quorum-default-plan.json" ||
+        fail "Default quorum plan-only resolution failed for ${security_scan_quorum_count} scans."
+    node -e '
+const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (plan.SecurityScans.MinimumSuccessfulScans !== Number(process.argv[2])) {
+  throw new Error(`unexpected default quorum: ${plan.SecurityScans.MinimumSuccessfulScans}`);
+}' "${security_scan_root}/quorum-default-plan.json" "${security_scan_quorum_expected}" ||
+        fail "The default quorum for ${security_scan_quorum_count} scans is not ${security_scan_quorum_expected}."
+done
 node -e '
 const plan = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 const scans = plan.SecurityScans;
 if (scans.Mode !== "integrated" || scans.Count !== 1 ||
     scans.ScanRelaunchLimit !== 0 || scans.Consolidation !== null ||
+    JSON.stringify(scans.ScanReportRecovery) !==
+      JSON.stringify({ Mode: "same-session-continuation", Available: false, AttemptLimit: 0 }) ||
     scans.Scans.length !== 1 || scans.Scans[0].Model !== plan.Model) {
   throw new Error("default plan is not one integrated security pass");
 }
@@ -16439,7 +16561,8 @@ run_security_scan_case() {
     mkdir -p -- "${case_root}/tmp"
     : > "${mock_log}"
     rm -f -- "${mock_log}".scan-request.* "${mock_log}.review-request" \
-        "${mock_log}.ledger-request" "${mock_log}".refused-*
+        "${mock_log}.ledger-request" "${mock_log}".refused-* \
+        "${mock_log}".scan-report-request.*
     set +e
     env "${case_environment[@]}" \
         RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
@@ -16604,8 +16727,8 @@ JS
 # Scan B fails transiently twice, so its one relaunch is exhausted. Scan C's
 # first attempt records a blocked fallback and must be force-stopped by the
 # live monitor; it is relaunched, not treated as a timeout. Two of three
-# scans still satisfy an approved quorum of two, and the failed scan's
-# evidence never reaches consolidation.
+# scans still satisfy the default quorum of two for three scans, and the
+# failed scan's evidence never reaches consolidation.
 security_scan_transient_always="${security_scan_root}/transient-always"
 printf 'always\n' > "${security_scan_transient_always}"
 run_security_scan_case quorum \
@@ -16613,10 +16736,9 @@ run_security_scan_case quorum \
     "MOCK_SCAN_TRANSIENT_MARKER=${security_scan_transient_always}" \
     MOCK_SCAN_EMPTY_MODEL=claude-fable-5.1 \
     MOCK_SCAN_STUBBORN_FALLBACK_MODEL=claude-fable-5.1 \
-    "MOCK_SCAN_STUBBORN_FALLBACK_MARKER=${security_scan_root}/stubborn-once" \
-    -- --min-successful-scans 2
+    "MOCK_SCAN_STUBBORN_FALLBACK_MARKER=${security_scan_root}/stubborn-once"
 [[ "${SECURITY_SCAN_CASE_EXIT}" -eq 0 ]] ||
-    fail 'One failed scan of three violated a two-scan quorum.'
+    fail 'One failed scan of three violated the default two-scan quorum.'
 grep -Eq '^Security scan B \(claude-opus-5\.5 at [a-z]+\) did not complete: the model service failed and one fresh relaunch did not recover the scan\. See security-scans/scan-b/errors\.txt\.$' \
     "${SECURITY_SCAN_CASE_REPOSITORY}/errors.txt" &&
     grep -Fxq 'Scan B: did not complete; no evidence from this scan is available' \
@@ -16644,7 +16766,8 @@ JS
 
 # Below the approved quorum, consolidation never starts and the repository
 # fails with a model-free failure analysis of the scan phase.
-run_security_scan_case quorum-failed MOCK_SCAN_FAIL_MODEL=claude-opus-5.5
+run_security_scan_case quorum-failed MOCK_SCAN_FAIL_MODEL=claude-opus-5.5 \
+    -- --min-successful-scans 3
 [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]] ||
     fail 'A run below the approved scan quorum succeeded.'
 [[ ! -e "${mock_log}.review-request" ]] ||
@@ -16669,6 +16792,222 @@ if (state.Status !== "ReviewFailed" || summary.SuccessfulScans !== 2 ||
     !analysis.Artifacts.includes("security-scans/security-scans.json") ||
     !report.includes("Only 2 of 3 security scans completed")) {
   throw new Error(`scan quorum failure was not finalized truthfully: ${JSON.stringify(analysis)}`);
+}
+JS
+
+# --reuse-scans: a later plan reuses the validated reports of the completed
+# scans A and C of that failed run. It pins the earlier commit, binds each
+# report's SHA-256 digest into the approval hash, runs only scan B again,
+# and verifies every reused report again before consolidation.
+security_scan_reuse_folder="$(
+    find "${security_scan_root}/quorum-failed/output" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)"
+grep -Fq -- "--reuse-scans ${security_scan_reuse_folder};" \
+    "${SECURITY_SCAN_CASE_REPOSITORY}/failure-analysis.md" ||
+    fail 'The failure analysis of a failed scan quorum does not recommend reusing the completed scans.'
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_reuse_folder}" \
+    --plan-only --non-interactive \
+    --output-root "${security_scan_root}/reuse-output" \
+    >"${security_scan_root}/reuse-plan.json" ||
+    fail 'A plan that reuses completed scans could not be resolved.'
+node - "${security_scan_root}/reuse-plan.json" "${security_scan_reuse_folder}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [planPath, folder] = process.argv.slice(2);
+const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+const scans = plan.SecurityScans;
+const labels = scans.Scans.map((scan) => (scan.Reuse ? scan.Reuse.Label : null));
+if (JSON.stringify(labels) !== JSON.stringify(["A", null, "C"]) ||
+    scans.ReuseSource?.RunFolder !== folder ||
+    scans.ReuseSource.RunId !== path.basename(folder) ||
+    !/^[0-9a-f]{40}$/.test(scans.ReuseSource.Commit) ||
+    plan.Sources[0].RequestedCommit !== scans.ReuseSource.Commit ||
+    !/^[0-9a-f]{64}$/.test(scans.Scans[0].Reuse.ReportSha256) ||
+    scans.Scans[0].Reuse.FindingCount !== 1 ||
+    scans.Scans[0].Reuse.RunId !== scans.ReuseSource.RunId) {
+  throw new Error(`unexpected reuse plan: ${JSON.stringify(scans)}`);
+}
+JS
+expect_security_scan_rejection reuse-single \
+    'Reusing security scans requires multiple security scans.' \
+    --security-scans 1 --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-not-run \
+    'The folder is not a Rhyolite run output folder.' \
+    --security-scans 2 --reuse-scans "${security_scan_root}/quorum-failed"
+expect_security_scan_rejection reuse-commit \
+    'The requested commit differs from the commit of the earlier run.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --commit 0000000000000000000000000000000000000001 \
+    --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-context \
+    'The earlier run used another harness, context tier, or scan protocol.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" --context default \
+    --reuse-scans "${security_scan_reuse_folder}"
+expect_security_scan_rejection reuse-models \
+    'No completed scan of the earlier run matches this plan.' \
+    --model gpt-6-sol --security-scans 2 --scan-model claude-opus-5.5 \
+    --reuse-scans "${security_scan_reuse_folder}"
+ln -s -- "${security_scan_reuse_folder}" "${security_scan_root}/reuse-link"
+expect_security_scan_rejection reuse-link \
+    'The earlier run output folder was not found.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_root}/reuse-link"
+security_scan_untrusted_folder="${security_scan_root}/untrusted/$(basename -- "${security_scan_reuse_folder}")"
+mkdir -p -- "${security_scan_root}/untrusted"
+cp -a -- "${security_scan_reuse_folder}" "${security_scan_untrusted_folder}"
+chmod g+w -- "${security_scan_untrusted_folder}"
+expect_security_scan_rejection reuse-untrusted \
+    'The earlier run output folder is not trusted.' \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_untrusted_folder}"
+run_security_scan_case scan-reuse -- --reuse-scans "${security_scan_reuse_folder}"
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-reuse/stdout" >&2
+    fail "A review that reuses completed scans failed (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+security_scan_reuse_requests=("${mock_log}".scan-request.*)
+((${#security_scan_reuse_requests[@]} == 1)) &&
+    [[ -f "${mock_log}.scan-request.claude-opus-5.5" ]] &&
+    grep -Fxq 'Scan A: completed; its validated report was reused from an earlier run of the same commit' \
+        "${mock_log}.review-request" &&
+    grep -Fxq 'Scan B: completed' "${mock_log}.review-request" &&
+    grep -Fxq 'A-1' "${mock_log}.review-request" &&
+    grep -Fxq 'B-1' "${mock_log}.review-request" &&
+    grep -Fxq 'C-1' "${mock_log}.review-request" ||
+    fail 'Reused scans started a worker or their evidence missed consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" "${security_scan_reuse_folder}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const [repository, folder] = process.argv.slice(2);
+const read = (name) => JSON.parse(fs.readFileSync(path.join(repository, name), "utf8"));
+const state = read("state.json");
+const summary = read("security-scans/security-scans.json");
+const [first, second, third] = summary.Scans;
+if (state.Status !== "Completed" || state.Commit !== state.RequestedCommit ||
+    summary.SuccessfulScans !== 3 ||
+    first.Status !== "Completed" || first.Attempts !== 0 ||
+    first.Reused?.RunId !== path.basename(folder) || first.Reused.Label !== "A" ||
+    second.Status !== "Completed" || second.Attempts !== 1 || second.Reused !== null ||
+    third.Reused?.Label !== "C" ||
+    fs.readFileSync(path.join(repository, "security-scans", "scan-a", "scan-report.txt"), "utf8") !==
+      fs.readFileSync(path.join(folder, "github--octocat--hello-world", "security-scans",
+        "scan-a", "scan-report.txt"), "utf8")) {
+  throw new Error(`reused scans were not imported truthfully: ${JSON.stringify(summary.Scans)}`);
+}
+JS
+# The reused report digests are approval-bound: a reused report that changes
+# after approval changes the plan, so execution stops before any scan runs.
+security_scan_reuse_hash="$(
+    node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).ApprovalHash)' \
+        "${security_scan_root}/reuse-plan.json"
+)"
+sed -i 's/^Fixture scan; no code was executed\.$/Fixture scan; no code was run./' \
+    "${security_scan_reuse_folder}/github--octocat--hello-world/security-scans/scan-c/scan-report.txt"
+security_scan_reuse_status=0
+PATH="${mock_bin}:${PATH}" "${RUNNER}" \
+    --repo https://github.com/octocat/Hello-World --scope 1 \
+    "${SECURITY_SCAN_CASE_DEFAULT_SCANS[@]}" \
+    --reuse-scans "${security_scan_reuse_folder}" \
+    --expected-plan-hash "${security_scan_reuse_hash}" --non-interactive \
+    --output-root "${security_scan_root}/reuse-output" \
+    >/dev/null 2>"${security_scan_root}/reuse-tampered.stderr" ||
+    security_scan_reuse_status=$?
+[[ "${security_scan_reuse_status}" -eq 2 ]] &&
+    grep -Fq 'approved plan changed; regenerate and reconfirm' \
+        "${security_scan_root}/reuse-tampered.stderr" ||
+    fail 'A reused scan report that changed after approval did not invalidate the approved plan.'
+
+# Scan C's context is compacted and it answers in its own layout, as in run
+# 20261026-170519. The runner asks the same session once, with the exact
+# validator diagnostic and the full scan report contract, for only its
+# report; the conforming resend completes the scan without a relaunch.
+run_security_scan_case scan-report-recovered \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_COMPACT_MODEL=claude-fable-5.1
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-recovered/stdout" >&2
+    fail "A same-session scan report request did not recover scan C (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+security_scan_report_request="${mock_log}.scan-report-request.claude-fable-5.1"
+[[ -f "${security_scan_report_request}" ]] &&
+    grep -Fxq 'RHYOLITE SECURITY SCAN REPORT REQUEST' "${security_scan_report_request}" &&
+    grep -Fxq 'The trusted runner could not accept your security scan report: The scan report must contain the section SCAN CONTEXT exactly once.' \
+        "${security_scan_report_request}" &&
+    [[ "$(sed -n '/^RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/,/^END_RHYOLITE_SECURITY_SCAN_REPORT_CONTRACT_V1$/p' \
+        "${security_scan_report_request}")" == "${scan_report_contract}" ]] &&
+    [[ "$(grep -c '^AGENT=rhyolite:repo-review-worker CONTINUATION$' "${mock_log}")" -eq 1 ]] &&
+    grep -Fxq 'C-1' "${mock_log}.review-request" ||
+    fail 'The scan report request lost its diagnostic or contract, or its findings missed consolidation.'
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scanDirectory = path.join(repository, "security-scans", "scan-c");
+const scan = JSON.parse(fs.readFileSync(path.join(scanDirectory, "scan-state.json"), "utf8"));
+const summary = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "security-scans.json"), "utf8"));
+const timeline = fs.readFileSync(path.join(scanDirectory, "analysis-timeline.txt"), "utf8");
+if (scan.Status !== "Completed" || scan.Attempts !== 1 || scan.FindingCount !== 1 ||
+    scan.ReportRequest !== "Recovered" || scan.Compactions !== 1 ||
+    summary.Scans[0].ReportRequest !== "NotNeeded" || summary.SuccessfulScans !== 3 ||
+    !timeline.includes("=== Rhyolite security scan C: same-session scan report request ===") ||
+    !fs.existsSync(path.join(scanDirectory, "report-request-reply.txt")) ||
+    fs.existsSync(path.join(scanDirectory, "attempts"))) {
+  throw new Error(`the scan report request did not recover scan C: ${JSON.stringify(scan)}`);
+}
+JS
+
+# A resend that still breaks the contract fails the scan without a fresh
+# relaunch; the default quorum of two of three scans still consolidates the
+# other two, and the diagnostic names the report request and the compaction.
+run_security_scan_case scan-report-never \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_COMPACT_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_REPORT_REQUEST_MODE=never
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-never/stdout" >&2
+    fail "One invalid scan report of three failed the default two-scan quorum (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scan = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "scan-state.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repository, "errors.txt"), "utf8");
+if (scan.Status !== "Failed" || scan.FailureClass !== "invalid-report" ||
+    scan.Attempts !== 1 || scan.ReportRequest !== "Failed" || scan.Compactions !== 1 ||
+    !scan.Diagnostic.includes("one same-session request for only the report did not correct it") ||
+    !scan.Diagnostic.includes("compacted the scan context 1 time,") ||
+    !errors.includes("Security scan C (claude-fable-5.1 at ")) {
+  throw new Error(`an uncorrected scan report was not reported truthfully: ${JSON.stringify(scan)}`);
+}
+JS
+
+# A continuation that itself fails, before any reply, is classified by its
+# own failure, never as a report the model declined to correct.
+run_security_scan_case scan-report-continuation-failed \
+    MOCK_SCAN_INVALID_MODEL=claude-fable-5.1 \
+    MOCK_SCAN_REPORT_REQUEST_MODE=fail
+if [[ "${SECURITY_SCAN_CASE_EXIT}" -ne 0 ]]; then
+    tail -n 60 "${security_scan_root}/scan-report-continuation-failed/stdout" >&2
+    fail "A failed scan report continuation failed the default two-scan quorum (exit ${SECURITY_SCAN_CASE_EXIT})."
+fi
+node - "${SECURITY_SCAN_CASE_REPOSITORY}" <<'JS'
+const fs = require("fs");
+const path = require("path");
+const repository = process.argv[2];
+const scan = JSON.parse(fs.readFileSync(
+  path.join(repository, "security-scans", "scan-c", "scan-state.json"), "utf8"));
+if (scan.Status !== "Failed" || scan.FailureClass !== "worker-failed" ||
+    scan.Attempts !== 1 || scan.ReportRequest !== "NotCompleted" ||
+    !scan.Diagnostic.includes("the same-session request for only its report did not complete") ||
+    scan.Diagnostic.includes("did not correct it")) {
+  throw new Error(`a failed scan report continuation was misclassified: ${JSON.stringify(scan)}`);
 }
 JS
 

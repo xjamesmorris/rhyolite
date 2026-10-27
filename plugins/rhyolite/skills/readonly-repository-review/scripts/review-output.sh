@@ -4484,7 +4484,16 @@ def _():
         elif failure_class == "provider-refusal":
             actions.append(f"Scan {label} was declined by its model provider (content refusal) and did not count against the required scans; to keep its independent evidence, choose another model, preferably from another vendor, for scan {label} in a new approved plan.")
         elif failure_class in ("missing-report", "invalid-report"):
-            actions.append(f"Rerun the approved review; read security-scans/scan-{label.lower()}/analysis-timeline.txt and errors.txt for the scan report problem.")
+            compactions = scan.get("Compactions") if isinstance(scan.get("Compactions"), int) else 0
+            request = scan.get("ReportRequest") or "NotReached"
+            actions.append(
+                f"Scan {label} returned no valid scan report"
+                + (f" after {compactions} automatic context compaction{'s' if compactions != 1 else ''}, which replace the request with a summary"
+                   if compactions > 0 else "")
+                + f" (same-session report request: {request}); read "
+                f"security-scans/scan-{label.lower()}/analysis-timeline.txt and errors.txt, then rerun.")
+        elif failure_class == "reuse-verification":
+            actions.append(f"Scan {label}'s reused report changed after plan approval or no longer passes the scan report contract; approve a new plan, which verifies the earlier run again, or run scan {label} again without --reuse-scans.")
         elif failure_class == "approved-model-enforcement":
             actions.append(f"Choose another model for scan {label} in a new approved plan; its session recorded a model, effort, or subagent outside the approved plan.")
         elif failure_class == "timeout":
@@ -4610,6 +4619,11 @@ def _():
             for message in messages:
                 outstanding.append(f"{section}: {message}")
         cause = "The report violated the strict report contract"
+        compacted = re.search(r"^Worker context compactions: ([0-9]+)", text, re.MULTILINE)
+        if compacted:
+            count = int(compacted.group(1))
+            cause += (f" after {count} automatic context compaction{'s' if count != 1 else ''}, "
+                      "each of which replaced earlier conversation, including the request, with a summary")
         if outstanding:
             cause += "; after bounded resubmission these sections still failed: " + "; ".join(outstanding[:6])
         return ("The worker's report did not satisfy the strict report contract.",
@@ -4651,6 +4665,18 @@ if classification is None:
                       ["Inspect errors.txt and analysis-timeline.txt, then rerun the approved review."],
                       ["File an issue with the sanitized errors.txt and this analysis so a signature can be added."])
 name, summary, cause, actions, maintainer_actions = classification
+# Completed scan reports of a failed repository can be reused by a new plan
+# for the same repository, commit, harness, context, scan model, and effort,
+# so only the other scans and the consolidation run again.
+completed_scans = [scan for scan in security_scans.get("Scans", [])
+                   if isinstance(scan, dict) and scan.get("Status") == "Completed"]
+if completed_scans and status != "Completed":
+    labels = ", ".join(str(scan.get("Label", "?")) for scan in completed_scans)
+    actions = list(actions) + [
+        f"To keep the validated reports of completed scan{'s' if len(completed_scans) != 1 else ''} {labels}, "
+        f"approve a new plan with --reuse-scans {directory.parent}; Rhyolite reuses a report only for the "
+        "same repository, commit, harness, context tier, scan model, and reasoning effort, and runs every "
+        "other scan and the consolidation again."]
 evidence = [line for line in errors if line.strip()][:MAX_EVIDENCE]
 if limit_line and limit_line not in evidence:
     evidence.append(limit_line)
