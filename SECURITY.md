@@ -29,10 +29,12 @@ The supported runner path:
 - Contributes local, display-only outer-session hooks. `sessionStart`
   emits one plain version/start line for ordinary loads or the
   exactly-once launcher plaque. The `userPromptSubmitted` command hook
-  emits a plaque only for exact manual review-start commands and ignores
-  internal resumes, marker-bearing continuations, launcher prompts, and
-  unrelated text. Neither hook performs network access, Git commands,
-  writes, prompt mutation, or environment/auth inspection.
+  emits a plaque only for exact manual review-start commands, including
+  Copilot CLI's fixed skill-invocation sentence for one at the start of
+  the prompt, and ignores internal resumes, marker-bearing continuations,
+  launcher prompts, and unrelated text. Neither hook performs network
+  access, Git commands, writes, prompt mutation, or environment/auth
+  inspection.
 - Runs clone/fetch in a process-local empty home, removes inherited Git,
   Copilot, GitHub, credential-manager, SSH-agent, `_netrc`/`.netrc`,
   and proxy inputs, clears credential helpers and HTTP headers, requires

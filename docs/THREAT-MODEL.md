@@ -174,10 +174,11 @@
 - A local plugin `sessionStart` hook emits one plain version/start line
   for ordinary loads or the exactly-once launcher plaque. A display-only
   `userPromptSubmitted` command hook emits a plaque only for exact manual
-  review-start commands and ignores internal resumes, marker-bearing
-  continuations, launcher prompts, and unrelated text. Neither hook
-  performs network access, Git commands, writes, prompt mutation, or
-  environment/auth inspection.
+  review-start commands, including Copilot CLI's fixed skill-invocation
+  sentence for one at the start of the prompt, and ignores internal
+  resumes, marker-bearing continuations, launcher prompts, and unrelated
+  text. Neither hook performs network access, Git commands, writes,
+  prompt mutation, or environment/auth inspection.
 - The outer model, reasoning effort, and context tier
   are selected before Copilot starts. The trusted launcher setup block
   contains only canonical source URLs plus constrained

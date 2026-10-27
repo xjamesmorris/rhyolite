@@ -93,6 +93,13 @@
   active homes; only the current user's exact-name, unlocked homes whose
   whole tree has been unchanged for 60 minutes are removed. Without `flock`,
   no sweep occurs.
+- The large plaque now appears after a manual `/rhyolite:start` or
+  `/rhyolite:repo-review` in Copilot CLI. Copilot CLI hands a plugin prompt
+  command to the `userPromptSubmitted` hook inside its fixed
+  skill-invocation sentence rather than as the literal command (recorded
+  since Copilot CLI 1.0.79), so the display-only hook never matched. It now
+  also recognizes that exact sentence for a review-start command at the
+  start of the prompt. Launcher starts were not affected.
 
 ### Known limitations
 

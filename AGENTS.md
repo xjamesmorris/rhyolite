@@ -96,9 +96,10 @@ supported and must not drive new work.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual
-  review-start commands only. Claude Code's `SessionStart` and
-  `UserPromptSubmit` hooks follow the same rules and emit only a display
-  `systemMessage`.
+  review-start commands only, either literally or in Copilot CLI's fixed
+  skill-invocation sentence at the start of the prompt. Claude Code's
+  `SessionStart` and `UserPromptSubmit` hooks follow the same rules and emit
+  only a display `systemMessage`.
 - `plugins/rhyolite/branding/banner.txt` and
   `plugins/rhyolite/branding/welcome-metadata.json` centralize replaceable
   onboarding branding and public home/docs/support/issues/pulls URLs.

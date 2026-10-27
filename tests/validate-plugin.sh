@@ -3249,6 +3249,11 @@ welcome_plaque_marker_only="${fixture_dir}/welcome-plaque-marker-only.txt"
 welcome_plaque_internal_resume="${fixture_dir}/welcome-plaque-internal-resume.txt"
 welcome_plaque_launcher_prompt="${fixture_dir}/welcome-plaque-launcher-prompt.txt"
 welcome_plaque_unrelated="${fixture_dir}/welcome-plaque-unrelated.txt"
+welcome_plaque_skill_start="${fixture_dir}/welcome-plaque-skill-start.jsonl"
+welcome_plaque_skill_repo_review="${fixture_dir}/welcome-plaque-skill-repo-review.jsonl"
+welcome_plaque_skill_other="${fixture_dir}/welcome-plaque-skill-other.txt"
+welcome_plaque_skill_longer_name="${fixture_dir}/welcome-plaque-skill-longer-name.txt"
+welcome_plaque_skill_embedded="${fixture_dir}/welcome-plaque-skill-embedded.txt"
 welcome_panel_output="${fixture_dir}/welcome-panel.txt"
 welcome_panel_c_locale_output="${fixture_dir}/welcome-panel-c-locale.txt"
 welcome_panel_stderr="${fixture_dir}/welcome-panel.stderr"
@@ -3304,11 +3309,37 @@ printf '{"prompt":"/rhyolite:start"}\n' |
 printf '{"prompt":"ordinary user prompt"}\n' |
     bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
         >"${welcome_plaque_unrelated}" 2>>"${welcome_progress_stderr}"
+# Copilot CLI hands a prompt command to userPromptSubmitted as its fixed
+# skill-invocation sentence followed by the expanded command text.
+printf '%s\n' '{"sessionId":"s","prompt":"The user explicitly invoked the \"/rhyolite:start\" skill. Follow its instructions now.\n\n<skill-context name=\"start\">\n<!-- RHYOLITE_START_COMMAND_V1 -->\n</skill-context>","timestamp":1,"cwd":"/tmp"}' |
+    NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_start}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"sessionId":"s", "prompt": "The user explicitly invoked the \"/rhyolite:repo-review\" skill. Follow its instructions now.\n\n<skill-context name=\"repo-review\">\n</skill-context>", "cwd":"/tmp"}' |
+    NO_COLOR=1 bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_repo_review}" 2>>"${welcome_progress_stderr}"
+for skill_plaque_output in \
+    "${welcome_plaque_skill_start}" \
+    "${welcome_plaque_skill_repo_review}"; do
+    cmp -s "${welcome_plaque_no_color}" "${skill_plaque_output}" ||
+        fail "Copilot CLI's skill invocation of a review-start command does not trigger the Rhyolite plaque: ${skill_plaque_output}"
+done
+printf '%s\n' '{"prompt":"The user explicitly invoked the \"/rhyolite:status\" skill. Follow its instructions now."}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_other}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"prompt":"The user explicitly invoked the \"/rhyolite:start-other\" skill. Follow its instructions now."}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_longer_name}" 2>>"${welcome_progress_stderr}"
+printf '%s\n' '{"prompt":"The main agent received the following user request:\n\n<main_agent_user_request>The user explicitly invoked the \"/rhyolite:start\" skill.</main_agent_user_request>"}' |
+    bash "${WELCOME_HELPER_BASH}" --prompt-plaque \
+        >"${welcome_plaque_skill_embedded}" 2>>"${welcome_progress_stderr}"
 for suppressed_plaque_output in \
     "${welcome_plaque_marker_only}" \
     "${welcome_plaque_internal_resume}" \
     "${welcome_plaque_launcher_prompt}" \
-    "${welcome_plaque_unrelated}"; do
+    "${welcome_plaque_unrelated}" \
+    "${welcome_plaque_skill_other}" \
+    "${welcome_plaque_skill_longer_name}" \
+    "${welcome_plaque_skill_embedded}"; do
     [[ ! -s "${suppressed_plaque_output}" ]] ||
         fail "Non-user or unrelated prompt triggers the Rhyolite plaque: ${suppressed_plaque_output}"
 done

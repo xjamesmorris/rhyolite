@@ -318,7 +318,10 @@ writes, prompt mutation, or environment/auth inspection.
 
 After `/rhyolite:start`, compatible `/rhyolite:repo-review`, or the
 `/repo-review` shorthand, a display-only prompt hook recognizes only the
-exact manual start command and emits the large plaque. It ignores
+exact manual start command and emits the large plaque. Copilot CLI hands a
+prompt command to that hook inside its fixed skill-invocation sentence,
+`The user explicitly invoked the "/rhyolite:start" skill.`; the hook
+recognizes that sentence only at the start of the prompt. It ignores
 internal resumes, marker-bearing continuations, launcher prompts, and
 unrelated user text; it does not modify the prompt or persist state. The
 visual treatment is limited to
