@@ -88,7 +88,7 @@ model_provider = "fixture-provider"
 
 [model_providers.fixture-provider]
 name = "Fixture provider"
-base_url = "https://fixture.invalid/v1"
+base_url = "https://fixture.example.org/v1"
 wire_api = "responses"
 env_key = "FIXTURE_CODEX_KEY"
 CODEX_CONFIG
@@ -196,7 +196,7 @@ assert_equal FIXTURE_CODEX_KEY "$(harness_auth_secret_env_vars)" \
 node - "$(harness_provider_summary)" <<'JS'
 const provider = JSON.parse(process.argv[2]);
 if (provider.Id !== "codex-fixture-provider" ||
-    provider.Host !== "fixture.invalid" ||
+    provider.Host !== "fixture.example.org" ||
     JSON.stringify(provider.ForwardedEnvVarNames) !==
       JSON.stringify(["FIXTURE_CODEX_KEY"])) {
   throw new Error("Codex provider summary changed");
@@ -250,7 +250,7 @@ for feature in (
     "plugins", "plugin_hooks", "worktrees", "daemon_auto_start",
 ):
     assert config["features"][feature] is False
-assert provider["base_url"] == "https://fixture.invalid/v1"
+assert provider["base_url"] == "https://fixture.example.org/v1"
 assert provider["env_key"] == "FIXTURE_CODEX_KEY"
 assert provider["request_max_retries"] == 0
 assert provider["stream_max_retries"] == 0
