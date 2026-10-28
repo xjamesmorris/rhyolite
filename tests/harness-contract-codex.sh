@@ -221,6 +221,28 @@ assert_equal local-stdio-mcp-snapshot-read-v1 \
     "$(harness_snapshot_transport)" 'Codex snapshot transport'
 harness_prepare_run >/dev/null ||
     fail 'Codex run preparation failed with fixture authentication.'
+# The runner builds worker arguments before it creates and prepares the
+# runtime home, so argv construction must not touch any runtime home.
+codex_session_id='00000000-0000-4000-8000-000000000021'
+declare -a codex_worker_argv=()
+declare -a codex_worker_env=()
+harness_worker_argv \
+    codex_worker_argv \
+    "${codex_session_root}" \
+    "${PLUGIN_ROOT}" \
+    codex-fixture-session \
+    "${codex_session_id}" \
+    gpt-5.6-sol \
+    max \
+    long_context \
+    FIXTURE_CODEX_KEY \
+    view,glob,rg,skill \
+    "${codex_transcript}" \
+    0 ||
+    fail 'Codex review argv construction failed.'
+[[ -z "$(find "${codex_runtime}" -mindepth 1 -print -quit)" &&
+    " ${codex_worker_argv[*]} " != *'model_instructions_file'* ]] ||
+    fail 'Codex review argv depended on a runtime home that the runner had not prepared.'
 harness_prepare_worker_home \
     "${codex_runtime}" max long_context review ||
     fail 'Codex review runtime preparation failed.'
@@ -228,9 +250,12 @@ harness_prepare_worker_home \
     fail 'Codex runtime config is not private.'
 [[ "$(stat -c '%a' "${codex_runtime}/model-catalog.json")" == 600 ]] ||
     fail 'Codex runtime model catalog is not private.'
+[[ "$(stat -c '%a' "${codex_runtime}/review-worker-instructions.md")" == 600 ]] ||
+    fail 'Codex review instructions are not private.'
 python3 -I - \
     "${codex_runtime}/config.toml" \
-    "${codex_runtime}/model-catalog.json" <<'PY'
+    "${codex_runtime}/model-catalog.json" \
+    "${codex_runtime}/review-worker-instructions.md" <<'PY'
 import json
 import sys
 import tomllib
@@ -241,6 +266,8 @@ with open(sys.argv[2], encoding="utf-8") as stream:
     catalog = json.load(stream)
 provider = config["model_providers"]["fixture-provider"]
 assert config["model_catalog_json"] == sys.argv[2]
+assert config["model_instructions_file"] == sys.argv[3]
+assert "model_instructions_file" not in provider
 assert config["model_reasoning_effort"] == "max"
 assert config["model_context_window"] == 872000
 assert config["model_auto_compact_token_limit"] == 784800
@@ -269,23 +296,6 @@ assert [item["effort"] for item in model["supported_reasoning_levels"]] == [
 assert model["max_context_window"] == 872000
 PY
 
-codex_session_id='00000000-0000-4000-8000-000000000021'
-declare -a codex_worker_argv=()
-declare -a codex_worker_env=()
-harness_worker_argv \
-    codex_worker_argv \
-    "${codex_session_root}" \
-    "${PLUGIN_ROOT}" \
-    codex-fixture-session \
-    "${codex_session_id}" \
-    gpt-5.6-sol \
-    max \
-    long_context \
-    FIXTURE_CODEX_KEY \
-    view,glob,rg,skill \
-    "${codex_transcript}" \
-    0 ||
-    fail 'Codex review argv construction failed.'
 harness_worker_env codex_worker_env ||
     fail 'Codex review environment construction failed.'
 [[ "${codex_worker_argv[0]}" == --no-daemon &&
@@ -341,6 +351,46 @@ done
     *'RHYOLITE_BROKER_OWNER_START_TIME="'* ]] ||
     fail 'Codex snapshot MCP did not bind the detached broker to its trusted runner owner.'
 
+# A home prepared before any worker argv, as the guided stage does, gets no
+# worker instructions; the worker environment then fails closed instead of
+# launching an uninstructed worker. Each pending record is consumed once.
+(
+    codex_order_runtime="${fixture_root}/codex-order-runtime"
+    mkdir -- "${codex_order_runtime}" "${codex_order_runtime}-second"
+    chmod 700 -- "${codex_order_runtime}" "${codex_order_runtime}-second"
+    harness_prepare_worker_home \
+        "${codex_order_runtime}" max long_context review ||
+        fail 'Codex home-first runtime preparation failed.'
+    [[ ! -e "${codex_order_runtime}/review-worker-instructions.md" ]] &&
+        ! grep -Fq model_instructions_file "${codex_order_runtime}/config.toml" ||
+        fail 'Codex wrote worker instructions without a recorded worker argv.'
+    declare -a codex_order_argv=()
+    declare -a codex_order_env=()
+    harness_worker_argv \
+        codex_order_argv "${codex_session_root}" "${PLUGIN_ROOT}" \
+        codex-order-session '00000000-0000-4000-8000-000000000024' \
+        gpt-5.6-sol max long_context FIXTURE_CODEX_KEY view,glob,rg,skill \
+        "${fixture_root}/codex-order-session.md" 0 ||
+        fail 'Codex home-first argv construction failed.'
+    if harness_worker_env codex_order_env >/dev/null 2>&1; then
+        fail 'Codex built a worker environment for a home without instructions.'
+    fi
+    assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
+        'The Codex worker instructions are not ready in the current runtime home' \
+        'Codex uninstructed worker rejection'
+    harness_prepare_worker_home \
+        "${codex_order_runtime}-second" max long_context research ||
+        fail 'Codex mismatched-phase runtime preparation failed.'
+    harness_prepare_worker_home \
+        "${codex_order_runtime}-second" max long_context review ||
+        fail 'Codex consumed-record runtime preparation failed.'
+    [[ -z "$(find "${codex_order_runtime}-second" -name '*-worker-instructions.md' -print -quit)" ]] ||
+        fail 'Codex reused a worker instruction record for another phase or home.'
+    if harness_worker_env codex_order_env >/dev/null 2>&1; then
+        fail 'Codex reused worker instructions after their record was consumed.'
+    fi
+) || fail 'Codex worker-instruction ordering regression failed.'
+
 codex_repair_runtime="${fixture_root}/codex-repair-runtime"
 mkdir -- "${codex_repair_runtime}"
 chmod 700 -- "${codex_repair_runtime}"
@@ -367,9 +417,6 @@ harness_report_repair_env codex_repair_env "${codex_repair_runtime}" ||
 codex_research_runtime="${fixture_root}/codex-research-runtime"
 mkdir -- "${codex_research_runtime}"
 chmod 700 -- "${codex_research_runtime}"
-harness_prepare_worker_home \
-    "${codex_research_runtime}" max long_context research ||
-    fail 'Codex research runtime preparation failed.'
 codex_research_launcher="${fixture_root}/codex-research-launcher"
 printf '#!/usr/bin/env bash\nexit 0\n' > "${codex_research_launcher}"
 chmod 700 -- "${codex_research_launcher}"
@@ -402,6 +449,17 @@ harness_research_worker_argv \
     research_capabilities,fetch_public_url,search_public_github,search_public_web,research_network_summary \
     "${fixture_root}/codex-research-session.md" ||
     fail 'Codex research argv construction failed.'
+[[ -z "$(find "${codex_research_runtime}" -mindepth 1 -print -quit)" &&
+    " ${codex_research_argv[*]} " != *'model_instructions_file'* ]] ||
+    fail 'Codex research argv depended on a runtime home that the runner had not prepared.'
+harness_prepare_worker_home \
+    "${codex_research_runtime}" max long_context research ||
+    fail 'Codex research runtime preparation failed.'
+grep -Fq 'Rhyolite shared review contract' \
+    "${codex_research_runtime}/research-worker-instructions.md" &&
+    grep -Fxq "model_instructions_file = \"${codex_research_runtime}/research-worker-instructions.md\"" \
+        "${codex_research_runtime}/config.toml" ||
+    fail 'Codex research runtime home lost its worker instructions.'
 harness_research_worker_env codex_research_env ||
     fail 'Codex research environment construction failed.'
 [[ "${codex_research_argv[-1]}" == - &&
@@ -458,6 +516,8 @@ harness_normalize_worker_output \
     fail 'Codex exact output normalization failed.'
 [[ "$(cat "${codex_reply}")" == EXACT_CODEX_FIXTURE_REPLY ]] ||
     fail 'Codex exact final reply changed.'
+[[ ! -e "${CODEX_REVIEW_FINAL_MESSAGE}" ]] ||
+    fail 'Codex left its unsanitized final-message file after normalization.'
 codex_outcome="${fixture_root}/codex-outcome.json"
 harness_worker_outcome \
     review "${codex_raw}" "${codex_runtime}" \
@@ -494,6 +554,7 @@ cat > "${codex_reroute_raw}" <<EOF
 {"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"EXACT_CODEX_FIXTURE_REPLY"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
 EOF
+printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
 if harness_normalize_worker_output \
     review "${codex_reroute_raw}" gpt-5.6-sol max \
     "${fixture_root}/reroute-normalized" "${fixture_root}/reroute-reply" \
@@ -504,6 +565,8 @@ assert_equal \
     'Codex recorded a model reroute; Rhyolite does not accept substituted output.' \
     "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
     'Codex reroute rejection'
+[[ ! -e "${CODEX_REVIEW_FINAL_MESSAGE}" ]] ||
+    fail 'Codex left a rejected unsanitized final-message file.'
 codex_reroute_outcome="${fixture_root}/codex-reroute-outcome.json"
 harness_worker_outcome \
     review "${codex_reroute_raw}" "${codex_runtime}" \
@@ -550,6 +613,7 @@ codex_outcome_case cyber-reroute refused 1 fixture-other <<EOF
 {"type":"item.completed","item":{"id":"item-2","type":"error","message":"model rerouted: gpt-5.6-sol -> fixture-other (HighRiskCyberActivity)"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
 EOF
+printf '%s' 'FALLBACK_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
 if harness_normalize_worker_output \
     review "${fixture_root}/codex-cyber-reroute.raw" gpt-5.6-sol max \
     "${fixture_root}/cyber-normalized" "${fixture_root}/cyber-reply" \
@@ -1279,5 +1343,259 @@ assert_contains "${fixture_root}/codex-launcher-scans.stderr" \
     'Staged Codex launcher scan rejection'
 [[ ! -e "${codex_launcher_capture}" ]] ||
     fail 'Staged Codex launcher started its controller after rejecting scans.'
+
+# The real runner drives the Codex adapter end to end with a fake Codex
+# worker: worker argv before runtime-home preparation, the isolated
+# environment, the snapshot broker launched from the adapter's own MCP
+# arguments, live monitoring, outcome, session verification, normalization,
+# report validation, and cleanup.
+codex_e2e_plugin="${fixture_root}/codex-e2e-plugin"
+codex_e2e_bin="${fixture_root}/codex-e2e-bin"
+codex_e2e_tmp="${fixture_root}/codex-e2e-tmp"
+codex_e2e_home="${fixture_root}/codex-e2e-home"
+codex_e2e_capture="${fixture_root}/codex-e2e-capture.json"
+codex_e2e_report="${fixture_root}/codex-e2e-report.txt"
+codex_e2e_runner="${codex_e2e_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
+cp -a -- "${PLUGIN_ROOT}" "${codex_e2e_plugin}"
+cat >> "${codex_e2e_plugin}/lib/harness/common.sh" <<'CODEX_E2E_TEST_REGISTRY'
+
+rhyolite_harness_list_registered() {
+    printf '%s\n' codex
+}
+
+rhyolite_harness_registry_lookup() {
+    local output_variable="$1"
+    local plugin_root="$2"
+    local selected_harness="$3"
+    [[ "${selected_harness}" == codex ]] || {
+        RHYOLITE_HARNESS_ERROR_DETAIL='Fixture registry supports only Codex for this case.'
+        return 1
+    }
+    printf -v "${output_variable}" '%s' "${plugin_root}/lib/harness/codex.sh"
+}
+CODEX_E2E_TEST_REGISTRY
+mkdir -p -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}"
+chmod 700 -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}"
+awk '
+    /^=+$/ && length($0) >= 80 { delimiters++ }
+    delimiters >= 1 { print }
+    delimiters == 2 { exit }
+' "${NOOP_WORKER_FIXTURE}" > "${codex_e2e_report}"
+grep -Fxq 'REPOSITORY REVIEW REPORT' "${codex_e2e_report}" ||
+    fail 'Codex end-to-end fixture report could not be prepared.'
+cat > "${codex_e2e_bin}/codex-worker.py" <<'CODEX_E2E_WORKER'
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tomllib
+
+report_path, capture_path, *args = sys.argv[1:]
+
+
+def fail(message):
+    print(f"Codex fixture worker: {message}", file=sys.stderr)
+    raise SystemExit(3)
+
+
+if args[:2] != ["--no-daemon", "exec"] or args[-1] != "-":
+    fail("unexpected command framing")
+options, overrides, index = {}, {}, 2
+while index < len(args) - 1:
+    argument = args[index]
+    if argument == "-c":
+        key, separator, value = args[index + 1].partition("=")
+        if not separator:
+            fail("malformed configuration override")
+        overrides[key] = tomllib.loads("value = " + value)["value"]
+        index += 2
+    elif argument in {"--sandbox", "--cd", "--model", "--output-last-message"}:
+        options[argument] = args[index + 1]
+        index += 2
+    elif argument in {"--strict-config", "--ignore-rules", "--json", "--skip-git-repo-check"}:
+        options[argument] = True
+        index += 1
+    else:
+        fail("unexpected argument " + argument)
+home = pathlib.Path(os.environ["CODEX_HOME"])
+config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+instructions = pathlib.Path(config.get("model_instructions_file", "/nonexistent"))
+if (instructions.parent != home or not instructions.is_file()
+        or "RHYOLITE_AGENT_SELF_CHECK_V2" not in instructions.read_text(encoding="utf-8")):
+    fail("the runtime home has no trusted worker instructions")
+if (options.get("--sandbox") != "read-only"
+        or not os.path.samefile(os.getcwd(), options["--cd"])):
+    fail("unexpected sandbox or working directory")
+prompt = sys.stdin.read()
+
+prefix = "mcp_servers.rhyolite_snapshot."
+environment = {name: os.environ[name] for name in ("HOME", "PATH", "TMPDIR") if name in os.environ}
+environment.update(overrides[prefix + "env"])
+server = subprocess.Popen(
+    [overrides[prefix + "command"], *overrides[prefix + "args"]],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    text=True, env=environment,
+)
+try:
+    def call(identifier, method, params):
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier,
+                                      "method": method, "params": params}) + "\n")
+        server.stdin.flush()
+        response = json.loads(server.stdout.readline())
+        if "result" not in response:
+            fail(f"snapshot {method} failed")
+        return response["result"]
+
+    call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "codex-fixture", "version": "0.163.0"}})
+    server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+    tools = [tool["name"] for tool in call(2, "tools/list", {})["tools"]]
+    if tools != overrides[prefix + "enabled_tools"]:
+        fail("the snapshot tool inventory changed")
+    read = call(3, "tools/call", {"name": "read_snapshot_text",
+                                  "arguments": {"grant": "snapshot", "path": "README.md"}})
+    if read.get("isError") or "mock repository" not in json.dumps(read):
+        fail("the snapshot read failed")
+    server.stdin.close()
+    if server.wait(timeout=10) != 0:
+        fail("the snapshot broker did not exit cleanly")
+finally:
+    if server.poll() is None:
+        server.terminate()
+        server.wait(timeout=10)
+
+model = options["--model"]
+effort = config["model_reasoning_effort"]
+window = config["model_context_window"] * 95 // 100
+thread = "00000000-0000-4000-8000-0000000000e2"
+reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n")
+usage = {"input_tokens": 24000, "cached_input_tokens": 0, "output_tokens": 900,
+         "reasoning_output_tokens": 0, "total_tokens": 24900}
+records = [
+    {"type": "session_meta", "payload": {"id": thread, "originator": "codex_exec",
+                                         "cli_version": "0.163.0", "source": "exec"}},
+    {"type": "event_msg", "payload": {"type": "task_started", "model_context_window": window}},
+    {"type": "turn_context", "payload": {
+        "approval_policy": "never", "sandbox_policy": {"type": "read-only"},
+        "model": model, "effort": effort,
+        "collaboration_mode": {"mode": "default",
+                               "settings": {"model": model, "reasoning_effort": effort}}}},
+    {"type": "response_item", "payload": {"type": "message", "role": "user",
+                                          "content": [{"type": "input_text", "text": prompt}]}},
+    {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": usage, "last_token_usage": usage,
+        "model_context_window": window}, "rate_limits": None}},
+    {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                                          "phase": "final_answer",
+                                          "content": [{"type": "output_text", "text": reply}]}},
+]
+sessions = home / "sessions" / "2026" / "10" / "01"
+sessions.mkdir(parents=True)
+(sessions / f"rollout-2026-10-01T12-00-00-{thread}.jsonl").write_text(
+    "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
+for event in (
+    {"type": "thread.started", "thread_id": thread},
+    {"type": "turn.started"},
+    {"type": "item.completed", "item": {
+        "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
+        "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},
+        "status": "completed"}},
+    {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": reply}},
+    {"type": "turn.completed", "usage": usage},
+):
+    print(json.dumps(event), flush=True)
+pathlib.Path(capture_path).write_text(json.dumps({
+    "Instructions": instructions.name, "SnapshotTools": tools,
+    "PromptHasCommit": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" in prompt,
+}), encoding="utf-8")
+CODEX_E2E_WORKER
+{
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+    printf 'codex_e2e_bin=%q\n' "${codex_e2e_bin}"
+    printf 'codex_e2e_report=%q\n' "${codex_e2e_report}"
+    printf 'codex_e2e_capture=%q\n' "${codex_e2e_capture}"
+    cat <<'CODEX_E2E_FAKE'
+if [[ "${1-}" == --version ]]; then
+    printf '%s\n' 'codex-cli 0.163.0'
+    exit 0
+fi
+exec python3 -I "${codex_e2e_bin}/codex-worker.py" \
+    "${codex_e2e_report}" "${codex_e2e_capture}" "$@"
+CODEX_E2E_FAKE
+} > "${codex_e2e_bin}/codex"
+chmod 700 -- "${codex_e2e_bin}/codex"
+codex_e2e_environment=(
+    env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS
+    HOME="${codex_e2e_home}"
+    XDG_STATE_HOME="${codex_e2e_home}/state"
+    CODEX_HOME="${codex_home}"
+    FIXTURE_CODEX_KEY='fixture-secret-value'
+    TMPDIR="${codex_e2e_tmp}"
+    PATH="${codex_e2e_bin}:${runner_mock_bin}:/usr/bin:/bin"
+)
+codex_e2e_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-workspace"
+    --output-root "${fixture_root}/codex-e2e-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-plan.json" \
+    2> "${fixture_root}/codex-e2e-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-plan.stderr" >&2
+        fail 'Codex end-to-end plan failed.'
+    }
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-plan.json")" \
+    > "${fixture_root}/codex-e2e.stdout" \
+    2> "${fixture_root}/codex-e2e.stderr" || {
+        cat -- "${fixture_root}/codex-e2e.stdout" "${fixture_root}/codex-e2e.stderr" >&2
+        cat -- "$(contract_run_path "${fixture_root}/codex-e2e.stdout")/github--octocat--hello-world/errors.txt" >&2 || true
+        fail 'Codex end-to-end runner execution failed.'
+    }
+node - "$(contract_run_path "${fixture_root}/codex-e2e.stdout")" "${codex_e2e_capture}" <<'JS'
+const fs = require("fs"), path = require("path");
+const [root, capturePath] = process.argv.slice(2);
+const repo = path.join(root, "github--octocat--hello-world");
+const read = (name) => JSON.parse(fs.readFileSync(name, "utf8"));
+const plan = read(path.join(root, "review-plan.json"));
+const capture = read(capturePath);
+for (const state of [read(path.join(root, "state.json")), read(path.join(repo, "state.json"))]) {
+  if (state.Status !== "Completed" || state.Harness !== "codex" ||
+      state.Model !== "gpt-5.6-sol" || state.ReasoningEffort !== "max" ||
+      JSON.stringify(state.SnapshotTransport) !== JSON.stringify(plan.SnapshotTransport)) {
+    throw new Error(`Codex end-to-end state is wrong: ${state.Status}`);
+  }
+}
+if (plan.SnapshotTransport.ContractVersion !== 11) throw new Error("snapshot contract changed");
+if (!fs.readFileSync(path.join(repo, "review.txt"), "utf8").includes("REPOSITORY REVIEW REPORT")) {
+  throw new Error("Codex end-to-end report is missing");
+}
+if (capture.Instructions !== "review-worker-instructions.md" || !capture.PromptHasCommit ||
+    capture.SnapshotTools.length !== 4) {
+  throw new Error("Codex worker did not start with instructions, request, and snapshot tools");
+}
+const sessions = fs.readdirSync(path.join(repo, "agent-state", "codex-home", "sessions"));
+if (sessions.length !== 1 || !fs.readFileSync(path.join(repo, "session.md"), "utf8").includes("### Codex")) {
+  throw new Error("Codex session evidence was not persisted");
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+    fail 'Codex end-to-end run left a runtime home or snapshot broker runtime.'
+[[ -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e.stdout")" \
+    -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex end-to-end run left an unsanitized final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

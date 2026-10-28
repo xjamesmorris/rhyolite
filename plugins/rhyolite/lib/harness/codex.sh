@@ -10,6 +10,11 @@ CODEX_SOURCE_CONFIG=''
 CODEX_RUNTIME_HOME=''
 CODEX_REVIEW_RUNTIME_HOME=''
 CODEX_HOME_PHASE=''
+CODEX_PENDING_INSTRUCTIONS_PHASE=''
+CODEX_PENDING_INSTRUCTIONS_WORKER=''
+CODEX_PENDING_INSTRUCTIONS_SKILL=''
+CODEX_INSTRUCTIONS_PHASE=''
+CODEX_INSTRUCTIONS_HOME=''
 CODEX_SESSION_ROOT=''
 CODEX_LOGICAL_SESSION_ID=''
 CODEX_NATIVE_THREAD_ID=''
@@ -265,6 +270,7 @@ codex_write_runtime_config() {
     local destination="$1"
     local reasoning_effort="$2"
     local context_tier="$3"
+    local instructions_path="${4-}"
     local context_window auto_compact
     local catalog_path="${destination%/*}/model-catalog.json"
 
@@ -281,6 +287,10 @@ codex_write_runtime_config() {
             "$(codex_toml_string "${reasoning_effort}")"
         printf 'model_context_window = %s\n' "${context_window}"
         printf 'model_auto_compact_token_limit = %s\n' "${auto_compact}"
+        if [[ -n "${instructions_path}" ]]; then
+            printf 'model_instructions_file = %s\n' \
+                "$(codex_toml_string "${instructions_path}")"
+        fi
         printf '%s\n' \
             'approval_policy = "never"' \
             'sandbox_mode = "read-only"' \
@@ -375,6 +385,32 @@ codex_write_instruction_bundle() {
         return 1
     fi
     chmod 600 -- "${destination}"
+}
+
+# The runner builds worker arguments before it creates the runtime home, so
+# argv only records the trusted instruction sources. The next runtime-home
+# preparation for the same phase writes them and names them in config.toml.
+codex_record_worker_instructions() {
+    CODEX_INSTRUCTIONS_PHASE=''
+    CODEX_INSTRUCTIONS_HOME=''
+    CODEX_PENDING_INSTRUCTIONS_PHASE="$1"
+    CODEX_PENDING_INSTRUCTIONS_WORKER="$2"
+    CODEX_PENDING_INSTRUCTIONS_SKILL="$3"
+}
+
+codex_require_worker_instructions() {
+    local phase="$1"
+    local instructions="${CODEX_RUNTIME_HOME}/${phase}-worker-instructions.md"
+
+    [[ -n "${CODEX_RUNTIME_HOME}" &&
+        "${CODEX_INSTRUCTIONS_PHASE}" == "${phase}" &&
+        "${CODEX_HOME_PHASE}" == "${phase}" &&
+        "${CODEX_INSTRUCTIONS_HOME}" == "${CODEX_RUNTIME_HOME}" &&
+        -f "${instructions}" && ! -L "${instructions}" ]] || {
+        rhyolite_harness_set_error \
+            'The Codex worker instructions are not ready in the current runtime home; build the worker arguments before preparing that home.'
+        return 1
+    }
 }
 
 codex_populate_worker_environment() {
@@ -861,6 +897,7 @@ harness_prepare_worker_home() {
     local reasoning_effort="$2"
     local context_tier="$3"
     local phase="${4:-review}"
+    local instructions_path='' instructions_worker='' instructions_skill=''
 
     case "${phase}" in
         review|research|report-repair) ;;
@@ -870,6 +907,19 @@ harness_prepare_worker_home() {
             return 1
             ;;
     esac
+    # A pending instruction record is consumed by exactly one preparation,
+    # and only a preparation for the phase that recorded it may use it.
+    if [[ "${phase}" != report-repair &&
+        "${CODEX_PENDING_INSTRUCTIONS_PHASE}" == "${phase}" ]]; then
+        instructions_path="${runtime_home}/${phase}-worker-instructions.md"
+        instructions_worker="${CODEX_PENDING_INSTRUCTIONS_WORKER}"
+        instructions_skill="${CODEX_PENDING_INSTRUCTIONS_SKILL}"
+    fi
+    CODEX_PENDING_INSTRUCTIONS_PHASE=''
+    CODEX_PENDING_INSTRUCTIONS_WORKER=''
+    CODEX_PENDING_INSTRUCTIONS_SKILL=''
+    CODEX_INSTRUCTIONS_PHASE=''
+    CODEX_INSTRUCTIONS_HOME=''
     harness_validate_reasoning_effort "${reasoning_effort}" || return 1
     harness_validate_context_tier "${context_tier}" || return 1
     [[ "${runtime_home}" == /* && -d "${runtime_home}" &&
@@ -885,10 +935,21 @@ harness_prepare_worker_home() {
             'Could not restrict the temporary Codex runtime home.'
         return 1
     }
+    if [[ -n "${instructions_path}" ]] &&
+        ! codex_write_instruction_bundle \
+            "${instructions_path}" \
+            "${instructions_worker}" \
+            "${instructions_skill}"; then
+        rm -f -- "${instructions_path}"
+        rhyolite_harness_set_error \
+            'Could not write the Codex worker instructions.'
+        return 1
+    fi
     codex_write_runtime_config \
         "${runtime_home}/config.toml" \
         "${reasoning_effort}" \
-        "${context_tier}" || {
+        "${context_tier}" \
+        "${instructions_path}" || {
         rhyolite_harness_set_error \
             'Could not write the temporary Codex configuration.'
         return 1
@@ -897,6 +958,10 @@ harness_prepare_worker_home() {
     CODEX_HOME_PHASE="${phase}"
     CODEX_CONTEXT_TIER="${context_tier}"
     [[ "${phase}" != review ]] || CODEX_REVIEW_RUNTIME_HOME="${runtime_home}"
+    if [[ -n "${instructions_path}" ]]; then
+        CODEX_INSTRUCTIONS_PHASE="${phase}"
+        CODEX_INSTRUCTIONS_HOME="${runtime_home}"
+    fi
 }
 
 harness_snapshot_transport() {
@@ -945,7 +1010,6 @@ harness_worker_argv() {
     local available_tools="${10}"
     local transcript_path="${11}"
     local enable_public_research="${12}"
-    local instruction_path
 
     codex_require_array_destination "${destination_name}" || return 1
     [[ "${session_root}" == /* && -d "${session_root}" && ! -L "${session_root}" &&
@@ -960,11 +1024,9 @@ harness_worker_argv() {
     [[ "${authentication_variables}" == "${CODEX_PROVIDER_ENV_KEY}" &&
         "${transcript_path}" == /* ]] || return 1
     : "${available_tools}" "${enable_public_research}"
-    instruction_path="${CODEX_RUNTIME_HOME}/review-worker-instructions.md"
-    codex_write_instruction_bundle \
-        "${instruction_path}" \
+    codex_record_worker_instructions review \
         "${plugin_root}/agents/repo-review-worker.agent.md" \
-        "${plugin_root}/skills/readonly-repository-review/SKILL.md" || return 1
+        "${plugin_root}/skills/readonly-repository-review/SKILL.md"
     CODEX_SESSION_ROOT="${session_root}"
     CODEX_LOGICAL_SESSION_ID="${session_id}"
     CODEX_TRANSCRIPT_PATH="${transcript_path}"
@@ -980,7 +1042,6 @@ harness_worker_argv() {
         exec
         --strict-config
         --ignore-rules
-        -c "model_instructions_file=$(codex_toml_string "${instruction_path}")"
         --sandbox read-only
         --json
         --skip-git-repo-check
@@ -992,6 +1053,7 @@ harness_worker_argv() {
 }
 
 harness_worker_env() {
+    codex_require_worker_instructions review || return 1
     codex_populate_worker_environment \
         "$1" "${CODEX_SESSION_ROOT}" "${CODEX_RUNTIME_HOME}"
 }
@@ -1076,7 +1138,7 @@ harness_research_worker_argv() {
     local mcp_config_path="${10}"
     local broker_tools="${11}"
     local transcript_path="${12}"
-    local instruction_path tools_json
+    local tools_json
 
     codex_require_array_destination "${destination_name}" || return 1
     [[ "${session_root}" == /* && -d "${session_root}" && ! -L "${session_root}" &&
@@ -1094,11 +1156,9 @@ harness_research_worker_argv() {
         "${transcript_path}" == /* ]] || return 1
     tools_json="[\"${broker_tools//,/\", \"}\"]"
     [[ "${tools_json}" == "${CODEX_RESEARCH_TOOLS_JSON}" ]] || return 1
-    instruction_path="${CODEX_RUNTIME_HOME}/research-worker-instructions.md"
-    codex_write_instruction_bundle \
-        "${instruction_path}" \
+    codex_record_worker_instructions research \
         "${plugin_root}/agents/repo-research-worker.agent.md" \
-        "${plugin_root}/skills/research-source-assessment/SKILL.md" || return 1
+        "${plugin_root}/skills/research-source-assessment/SKILL.md"
     CODEX_RESEARCH_SESSION_ROOT="${session_root}"
     CODEX_RESEARCH_LOGICAL_SESSION_ID="${session_id}"
     CODEX_RESEARCH_TRANSCRIPT_PATH="${transcript_path}"
@@ -1112,7 +1172,6 @@ harness_research_worker_argv() {
         exec
         --strict-config
         --ignore-rules
-        -c "model_instructions_file=$(codex_toml_string "${instruction_path}")"
         --sandbox read-only
         --json
         --skip-git-repo-check
@@ -1129,6 +1188,7 @@ harness_research_worker_argv() {
 }
 
 harness_research_worker_env() {
+    codex_require_worker_instructions research || return 1
     codex_populate_worker_environment \
         "$1" "${CODEX_RESEARCH_SESSION_ROOT}" "${CODEX_RUNTIME_HOME}"
 }
@@ -1196,17 +1256,29 @@ codex_final_message_for_phase() {
     esac
 }
 
+# Codex writes its exact final reply into the writable output tree, so the
+# raw file is removed once normalization has read it, whatever the verdict;
+# the runner keeps only its sanitized copy of the reply.
 harness_normalize_worker_output() {
+    local final_message status=0
+
+    rhyolite_harness_validate_normalize_arguments "$@" || return 1
+    final_message="$(codex_final_message_for_phase "$1")" || return 1
+    codex_normalize_final_message "$@" "${final_message}" || status=$?
+    [[ -z "${final_message}" ]] || rm -f -- "${final_message}"
+    return "${status}"
+}
+
+codex_normalize_final_message() {
     local phase="$1"
     local raw_output="$2"
     local approved_model="$3"
     local approved_effort="$4"
     local normalized_output="$5"
     local final_reply_output="$6"
-    local final_message status
+    local final_message="$7"
+    local status
 
-    rhyolite_harness_validate_normalize_arguments "$@" || return 1
-    final_message="$(codex_final_message_for_phase "${phase}")" || return 1
     [[ -f "${final_message}" && ! -L "${final_message}" ]] || {
         rhyolite_harness_set_error \
             'Codex did not write its exact final-message artifact.'

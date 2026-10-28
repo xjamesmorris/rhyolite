@@ -263,10 +263,14 @@ accept success-shaped fallbacks, or continue after malformed values.
 `harness_prepare_worker_home` receives the new runtime-home path plus the
 approved reasoning effort and context tier. Its optional fourth phase is
 `research` or `report-repair`; an omitted phase preserves normal review-worker
-behavior. The runner calls the five research functions only for scope 2/3,
-and only when the adapter reports `web_research=yes`; otherwise scope 2/3
-fails at stage `harness <id> harness_capability` before any broker or worker
-activity.
+behavior. For every review, security-scan, and research worker the runner
+builds the worker argv first, then creates the runtime home and calls
+`harness_prepare_worker_home`, then builds the environment; worker argv
+functions therefore never depend on a runtime home. Report repair prepares
+its fresh home before its argv. The runner calls the five research functions
+only for scope 2/3, and only when the adapter reports `web_research=yes`;
+otherwise scope 2/3 fails at stage `harness <id> harness_capability` before
+any broker or worker activity.
 Multi-model security scans add no adapter function or phase. Each scan is a
 fresh normal review-worker invocation, phase `review`, that the runner builds
 with `harness_worker_argv`, `harness_prepare_worker_home`,

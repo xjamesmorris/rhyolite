@@ -119,8 +119,14 @@ Status values:
   session record. The first live guided setup failed at its stage validator,
   which rejected the model's reasoning items; the validator now accepts them
   and names any failed check, and the live rerun with that fix passed.
-- **Next step:** run real scope 1, 2, and 3 reviews of a small public
-  repository through a private test-owned registry, then complete the live
+  The first live scope-1 review then failed before its worker launched: the
+  adapter wrote its worker instructions while building argv, before the
+  runner creates the runtime home. Runtime-home preparation now writes them,
+  and a mocked end-to-end runner test with the real snapshot broker covers
+  the whole review path.
+- **Next step:** rerun the live scope-1 review, then real scope 2 and 3
+  reviews of a small public repository through a private test-owned
+  registry, then complete the live
   research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
