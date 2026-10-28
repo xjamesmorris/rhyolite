@@ -8901,6 +8901,84 @@ events_path.write_text(
 )
 PY
     fi
+    if [[ -n "${MOCK_RESEARCH_COOKIE_CASE-}" ]]; then
+        # Like a real broker, record each Set-Cookie header privately and
+        # publish only its name, value hash, and attribute projection.
+        /usr/bin/python3 - \
+            "${network_root}/events.jsonl" \
+            "${network_root}/private/cookies.jsonl" \
+            "${MOCK_RESEARCH_COOKIE_CASE}" <<'PY'
+import hashlib
+import http.cookies
+import json
+import pathlib
+import sys
+
+events_path = pathlib.Path(sys.argv[1])
+cookies_path = pathlib.Path(sys.argv[2])
+mode = sys.argv[3]
+events = [
+    json.loads(line)
+    for line in events_path.read_text(encoding="utf-8").splitlines()
+    if line
+]
+# A site's date-valued cookie and a same-day expiring cookie from the same
+# response: the first value appears inside the second cookie's Expires.
+headers = [
+    "last-access=01-Oct-2026; Path=/; Secure; HttpOnly",
+    "edge-session=abc; Expires=Thu, 01-Oct-2026 01:00:00 GMT; Path=/; Secure",
+]
+if mode == "own-value":
+    headers.append(
+        "tracker=mock-tracker-0123456789; Path=/mock-tracker-0123456789; Secure"
+    )
+sequence = max(event["Sequence"] for event in events)
+with cookies_path.open("a", encoding="utf-8") as ledger:
+    for header in headers:
+        ledger.write(json.dumps({
+            "SchemaVersion": 1,
+            "Timestamp": "2026-10-01T00:00:06Z",
+            "RequestId": "request-000001",
+            "Url": "https://github.com/octocat/Hello-World",
+            "RawSetCookie": header,
+        }, separators=(",", ":")) + "\n")
+        parsed = http.cookies.SimpleCookie()
+        parsed.load(header)
+        for name, morsel in parsed.items():
+            sequence += 1
+            events.append({
+                "SchemaVersion": 1,
+                "Sequence": sequence,
+                "Timestamp": "2026-10-01T00:00:06Z",
+                "Type": "cookie_observed",
+                "RequestId": "request-000001",
+                "Host": "github.com",
+                "Name": name,
+                "ValueHash": hashlib.sha256(morsel.value.encode("utf-8")).hexdigest(),
+                "Attributes": {
+                    "Domain": morsel["domain"].strip().lower().lstrip(".") or None,
+                    "Path": morsel["path"] or "/",
+                    "Secure": bool(morsel["secure"]),
+                    "HttpOnly": bool(morsel["httponly"]),
+                    "SameSite": morsel["samesite"] or None,
+                    "Expires": morsel["expires"] or None,
+                    "MaxAge": morsel["max-age"] or None,
+                },
+                "Accepted": False,
+                "Reason": "replay_disabled",
+            })
+if mode == "tampered":
+    events[-1]["Attributes"]["Path"] = "/not-from-the-ledger"
+events_path.write_text(
+    "".join(
+        json.dumps(value, separators=(",", ":")) + "\n"
+        for value in events
+    ),
+    encoding="utf-8",
+    newline="",
+)
+PY
+    fi
     chmod 600 -- \
         "${network_root}/events.jsonl" \
         "${network_root}/summary.json"
@@ -12389,7 +12467,9 @@ for research_failure_case in \
     claim-invalid-ownership \
     claim-invalid-status \
     claim-missing-status-reason \
-    claim-missing-confidence-evidence; do
+    claim-missing-confidence-evidence \
+    cookie-attributes-tampered \
+    cookie-own-value; do
     research_failure_value=1
     expected_research_error=''
     case "${research_failure_case}" in
@@ -12563,6 +12643,20 @@ for research_failure_case in \
             expected_research_status='ResearchFailed'
             expected_research_stage='research validation'
             expected_research_error='claim verification evidence entry 1 has an invalid Confidence value or evidence basis'
+            ;;
+        cookie-attributes-tampered)
+            research_failure_env='MOCK_RESEARCH_COOKIE_CASE'
+            research_failure_value='tampered'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='research cookie event attributes do not match the private cookie ledger'
+            ;;
+        cookie-own-value)
+            research_failure_env='MOCK_RESEARCH_COOKIE_CASE'
+            research_failure_value='own-value'
+            expected_research_status='ResearchFailed'
+            expected_research_stage='research validation'
+            expected_research_error='raw cookie evidence escaped the private ledger'
             ;;
     esac
     research_failure_output="${fixture_dir}/${research_failure_case}-research-output"
@@ -12952,6 +13046,72 @@ for (const name of ["accepted-dossier.txt", "research-output.normalized",
   if (walk(run).some((file) => path.basename(file) === name)) {
     throw new Error(`raw research artifact ${name} leaked into the run output`);
   }
+}
+JS
+
+# A cookie value that coincides with another cookie's public Expires
+# attribute is not leaked cookie evidence: those attributes match their own
+# ledger headers, so research validation must accept the bundle.
+cookie_coincidence_output="${fixture_dir}/cookie-coincidence-research-output"
+cookie_coincidence_workspace="${fixture_dir}/cookie-coincidence-research-workspace"
+cookie_coincidence_plan="${fixture_dir}/cookie-coincidence-research-plan.json"
+cookie_coincidence_stdout="${fixture_dir}/cookie-coincidence-research.stdout"
+cookie_coincidence_stderr="${fixture_dir}/cookie-coincidence-research.stderr"
+PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${cookie_coincidence_workspace}" \
+        --output-root "${cookie_coincidence_output}" \
+        --non-interactive \
+        --no-open-html \
+        --plan-only > "${cookie_coincidence_plan}"
+: > "${mock_log}"
+: > "${mock_git_log}"
+if ! env \
+    MOCK_RESEARCH_COOKIE_CASE=coincidence \
+    MOCK_LOG="${mock_log}" \
+    MOCK_GIT_LOG="${mock_git_log}" \
+    MOCK_RUNTIME_LOG="${runtime_log}" \
+    MOCK_EXPECT_USER='keychain-user' \
+    MOCK_EXPECT_PLAINTEXT=0 \
+    COPILOT_HOME="${metadata_copilot_home}" \
+    GIT_CEILING_DIRECTORIES="${fixture_root}:/poisoned/ceiling" \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES=/poisoned/objects \
+    TMPDIR="${runtime_tmp}" \
+    PATH="${mock_bin}:${PATH}" \
+    "${RUNNER}" \
+        --repo https://github.com/octocat/Hello-World \
+        --scope 2 \
+        --workspace-root "${cookie_coincidence_workspace}" \
+        --output-root "${cookie_coincidence_output}" \
+        --expected-plan-hash "$(
+            node -e \
+                'const fs=require("fs");process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).ApprovalHash)' \
+                "${cookie_coincidence_plan}"
+        )" \
+        --non-interactive \
+        --no-open-html >"${cookie_coincidence_stdout}" \
+        2>"${cookie_coincidence_stderr}"; then
+    cat -- "${cookie_coincidence_stdout}" "${cookie_coincidence_stderr}" >&2
+    fail 'Research validation rejected a cookie value that only coincides with another cookie attribute.'
+fi
+node - "$(
+    find "${cookie_coincidence_output}" -mindepth 1 -maxdepth 1 -type d |
+        head -n 1
+)" <<'JS'
+const fs = require("fs");
+const path = require("path");
+
+const repository = path.join(process.argv[2], "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json")));
+const events = fs.readFileSync(
+  path.join(repository, "research", "network", "events.jsonl"),
+  "utf8",
+);
+if (state.Status !== "Completed" || state.Research?.Status !== "Completed" ||
+    !events.includes('"Expires":"Thu, 01-Oct-2026 01:00:00 GMT"')) {
+  throw new Error("the cookie attribute coincidence case did not complete with its event");
 }
 JS
 

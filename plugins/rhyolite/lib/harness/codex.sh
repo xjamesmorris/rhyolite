@@ -357,8 +357,8 @@ codex_write_runtime_config() {
         printf '%s\n' \
             'requires_openai_auth = false' \
             'supports_websockets = false' \
-            'request_max_retries = 0' \
-            'stream_max_retries = 0'
+            'request_max_retries = 4' \
+            'stream_max_retries = 5'
     } > "${destination}" || return 1
     chmod 600 -- "${destination}"
 }
@@ -1398,8 +1398,18 @@ for line in raw.splitlines():
     elif event_type in {"turn.failed", "error"}:
         error = event.get("error") if event_type == "turn.failed" else event
         message = str(error.get("message", "")) if isinstance(error, dict) else ""
-        if status not in {"substituted", "subagent", "refused"}:
-            status = "refused" if refusal_message(message) else "failed"
+        if refusal_message(message):
+            if status not in {"substituted", "subagent"}:
+                status = "refused"
+        elif event_type == "error" and re.fullmatch(
+            r"Reconnecting\.\.\. (?:[0-9]{1,6}/[0-9]{1,6}|waiting for network)(?: \(.*\))?",
+            message.strip(),
+            re.DOTALL,
+        ):
+            # Codex retried the same request within the same turn.
+            pass
+        elif status not in {"substituted", "subagent", "refused"}:
+            status = "failed"
     elif event_type in {"item.started", "item.updated", "item.completed"}:
         item = event.get("item")
         if not isinstance(item, dict):
@@ -1512,6 +1522,12 @@ REFUSAL_CODES = {
     "misalignment_policy_violation",
 }
 ERROR_CODE = re.compile(r'"code"\s*:\s*"([A-Za-z_]{1,64})"')
+# Codex 0.163.0 announces each built-in retry of the same request as a
+# top-level error event; the request is retried within the same turn.
+RETRY_NOTICE = re.compile(
+    r"Reconnecting\.\.\. (?:[0-9]{1,6}/[0-9]{1,6}|waiting for network)(?: \(.*\))?",
+    re.DOTALL,
+)
 FORBIDDEN_ITEMS = {"command_execution", "file_change", "web_search", "todo_list"}
 TRANSIENT = re.compile(
     r"stream disconnected before completion|"
@@ -1577,7 +1593,10 @@ def inspect(event):
         message = error.get("message") if isinstance(error, dict) else None
         return ("turn-failed", str(message or "turn failed"))
     if event_type == "error":
-        return ("error", str(event.get("message") or "error"))
+        message = str(event.get("message") or "error")
+        if RETRY_NOTICE.fullmatch(message.strip()):
+            return ("retry", message)
+        return ("error", message)
     if event_type not in {"item.started", "item.updated", "item.completed"}:
         return None
     item = event.get("item")
@@ -1633,7 +1652,7 @@ def watch():
                 f"for high-risk cyber activity, and Codex rerouted the request to "
                 f"{safe(value)}; Rhyolite does not accept that model's output."
             )
-        elif kind in {"error", "turn-failed"} and refusal_kind(value):
+        elif kind in {"error", "retry", "turn-failed"} and refusal_kind(value):
             status, detail = "refusal", (
                 f"The model provider declined a request to the approved model "
                 f"{approved_model}: {refusal_kind(value)}."
@@ -1721,6 +1740,8 @@ def outcome():
     subagent = False
     forbidden = False
     messages = []
+    retries = 0
+    retried_refusals = 0
     for raw in pathlib.Path(raw_name).read_bytes().split(b"\n"):
         event = parse(raw) if raw.strip() else None
         observation = inspect(event) if event is not None else None
@@ -1731,6 +1752,15 @@ def outcome():
             turn += 1
         elif kind == "turn-completed":
             turn_status[turn] = "completed"
+        elif kind == "retry":
+            # A retried request is not a failed turn. A refusal that Codex
+            # retried is still a refusal of the approved model.
+            retries += 1
+            if refusal_kind(value):
+                retried_refusals += 1
+                message = clean(value)
+                if message and message not in errors and len(errors) < 5:
+                    errors.append(message)
         elif kind in {"turn-failed", "error"}:
             if kind == "turn-failed":
                 turn_status[turn] = "failed"
@@ -1763,7 +1793,7 @@ def outcome():
     fallback = ""
     if subagent or evidence["effort_changed"]:
         result = "substituted"
-    elif reroute_refusals or (refused_turns and unrecovered):
+    elif reroute_refusals or retried_refusals or (refused_turns and unrecovered):
         # A refusal of the approved model explains a reroute in any order;
         # its output is never accepted, and the refusing model is not retried.
         result = "refused"
@@ -1798,12 +1828,12 @@ def outcome():
         "ExitCode": None,
         "SessionErrors": errors,
         "ModelCallFailures": min(len(failed_turns), 1000000),
-        "TurnRetries": 0,
+        "TurnRetries": min(retries, 1000000),
         "OutputLimitHits": min(len(limit_turns), 1000000),
         "OutputTokenLimit": None,
         "FinalReplyAtOutputLimit": False,
         "FallbackModel": fallback,
-        "ContentRefusals": min(reroute_refusals + len(refused_turns), 1000000),
+        "ContentRefusals": min(reroute_refusals + retried_refusals + len(refused_turns), 1000000),
         "PromptBudget": evidence["budget"],
         "PeakPromptTokens": evidence["peak"],
         "Compactions": min(len(evidence["compactions"]), 1000000),

@@ -282,8 +282,8 @@ for feature in (
     assert config["features"][feature] is False
 assert provider["base_url"] == "https://fixture.example.org/v1"
 assert provider["env_key"] == "FIXTURE_CODEX_KEY"
-assert provider["request_max_retries"] == 0
-assert provider["stream_max_retries"] == 0
+assert provider["request_max_retries"] == 4
+assert provider["stream_max_retries"] == 5
 assert len(catalog["models"]) == 1
 model = catalog["models"][0]
 assert model["slug"] == "gpt-5.6-sol"
@@ -671,6 +671,78 @@ codex_outcome_case quota failed 0 '' <<EOF
 {"type":"turn.started"}
 {"type":"turn.failed","error":{"message":"Quota exceeded. Check your plan and billing details."}}
 EOF
+# Codex 0.163.0 announces each built-in retry of the same request as a
+# top-level "Reconnecting... n/max (reason)" error event within the turn. A
+# retried request is not a failed turn, but a retried refusal still refuses.
+codex_outcome_case retried-completion completed 0 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: The server had an error processing your request.)"}
+{"type":"error","message":"Reconnecting... 2/5 (We’re currently experiencing high demand, which may cause temporary errors.)"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"EXACT_CODEX_FIXTURE_REPLY"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
+EOF
+codex_outcome_case retried-refusal refused 1 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: Incomplete response returned, reason: content_filter)"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"EXACT_CODEX_FIXTURE_REPLY"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
+EOF
+codex_outcome_case retries-exhausted transient-failure 0 '' <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion: The server had an error processing your request.)"}
+{"type":"error","message":"stream disconnected before completion: The server had an error processing your request."}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: The server had an error processing your request."}}
+EOF
+python3 - \
+    "${fixture_root}/codex-retried-completion-outcome.json" \
+    "${fixture_root}/codex-retried-refusal-outcome.json" \
+    "${fixture_root}/codex-retries-exhausted-outcome.json" <<'PY' ||
+import json
+import sys
+
+completed, refused, exhausted = (
+    json.load(open(path, encoding="utf-8")) for path in sys.argv[1:4]
+)
+assert (completed["TurnRetries"], completed["ModelCallFailures"],
+        completed["SessionErrors"]) == (2, 0, []), completed
+assert refused["TurnRetries"] == 1 and refused["SessionErrors"], refused
+assert (exhausted["TurnRetries"], exhausted["ModelCallFailures"],
+        exhausted["Retryable"]) == (1, 1, True), exhausted
+PY
+    fail 'Codex retry notices were not classified as retries.'
+printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
+harness_normalize_worker_output \
+    review "${fixture_root}/codex-retried-completion.raw" gpt-5.6-sol max \
+    "${fixture_root}/retried-normalized" "${fixture_root}/retried-reply" ||
+    fail 'Codex rejected a reply that completed after a retried request.'
+[[ "$(cat "${fixture_root}/retried-reply")" == EXACT_CODEX_FIXTURE_REPLY ]] ||
+    fail 'Codex changed the final reply of a retried request.'
+printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
+if harness_normalize_worker_output \
+    review "${fixture_root}/codex-retried-refusal.raw" gpt-5.6-sol max \
+    "${fixture_root}/retried-refusal-normalized" "${fixture_root}/retried-refusal-reply" \
+    >/dev/null 2>&1; then
+    fail 'Codex accepted output after it retried a provider refusal.'
+fi
+assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
+    'provider refusal of the approved model' 'Codex retried-refusal rejection'
+codex_retry_cursor="${fixture_root}/codex-retry-cursor"
+harness_detect_worker_violation \
+    review "${fixture_root}/codex-retried-completion.raw" gpt-5.6-sol max \
+    "${codex_retry_cursor}" ||
+    fail 'Codex live enforcement stopped a worker for an ordinary retry.'
+rm -f -- "${codex_retry_cursor}"
+set +e
+harness_detect_worker_violation \
+    review "${fixture_root}/codex-retried-refusal.raw" gpt-5.6-sol max \
+    "${codex_retry_cursor}"
+codex_retry_status=$?
+set -e
+((codex_retry_status == RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS)) ||
+    fail 'Codex live enforcement did not stop a worker whose refusal Codex retried.'
 codex_refusal_cursor="${fixture_root}/codex-refusal-cursor"
 set +e
 harness_detect_worker_violation \
@@ -1546,6 +1618,8 @@ sessions.mkdir(parents=True)
 if phase == "review":
     pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
     events = (
+        {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion: "
+                                     "The server had an error processing your request.)"},
         {"type": "item.completed", "item": {
             "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
             "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Research validation no longer fails a scope 2 or 3 review when a cookie
+  value only coincides with another cookie's public attributes, such as a
+  date-valued cookie and a cookie that expires the same day. Each cookie
+  event's recorded attributes must now match its own private `Set-Cookie`
+  header exactly and contain none of that header's values; the dossier,
+  network summary, and every other event field are still scanned for raw
+  cookie values.
+
 ## 0.9.0 - 2026-10-27
 
 ### Added

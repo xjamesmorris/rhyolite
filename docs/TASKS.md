@@ -132,7 +132,12 @@ Status values:
   adapter compared the broker's compact research tool list with a spaced
   rebuild as exact strings. The comparison now ignores JSON whitespace, and
   the mocked end-to-end test also covers the scope-2 research launch with
-  both real brokers.
+  both real brokers. Two later scope-2 reruns proved live research and
+  dossier acceptance. One failed on provider errors because the adapter
+  disabled Codex's own retries, which it now keeps with retry-notice
+  handling; the other failed on a cookie false positive in the shared
+  research validation, which now verifies cookie attributes against the
+  private ledger.
 - **Next step:** run real scope 2 and 3 reviews of a small public
   repository through a private test-owned registry, then complete the live
   research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until

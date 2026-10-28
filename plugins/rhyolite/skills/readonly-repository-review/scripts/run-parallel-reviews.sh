@@ -11044,13 +11044,8 @@ for path in private_root.rglob("*"):
     if path.is_file() and mode != 0o600:
         raise SystemExit(f"research private file mode is {mode:o}: {path}")
 
-public_bytes = b"\n".join(
-    [
-        dossier_bytes,
-        summary_path.read_bytes(),
-        events_path.read_bytes(),
-    ]
-)
+cookie_candidates = []
+ledger_cookies = {}
 cookies_path = private_root / "cookies.jsonl"
 for line in cookies_path.read_text(encoding="utf-8").splitlines():
     if not line.strip():
@@ -11059,17 +11054,83 @@ for line in cookies_path.read_text(encoding="utf-8").splitlines():
     raw = value.get("RawSetCookie")
     if not isinstance(raw, str):
         raise SystemExit("private cookie ledger entry is missing RawSetCookie")
-    candidates = [raw]
+    cookie_candidates.append(raw)
     parsed = http.cookies.SimpleCookie()
     try:
         parsed.load(raw)
     except Exception:
         parsed = http.cookies.SimpleCookie()
-    candidates.extend(morsel.value for morsel in parsed.values())
-    for candidate in candidates:
-        encoded = candidate.encode("utf-8")
-        if len(encoded) >= 8 and encoded in public_bytes:
-            raise SystemExit("raw cookie evidence escaped the private ledger")
+    header_values = [morsel.value for morsel in parsed.values()]
+    cookie_candidates.extend(header_values)
+    for name, morsel in parsed.items():
+        # The broker publishes this exact projection of each cookie's own
+        # attributes, never its value.
+        domain_value = morsel["domain"].strip().lower().lstrip(".")
+        projection = {
+            "Domain": domain_value or None,
+            "Path": morsel["path"] or "/",
+            "Secure": bool(morsel["secure"]),
+            "HttpOnly": bool(morsel["httponly"]),
+            "SameSite": morsel["samesite"] or None,
+            "Expires": morsel["expires"] or None,
+            "MaxAge": morsel["max-age"] or None,
+        }
+        key = (
+            value.get("RequestId"),
+            name,
+            hashlib.sha256(morsel.value.encode("utf-8")).hexdigest(),
+        )
+        ledger_cookies.setdefault(key, []).append((projection, header_values))
+
+# A cookie value may coincide with another cookie's public attributes, such as
+# a date value inside a same-day Expires. The scan skips only attributes that
+# exactly match their own ledger header and contain none of its values.
+public_event_lines = []
+for line in events_path.read_bytes().splitlines():
+    event = json.loads(line) if line.strip() else None
+    if (
+        isinstance(event, dict)
+        and event.get("Type") == "cookie_observed"
+        and "Attributes" in event
+    ):
+        header_value_sets = [
+            header_values
+            for projection, header_values in ledger_cookies.get(
+                (event.get("RequestId"), event.get("Name"), event.get("ValueHash")),
+                [],
+            )
+            if projection == event["Attributes"]
+        ]
+        if not header_value_sets:
+            raise SystemExit(
+                "research cookie event attributes do not match the private cookie ledger"
+            )
+        for attribute in event["Attributes"].values():
+            if isinstance(attribute, str) and any(
+                len(own_value.encode("utf-8")) >= 8 and own_value in attribute
+                for header_values in header_value_sets
+                for own_value in header_values
+            ):
+                raise SystemExit("raw cookie evidence escaped the private ledger")
+        line = json.dumps(
+            {key: item for key, item in event.items() if key != "Attributes"},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    public_event_lines.append(line)
+
+public_bytes = b"\n".join(
+    [
+        dossier_bytes,
+        summary_path.read_bytes(),
+        b"\n".join(public_event_lines),
+    ]
+)
+for candidate in cookie_candidates:
+    encoded = candidate.encode("utf-8")
+    if len(encoded) >= 8 and encoded in public_bytes:
+        raise SystemExit("raw cookie evidence escaped the private ledger")
 
 manifest_path = private_root / "body-manifest.jsonl"
 bodies_root = private_root / "bodies"
