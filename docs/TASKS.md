@@ -127,7 +127,12 @@ Status values:
   then found that research-enabled review instructions forbade every MCP
   tool and required direct path reads of the dossier, which an offline
   snapshot reader cannot do; they now allow exactly the harness-supplied
-  read-only snapshot tools and name the dossier grants.
+  read-only snapshot tools and name the dossier grants. The first live
+  scope-2 review then failed before its research worker launched: the
+  adapter compared the broker's compact research tool list with a spaced
+  rebuild as exact strings. The comparison now ignores JSON whitespace, and
+  the mocked end-to-end test also covers the scope-2 research launch with
+  both real brokers.
 - **Next step:** run real scope 2 and 3 reviews of a small public
   repository through a private test-owned registry, then complete the live
   research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until

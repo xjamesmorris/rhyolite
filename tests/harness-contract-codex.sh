@@ -429,7 +429,19 @@ declare -a codex_research_broker_arguments=(
     --expected-policy-digest "$(printf '%064d' 0)"
 )
 codex_research_config="${fixture_root}/codex-research-config.json"
-codex_research_tools_json='["research_capabilities", "fetch_public_url", "search_public_github", "search_public_web", "research_network_summary"]'
+# The runner passes the broker's own compact policy tool list; derive it the
+# same way so this fixture cannot drift from the real format.
+mapfile -d '' -t codex_research_policy_fields < <(
+    python3 "${PLUGIN_ROOT}/skills/readonly-repository-review/scripts/research-egress-broker.py" \
+        --policy "${PLUGIN_ROOT}/skills/readonly-repository-review/research-policy.json" \
+        --scope 2 --web-search-provider duckduckgo-html-v1 \
+        --describe-policy --describe-format nul
+)
+((${#codex_research_policy_fields[@]} == 10)) ||
+    fail 'The research broker policy description changed shape.'
+codex_research_tools_json="${codex_research_policy_fields[9]}"
+[[ "${codex_research_tools_json}" == '["research_capabilities","fetch_public_url","search_public_github","search_public_web","research_network_summary"]' ]] ||
+    fail 'The research broker tool list changed.'
 harness_write_research_mcp_config \
     "${codex_research_config}" \
     "${codex_research_launcher}" \
@@ -438,6 +450,22 @@ harness_write_research_mcp_config \
     fail 'Codex research MCP configuration failed.'
 declare -a codex_research_argv=()
 declare -a codex_research_env=()
+(
+    declare -a codex_mismatched_argv=()
+    if harness_research_worker_argv \
+        codex_mismatched_argv "${codex_session_root}" "${PLUGIN_ROOT}" \
+        codex-research '00000000-0000-4000-8000-000000000023' \
+        gpt-5.6-sol max long_context FIXTURE_CODEX_KEY \
+        "${codex_research_config}" \
+        research_capabilities,fetch_public_url,search_public_github,research_network_summary \
+        "${fixture_root}/codex-research-session.md" >/dev/null 2>&1; then
+        fail 'Codex research argv accepted a tool list that differs from its MCP configuration.'
+    fi
+    assert_equal \
+        'The Codex research tool names differ from the research MCP configuration.' \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Codex research tool-list mismatch detail'
+) || fail 'Codex research tool-list mismatch regression failed.'
 harness_research_worker_argv \
     codex_research_argv \
     "${codex_session_root}" \
@@ -1353,7 +1381,7 @@ codex_e2e_plugin="${fixture_root}/codex-e2e-plugin"
 codex_e2e_bin="${fixture_root}/codex-e2e-bin"
 codex_e2e_tmp="${fixture_root}/codex-e2e-tmp"
 codex_e2e_home="${fixture_root}/codex-e2e-home"
-codex_e2e_capture="${fixture_root}/codex-e2e-capture.json"
+codex_e2e_capture="${fixture_root}/codex-e2e-capture"
 codex_e2e_report="${fixture_root}/codex-e2e-report.txt"
 codex_e2e_runner="${codex_e2e_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
 cp -a -- "${PLUGIN_ROOT}" "${codex_e2e_plugin}"
@@ -1374,8 +1402,8 @@ rhyolite_harness_registry_lookup() {
     printf -v "${output_variable}" '%s' "${plugin_root}/lib/harness/codex.sh"
 }
 CODEX_E2E_TEST_REGISTRY
-mkdir -p -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}"
-chmod 700 -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}"
+mkdir -p -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}" "${codex_e2e_capture}"
+chmod 700 -- "${codex_e2e_bin}" "${codex_e2e_tmp}" "${codex_e2e_home}" "${codex_e2e_capture}"
 awk '
     /^=+$/ && length($0) >= 80 { delimiters++ }
     delimiters >= 1 { print }
@@ -1420,56 +1448,76 @@ while index < len(args) - 1:
         fail("unexpected argument " + argument)
 home = pathlib.Path(os.environ["CODEX_HOME"])
 config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+phase = "research" if "mcp_servers.rhyolite_research.command" in overrides else "review"
 instructions = pathlib.Path(config.get("model_instructions_file", "/nonexistent"))
-if (instructions.parent != home or not instructions.is_file()
-        or "RHYOLITE_AGENT_SELF_CHECK_V2" not in instructions.read_text(encoding="utf-8")):
-    fail("the runtime home has no trusted worker instructions")
+instruction_text = instructions.read_text(encoding="utf-8") if instructions.is_file() else ""
+if (instructions.parent != home or instructions.name != f"{phase}-worker-instructions.md"
+        or "RHYOLITE_AGENT_SELF_CHECK_V2" not in instruction_text
+        or (phase == "research" and "research_capabilities" not in instruction_text)):
+    fail("the runtime home has no trusted worker instructions for this phase")
 if (options.get("--sandbox") != "read-only"
         or not os.path.samefile(os.getcwd(), options["--cd"])):
     fail("unexpected sandbox or working directory")
 prompt = sys.stdin.read()
 
-prefix = "mcp_servers.rhyolite_snapshot."
-environment = {name: os.environ[name] for name in ("HOME", "PATH", "TMPDIR") if name in os.environ}
-environment.update(overrides[prefix + "env"])
-server = subprocess.Popen(
-    [overrides[prefix + "command"], *overrides[prefix + "args"]],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-    text=True, env=environment,
-)
-try:
-    def call(identifier, method, params):
-        server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier,
-                                      "method": method, "params": params}) + "\n")
-        server.stdin.flush()
-        response = json.loads(server.stdout.readline())
-        if "result" not in response:
-            fail(f"snapshot {method} failed")
-        return response["result"]
 
-    call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                           "clientInfo": {"name": "codex-fixture", "version": "0.163.0"}})
-    server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-    tools = [tool["name"] for tool in call(2, "tools/list", {})["tools"]]
-    if tools != overrides[prefix + "enabled_tools"]:
-        fail("the snapshot tool inventory changed")
-    read = call(3, "tools/call", {"name": "read_snapshot_text",
-                                  "arguments": {"grant": "snapshot", "path": "README.md"}})
-    if read.get("isError") or "mock repository" not in json.dumps(read):
-        fail("the snapshot read failed")
-    server.stdin.close()
-    if server.wait(timeout=10) != 0:
-        fail("the snapshot broker did not exit cleanly")
-finally:
-    if server.poll() is None:
-        server.terminate()
-        server.wait(timeout=10)
+def use_server(server_name, calls):
+    prefix = f"mcp_servers.{server_name}."
+    if overrides.get(prefix + "required") is not True or overrides.get(prefix + "env_vars") != []:
+        fail(f"{server_name} is not a required, environment-isolated MCP server")
+    environment = {name: os.environ[name] for name in ("HOME", "PATH", "TMPDIR") if name in os.environ}
+    environment.update(overrides[prefix + "env"])
+    server = subprocess.Popen(
+        [overrides[prefix + "command"], *overrides[prefix + "args"]],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, env=environment,
+    )
+    try:
+        def call(identifier, method, params):
+            server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": identifier,
+                                          "method": method, "params": params}) + "\n")
+            server.stdin.flush()
+            response = json.loads(server.stdout.readline())
+            if "result" not in response:
+                fail(f"{server_name} {method} failed")
+            return response["result"]
+
+        call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                               "clientInfo": {"name": "codex-fixture", "version": "0.163.0"}})
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        tools = [tool["name"] for tool in call(2, "tools/list", {})["tools"]]
+        if tools != overrides[prefix + "enabled_tools"]:
+            fail(f"the {server_name} tool inventory changed")
+        results = []
+        for offset, (tool, arguments) in enumerate(calls):
+            result = call(3 + offset, "tools/call", {"name": tool, "arguments": arguments})
+            if result.get("isError"):
+                fail(f"{server_name} {tool} failed")
+            results.append(json.dumps(result))
+        server.stdin.close()
+        if server.wait(timeout=10) != 0:
+            fail(f"the {server_name} broker did not exit cleanly")
+        return tools, results
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            server.wait(timeout=10)
+
+
+tools, snapshot_results = use_server("rhyolite_snapshot", [
+    ("read_snapshot_text", {"grant": "snapshot", "path": "README.md"}),
+])
+if "mock repository" not in snapshot_results[0]:
+    fail("the snapshot read failed")
+research_tools = []
+if phase == "research":
+    research_tools, _ = use_server("rhyolite_research", [("research_capabilities", {})])
 
 model = options["--model"]
 effort = config["model_reasoning_effort"]
 window = config["model_context_window"] * 95 // 100
-thread = "00000000-0000-4000-8000-0000000000e2"
-reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n")
+thread = "00000000-0000-4000-8000-0000000000e2" if phase == "review" else "00000000-0000-4000-8000-0000000000e3"
+reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
 usage = {"input_tokens": 24000, "cached_input_tokens": 0, "output_tokens": 900,
          "reasoning_output_tokens": 0, "total_tokens": 24900}
 records = [
@@ -1486,30 +1534,40 @@ records = [
     {"type": "event_msg", "payload": {"type": "token_count", "info": {
         "total_token_usage": usage, "last_token_usage": usage,
         "model_context_window": window}, "rate_limits": None}},
-    {"type": "response_item", "payload": {"type": "message", "role": "assistant",
-                                          "phase": "final_answer",
-                                          "content": [{"type": "output_text", "text": reply}]}},
 ]
+if phase == "review":
+    records.append({"type": "response_item", "payload": {
+        "type": "message", "role": "assistant", "phase": "final_answer",
+        "content": [{"type": "output_text", "text": reply}]}})
 sessions = home / "sessions" / "2026" / "10" / "01"
 sessions.mkdir(parents=True)
 (sessions / f"rollout-2026-10-01T12-00-00-{thread}.jsonl").write_text(
     "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
-for event in (
-    {"type": "thread.started", "thread_id": thread},
-    {"type": "turn.started"},
-    {"type": "item.completed", "item": {
-        "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
-        "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},
-        "status": "completed"}},
-    {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": reply}},
-    {"type": "turn.completed", "usage": usage},
-):
+if phase == "review":
+    pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
+    events = (
+        {"type": "item.completed", "item": {
+            "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
+            "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},
+            "status": "completed"}},
+        {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": reply}},
+        {"type": "turn.completed", "usage": usage},
+    )
+else:
+    events = (
+        {"type": "item.completed", "item": {
+            "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_research",
+            "tool": "research_capabilities", "arguments": {}, "status": "completed"}},
+        {"type": "turn.failed", "error": {
+            "message": "fixture research worker stopped before public retrieval"}},
+    )
+for event in ({"type": "thread.started", "thread_id": thread}, {"type": "turn.started"}, *events):
     print(json.dumps(event), flush=True)
-pathlib.Path(capture_path).write_text(json.dumps({
-    "Instructions": instructions.name, "SnapshotTools": tools,
+(pathlib.Path(capture_path) / f"{phase}.json").write_text(json.dumps({
+    "Instructions": instructions.name, "SnapshotTools": tools, "ResearchTools": research_tools,
     "PromptHasCommit": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" in prompt,
 }), encoding="utf-8")
+raise SystemExit(0 if phase == "review" else 1)
 CODEX_E2E_WORKER
 {
     printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
@@ -1571,7 +1629,7 @@ const [root, capturePath] = process.argv.slice(2);
 const repo = path.join(root, "github--octocat--hello-world");
 const read = (name) => JSON.parse(fs.readFileSync(name, "utf8"));
 const plan = read(path.join(root, "review-plan.json"));
-const capture = read(capturePath);
+const capture = read(path.join(capturePath, "review.json"));
 for (const state of [read(path.join(root, "state.json")), read(path.join(repo, "state.json"))]) {
   if (state.Status !== "Completed" || state.Harness !== "codex" ||
       state.Model !== "gpt-5.6-sol" || state.ReasoningEffort !== "max" ||
@@ -1597,5 +1655,73 @@ JS
 [[ -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e.stdout")" \
     -name '*.codex-final' -print -quit)" ]] ||
     fail 'Codex end-to-end run left an unsanitized final-message file.'
+
+# Scope 2 drives the research phase through the adapter-built research argv,
+# runtime home, environment, and both real brokers. The fake research worker
+# records a real broker capability check and then stops, so the run must end
+# as a research-worker failure, never as an adapter or capability failure.
+codex_e2e_research_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 2
+    --research-cookies off
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-research-workspace"
+    --output-root "${fixture_root}/codex-e2e-research-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_research_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-research-plan.json" \
+    2> "${fixture_root}/codex-e2e-research-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-research-plan.stderr" >&2
+        fail 'Codex end-to-end research plan failed.'
+    }
+if "${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_research_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-research-plan.json")" \
+    > "${fixture_root}/codex-e2e-research.stdout" \
+    2> "${fixture_root}/codex-e2e-research.stderr"; then
+    fail 'Codex end-to-end research fixture unexpectedly completed.'
+fi
+node - "$(contract_run_path "${fixture_root}/codex-e2e-research.stdout")" \
+    "${codex_e2e_capture}" <<'JS'
+const fs = require("fs"), path = require("path");
+const [root, captureRoot] = process.argv.slice(2);
+const repo = path.join(root, "github--octocat--hello-world");
+const read = (name) => JSON.parse(fs.readFileSync(name, "utf8"));
+const research = read(path.join(repo, "research", "research-state.json"));
+const errors = fs.readFileSync(path.join(repo, "research", "research-errors.txt"), "utf8");
+if (research.Status !== "ResearchFailed" || research.Attempts.Count !== 1) {
+  throw new Error(`Codex research did not fail as a worker after launch: ${research.Status}\n${errors}`);
+}
+if (!errors.includes("fixture research worker stopped before public retrieval")) {
+  throw new Error(`Codex research errors lost the worker's own failure:\n${errors}`);
+}
+for (const forbidden of ["harness_research_worker_argv", "harness_prepare_worker_home",
+  "harness_research_worker_env", "harness_configure_snapshot_transport",
+  "did not record a verifiable lifecycle exit", "cleanup failed"]) {
+  if (errors.includes(forbidden)) throw new Error(`Codex research launch path failed: ${forbidden}\n${errors}`);
+}
+const events = fs.readFileSync(path.join(repo, "research", "network", "events.jsonl"), "utf8");
+if (!events.includes('"capabilities_checked"')) {
+  throw new Error("the real research broker did not record the capability check");
+}
+const capture = read(path.join(captureRoot, "research.json"));
+if (capture.Instructions !== "research-worker-instructions.md" || !capture.PromptHasCommit ||
+    capture.SnapshotTools.length !== 4 ||
+    JSON.stringify(capture.ResearchTools) !== JSON.stringify([
+      "research_capabilities", "fetch_public_url", "search_public_github",
+      "search_public_web", "research_network_summary"])) {
+  throw new Error("Codex research worker did not start with its instructions and both MCP servers");
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+    fail 'Codex end-to-end research run left a runtime home or broker runtime.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

@@ -1015,14 +1015,26 @@ harness_worker_argv() {
     [[ "${session_root}" == /* && -d "${session_root}" && ! -L "${session_root}" &&
         "${plugin_root}" == /* &&
         -f "${plugin_root}/agents/repo-review-worker.agent.md" &&
-        -f "${plugin_root}/skills/readonly-repository-review/SKILL.md" ]] || return 1
+        -f "${plugin_root}/skills/readonly-repository-review/SKILL.md" ]] || {
+        rhyolite_harness_set_error \
+            'The Codex review session root or bundled review-worker instructions are unavailable.'
+        return 1
+    }
     codex_valid_safe_identifier "${session_name}" &&
-        codex_valid_session_id "${session_id}" || return 1
+        codex_valid_session_id "${session_id}" || {
+        rhyolite_harness_set_error \
+            'The Codex review session name or ID is invalid.'
+        return 1
+    }
     harness_validate_model_id "${model}" &&
         harness_validate_reasoning_effort "${reasoning_effort}" &&
         harness_validate_context_tier "${context_tier}" || return 1
     [[ "${authentication_variables}" == "${CODEX_PROVIDER_ENV_KEY}" &&
-        "${transcript_path}" == /* ]] || return 1
+        "${transcript_path}" == /* ]] || {
+        rhyolite_harness_set_error \
+            'The Codex review authentication variable or transcript path differs from the approved provider configuration.'
+        return 1
+    }
     : "${available_tools}" "${enable_public_research}"
     codex_record_worker_instructions review \
         "${plugin_root}/agents/repo-review-worker.agent.md" \
@@ -1144,18 +1156,36 @@ harness_research_worker_argv() {
     [[ "${session_root}" == /* && -d "${session_root}" && ! -L "${session_root}" &&
         "${plugin_root}" == /* &&
         -f "${plugin_root}/agents/repo-research-worker.agent.md" &&
-        -f "${plugin_root}/skills/research-source-assessment/SKILL.md" ]] || return 1
+        -f "${plugin_root}/skills/research-source-assessment/SKILL.md" ]] || {
+        rhyolite_harness_set_error \
+            'The Codex research session root or bundled research-worker instructions are unavailable.'
+        return 1
+    }
     codex_valid_safe_identifier "${session_name}" &&
-        codex_valid_session_id "${session_id}" || return 1
+        codex_valid_session_id "${session_id}" || {
+        rhyolite_harness_set_error \
+            'The Codex research session name or ID is invalid.'
+        return 1
+    }
     harness_validate_model_id "${model}" &&
         harness_validate_reasoning_effort "${reasoning_effort}" &&
         harness_validate_context_tier "${context_tier}" || return 1
     [[ "${authentication_variables}" == "${CODEX_PROVIDER_ENV_KEY}" &&
         "${mcp_config_path}" == "${CODEX_RESEARCH_CONFIG_PATH}" &&
         -f "${mcp_config_path}" && ! -L "${mcp_config_path}" &&
-        "${transcript_path}" == /* ]] || return 1
-    tools_json="[\"${broker_tools//,/\", \"}\"]"
-    [[ "${tools_json}" == "${CODEX_RESEARCH_TOOLS_JSON}" ]] || return 1
+        "${transcript_path}" == /* ]] || {
+        rhyolite_harness_set_error \
+            'The Codex research authentication variable, MCP configuration, or transcript path differs from the approved research configuration.'
+        return 1
+    }
+    # The runner's tool list is the broker's compact JSON array; tool names
+    # never contain whitespace, so only JSON whitespace is ignored here.
+    tools_json="[\"${broker_tools//,/\",\"}\"]"
+    [[ "${tools_json}" == "${CODEX_RESEARCH_TOOLS_JSON//[[:space:]]/}" ]] || {
+        rhyolite_harness_set_error \
+            'The Codex research tool names differ from the research MCP configuration.'
+        return 1
+    }
     codex_record_worker_instructions research \
         "${plugin_root}/agents/repo-research-worker.agent.md" \
         "${plugin_root}/skills/research-source-assessment/SKILL.md"
