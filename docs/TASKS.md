@@ -118,10 +118,10 @@ Status values:
   provider, and the outcome classifier reported `completed` from the real
   session record. The first live guided setup failed at its stage validator,
   which rejected the model's reasoning items; the validator now accepts them
-  and names any failed check.
-- **Next step:** rerun the live native setup/approval/controller path from
-  a private staged package, then complete live research, continuation/recovery,
-  repair, all-scope, and stop/timeout gates. Keep production registration absent until
+  and names any failed check, and the live rerun with that fix passed.
+- **Next step:** run real scope 1, 2, and 3 reviews of a small public
+  repository through a private test-owned registry, then complete the live
+  research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness
