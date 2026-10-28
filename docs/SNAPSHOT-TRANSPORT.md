@@ -84,6 +84,14 @@ ownership, and read-only mode on access. No output directory, private
 research body, cookie, authentication file, or arbitrary absolute path is
 granted. Repair has no grants.
 
+The review request names those trusted paths, which an offline-transport
+worker cannot open. Its research transport instructions therefore tell that
+worker to read the pair with `read_snapshot_text` using grant
+`research-dossier` or `research-network-summary` and no path. The shared
+worker instructions forbid every MCP tool other than the harness-supplied
+read-only snapshot tools; native-transport requests keep the path
+instructions.
+
 ## Model-visible tools
 
 Every tool rejects unknown arguments. Paths are relative UTF-8 strings;

@@ -2469,6 +2469,34 @@ grep -Fq 'wrapper'\''s collection and exact-commit' "${WORKER_AGENT}" &&
 grep -Fq 'Do not invoke a research specialist' "${WORKER_AGENT}" &&
     grep -Fq 'validated sanitized research dossier' "${WORKER_AGENT}" ||
     fail 'Main worker does not consume the dedicated sanitized dossier.'
+# An offline snapshot transport reads source and dossier only through MCP
+# tools, so every main-worker MCP prohibition excludes exactly that interface
+# and defers dossier access to the request's research transport instructions.
+for research_consumer in \
+    "${PROMPT}" \
+    "${SKILL}" \
+    "${WORKER_AGENT}" \
+    "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"; do
+    research_consumer_text="$(
+        tr '\r\n\t' '   ' < "${research_consumer}" | sed -E 's/[[:space:]]+/ /g'
+    )"
+    [[ "${research_consumer_text}" == *'MCP tool other than the harness-supplied read-only snapshot tools'* &&
+        "${research_consumer_text}" == *'through the access that the'*'research transport instructions describe'* ]] ||
+        fail "Main-worker dossier access does not allow the harness snapshot tools: ${research_consumer}"
+    ! grep -Eq 'call (a direct web or|an) MCP tool|or an MCP tool from the main worker' \
+        <<< "${research_consumer_text}" ||
+        fail "Main-worker dossier access still forbids every MCP tool: ${research_consumer}"
+done
+copilot_dossier_paragraph="$(
+    sed -n '/^When public research is enabled, consume only/,/^$/p' "${WORKER_AGENT}"
+)"
+claude_dossier_paragraph="$(
+    sed -n '/^When public research is enabled, consume only/,/^$/p' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review-worker.md"
+)"
+[[ -n "${copilot_dossier_paragraph}" &&
+    "${copilot_dossier_paragraph}" == "${claude_dossier_paragraph}" ]] ||
+    fail 'The Copilot and Claude Code review workers describe dossier access differently.'
 grep -Fq 'Call `research_capabilities` first' "${RESEARCH_WORKER_AGENT}" ||
     fail 'Research worker does not enforce broker capability validation.'
 grep -Fq 'Perform at least one successful public retrieval' \

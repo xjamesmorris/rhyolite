@@ -123,10 +123,13 @@ Status values:
   adapter wrote its worker instructions while building argv, before the
   runner creates the runtime home. Runtime-home preparation now writes them,
   and a mocked end-to-end runner test with the real snapshot broker covers
-  the whole review path.
-- **Next step:** rerun the live scope-1 review, then real scope 2 and 3
-  reviews of a small public repository through a private test-owned
-  registry, then complete the live
+  the whole review path. The live rerun passed on 2026-10-28. Inspection
+  then found that research-enabled review instructions forbade every MCP
+  tool and required direct path reads of the dossier, which an offline
+  snapshot reader cannot do; they now allow exactly the harness-supplied
+  read-only snapshot tools and name the dossier grants.
+- **Next step:** run real scope 2 and 3 reviews of a small public
+  repository through a private test-owned registry, then complete the live
   research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
