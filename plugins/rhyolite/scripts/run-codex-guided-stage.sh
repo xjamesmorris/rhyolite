@@ -12,8 +12,18 @@ model=''
 reasoning_effort=''
 context_tier=''
 
+# Report the failed stage with an optional sanitized detail, and keep the same
+# line next to the result path so the controller's private session directory
+# records why a native stage failed.
 fail_stage() {
-    printf 'Codex guided stage failed: %s\n' "$1" >&2
+    local detail="${2-}"
+    detail="$(printf '%s' "${detail}" | tr -cd '[:alnum:] ._:/=(),-' | cut -c1-200)"
+    printf 'Codex guided stage failed: %s%s\n' "$1" "${detail:+ (${detail})}" >&2
+    if [[ "${result_path}" == /*.json && -d "${result_path%/*}" &&
+        ! -L "${result_path%/*}" ]]; then
+        ( set -C; printf '%s%s\n' "$1" "${detail:+: ${detail}}" \
+            > "${result_path%.json}.failure" ) 2>/dev/null || true
+    fi
     exit 1
 }
 
@@ -201,17 +211,19 @@ env "${stage_environment[@]}" "TERM=${stage_terminal_type}" \
     "${prompt}" >&2
 codex_status=$?
 set -e
-((codex_status == 0)) || fail_stage session
+((codex_status == 0)) ||
+    fail_stage session "Codex exited with status ${codex_status}"
 
 expected_context="$(codex_usable_context_window "${context_tier}")" ||
     fail_stage context
-python3 -I - \
+# The validator prints only a fixed-vocabulary reason, never session content.
+if ! validation_detail="$(python3 -I - \
     "${runtime_home}" \
     "${stage}" \
     "${model}" \
     "${reasoning_effort}" \
     "${expected_context}" \
-    "${result_path}" <<'PY' || fail_stage result
+    "${result_path}" <<'PY'
 import json
 import os
 import pathlib
@@ -220,9 +232,25 @@ import sys
 
 root, stage, model, effort, context_text, result_name = sys.argv[1:7]
 expected_context = int(context_text)
+# Codex 0.163.0 persists every completed turn item of an interactive session.
+# A real model's reasoning and the answer to a native question carry no
+# authority; any other item, such as a command, file change, or MCP call, does.
+ALLOWED_ITEMS = {"UserMessage", "AgentMessage", "Reasoning", "FunctionCallOutput"}
+
+
+def fail(reason):
+    print(reason)
+    raise SystemExit(1)
+
+
+def name(value):
+    text = str(value)
+    return text if re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", text) else "unrecognized"
+
+
 paths = sorted((pathlib.Path(root) / "sessions").glob("**/*.jsonl"))
 if len(paths) != 1 or paths[0].is_symlink():
-    raise SystemExit(1)
+    fail(f"expected one session record, found {len(paths)}")
 final_messages = []
 turns = 0
 contexts = set()
@@ -232,7 +260,7 @@ for raw in paths[0].read_bytes().split(b"\n"):
     try:
         record = json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError):
-        raise SystemExit(1)
+        fail("unreadable session record")
     if not isinstance(record, dict):
         continue
     payload = record.get("payload")
@@ -241,16 +269,18 @@ for raw in paths[0].read_bytes().split(b"\n"):
     if record.get("type") == "turn_context":
         turns += 1
         collaboration = payload.get("collaboration_mode")
-        if (
-            payload.get("model") != model
-            or payload.get("effort") != effort
-            or payload.get("approval_policy") != "never"
-            or payload.get("sandbox_policy", {}).get("type") != "read-only"
-            or not isinstance(collaboration, dict)
-            or collaboration.get("mode") != "default"
-            or payload.get("multi_agent_version") != "disabled"
+        sandbox = payload.get("sandbox_policy")
+        for field, ok in (
+            ("model", payload.get("model") == model),
+            ("reasoning effort", payload.get("effort") == effort),
+            ("approval policy", payload.get("approval_policy") == "never"),
+            ("sandbox", isinstance(sandbox, dict) and sandbox.get("type") == "read-only"),
+            ("collaboration mode", isinstance(collaboration, dict)
+                and collaboration.get("mode") == "default"),
+            ("multi-agent setting", payload.get("multi_agent_version") == "disabled"),
         ):
-            raise SystemExit(1)
+            if not ok:
+                fail(f"turn context {field} differs from the approved session")
     elif record.get("type") == "event_msg":
         if payload.get("type") == "task_started":
             value = payload.get("model_context_window")
@@ -259,13 +289,15 @@ for raw in paths[0].read_bytes().split(b"\n"):
         item = payload.get("item")
         if payload.get("type") == "item_completed" and isinstance(item, dict):
             item_type = str(item.get("type", ""))
-            if item_type not in {"UserMessage", "AgentMessage"}:
-                raise SystemExit(1)
+            if item_type not in ALLOWED_ITEMS:
+                fail(f"unexpected completed item {name(item_type)}")
     elif record.get("type") == "response_item":
-        payload_type = payload.get("type")
+        payload_type = str(payload.get("type", ""))
         if payload_type == "function_call":
             if payload.get("name") != "request_user_input":
-                raise SystemExit(1)
+                fail(f"unexpected tool call {name(payload.get('name'))}")
+        elif payload_type.endswith("_call"):
+            fail(f"unexpected tool call type {name(payload_type)}")
         elif payload_type == "message" and payload.get("role") == "assistant":
             if payload.get("phase") == "final_answer":
                 text = "\n".join(
@@ -275,24 +307,28 @@ for raw in paths[0].read_bytes().split(b"\n"):
                     and item.get("type") in {"text", "output_text", "Text"}
                 )
                 final_messages.append(text)
-if turns == 0 or contexts != {expected_context} or not final_messages:
-    raise SystemExit(1)
+if turns == 0:
+    fail("no turn context recorded")
+if contexts != {expected_context}:
+    fail(f"context window {sorted(contexts)} differs from {expected_context}")
+if not final_messages:
+    fail("no final answer recorded")
 try:
     value = json.loads(final_messages[-1])
 except ValueError:
-    raise SystemExit(1)
+    fail("final answer is not one JSON object")
 if stage == "setup":
     keys = {
         "Protocol", "Action", "OutputRoot", "Scope",
         "ProvenanceLookbackMonths", "ResearchCookies",
     }
     if not isinstance(value, dict) or set(value) != keys:
-        raise SystemExit(1)
+        fail("setup reply fields differ from the setup protocol")
     if value["Protocol"] != "RHYOLITE_CODEX_SETUP_V1":
-        raise SystemExit(1)
+        fail("setup reply protocol differs")
     if value["Action"] == "cancel":
         if any(value[key] is not None for key in keys - {"Protocol", "Action"}):
-            raise SystemExit(1)
+            fail("cancelled setup reply carries values")
     elif value["Action"] == "continue":
         output = value["OutputRoot"]
         scope = value["Scope"]
@@ -310,9 +346,9 @@ if stage == "setup":
             or (scope in {2, 3} and cookies not in {"off", "ephemeral"})
             or (scope == 1 and cookies is not None)
         ):
-            raise SystemExit(1)
+            fail("setup reply values are invalid")
     else:
-        raise SystemExit(1)
+        fail("setup reply action is invalid")
 else:
     if (
         not isinstance(value, dict)
@@ -322,12 +358,15 @@ else:
         or not isinstance(value["ApprovalHash"], str)
         or not re.fullmatch(r"[0-9a-f]{64}", value["ApprovalHash"])
     ):
-        raise SystemExit(1)
+        fail("approval reply is invalid")
 destination = pathlib.Path(result_name)
 descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
     json.dump(value, stream, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     stream.write("\n")
 PY
+)"; then
+    fail_stage result "${validation_detail}"
+fi
 
 printf '%s\n' "${result_path}"

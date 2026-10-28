@@ -113,12 +113,15 @@ Status values:
   reroute, content-filter stops, and policy errors) and its rollout records
   for prompt sizes and compactions. Codex has one verified model, so it keeps
   the integrated security pass; offline-transport plans with more than one
-  security scan fail before planning.
-- **Next step:** establish the intended provider and obtain a successful
-  API-key-authenticated isolated model response, then run the native
-  setup/approval/controller path from a private
-  staged package, then complete live research, continuation/recovery, repair,
-  all-scope, and stop/timeout gates. Keep production registration absent until
+  security scan fail before planning. The same evening, the authenticated
+  adapter smoke passed again at Contract v11 with an explicitly configured
+  provider, and the outcome classifier reported `completed` from the real
+  session record. The first live guided setup failed at its stage validator,
+  which rejected the model's reasoning items; the validator now accepts them
+  and names any failed check.
+- **Next step:** rerun the live native setup/approval/controller path from
+  a private staged package, then complete live research, continuation/recovery,
+  repair, all-scope, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness

@@ -130,6 +130,8 @@ case "${prompt}" in
 esac
 final="${RHYOLITE_CODEX_FAKE_FINAL:-${final}}"
 native_tool="${RHYOLITE_CODEX_FAKE_TOOL:-request_user_input}"
+# A real model's interactive session records its reasoning as a completed item.
+native_item="${RHYOLITE_CODEX_FAKE_ITEM:-Reasoning}"
 if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
     printf 'RHYOLITE_CODEX_NATIVE_UI %s TERM=%s\n' "${native_stage}" "${TERM-}"
 fi
@@ -142,6 +144,7 @@ cat > "${session_dir}/rollout.jsonl" <<EOF
 {"type":"session_meta","payload":{"session_id":"${session_id}","id":"${session_id}","originator":"codex_cli","cli_version":"0.163.0","source":"cli"}}
 {"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}
 {"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"read-only"},"model":"gpt-5.6-sol","effort":"max","multi_agent_version":"disabled","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.6-sol","reasoning_effort":"max"}}}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"${session_id}","turn_id":"fixture-turn","item":{"type":"${native_item}","id":"fixture-item","summary_text":[],"raw_content":[]}}}
 {"type":"response_item","payload":{"type":"function_call","name":"${native_tool}","arguments":"{}","call_id":"fixture-call"}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"${escaped_final}"}]}}
 EOF
@@ -746,9 +749,12 @@ codex_invalid_stage_case() {
     local input="$3"
     local final="$4"
     local tool="$5"
+    local item="${6:-Reasoning}"
+    local detail="${7-}"
     local result="${fixture_root}/codex-invalid-${name}.json"
 
     if RHYOLITE_CODEX_FAKE_FINAL="${final}" RHYOLITE_CODEX_FAKE_TOOL="${tool}" \
+        RHYOLITE_CODEX_FAKE_ITEM="${item}" \
         codex_run_with_terminal "${fixture_root}/codex-invalid-${name}.stdout" \
         "${fixture_root}/codex-invalid-${name}.terminal" \
         "${CODEX_GUIDED_STAGE}" \
@@ -763,9 +769,14 @@ codex_invalid_stage_case() {
         fail "Codex guided stage accepted the invalid ${name} reply."
     fi
     assert_contains "${fixture_root}/codex-invalid-${name}.terminal" \
-        'Codex guided stage failed: result' "Codex invalid ${name} reply"
+        "Codex guided stage failed: result${detail:+ (${detail})}" \
+        "Codex invalid ${name} reply"
     [[ ! -e "${result}" ]] ||
         fail "Codex guided stage wrote a result for the invalid ${name} reply."
+    if [[ -n "${detail}" ]]; then
+        assert_equal "result: ${detail}" "$(cat -- "${result%.json}.failure")" \
+            "Codex invalid ${name} failure record"
+    fi
 }
 codex_invalid_stage_case setup-scope setup "${codex_setup_input}" \
     '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":4,"ProvenanceLookbackMonths":null,"ResearchCookies":null}' \
@@ -773,7 +784,10 @@ codex_invalid_stage_case setup-scope setup "${codex_setup_input}" \
 codex_invalid_stage_case setup-extra setup "${codex_setup_input}" \
     '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":1,"ProvenanceLookbackMonths":null,"ResearchCookies":null,"Shell":"allowed"}' \
     request_user_input
-codex_invalid_stage_case setup-tool setup "${codex_setup_input}" '' shell
+codex_invalid_stage_case setup-tool setup "${codex_setup_input}" '' shell \
+    Reasoning 'unexpected tool call shell'
+codex_invalid_stage_case setup-command-item setup "${codex_setup_input}" '' \
+    request_user_input CommandExecution 'unexpected completed item CommandExecution'
 codex_invalid_stage_case approval-action approval "${codex_approval_input}" \
     "{\"Protocol\":\"RHYOLITE_CODEX_APPROVAL_V1\",\"Action\":\"execute\",\"ApprovalHash\":\"${codex_approval_hash}\"}" \
     request_user_input

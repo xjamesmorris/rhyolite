@@ -122,6 +122,8 @@ broker lifecycle and removed its transient runtime.
 | Staged controller terminal handoff | On October 22, a connected controller/stage-helper PTY regression reproduced setup failure when the controller discarded helper stdout: the native CLI no longer had terminal stdout. The stage helper now routes native UI stdout to its terminal stderr, reserving helper stdout for the validated result path. A terminal-checking fixture CLI exercises both setup and approval, plan-hash execution, and per-stage runtime removal with controller stdout captured separately. | This closes the deterministic terminal-descriptor handoff regression. The fixture is not a real Codex CLI or an authenticated staged controller review. |
 | Current native API-key readiness | On October 23 (UTC), the installed 0.163.0 CLI was verified and the supplied credential was compared locally with its saved API-key-only login without displaying either value. A fresh owner-only runtime with only that API-key credential passed native login-status inspection, recorded the requested `gpt-5.6-sol`/`max` and 828,400-token usable context, and made no tool calls, but the actual model request returned HTTP 401 from the native default OpenAI endpoint. Local effective-config inspection found no selected custom provider or Azure endpoint. A subsequent metadata-only capture from the working terminal confirmed the same native-default provider and no API-key environment variables or routing overrides. Transient credentials and raw output were removed. | Local credential loading is proven; current backend authorization is not. This does not invalidate the earlier explicitly configured-provider smoke, establish a bad key, or justify guessing another endpoint. Establish the intended provider and successful backend authorization before another live gate; another context capture is not required. |
 | Contract-v11 outcome classification | On October 27, the merged branch moved the candidate to Contract v11 and outcome schema 3. Pinned 0.163.0 source fixes the evidence: exec JSON reports a reroute only as `model rerouted: FROM -> TO (REASON)`, whose only reason is `HighRiskCyberActivity`; a `response.incomplete` with reason `content_filter` surfaces as the fixed message `stream disconnected before completion: Incomplete response returned, reason: content_filter`; cyber, bio, and misalignment policy errors fall back to fixed messages and HTTP 400 bodies keep their error code; error events are never written to the session rollout; and the rollout records `token_count` usage per response plus one `compacted` record per compaction window. Synthetic fixtures cover a refusal reroute, a content-filter turn, a policy fallback, a transient 429 retry-limit failure, a quota failure, prompt budget and peak, and deduplicated compactions. | A refusal of the approved model is `refused`, detected live and after exit, never retried, and its fallback output is never accepted. A policy message worded by the server without those forms stays an ordinary failure. This is pinned-source and fixture evidence, not a live refusal. |
+| Contract-v11 authenticated adapter smoke | On October 27, the maintainer ran the exact adapter at the Contract-v11 merge (`adf5ec9`) against an explicitly configured provider: `gpt-5.6-sol`, `max`, long context, one snapshot read through the supervised broker, exact reply bytes, a verified native session, zero client retries, no reroute, rate-limit, quota, or timeout signal, and clean broker and runtime teardown. The outcome-schema-3 classifier reported `completed` with an 828,400-token prompt budget, a 21,651-token largest prompt, no compactions, and no refusals. | The outcome classifier works on a real session record, and the explicitly configured provider resolves the earlier HTTP 401 from the native default endpoint. Backend identity is still not independently claimed. |
+| First live guided setup | The same evening, the real native setup stage ran with an inert runner and failed at the guided controller; the run kept no diagnostic. Pinned source shows that an interactive session persists every completed turn item, including the model's `Reasoning` items, while the stage validator accepted only user and agent messages, which a real model at maximum effort cannot satisfy; synthetic probes produced no reasoning items. The validator now also accepts `Reasoning` and `FunctionCallOutput` items, still rejects every other item and tool call, names the failed check, and records it beside the stage result. | The cause is inferred from pinned source, not observed. The live guided gate stays open until a rerun passes. |
 
 Confidence is **High** for the captured pinned-CLI request inventories and
 configuration results: they came from the pinned executable, not a model's
@@ -155,7 +157,9 @@ At the pinned commit:
   `api_bridge.rs` map content-filter, cyber, bio, and misalignment refusals;
   `codex-rs/protocol/src/error.rs` fixes their messages.
 - `codex-rs/rollout/src/policy.rs` keeps `token_count`, `compacted`, and turn
-  context records and omits error events from the rollout.
+  context records, omits error events from the rollout, and in paginated
+  history persists every completed turn item; `codex-rs/protocol/src/items.rs`
+  defines those item types, including `Reasoning`.
 
 Official source references:
 
@@ -190,18 +194,17 @@ installation/setup, live provider operation, or actual model/effort/context.
 Exact bytes, native UUID continuation, a fresh zero-tool reply, native local
 plugin/picker behavior, combined MCP boundaries, and the adapter-built review
 path are proven with synthetic events. Both a basic native call and the exact
-adapter-built `max`/long-context snapshot smoke passed under authentication.
+adapter-built `max`/long-context snapshot smoke passed under authentication,
+the smoke again at Contract v11.
 Complete hostile configuration isolation, a successful public research
 response and accepted dossier, adapter-built live continuation/recovery and
 repair, a real staged native setup/approval/controller run, all-scope reviews,
 and stop/timeout lifecycle remain unverified. The October 22 connected PTY
-regression covers terminal handoff only; the live staged gate remains next.
-The current native-default API-key attempt is blocked on HTTP 401, not CLI
-installation or access to the supplied credential. The working-terminal
-capture confirms the same native-default OpenAI provider with no endpoint
-override, so missing context is no longer the blocker. Successful backend
-authorization for the intended provider is required before another live
-attempt; do not substitute an endpoint or authentication method.
+regression covers terminal handoff only. The first live guided run failed at
+the stage validator; the corrected validator needs a passing rerun next.
+The earlier HTTP 401 came from the native default endpoint; with the
+explicitly configured provider, the adapter smoke passed. Do not substitute
+an endpoint or authentication method.
 Production enablement still requires the complete
 [harness playbook](ADDING-A-HARNESS.md), automated coverage, real-run
 evidence, and Fedora validation.
