@@ -362,7 +362,10 @@ supported and must not drive new work.
   `Interrupted` artifacts. On the first signal each repository records its
   `Interrupted` state before cleanup, and the runner writes a provisional
   run-level record when repositories are slow to stop, so a later hard kill
-  still leaves truthful state. Every worker starts under util-linux
+  still leaves truthful state. Once a stopped worker has exited, its output
+  survives only sanitized: in its timeline, with a transcript that its
+  harness wrote while stopping made inert, and with no raw intermediate
+  file left. Every worker starts under util-linux
   `setpriv --pdeathsig TERM` when available, so a hard kill of the runner
   stops the worker's `timeout` process group instead of orphaning it.
   Every runner runtime home and offline snapshot broker runtime under

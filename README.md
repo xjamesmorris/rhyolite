@@ -1341,7 +1341,11 @@ directly. The runner propagates interruption signals through its tracked
 repository, timeout, Copilot worker, and broker processes before writing
 truthful `Interrupted` artifacts. Each repository records its `Interrupted`
 state as soon as the signal arrives, so even a hard kill during cleanup
-leaves truthful state. Each worker starts under util-linux
+leaves truthful state. Once a stopped worker has exited, the runner keeps
+what it had written only in sanitized form: its output goes to the
+repository's `analysis-timeline.txt`, a transcript that the harness wrote
+while stopping becomes the inert `session.md` document, and no unsanitized
+raw output file remains. Each worker starts under util-linux
 `setpriv --pdeathsig TERM` when it is available, so a worker stops when the
 runner process that started it dies instead of running on unobserved.
 

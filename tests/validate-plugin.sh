@@ -8108,6 +8108,13 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
             kill "${mock_block_child_pid}" 2>/dev/null || true
             wait "${mock_block_child_pid}" 2>/dev/null || true
         fi
+        # Model a CLI that writes its session transcript while it stops.
+        if [[ "${MOCK_COPILOT_INTERRUPT_OUTPUT-}" == "1" &&
+            "${phase}" != 'report-repair' ]]; then
+            printf '%s\n' '# Mock Copilot stopped session' \
+                'Contact maintainer@example.com with api_key=interrupt-transcript-secret' \
+                > "${share_path}"
+        fi
         exit "${exit_code}"
     }
     if [[ "${MOCK_COPILOT_IGNORE_TERM-}" == "1" && "${phase}" != 'report-repair' ]]; then
@@ -8125,6 +8132,11 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
     else
         [[ -n "${MOCK_COPILOT_PID_FILE-}" ]] &&
             printf '%s\n' "$$" > "${MOCK_COPILOT_PID_FILE}"
+    fi
+    if [[ "${MOCK_COPILOT_INTERRUPT_OUTPUT-}" == "1" &&
+        "${phase}" != 'report-repair' ]]; then
+        printf '%s\n' \
+            'Mock interrupted review output for maintainer@example.com api_key=interrupt-output-secret'
     fi
     sleep 300 &
     mock_block_child_pid=$!
@@ -9169,6 +9181,8 @@ EVENTS
         fi
     fi
     if [[ -n "${MOCK_SCAN_BLOCK_PID_DIRECTORY-}" ]]; then
+        printf '%s\n' \
+            'Mock interrupted scan output for scanner@example.com token=scan-interrupt-secret'
         printf '%s\n' "$$" > "${MOCK_SCAN_BLOCK_PID_DIRECTORY}/${model}"
         sleep 300 &
         wait "$!"
@@ -16230,6 +16244,7 @@ interrupt_stderr="${fixture_dir}/interrupt.stderr"
 interrupt_copilot_pid_file="${fixture_dir}/interrupt-copilot.pid"
 interrupt_child_pid_file="${fixture_dir}/interrupt-child.pid"
 MOCK_COPILOT_BLOCK=1 \
+    MOCK_COPILOT_INTERRUPT_OUTPUT=1 \
     MOCK_COPILOT_PID_FILE="${interrupt_copilot_pid_file}" \
     MOCK_COPILOT_CHILD_PID_FILE="${interrupt_child_pid_file}" \
     MOCK_LOG="${mock_log}" \
@@ -16296,6 +16311,27 @@ if (runState.Status !== "Interrupted" ||
     !errors.includes("Runner received TERM") ||
     !errors.includes("terminated its tracked repository-review process tree")) {
   throw new Error("interrupted runner did not persist truthful cancellation state");
+}
+// The stopped worker's output survives only in sanitized form: its raw
+// output reaches the timeline, the transcript that the CLI wrote while it
+// stopped becomes the inert transcript document, and no unsanitized
+// intermediate file remains.
+const timeline = fs.readFileSync(path.join(repository, "analysis-timeline.txt"), "utf8");
+const transcript = fs.readFileSync(path.join(repository, "session.md"), "utf8");
+const leftovers = fs.readdirSync(repository).filter(
+  (name) => /\.(raw|normalized|cursor|plain|previous|tmp)$/.test(name),
+);
+if (leftovers.length !== 0 ||
+    !timeline.includes(
+      "Mock interrupted review output for [email omitted] api_key=[credential omitted]",
+    ) ||
+    !transcript.startsWith("# Copilot Session Transcript\n\n") ||
+    !transcript.includes(
+      "\n    Contact [email omitted] with api_key=[credential omitted]\n",
+    ) ||
+    [timeline, transcript].some((text) =>
+      text.includes("maintainer@example.com") || text.includes("interrupt-"))) {
+  throw new Error(`interrupted runner kept unsanitized worker output: ${JSON.stringify({ leftovers, timeline, transcript })}`);
 }
 JS
 grep -Fq 'Stage: user interruption' "${interrupt_stdout}" &&
@@ -17494,7 +17530,8 @@ if (state.Status !== "Completed" || state.Model !== "claude-opus-5.5" ||
 JS
 
 # Stopping the runner during parallel scans stops every scan worker, records
-# each scan as Interrupted, and removes every scan runtime home.
+# each scan as Interrupted, removes every scan runtime home, and keeps each
+# stopped scan's output only in its sanitized timeline.
 security_scan_interrupt_root="${security_scan_root}/interrupt"
 security_scan_interrupt_pids="${security_scan_interrupt_root}/pids"
 mkdir -p -- "${security_scan_interrupt_pids}" "${security_scan_interrupt_root}/tmp"
@@ -17554,11 +17591,20 @@ const scans = path.join(repository, "security-scans");
 const state = JSON.parse(fs.readFileSync(path.join(repository, "state.json"), "utf8"));
 const summary = JSON.parse(fs.readFileSync(path.join(scans, "security-scans.json"), "utf8"));
 for (const slug of ["a", "b"]) {
-  const scan = JSON.parse(fs.readFileSync(
-    path.join(scans, `scan-${slug}`, "scan-state.json"), "utf8"));
+  const directory = path.join(scans, `scan-${slug}`);
+  const scan = JSON.parse(fs.readFileSync(path.join(directory, "scan-state.json"), "utf8"));
   if (scan.Status !== "Interrupted" || scan.FailureClass !== "interrupted" ||
-      fs.existsSync(path.join(scans, `scan-${slug}`, ".runtime-home"))) {
+      fs.existsSync(path.join(directory, ".runtime-home"))) {
     throw new Error(`scan ${slug} recorded ${scan.Status}, expected Interrupted without a runtime home`);
+  }
+  const timeline = fs.readFileSync(path.join(directory, "analysis-timeline.txt"), "utf8");
+  const files = fs.readdirSync(directory);
+  if (files.some((name) => /\.(raw|normalized|cursor|previous|tmp)$/.test(name)) ||
+      !timeline.includes("Mock interrupted scan output for [email omitted] token=[credential omitted]") ||
+      files.some((name) => fs.statSync(path.join(directory, name)).isFile() &&
+        /scanner@example\.com|scan-interrupt-secret/.test(
+          fs.readFileSync(path.join(directory, name), "utf8")))) {
+    throw new Error(`stopped scan ${slug} kept unsanitized output: ${JSON.stringify({ files, timeline })}`);
   }
 }
 if (state.Status !== "Interrupted" || summary.Ledger.Status !== "NotReached") {

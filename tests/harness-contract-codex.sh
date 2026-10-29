@@ -711,11 +711,12 @@ assert (exhausted["TurnRetries"], exhausted["ModelCallFailures"],
         exhausted["Retryable"]) == (1, 1, True), exhausted
 PY
     fail 'Codex retry notices were not classified as retries.'
-# Codex writes no final-message file for a failed turn. An ordinary failed
-# turn is the worker's failure, not an adapter one: it normalizes to its
-# narrative and an empty reply, so the runner decides from the outcome
-# whether to continue it. Refusal, forbidden-tool, and stale-reply evidence
-# still fail, and a completed turn still needs its exact final message.
+# Codex writes no final-message file for a failed or interrupted turn. Such
+# an ordinary turn is the worker's failure, not an adapter one: it normalizes
+# to its narrative and an empty reply, so the runner decides from its exit
+# status and the outcome what happened. Refusal, forbidden-tool, and
+# stale-reply evidence still fail, and a completed turn still needs its exact
+# final message.
 rm -f -- "${CODEX_REVIEW_FINAL_MESSAGE}"
 harness_normalize_worker_output \
     review "${fixture_root}/codex-retries-exhausted.raw" gpt-5.6-sol max \
@@ -725,6 +726,25 @@ harness_normalize_worker_output \
     cmp -s -- "${fixture_root}/failed-turn-normalized" \
         "${fixture_root}/codex-retries-exhausted.raw" ||
     fail 'Codex failed-turn normalization changed the narrative or produced a reply.'
+# A stop or timeout ends Codex with SIGTERM, which it does not handle: its
+# output simply ends mid-turn, as recorded live by the offline lifecycle
+# probe, with no terminal event and no final message. A partial agent
+# message from an unfinished turn never becomes the reply.
+cat > "${fixture_root}/codex-interrupted.raw" <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"rhyolite_snapshot","tool":"read_snapshot_text","arguments":{"grant":"snapshot","path":"README"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"rhyolite_snapshot","tool":"read_snapshot_text","arguments":{"grant":"snapshot","path":"README"},"result":{"content":[],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"PARTIAL_REPLY"}}
+EOF
+harness_normalize_worker_output \
+    review "${fixture_root}/codex-interrupted.raw" gpt-5.6-sol max \
+    "${fixture_root}/interrupted-normalized" "${fixture_root}/interrupted-reply" ||
+    fail 'Codex treated a stopped or timed-out turn as an adapter failure.'
+[[ -f "${fixture_root}/interrupted-reply" && ! -s "${fixture_root}/interrupted-reply" ]] &&
+    cmp -s -- "${fixture_root}/interrupted-normalized" \
+        "${fixture_root}/codex-interrupted.raw" ||
+    fail 'Codex turned the partial output of an unfinished turn into a reply.'
 cat > "${fixture_root}/codex-failed-forbidden.raw" <<EOF
 {"type":"thread.started","thread_id":"${codex_native_id}"}
 {"type":"turn.started"}
@@ -1750,6 +1770,10 @@ if resumed:
 # Codex 0.163.0 writes no final-message file when a turn fails: here every
 # built-in stream retry of a transient model-service error was exhausted.
 transient = phase == "review" and pathlib.Path(__file__).with_name("transient-mode").exists()
+# A session timeout stops Codex with SIGTERM, which it does not handle: its
+# output ends mid-turn without a terminal event or final message, and the
+# runner sees the 124 exit status of `timeout`.
+stopped = phase == "review" and pathlib.Path(__file__).with_name("timeout-mode").exists()
 reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
 if phase == "review" and pathlib.Path(__file__).with_name("repair-mode").exists():
     # The compound value of a real incident: no deterministic normalization
@@ -1764,13 +1788,18 @@ records = [
                                          "cli_version": "0.163.0", "source": "exec"}},
     *turn_records,
 ]
-if phase == "review" and not transient:
+if phase == "review" and not transient and not stopped:
     records.append(assistant(reply))
 sessions = home / "sessions" / "2026" / "10" / "01"
 sessions.mkdir(parents=True)
 (sessions / f"rollout-2026-10-01T12-00-00-{thread}.jsonl").write_text(
     "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-if transient:
+if stopped:
+    events = (
+        {"type": "item.started", "item": {**snapshot_read["item"], "status": "in_progress"}},
+        snapshot_read,
+    )
+elif transient:
     failure = ("stream disconnected before completion: "
                "The server had an error processing your request.")
     events = (
@@ -1802,7 +1831,7 @@ emit(events)
     "Instructions": instructions.name, "SnapshotTools": tools, "ResearchTools": research_tools,
     "PromptHasCommit": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" in prompt,
 }), encoding="utf-8")
-raise SystemExit(0 if phase == "review" and not transient else 1)
+raise SystemExit(124 if stopped else 0 if phase == "review" and not transient else 1)
 CODEX_E2E_WORKER
 {
     printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
@@ -2095,5 +2124,54 @@ cmp -s <(grep -v '^$' "${codex_e2e_recovery_repository}/review.txt") \
     -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-recovery.stdout")" \
         -name '*.codex-final' -print -quit)" ]] ||
     fail 'Codex same-session recovery left a runtime home, broker runtime, or final-message file.'
+
+# A session timeout stops Codex mid-turn. The run must report the timeout,
+# not an adapter failure, and still clean up the runtime home and broker.
+touch -- "${codex_e2e_bin}/timeout-mode"
+codex_e2e_timeout_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-timeout-workspace"
+    --output-root "${fixture_root}/codex-e2e-timeout-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_timeout_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-timeout-plan.json" \
+    2> "${fixture_root}/codex-e2e-timeout-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-timeout-plan.stderr" >&2
+        fail 'Codex end-to-end timeout plan failed.'
+    }
+if "${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_timeout_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-timeout-plan.json")" \
+    > "${fixture_root}/codex-e2e-timeout.stdout" \
+    2> "${fixture_root}/codex-e2e-timeout.stderr"; then
+    fail 'Codex end-to-end timeout fixture unexpectedly completed.'
+fi
+rm -f -- "${codex_e2e_bin}/timeout-mode"
+node - "$(contract_run_path "${fixture_root}/codex-e2e-timeout.stdout")" <<'JS'
+const fs = require("fs"), path = require("path");
+const repo = path.join(process.argv[2], "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repo, "state.json"), "utf8"));
+const analysis = JSON.parse(fs.readFileSync(path.join(repo, "failure-analysis.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repo, "errors.txt"), "utf8");
+if (state.Status !== "TimedOut" || state.ExitCode !== 124 ||
+    analysis.Stage !== "worker timeout" || !errors.includes("Session exceeded") ||
+    errors.includes("Harness failure stage:")) {
+  throw new Error(`a Codex session timeout was not reported as a timeout: ${state.Status}, ${analysis.Stage}\n${errors}`);
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-timeout.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex session timeout left a runtime home, broker runtime, or final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

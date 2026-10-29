@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- A stopped or cancelled review no longer leaves the stopped worker's raw
+  output, which normal runs sanitize and delete, in the run output folder.
+  Once the worker has exited, the runner writes that output to the
+  repository's `analysis-timeline.txt` with the usual email and credential
+  redaction, turns a transcript that the harness wrote while stopping into
+  the inert `session.md` document, and deletes every raw intermediate file;
+  security scans keep a stopped scan's output the same way. A hard kill of
+  the runner still leaves no chance to do this.
+- A research or snapshot broker that received a second stop signal while it
+  was shutting down could exit without recording its lifecycle exit. The run
+  then reported a broker cleanup failure and could leave the broker's runtime
+  folder behind until a later run removed it. A broker now stops serving on
+  the first stop signal and ignores repeats until it has recorded its exit.
 - Research validation no longer fails a scope 2 or 3 review when a cookie
   value only coincides with another cookie's public attributes, such as a
   date-valued cookie and a cookie that expires the same day. Each cookie

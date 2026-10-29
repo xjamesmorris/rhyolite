@@ -2831,6 +2831,22 @@ class BrokerTests(unittest.TestCase):
         self.assertTrue(exit_state["CleanExit"])
         self.assertFalse((runtime / "broker.pid").exists())
 
+    def test_stop_signal_handlers_ignore_repeats_during_shutdown(self) -> None:
+        # A stop often arrives more than once: the runner signals the whole
+        # worker tree, and a supervisor or harness relays the same stop to its
+        # MCP servers. Only the first stop raises; a repeat must not interrupt
+        # the shutdown that writes the lifecycle exit record.
+        previous = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            broker_module.install_stop_signal_handlers()
+            with self.assertRaises(broker_module.BrokerShutdown):
+                signal.raise_signal(signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)
+            signal.raise_signal(signal.SIGINT)
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+
 
 class SnapshotBrokerTests(unittest.TestCase):
     def setUp(self) -> None:

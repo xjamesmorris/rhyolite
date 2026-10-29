@@ -593,6 +593,113 @@ repository_interrupt_exit_code() {
     esac
 }
 
+# A stopped worker's raw output and intermediate files were never sanitized.
+# Keep that output only in sanitized form, in the timeline it would have
+# reached, and delete every intermediate. With a heading the output is
+# appended under it; without one it is written only to an empty timeline,
+# because a timeline that already has content already holds that output.
+#   preserve_interrupted_worker_output <raw> <timeline> <heading> [file...]
+preserve_interrupted_worker_output() {
+    local raw="$1"
+    local timeline="$2"
+    local heading="$3"
+    local leftover
+    shift 3
+
+    if [[ -f "${raw}" && ! -L "${raw}" ]]; then
+        if [[ -n "${heading}" ]]; then
+            {
+                printf '\n=== %s ===\n\n' "${heading}"
+                tr -d '\r' < "${raw}" | sanitize_review_text
+            } >> "${timeline}"
+        elif [[ ! -s "${timeline}" ]]; then
+            tr -d '\r' < "${raw}" | sanitize_review_text > "${timeline}"
+        fi
+    fi
+    for leftover in "${raw}" "${raw}.cursor" "$@"; do
+        if [[ -f "${leftover}" && ! -L "${leftover}" ]]; then
+            rm -f -- "${leftover}"
+        fi
+    done
+}
+
+# Sanitize a transcript in place, as the runner does after every worker.
+sanitize_transcript_in_place() {
+    local transcript="$1"
+
+    tr -d '\r' < "${transcript}" |
+        strip_terminal_controls |
+        strip_runner_error_controls |
+        redact_credentials |
+        redact_emails > "${transcript}.tmp" &&
+        mv -f -- "${transcript}.tmp" "${transcript}"
+}
+
+# The transcript of a review without a completed session.
+review_transcript_placeholder() {
+    printf '# %s session transcript\n\n%s\n' \
+        "${HARNESS_DISPLAY_NAME}" \
+        'No completed session transcript is available.'
+}
+
+# True when the transcript is already the runner's inert Markdown document.
+review_transcript_is_safe_document() {
+    local transcript="$1"
+    local first=''
+    local second=''
+
+    { IFS= read -r first && IFS= read -r second; } < "${transcript}" ||
+        return 1
+    [[ "${first}" == "# ${HARNESS_DISPLAY_NAME} Session Transcript" &&
+        -z "${second}" ]] || return 1
+    ! tail -n +3 -- "${transcript}" | grep -qv '^    '
+}
+
+# The interrupt handler's counterpart of the runner's post-worker
+# processing for the review worker and its continuations: a stopped worker's
+# output reaches the timeline in sanitized form, a transcript that the
+# harness wrote while it stopped is sanitized and made inert, a continuation
+# that left none gets its previous transcript back, and no unsanitized
+# intermediate file of this repository remains.
+preserve_interrupted_review_output() {
+    local raw number heading
+
+    preserve_interrupted_worker_output "${raw_output}" "${timeline_path}" '' \
+        "${normalized_output}" "${final_reply_path}"
+    for raw in "${WORKER_RECOVERY_DIRECTORY}"/continuation-*-output.raw; do
+        [[ -f "${raw}" && ! -L "${raw}" ]] || continue
+        number="${raw##*/continuation-}"
+        number="${number%-output.raw}"
+        [[ "${number}" =~ ^[1-9][0-9]*$ ]] || continue
+        # A continuation appends its own section before deleting its output.
+        heading="Rhyolite worker continuation ${number} (interrupted)"
+        if grep -Fq -- "=== Rhyolite worker continuation ${number}: " \
+            "${timeline_path}" 2>/dev/null; then
+            heading=''
+        fi
+        preserve_interrupted_worker_output "${raw}" "${timeline_path}" \
+            "${heading}" \
+            "${raw%-output.raw}-output.normalized" \
+            "${raw%-output.raw}-reply.raw"
+    done
+    if [[ -f "${transcript_path}" && ! -L "${transcript_path}" ]] &&
+        ! cmp -s -- "${transcript_path}" <(review_transcript_placeholder); then
+        if ! review_transcript_is_safe_document "${transcript_path}"; then
+            sanitize_transcript_in_place "${transcript_path}" &&
+                write_safe_markdown_document \
+                    "${HARNESS_DISPLAY_NAME} Session Transcript" \
+                    "${transcript_path}" \
+                    "${transcript_path}.tmp" &&
+                mv -f -- "${transcript_path}.tmp" "${transcript_path}"
+        fi
+        rm -f -- "${transcript_path}.previous"
+    elif [[ -f "${transcript_path}.previous" &&
+        ! -L "${transcript_path}.previous" ]]; then
+        mv -f -- "${transcript_path}.previous" "${transcript_path}"
+    fi
+    rm -f -- "${transcript_plain_path}" "${transcript_path}.tmp"
+}
+
 interrupt_repository_process() {
     local signal_name="$1"
     local interrupt_exit_code
@@ -652,6 +759,8 @@ interrupt_repository_process() {
             'The review was interrupted during consolidation.' \
             2>/dev/null || true
     fi
+    # The worker tree has stopped, so nothing writes its output any more.
+    preserve_interrupted_review_output 2>/dev/null || true
     if ((report_repair_interrupted)); then
         sanitize_report_repair_output
         cleanup_report_repair_runtime || true
@@ -5858,8 +5967,44 @@ security_scan_cleanup_home() {
     return 1
 }
 
+# The interrupted-scan counterpart of security_scan_collect_output, used by
+# the scan's own stop handler and again by the repository's handler for a
+# scan that had to be killed: the stopped scan's output reaches its timeline
+# in sanitized form, and its transcript is sanitized or restored.
+#   preserve_interrupted_scan_output <scan-directory> <scan-label>
+preserve_interrupted_scan_output() {
+    local directory="$1"
+    local label="$2"
+    local timeline="${directory}/analysis-timeline.txt"
+    local transcript="${directory}/session.md"
+    local heading="Rhyolite security scan ${label}: same-session scan report request (interrupted)"
+
+    preserve_interrupted_worker_output "${directory}/${HARNESS}-output.raw" \
+        "${timeline}" '' \
+        "${directory}/${HARNESS}-output.normalized" \
+        "${directory}/${HARNESS}-output-final-reply.raw"
+    # A collected report request already appended its own section.
+    if grep -Fq -- \
+        "=== Rhyolite security scan ${label}: same-session scan report request ===" \
+        "${timeline}" 2>/dev/null; then
+        heading=''
+    fi
+    preserve_interrupted_worker_output "${directory}/${HARNESS}-report-request.raw" \
+        "${timeline}" "${heading}" \
+        "${directory}/${HARNESS}-report-request.normalized" \
+        "${directory}/${HARNESS}-report-request-final-reply.raw"
+    if [[ -f "${transcript}" && ! -L "${transcript}" ]]; then
+        sanitize_transcript_in_place "${transcript}"
+        rm -f -- "${transcript}.previous"
+    elif [[ -f "${transcript}.previous" && ! -L "${transcript}.previous" ]]; then
+        mv -f -- "${transcript}.previous" "${transcript}"
+    fi
+    rm -f -- "${transcript}.tmp"
+}
+
 # Stop handler of one scan subshell: stop its worker tree, record the truthful
-# Interrupted scan state, and remove its runtime home before exiting.
+# Interrupted scan state, remove its runtime home, and keep the stopped
+# scan's output only in sanitized form before exiting.
 security_scan_interrupted() {
     trap '' INT TERM HUP
     if [[ -n "${RHYOLITE_ACTIVE_CHILD_PID-}" ]]; then
@@ -5873,6 +6018,8 @@ security_scan_interrupted() {
         "${SCAN_ATTEMPT_REPORT_REQUEST:-NotReached}" \
         "${SCAN_ATTEMPT_COMPACTIONS:-0}" || true
     security_scan_cleanup_home || true
+    preserve_interrupted_scan_output "${scan_directory}" "${scan_label}" \
+        2>/dev/null || true
     exit 143
 }
 
@@ -6711,6 +6858,8 @@ finalize_interrupted_security_scans() {
         scan_slug="$(security_scan_slug "${index}")"
         directory="${SECURITY_SCANS_DIRECTORY}/scan-${scan_slug}"
         [[ -d "${directory}" ]] || continue
+        preserve_interrupted_scan_output "${directory}" \
+            "$(security_scan_label "${index}")" 2>/dev/null || true
         if [[ -f "${directory}/.runtime-home" ]] &&
             IFS= read -r home < "${directory}/.runtime-home" &&
             [[ "${home}" == "${TMPDIR:-/tmp}/rhyolite-repo-review-${HARNESS}."* &&
@@ -8600,9 +8749,7 @@ finalize_repository_artifacts() {
     mkdir -p -- "${output_directory}/agent-state"
     [[ -f "${timeline}" ]] || : > "${timeline}"
     if [[ ! -f "${transcript}" ]]; then
-        printf '# %s session transcript\n\n%s\n' \
-            "${HARNESS_DISPLAY_NAME}" \
-            'No completed session transcript is available.' > "${transcript}"
+        review_transcript_placeholder > "${transcript}"
     fi
     if [[ ! -f "${request}" ]]; then
         printf '%s\n' \

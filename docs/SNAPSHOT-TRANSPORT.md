@@ -155,7 +155,12 @@ in a separate process group because Codex terminates its own MCP process group
 two seconds after `SIGTERM`. The supervisor preserves the MCP stdio channels,
 monitors the trusted runner's PID and kernel start time, and exits with the
 broker; this lets normal Codex shutdown reach a clean broker exit without
-allowing a detached process to survive loss of its runner owner. Copilot and
+allowing a detached process to survive loss of its runner owner. A stop often
+arrives more than once: the runner signals a worker's whole process tree
+child first, so the broker receives `SIGTERM` directly and again through its
+supervisor. The broker stops serving on the first `SIGTERM` or `SIGINT` and
+ignores every repeat, so a repeat cannot interrupt the shutdown that writes
+its lifecycle exit record. Copilot and
 Claude Code retain the direct launcher path. Cleanup removes transient grants
 and configuration, preserves the read-only snapshot/evidence, and is
 idempotent. The runner holds each broker runtime under the same inherited

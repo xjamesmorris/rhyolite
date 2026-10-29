@@ -1311,8 +1311,8 @@ codex_normalize_final_message() {
     local final_message="$7"
     local status
 
-    # Codex 0.163.0 writes no final-message file for a failed turn; the
-    # structured output below decides whether that is acceptable.
+    # Codex 0.163.0 writes no final-message file for a failed or interrupted
+    # turn; the structured output below decides whether that is acceptable.
     if [[ -L "${final_message}" ||
         ( -e "${final_message}" && ! -f "${final_message}" ) ]]; then
         rhyolite_harness_set_error \
@@ -1445,19 +1445,20 @@ for line in raw.splitlines():
         elif item_type == "mcp_tool_call":
             if (item.get("server"), item.get("tool")) not in allowed_mcp:
                 status = "forbidden-tool"
-if (status == "failed" and last_turn == "failed" and exact is None
-        and len(threads) == 1):
-    # An ordinary failed turn is the worker's failure, not an adapter one:
-    # its events become the narrative and the reply stays empty, so the
-    # runner classifies it from the worker outcome and may continue a
-    # transient failure in the same session. No partial output ever becomes
-    # a reply.
-    status = "failed-turn"
+if exact is None and len(threads) == 1 and (
+        (status == "failed" and last_turn == "failed")
+        or (status in {"verified", "failed"} and last_turn is None)):
+    # An ordinary failed turn, or a turn that a stop or timeout ended before
+    # any terminal event (Codex dies on SIGTERM), is the worker's failure,
+    # not an adapter one: its events become the narrative and the reply
+    # stays empty, so the runner classifies it from its own exit status and
+    # the worker outcome. No partial output ever becomes a reply.
+    status = "unfinished-turn"
 elif status == "verified" and exact is None:
     status = "missing-final"
 elif len(threads) != 1 or exact is None or last_reply is None or last_reply != exact:
     status = "unreadable" if status == "verified" else status
-if status in {"verified", "failed-turn"}:
+if status in {"verified", "unfinished-turn"}:
     pathlib.Path(normalized_name).write_text(raw, encoding="utf-8")
     pathlib.Path(reply_name).write_text(exact if status == "verified" else "",
                                         encoding="utf-8")
@@ -1465,7 +1466,7 @@ print(status)
 PY
     )" || return 1
     case "${status}" in
-        verified|failed-turn)
+        verified|unfinished-turn)
             chmod 600 -- "${normalized_output}" "${final_reply_output}"
             return 0
             ;;

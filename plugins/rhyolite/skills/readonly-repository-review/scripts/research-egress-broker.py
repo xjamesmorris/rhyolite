@@ -350,6 +350,28 @@ class BrokerShutdown(Exception):
     """Terminate the stdio server cleanly after an external stop request."""
 
 
+def install_stop_signal_handlers() -> None:
+    """Stop serving on the first SIGTERM or SIGINT and ignore repeats.
+
+    A stop often arrives more than once: the runner signals a worker's whole
+    process tree, and a supervisor or harness relays the same stop to its MCP
+    servers. A repeat must not interrupt the shutdown that writes the
+    lifecycle exit record.
+    """
+
+    def ignore_repeated_stop(signum: int, frame: Any) -> None:
+        del signum, frame
+
+    def stop_server(signum: int, frame: Any) -> None:
+        del signum, frame
+        signal.signal(signal.SIGTERM, ignore_repeated_stop)
+        signal.signal(signal.SIGINT, ignore_repeated_stop)
+        raise BrokerShutdown
+
+    signal.signal(signal.SIGTERM, stop_server)
+    signal.signal(signal.SIGINT, stop_server)
+
+
 @dataclasses.dataclass(frozen=True)
 class ValidatedUrl:
     url: str
@@ -6149,12 +6171,7 @@ def run_snapshot_server(arguments: argparse.Namespace) -> int:
             output.write(process_identity)
         server = SnapshotMcpServer(broker)
 
-        def stop_server(signum: int, frame: Any) -> None:
-            del signum, frame
-            raise BrokerShutdown
-
-        signal.signal(signal.SIGTERM, stop_server)
-        signal.signal(signal.SIGINT, stop_server)
+        install_stop_signal_handlers()
         try:
             server.serve()
         except BrokerShutdown:
@@ -6307,12 +6324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         server = McpServer(broker)
 
-        def stop_server(signum: int, frame: Any) -> None:
-            del signum, frame
-            raise BrokerShutdown
-
-        signal.signal(signal.SIGTERM, stop_server)
-        signal.signal(signal.SIGINT, stop_server)
+        install_stop_signal_handlers()
         clean_exit = False
         try:
             try:

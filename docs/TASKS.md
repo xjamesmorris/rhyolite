@@ -150,10 +150,16 @@ Status values:
   reports `worker_continuation` as `yes`. Enabling it exposed that the
   normalizer reported every failed turn as an adapter failure, which blocked
   transient recovery; an ordinary failed turn now normalizes with an empty
-  reply, and the mocked end-to-end test covers same-session recovery.
-- **Next step:** complete the stop/timeout/interrupt lifecycle gate,
-  including what Codex records for an interrupted turn, and the
-  hostile-configuration isolation gate, then production enablement. Live
+  reply, and the mocked end-to-end test covers same-session recovery. On
+  2026-10-29 an offline lifecycle probe with the real CLI, runner, and broker
+  found that a repeated stop signal could prevent the snapshot broker from
+  recording its exit and that a session timeout was reported as an adapter
+  failure; both are fixed, and stop, timeout, and hard kill now leave
+  truthful state and no process. A stopped worker's raw output, which the
+  probe found left unsanitized for every harness, now survives only in its
+  sanitized timeline.
+- **Next step:** complete the hostile-configuration isolation gate, then
+  production enablement. Live
   report repair remains fixture-proven until a live run needs one. Keep
   production registration absent until the full contract and live evidence
   pass.
