@@ -326,12 +326,12 @@ grep -Fq 'RHYOLITE_AGENT_SELF_CHECK_V2' \
 # reach the worker; the approved provider key and the CA certificate that only
 # adds TLS trust for the provider connection do.
 (
-    export CODEX_EXEC_SERVER_URL=http://127.0.0.1:9/fixture
+    export CODEX_EXEC_SERVER_URL=fixture-hostile-exec-server
     export CODEX_SQLITE_HOME="${fixture_root}/codex-hostile-sqlite"
     export CODEX_API_KEY=fixture-hostile-key
     export CODEX_INTERNAL_ORIGINATOR_OVERRIDE=fixture-hostile-originator
     export OPENAI_API_KEY=fixture-hostile-openai-key
-    export OPENAI_BASE_URL=http://127.0.0.1:9/v1
+    export OPENAI_BASE_URL=fixture-hostile-base-url
     export CODEX_THREAD_ID=fixture-hostile-thread
     export CODEX_CA_CERTIFICATE="${fixture_root}/codex-fixture-ca.pem"
     declare -a codex_scrubbed_env=()
