@@ -139,11 +139,12 @@ Status values:
   research validation, which now verifies cookie attributes against the
   private ledger. With both fixes, the live scope-2 review passed on
   2026-10-28, and the mocked end-to-end test now also drives a real report
-  repair through a fresh tool-less Codex session.
-- **Next step:** run a real scope 3 review of a small public repository
-  through a private test-owned registry, then complete the live
-  continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
-  the full contract and live evidence pass.
+  repair through a fresh tool-less Codex session. The live scope-3 review
+  passed the same day, with Codex's built-in retries absorbing six provider
+  rate-limit rejections during research.
+- **Next step:** complete the live continuation/recovery, report repair,
+  and stop/timeout gates, then production enablement. Keep production
+  registration absent until the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness
   playbook and Fedora validation without regressing existing harnesses.

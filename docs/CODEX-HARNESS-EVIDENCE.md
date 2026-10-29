@@ -134,6 +134,7 @@ broker lifecycle and removed its transient runtime.
 | Codex built-in retries | The adapter now keeps Codex's own bounded retries: 4 request and 5 stream retries, the 0.163.0 defaults. Pinned source shows that a stream retry re-sends the same request within the same turn and announces it as a top-level `Reconnecting... n/max` error event; WebSocket transport stays disabled, so every retry is announced. The live monitor ignores a plain retry notice, the outcome counts it as `TurnRetries` instead of a failed turn, and normalization accepts a turn that completed after retries. A retry notice that carries a refusal still stops the worker and classifies the session as `refused`, so no later output is accepted. Codex also retries content-filter stops, so it may re-send one request to the same model before the monitor stops the worker. | Pinned-source and fixture evidence, including a retried turn through the full runner; a live retried turn has not been observed yet. |
 | Live scope-2 review | On October 28, the rerun at `48ff65a` completed in about 14 minutes against the pinned commit. Research completed in one attempt of about 11 minutes: 85 broker requests, 75 successful public responses, 39 cookies observed and none accepted or sent, and the 35,248-byte dossier accepted on its first submission; the cookie attribute verification passed for all 39 cookie events. The review session, one native turn on `gpt-5.6-sol` at `max` in the read-only sandbox, read the dossier through grant `research-dossier` in eight pages, the network summary through `research-network-summary`, and the snapshot. The canonical report passed strict validation without repair or recovery and contains every scope-2 section, from the research source landscape through the prior-art assessment, and no provenance section. No retry notice, refusal, or error occurred. The run output held no final-message file, credential-shaped value, or email address, and no runtime home, broker root, or lock remained. | The live scope-2 review gate passes, including live research, dossier acceptance, and offline-transport dossier access. Codex's built-in retries were not needed. Requested and natively recorded identity match; backend identity is still not independently attested. |
 | Report repair end to end | The mocked end-to-end test now drives a real confidence edit. The review returns the compound confidence value of an earlier production incident, which no deterministic normalization accepts, so the runner hands it to a fresh `--ephemeral` Codex session with no MCP server, no worker instructions, and an empty working directory. That session returns the exact expected descriptor, and the edited report passes unchanged strict validation with `ReportRepair` `Succeeded`. | Fixture evidence through the real runner; no live Codex review has needed a repair yet. |
+| Live scope-3 review | On October 28, the scope-3 run at `66df7d5` completed in about 18 minutes against the pinned commit, with a six-month provenance window. Research completed in one attempt of about 14.5 minutes: 119 broker requests, 104 successful public responses, 30 cookies observed and none accepted or sent, and the 49,324-byte dossier accepted on its second submission within the three-attempt limit. The provider rejected six research requests for its token rate limit; Codex's built-in retries absorbed all six, and one request succeeded only on its fifth and final retry. The review, one native turn on `gpt-5.6-sol` at `max` in the read-only sandbox, read the dossier through its grant in six pages, the network summary, and the snapshot. The canonical report passed strict validation without repair or recovery and contains every scope-3 section, including both provenance assessments: no direct model, effort, or harness attribution, no heuristic model candidate, heuristic confidence `Not applicable`, full asset and window coverage, and alternative explanations. No refusal or error occurred, and the hygiene checks matched scope 2. | The live scope-3 review gate passes, and Codex's built-in retries are observed live. The provider's token rate limit nearly exhausted one request's retries; that is an operating capacity limit of the configured deployment, not an adapter defect. |
 
 Confidence is **High** for the captured pinned-CLI request inventories and
 configuration results: they came from the pinned executable, not a model's
@@ -206,9 +207,10 @@ plugin/picker behavior, combined MCP boundaries, and the adapter-built review
 path are proven with synthetic events. Both a basic native call and the exact
 adapter-built `max`/long-context snapshot smoke passed under authentication,
 the smoke again at Contract v11.
-Complete hostile configuration isolation, a successful public research
-response and accepted dossier, adapter-built live continuation/recovery and
-repair, all-scope reviews, and stop/timeout lifecycle remain unverified. The
+Complete hostile configuration isolation, adapter-built live
+continuation/recovery, a live report repair, and the stop/timeout lifecycle
+remain unverified. Live public research with an accepted dossier and live
+reviews in all three scopes are now proven. The
 first live guided run failed at the stage validator; the rerun with the
 corrected validator passed the real staged native setup, approval, and
 controller path.
@@ -221,7 +223,9 @@ end-to-end research-launch test. Two later scope-2 reruns proved live
 research and dossier acceptance; one failed on provider errors without
 client retries and the other on a cookie false positive in the shared
 research validation, and both causes are now fixed. The rerun with those
-fixes passed the live scope-2 review. Scope 3 remains unverified.
+fixes passed the live scope-2 review, and the scope-3 review then passed
+live as well, with Codex's built-in retries absorbing six provider
+rate-limit rejections during research.
 The earlier HTTP 401 came from the native default endpoint; with the
 explicitly configured provider, the adapter smoke passed. Do not substitute
 an endpoint or authentication method.
