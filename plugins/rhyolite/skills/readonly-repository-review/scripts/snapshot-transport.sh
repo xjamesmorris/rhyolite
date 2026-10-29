@@ -198,6 +198,56 @@ snapshot_transport_prepare() {
     )
 }
 
+snapshot_transport_exit_record_clean() {
+    local exit_file="$1" policy_digest="$2" phase="$3"
+    python3 -I - "${exit_file}" "${policy_digest}" "${phase}" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+metadata = path.lstat()
+if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_size > 4096):
+    raise SystemExit(1)
+value = json.loads(path.read_text(encoding="utf-8"))
+if (not isinstance(value, dict) or set(value) != {
+        "BrokerVersion", "CleanExit", "CompletedAt", "Phase", "PolicyDigest"}
+        or value["BrokerVersion"] != "1.0" or value["CleanExit"] is not True
+        or value["PolicyDigest"] != sys.argv[2] or value["Phase"] != sys.argv[3]):
+    raise SystemExit(1)
+PY
+}
+
+# A resumed worker session restarts the snapshot broker in its runtime root.
+# Wait, within a bound, until the previous broker has finished, and require its
+# recorded clean exit, so the next lifecycle can start in the same root.
+snapshot_transport_wait_idle() {
+    local runtime_root="$1" policy_digest="$2" phase="$3" limit="${4:-30}"
+    local exit_file="${runtime_root}/snapshot-broker-exit.json"
+    local pid_file="${runtime_root}/snapshot-broker.pid"
+    local attempts
+
+    [[ "${limit}" =~ ^[1-9][0-9]{0,2}$ ]] || return 1
+    attempts=$((limit * 5))
+    snapshot_transport_canonical_path "${runtime_root}" directory || return 1
+    while [[ -e "${pid_file}" || -L "${pid_file}" ]]; do
+        if ((attempts-- <= 0)); then
+            snapshot_transport_error 'The previous snapshot broker did not finish in time.'
+            return 1
+        fi
+        sleep 0.2
+    done
+    [[ -e "${exit_file}" || -L "${exit_file}" ||
+        -e "${runtime_root}/snapshot-broker-process.txt" ]] || return 0
+    snapshot_transport_exit_record_clean "${exit_file}" "${policy_digest}" "${phase}" || {
+        snapshot_transport_error 'The previous snapshot broker did not record a clean exit.'
+        return 1
+    }
+}
+
 snapshot_transport_cleanup() {
     local runtime_root="$1" policy_digest="$2" phase="$3"
     local pid='' command_line='' attempt broker_path
@@ -258,25 +308,8 @@ snapshot_transport_cleanup() {
         [[ -f "${exit_file}" && ! -L "${exit_file}" ]] || return 1
     fi
     if [[ -e "${exit_file}" ]]; then
-        python3 -I - "${exit_file}" "${policy_digest}" "${phase}" <<'PY' || return 1
-import json
-import os
-import pathlib
-import stat
-import sys
-
-path = pathlib.Path(sys.argv[1])
-metadata = path.lstat()
-if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_size > 4096):
-    raise SystemExit(1)
-value = json.loads(path.read_text(encoding="utf-8"))
-if (not isinstance(value, dict) or set(value) != {
-        "BrokerVersion", "CleanExit", "CompletedAt", "Phase", "PolicyDigest"}
-        or value["BrokerVersion"] != "1.0" or value["CleanExit"] is not True
-        or value["PolicyDigest"] != sys.argv[2] or value["Phase"] != sys.argv[3]):
-    raise SystemExit(1)
-PY
+        snapshot_transport_exit_record_clean "${exit_file}" "${policy_digest}" "${phase}" ||
+            return 1
     fi
     [[ ! -L "${runtime_root}/snapshot-broker.pid" ]] || return 1
     if [[ -e "${runtime_root}/snapshot-broker.pid" && ! -e "${process_file}" ]]; then

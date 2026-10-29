@@ -3327,6 +3327,8 @@ if [[ "${operation}" == prepare ]]; then
     declare -a broker_arguments=()
     snapshot_transport_prepare broker_arguments "$@"
     printf '%s\\0' "${broker_arguments[@]}"
+elif [[ "${operation}" == wait-idle ]]; then
+    snapshot_transport_wait_idle "$@"
 else
     snapshot_transport_cleanup "$@"
 fi
@@ -3335,6 +3337,81 @@ fi
             ["bash", "-c", script, "snapshot-test", str(SNAPSHOT_TRANSPORT_HELPER), operation, *arguments],
             capture_output=True, timeout=15,
         )
+
+    def snapshot_lifecycle(self) -> tuple[int, str, str]:
+        """Run one launcher lifecycle: initialize, then end the client input."""
+        process = subprocess.Popen(
+            [
+                str(SNAPSHOT_BROKER_LAUNCHER),
+                "--runtime-root", str(self.runtime.resolve()),
+                "--grant-manifest", str(self.manifest.resolve()),
+                "--expected-policy-digest", broker_module.snapshot_policy_digest(),
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        request = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": broker_module.MCP_PROTOCOL_VERSION},
+        }) + "\n"
+        stdout, stderr = process.communicate(request, timeout=15)
+        return process.returncode, stdout, stderr
+
+    def test_snapshot_restart_in_same_runtime_requires_previous_clean_exit(self) -> None:
+        # A resumed worker session restarts the broker with the same approved
+        # arguments, so a second lifecycle may follow only a clean first one.
+        self.write_manifest()
+        exit_record = self.runtime / "snapshot-broker-exit.json"
+        identity = self.runtime / "snapshot-broker-process.txt"
+        identities = []
+        for _ in range(2):
+            status, stdout, stderr = self.snapshot_lifecycle()
+            self.assertEqual((status, stderr), (0, ""))
+            self.assertEqual(
+                json.loads(stdout.splitlines()[0])["result"]["serverInfo"]["name"],
+                broker_module.SNAPSHOT_SERVER_NAME,
+            )
+            self.assertTrue(json.loads(exit_record.read_text(encoding="utf-8"))["CleanExit"])
+            self.assertFalse((self.runtime / "snapshot-broker.pid").exists())
+            identities.append(identity.read_text(encoding="ascii"))
+        self.assertNotEqual(identities[0], identities[1])
+        for previous in ("unclean", "unrecorded"):
+            if previous == "unclean":
+                value = json.loads(exit_record.read_text(encoding="utf-8"))
+                value["CleanExit"] = False
+                exit_record.write_text(json.dumps(value), encoding="utf-8")
+                os.chmod(exit_record, 0o600)
+            else:
+                exit_record.unlink()
+            status, stdout, _ = self.snapshot_lifecycle()
+            self.assertNotEqual(status, 0, previous)
+            self.assertNotIn("serverInfo", stdout)
+            # The refused lifecycle records its own unclean exit.
+            self.assertFalse(json.loads(exit_record.read_text(encoding="utf-8"))["CleanExit"])
+            self.assertEqual(identity.read_text(encoding="ascii"), identities[1])
+
+    def test_snapshot_bash_wait_idle_requires_finished_clean_lifecycle(self) -> None:
+        self.write_manifest()
+        root = str(self.runtime.resolve())
+        digest = broker_module.snapshot_policy_digest()
+        self.assertEqual(self.run_snapshot_helper("wait-idle", root, digest, "review", "1").returncode, 0)
+        status, _, stderr = self.snapshot_lifecycle()
+        self.assertEqual((status, stderr), (0, ""))
+        idle = self.run_snapshot_helper("wait-idle", root, digest, "review", "1")
+        self.assertEqual(idle.returncode, 0, idle.stderr.decode())
+        self.assertNotEqual(self.run_snapshot_helper("wait-idle", root, digest, "research", "1").returncode, 0)
+        pid_file = self.runtime / "snapshot-broker.pid"
+        pid_file.write_text("1\n", encoding="ascii")
+        os.chmod(pid_file, 0o600)
+        started = time.monotonic()
+        self.assertNotEqual(self.run_snapshot_helper("wait-idle", root, digest, "review", "1").returncode, 0)
+        self.assertGreaterEqual(time.monotonic() - started, 1.0)
+        pid_file.unlink()
+        exit_record = self.runtime / "snapshot-broker-exit.json"
+        value = json.loads(exit_record.read_text(encoding="utf-8"))
+        value["CleanExit"] = False
+        exit_record.write_text(json.dumps(value), encoding="utf-8")
+        os.chmod(exit_record, 0o600)
+        self.assertNotEqual(self.run_snapshot_helper("wait-idle", root, digest, "review", "1").returncode, 0)
 
     def test_snapshot_bash_grants_only_runner_source_and_sanitized_file_pair(self) -> None:
         arguments = self.prepare_trusted_bash_transport(include_files=True)

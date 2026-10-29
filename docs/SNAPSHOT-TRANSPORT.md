@@ -161,3 +161,12 @@ idempotent. The runner holds each broker runtime under the same inherited
 `flock` lock as its runtime homes, so after a hard kill a later runner start
 removes a `rhyolite-snapshot-read.*` runtime only when its lock is free and
 its whole tree is unchanged for 60 minutes.
+
+A same-session worker continuation restarts the broker with the identical
+approved arguments, so a runtime may hold several sequential broker
+lifecycles. Before each continuation the runner waits up to 30 seconds for
+the previous broker to finish and requires its recorded clean exit. Holding
+the exclusive PID record, a new broker then retires the previous lifecycle's
+process identity and exit record before writing its own, and it refuses to
+start after an unclean or unrecorded previous lifecycle. Cleanup therefore
+always verifies the last lifecycle.

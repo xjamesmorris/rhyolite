@@ -6032,6 +6032,31 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _snapshot_lifecycle_exit_is_clean(exit_path: pathlib.Path, phase: str) -> bool:
+    """Apply the runner's cleanup rules to a previous lifecycle's exit record."""
+    try:
+        metadata = exit_path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size > 4096
+        ):
+            return False
+        value = json.loads(exit_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return (
+        isinstance(value, dict)
+        and set(value)
+        == {"BrokerVersion", "CleanExit", "CompletedAt", "Phase", "PolicyDigest"}
+        and value["BrokerVersion"] == SNAPSHOT_BROKER_VERSION
+        and value["CleanExit"] is True
+        and value["Phase"] == phase
+        and value["PolicyDigest"] == snapshot_policy_digest()
+    )
+
+
 def run_snapshot_server(arguments: argparse.Namespace) -> int:
     forbidden = (
         arguments.policy,
@@ -6098,6 +6123,20 @@ def run_snapshot_server(arguments: argparse.Namespace) -> int:
         with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as output:
             output.write(f"{os.getpid()}\n")
         pid_created = True
+        # A resumed worker session restarts the broker in the same runtime
+        # root. Accept that only after the previous lifecycle recorded a clean
+        # exit, and retire its records first, so a failure of this lifecycle
+        # is never reported with the earlier clean exit.
+        if any(
+            path.exists() or path.is_symlink() for path in (process_path, exit_path)
+        ):
+            if not _snapshot_lifecycle_exit_is_clean(exit_path, grant_set.phase):
+                raise BrokerError(
+                    "unclean_snapshot_lifecycle",
+                    "The previous snapshot broker lifecycle in this runtime root did not end cleanly",
+                )
+            exit_path.unlink()
+            process_path.unlink(missing_ok=True)
         process_stat = pathlib.Path("/proc/self/stat").read_text(encoding="ascii")
         process_fields = process_stat.rsplit(") ", 1)[1].split()
         process_identity = f"{os.getpid()}\n{process_fields[19]}\n{os.getuid()}\n"

@@ -7146,6 +7146,16 @@ run_worker_continuation() {
             >> "${error_path}"
         return 1
     fi
+    # The resumed session restarts the offline snapshot broker in the same
+    # runtime root, which the previous broker must have left cleanly.
+    if [[ -n "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN-}" ]] &&
+        ! snapshot_transport_wait_idle "${REVIEW_SNAPSHOT_RUNTIME_TO_CLEAN}" \
+            "${SNAPSHOT_POLICY_DIGEST}" review 30 2>> "${error_path}"; then
+        printf '%s\n' \
+            'Snapshot transport was not ready to resume the worker session.' \
+            >> "${error_path}"
+        return 1
+    fi
     remaining="$(worker_recovery_remaining_seconds)"
     review_progress "${slug}" 'worker recovery' \
         "continuation ${number}/${WORKER_RECOVERY_CONTINUATION_LIMIT}: ${label}"
