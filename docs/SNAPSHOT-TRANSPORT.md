@@ -71,7 +71,8 @@ Independent security scans and their consolidation read relabelled scan
 reports that no snapshot grant covers. A plan that combines this transport
 with more than one security scan therefore fails before planning, and the
 harness keeps the integrated security pass, which is identical in every
-scope.
+scope. Scan grants must also make the same-session scan report request wait
+for the scan's previous broker, as review continuations do.
 
 Research receives the tree alone. A review after successful research may
 also receive the complete pair `research-dossier` and

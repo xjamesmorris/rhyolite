@@ -144,9 +144,17 @@ Status values:
   rate-limit rejections during research. An offline continuation probe with
   the pinned CLI then found that a resumed session could not restart the
   snapshot broker in its runtime root; the broker now allows a later
-  lifecycle after a recorded clean exit, and the probe passes.
-- **Next step:** run the live continuation probe, then complete the
-  report repair and stop/timeout gates, then production enablement. Keep
+  lifecycle after a recorded clean exit, and the probe passes. The live
+  continuation probe passed on 2026-10-29, after a first attempt whose
+  synthetic prompt the provider's content filter declined, so Codex now
+  reports `worker_continuation` as `yes`. Enabling it exposed that the
+  normalizer reported every failed turn as an adapter failure, which blocked
+  transient recovery; an ordinary failed turn now normalizes with an empty
+  reply, and the mocked end-to-end test covers same-session recovery.
+- **Next step:** complete the stop/timeout/interrupt lifecycle gate,
+  including what Codex records for an interrupted turn, and the
+  hostile-configuration isolation gate, then production enablement. Live
+  report repair remains fixture-proven until a live run needs one. Keep
   production registration absent until the full contract and live evidence
   pass.
 - **Done when:** all three scopes, native setup/package behavior,

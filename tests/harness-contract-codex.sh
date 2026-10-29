@@ -207,7 +207,7 @@ if (provider.Id !== "codex-fixture-provider" ||
 JS
 for capability in \
     shell_denial structured_questions web_research \
-    builtin_research_specialist final_message_file; do
+    builtin_research_specialist final_message_file worker_continuation; do
     assert_equal yes "$(harness_capability "${capability}")" \
         "Codex ${capability} capability"
 done
@@ -215,8 +215,6 @@ for capability in subagents builtin_security_specialist; do
     assert_equal no "$(harness_capability "${capability}")" \
         "Codex ${capability} capability"
 done
-assert_equal unverified "$(harness_capability worker_continuation)" \
-    'Codex continuation remains gated on an adapter-built live probe'
 assert_equal local-stdio-mcp-snapshot-read-v1 \
     "$(harness_snapshot_transport)" 'Codex snapshot transport'
 harness_prepare_run >/dev/null ||
@@ -713,6 +711,53 @@ assert (exhausted["TurnRetries"], exhausted["ModelCallFailures"],
         exhausted["Retryable"]) == (1, 1, True), exhausted
 PY
     fail 'Codex retry notices were not classified as retries.'
+# Codex writes no final-message file for a failed turn. An ordinary failed
+# turn is the worker's failure, not an adapter one: it normalizes to its
+# narrative and an empty reply, so the runner decides from the outcome
+# whether to continue it. Refusal, forbidden-tool, and stale-reply evidence
+# still fail, and a completed turn still needs its exact final message.
+rm -f -- "${CODEX_REVIEW_FINAL_MESSAGE}"
+harness_normalize_worker_output \
+    review "${fixture_root}/codex-retries-exhausted.raw" gpt-5.6-sol max \
+    "${fixture_root}/failed-turn-normalized" "${fixture_root}/failed-turn-reply" ||
+    fail 'Codex treated an ordinary failed turn as an adapter failure.'
+[[ -f "${fixture_root}/failed-turn-reply" && ! -s "${fixture_root}/failed-turn-reply" ]] &&
+    cmp -s -- "${fixture_root}/failed-turn-normalized" \
+        "${fixture_root}/codex-retries-exhausted.raw" ||
+    fail 'Codex failed-turn normalization changed the narrative or produced a reply.'
+cat > "${fixture_root}/codex-failed-forbidden.raw" <<EOF
+{"type":"thread.started","thread_id":"${codex_native_id}"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item-1","type":"command_execution","command":"true","status":"completed"}}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: The server had an error processing your request."}}
+EOF
+codex_failed_turn_rejected() {
+    local raw="$1"
+    local expected="$2"
+    local name="${raw##*/}"
+
+    if harness_normalize_worker_output \
+        review "${raw}" gpt-5.6-sol max \
+        "${fixture_root}/${name}.normalized" "${fixture_root}/${name}.reply" \
+        >/dev/null 2>&1; then
+        fail "Codex normalized ${name} as acceptable."
+    fi
+    assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
+        "${expected}" "Codex ${name} rejection"
+    [[ ! -e "${fixture_root}/${name}.normalized" &&
+        ! -e "${fixture_root}/${name}.reply" &&
+        ! -e "${CODEX_REVIEW_FINAL_MESSAGE}" ]] ||
+        fail "Codex left normalization output behind for ${name}."
+}
+codex_failed_turn_rejected "${fixture_root}/codex-content-filter.raw" \
+    'provider refusal of the approved model'
+codex_failed_turn_rejected "${fixture_root}/codex-failed-forbidden.raw" \
+    'Codex recorded a tool outside the approved phase inventory.'
+printf '%s' 'STALE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
+codex_failed_turn_rejected "${fixture_root}/codex-retries-exhausted.raw" \
+    'Codex recorded a failed worker turn.'
+codex_failed_turn_rejected "${codex_raw}" \
+    'Codex did not write its exact final-message artifact.'
 printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
 harness_normalize_worker_output \
     review "${fixture_root}/codex-retried-completion.raw" gpt-5.6-sol max \
@@ -1501,10 +1546,18 @@ def fail(message):
 
 if args[:2] != ["--no-daemon", "exec"] or args[-1] != "-":
     fail("unexpected command framing")
+# A same-session continuation inserts `resume` before --model and names the
+# native thread before the final "-".
+resumed = "resume" in args
+if resumed and (args.count("resume") != 1 or "--model" not in args
+                or args.index("resume") > args.index("--model")):
+    fail("unexpected resume framing")
 options, overrides, index = {}, {}, 2
-while index < len(args) - 1:
+while index < len(args) - (2 if resumed else 1):
     argument = args[index]
-    if argument == "-c":
+    if argument == "resume":
+        index += 1
+    elif argument == "-c":
         key, separator, value = args[index + 1].partition("=")
         if not separator:
             fail("malformed configuration override")
@@ -1521,6 +1574,8 @@ while index < len(args) - 1:
         fail("unexpected argument " + argument)
 home = pathlib.Path(os.environ["CODEX_HOME"])
 config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+if resumed and options.get("--ephemeral"):
+    fail("an ephemeral session cannot be resumed")
 if options.get("--ephemeral"):
     # The runner's fresh, tool-less confidence edit: no MCP server, no worker
     # instructions, and an empty trusted working directory.
@@ -1613,20 +1668,9 @@ model = options["--model"]
 effort = config["model_reasoning_effort"]
 window = config["model_context_window"] * 95 // 100
 thread = "00000000-0000-4000-8000-0000000000e2" if phase == "review" else "00000000-0000-4000-8000-0000000000e3"
-reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
-if phase == "review" and pathlib.Path(__file__).with_name("repair-mode").exists():
-    # The compound value of a real incident: no deterministic normalization
-    # applies, so the runner must hand it to the isolated confidence edit.
-    reply = reply.replace(
-        "Confidence: High.",
-        "Confidence: High for counts and Medium for adoption interpretation.",
-        1,
-    )
 usage = {"input_tokens": 24000, "cached_input_tokens": 0, "output_tokens": 900,
          "reasoning_output_tokens": 0, "total_tokens": 24900}
-records = [
-    {"type": "session_meta", "payload": {"id": thread, "originator": "codex_exec",
-                                         "cli_version": "0.163.0", "source": "exec"}},
+turn_records = [
     {"type": "event_msg", "payload": {"type": "task_started", "model_context_window": window}},
     {"type": "turn_context", "payload": {
         "approval_policy": "never", "sandbox_policy": {"type": "read-only"},
@@ -1639,23 +1683,109 @@ records = [
         "total_token_usage": usage, "last_token_usage": usage,
         "model_context_window": window}, "rate_limits": None}},
 ]
-if phase == "review":
-    records.append({"type": "response_item", "payload": {
+snapshot_read = {"type": "item.completed", "item": {
+    "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
+    "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},
+    "status": "completed"}}
+
+
+def assistant(text):
+    return {"type": "response_item", "payload": {
         "type": "message", "role": "assistant", "phase": "final_answer",
-        "content": [{"type": "output_text", "text": reply}]}})
+        "content": [{"type": "output_text", "text": text}]}}
+
+
+def emit(events):
+    for event in ({"type": "thread.started", "thread_id": thread}, {"type": "turn.started"},
+                  *events):
+        print(json.dumps(event), flush=True)
+
+
+if resumed:
+    # Codex appends the resumed turn to the same rollout after restarting the
+    # required MCP servers (the snapshot read above), and answers the
+    # runner's report delivery page from the fixture report.
+    rollouts = sorted((home / "sessions").glob(f"**/rollout-*-{thread}.jsonl"))
+    if phase != "review" or args[-2] != thread or len(rollouts) != 1:
+        fail("only the review session may be resumed, by its own native thread")
+    request = prompt.splitlines()
+    report = pathlib.Path(report_path).read_text(encoding="utf-8").splitlines()
+    page_id = next(line.split(": ", 1)[1] for line in request if line.startswith("Request: "))
+    sections = []
+    for line in request[request.index("Requested sections, in this exact order:") + 1:]:
+        if not line.startswith("- "):
+            break
+        sections.append(line[2:])
+    headings = {
+        "REVIEW CONTEXT", "EXECUTIVE SUMMARY", "FINDINGS",
+        "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT",
+        "CLAIMS AND REPUTATION INTEGRITY ASSESSMENT", "COMMUNITY HEALTH ASSESSMENT",
+        "AREAS REVIEWED WITHOUT QUALIFYING FINDINGS", "PRIORITIZED REMEDIATION",
+        "OVERALL ASSESSMENT",
+    }
+    page = [f"Delivering {len(sections)} section(s).", f"RHYOLITE REPORT PAGE {page_id} BEGIN"]
+    for section in sections:
+        body = []
+        for line in report[report.index(section) + 1:]:
+            if line in headings or (len(line) >= 80 and set(line) == {"="}):
+                break
+            body.append(line)
+        page.extend([section, "\n".join(body).rstrip("\n"), ""])
+    page.append(f"RHYOLITE REPORT PAGE {page_id} END")
+    reply = "\n".join(page)
+    with rollouts[0].open("a", encoding="utf-8") as stream:
+        for record in (*turn_records, assistant(reply)):
+            stream.write(json.dumps(record) + "\n")
+    pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
+    emit((snapshot_read,
+          {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message",
+                                              "text": reply}},
+          {"type": "turn.completed", "usage": usage}))
+    continuations = pathlib.Path(capture_path) / "review-continuations.json"
+    entries = json.loads(continuations.read_text(encoding="utf-8")) if continuations.exists() else []
+    entries.append({"Page": page_id, "Sections": sections, "SnapshotTools": tools})
+    continuations.write_text(json.dumps(entries), encoding="utf-8")
+    raise SystemExit(0)
+
+# Codex 0.163.0 writes no final-message file when a turn fails: here every
+# built-in stream retry of a transient model-service error was exhausted.
+transient = phase == "review" and pathlib.Path(__file__).with_name("transient-mode").exists()
+reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
+if phase == "review" and pathlib.Path(__file__).with_name("repair-mode").exists():
+    # The compound value of a real incident: no deterministic normalization
+    # applies, so the runner must hand it to the isolated confidence edit.
+    reply = reply.replace(
+        "Confidence: High.",
+        "Confidence: High for counts and Medium for adoption interpretation.",
+        1,
+    )
+records = [
+    {"type": "session_meta", "payload": {"id": thread, "originator": "codex_exec",
+                                         "cli_version": "0.163.0", "source": "exec"}},
+    *turn_records,
+]
+if phase == "review" and not transient:
+    records.append(assistant(reply))
 sessions = home / "sessions" / "2026" / "10" / "01"
 sessions.mkdir(parents=True)
 (sessions / f"rollout-2026-10-01T12-00-00-{thread}.jsonl").write_text(
     "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
-if phase == "review":
+if transient:
+    failure = ("stream disconnected before completion: "
+               "The server had an error processing your request.")
+    events = (
+        snapshot_read,
+        *({"type": "error", "message": f"Reconnecting... {attempt}/5 ({failure})"}
+          for attempt in range(1, 6)),
+        {"type": "error", "message": failure},
+        {"type": "turn.failed", "error": {"message": failure}},
+    )
+elif phase == "review":
     pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
     events = (
         {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion: "
                                      "The server had an error processing your request.)"},
-        {"type": "item.completed", "item": {
-            "id": "item_0", "type": "mcp_tool_call", "server": "rhyolite_snapshot",
-            "tool": "read_snapshot_text", "arguments": {"grant": "snapshot", "path": "README.md"},
-            "status": "completed"}},
+        snapshot_read,
         {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": reply}},
         {"type": "turn.completed", "usage": usage},
     )
@@ -1667,13 +1797,12 @@ else:
         {"type": "turn.failed", "error": {
             "message": "fixture research worker stopped before public retrieval"}},
     )
-for event in ({"type": "thread.started", "thread_id": thread}, {"type": "turn.started"}, *events):
-    print(json.dumps(event), flush=True)
+emit(events)
 (pathlib.Path(capture_path) / f"{phase}.json").write_text(json.dumps({
     "Instructions": instructions.name, "SnapshotTools": tools, "ResearchTools": research_tools,
     "PromptHasCommit": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" in prompt,
 }), encoding="utf-8")
-raise SystemExit(0 if phase == "review" else 1)
+raise SystemExit(0 if phase == "review" and not transient else 1)
 CODEX_E2E_WORKER
 {
     printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
@@ -1885,5 +2014,86 @@ JS
     -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-repair.stdout")" \
         -name '*.codex-final' -print -quit)" ]] ||
     fail 'Codex end-to-end report repair left a runtime home or final-message file.'
+
+# A review turn that exhausts Codex's built-in retries of a transient
+# model-service error ends without a final message. The runner resumes the
+# same native session with the adapter's continuation argv, waits for the
+# previous snapshot broker before each resume, lets every resumed session
+# restart that broker, and assembles the report from strictly validated
+# pages; the adapter re-verifies the appended session after each turn.
+touch -- "${codex_e2e_bin}/transient-mode"
+rm -f -- "${codex_e2e_capture}/review-continuations.json"
+codex_e2e_recovery_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-recovery-workspace"
+    --output-root "${fixture_root}/codex-e2e-recovery-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
+    "${codex_e2e_runner}" "${codex_e2e_recovery_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-recovery-plan.json" \
+    2> "${fixture_root}/codex-e2e-recovery-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-recovery-plan.stderr" >&2
+        fail 'Codex end-to-end recovery plan failed.'
+    }
+"${codex_e2e_environment[@]}" RHYOLITE_WORKER_RETRY_DELAY_SECONDS=0 \
+    "${codex_e2e_runner}" "${codex_e2e_recovery_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-recovery-plan.json")" \
+    > "${fixture_root}/codex-e2e-recovery.stdout" \
+    2> "${fixture_root}/codex-e2e-recovery.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-recovery.stdout" "${fixture_root}/codex-e2e-recovery.stderr" >&2
+        cat -- "$(contract_run_path "${fixture_root}/codex-e2e-recovery.stdout")/github--octocat--hello-world/errors.txt" >&2 || true
+        fail 'Codex end-to-end same-session recovery failed.'
+    }
+rm -f -- "${codex_e2e_bin}/transient-mode"
+codex_e2e_recovery_repository="$(contract_run_path "${fixture_root}/codex-e2e-recovery.stdout")/github--octocat--hello-world"
+node - "$(contract_run_path "${fixture_root}/codex-e2e-recovery.stdout")" \
+    "${codex_e2e_capture}" <<'JS'
+const fs = require("fs"), path = require("path");
+const [root, captureRoot] = process.argv.slice(2);
+const repo = path.join(root, "github--octocat--hello-world");
+const read = (name) => JSON.parse(fs.readFileSync(name, "utf8"));
+const plan = read(path.join(root, "review-plan.json"));
+const state = read(path.join(repo, "state.json"));
+const recovery = state.WorkerRecovery;
+const pages = read(path.join(captureRoot, "review-continuations.json"));
+if (state.Status !== "Completed" || plan.WorkerRecoveryPolicy?.Available !== true ||
+    recovery?.Status !== "Recovered" || recovery.Trigger !== "interrupted" ||
+    recovery.Available !== true || recovery.TransientRetries !== 1 ||
+    recovery.Continuations < 1 || recovery.Continuations !== pages.length ||
+    recovery.PagesAccepted !== pages.length) {
+  throw new Error(`Codex transient failure was not recovered in the same session: ${JSON.stringify(recovery)}`);
+}
+if (pages.some((page) => page.SnapshotTools.length !== 4)) {
+  throw new Error("a resumed Codex session did not restart the snapshot broker");
+}
+const sessions = path.join(repo, "agent-state", "codex-home", "sessions");
+const records = fs.readdirSync(sessions);
+const turns = fs.readFileSync(path.join(sessions, records[0]), "utf8").split("\n")
+  .filter((line) => line.includes('"type":"turn_context"')).length;
+if (records.length !== 1 || turns !== 1 + pages.length) {
+  throw new Error(`Codex did not re-record every resumed turn: ${records.length} record(s), ${turns} turn(s)`);
+}
+const errorsPath = path.join(repo, "errors.txt");
+const errors = fs.existsSync(errorsPath) ? fs.readFileSync(errorsPath, "utf8") : "";
+if (errors.includes("Harness failure stage:")) {
+  throw new Error(`an ordinary failed Codex turn was reported as an adapter failure:\n${errors}`);
+}
+JS
+cmp -s <(grep -v '^$' "${codex_e2e_recovery_repository}/review.txt") \
+    <(grep -v '^$' "${codex_e2e_report}") ||
+    fail 'Codex same-session recovery did not reassemble the canonical report.'
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-recovery.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex same-session recovery left a runtime home, broker runtime, or final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

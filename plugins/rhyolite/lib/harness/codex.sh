@@ -777,11 +777,13 @@ harness_capability() {
         shell_denial|structured_questions|web_research|builtin_research_specialist|final_message_file)
             printf '%s\n' 'yes'
             ;;
+        # Verified live with Codex CLI 0.163.0: `exec resume <thread>` with the
+        # adapter-built argv keeps the session's context in the same rollout.
+        worker_continuation)
+            printf '%s\n' 'yes'
+            ;;
         subagents|builtin_security_specialist)
             printf '%s\n' 'no'
-            ;;
-        worker_continuation)
-            printf '%s\n' 'unverified'
             ;;
         *)
             printf '%s\n' 'unverified'
@@ -1309,11 +1311,14 @@ codex_normalize_final_message() {
     local final_message="$7"
     local status
 
-    [[ -f "${final_message}" && ! -L "${final_message}" ]] || {
+    # Codex 0.163.0 writes no final-message file for a failed turn; the
+    # structured output below decides whether that is acceptable.
+    if [[ -L "${final_message}" ||
+        ( -e "${final_message}" && ! -f "${final_message}" ) ]]; then
         rhyolite_harness_set_error \
             'Codex did not write its exact final-message artifact.'
         return 1
-    }
+    fi
     if [[ "${phase}" == review && "${CODEX_TRANSCRIPT_STATUS}" != verified ]]; then
         rhyolite_harness_set_error \
             'The Codex review session record did not verify the approved model, effort, context, and no-subagent boundary.'
@@ -1375,11 +1380,13 @@ def refusal_message(message):
 
 try:
     raw = pathlib.Path(raw_name).read_text(encoding="utf-8")
-    exact = pathlib.Path(final_name).read_text(encoding="utf-8")
+    final_path = pathlib.Path(final_name)
+    exact = final_path.read_text(encoding="utf-8") if final_path.is_file() else None
 except (OSError, UnicodeError):
     print("unreadable")
     raise SystemExit(0)
 last_reply = None
+last_turn = None
 threads = set()
 status = "verified"
 for line in raw.splitlines():
@@ -1395,7 +1402,11 @@ for line in raw.splitlines():
         candidate = event.get("thread_id")
         if isinstance(candidate, str):
             threads.add(candidate)
+    elif event_type == "turn.completed":
+        last_turn = "completed"
     elif event_type in {"turn.failed", "error"}:
+        if event_type == "turn.failed":
+            last_turn = "failed"
         error = event.get("error") if event_type == "turn.failed" else event
         message = str(error.get("message", "")) if isinstance(error, dict) else ""
         if refusal_message(message):
@@ -1408,7 +1419,7 @@ for line in raw.splitlines():
         ):
             # Codex retried the same request within the same turn.
             pass
-        elif status not in {"substituted", "subagent", "refused"}:
+        elif status not in {"substituted", "subagent", "refused", "forbidden-tool"}:
             status = "failed"
     elif event_type in {"item.started", "item.updated", "item.completed"}:
         item = event.get("item")
@@ -1434,16 +1445,27 @@ for line in raw.splitlines():
         elif item_type == "mcp_tool_call":
             if (item.get("server"), item.get("tool")) not in allowed_mcp:
                 status = "forbidden-tool"
-if len(threads) != 1 or last_reply is None or last_reply != exact:
+if (status == "failed" and last_turn == "failed" and exact is None
+        and len(threads) == 1):
+    # An ordinary failed turn is the worker's failure, not an adapter one:
+    # its events become the narrative and the reply stays empty, so the
+    # runner classifies it from the worker outcome and may continue a
+    # transient failure in the same session. No partial output ever becomes
+    # a reply.
+    status = "failed-turn"
+elif status == "verified" and exact is None:
+    status = "missing-final"
+elif len(threads) != 1 or exact is None or last_reply is None or last_reply != exact:
     status = "unreadable" if status == "verified" else status
-if status == "verified":
+if status in {"verified", "failed-turn"}:
     pathlib.Path(normalized_name).write_text(raw, encoding="utf-8")
-    pathlib.Path(reply_name).write_text(exact, encoding="utf-8")
+    pathlib.Path(reply_name).write_text(exact if status == "verified" else "",
+                                        encoding="utf-8")
 print(status)
 PY
     )" || return 1
     case "${status}" in
-        verified)
+        verified|failed-turn)
             chmod 600 -- "${normalized_output}" "${final_reply_output}"
             return 0
             ;;
@@ -1466,6 +1488,10 @@ PY
         failed)
             rhyolite_harness_set_error \
                 'Codex recorded a failed worker turn.'
+            ;;
+        missing-final)
+            rhyolite_harness_set_error \
+                'Codex did not write its exact final-message artifact.'
             ;;
         *)
             rhyolite_harness_set_error \
