@@ -137,10 +137,12 @@ Status values:
   disabled Codex's own retries, which it now keeps with retry-notice
   handling; the other failed on a cookie false positive in the shared
   research validation, which now verifies cookie attributes against the
-  private ledger.
-- **Next step:** run real scope 2 and 3 reviews of a small public
-  repository through a private test-owned registry, then complete the live
-  research, continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
+  private ledger. With both fixes, the live scope-2 review passed on
+  2026-10-28, and the mocked end-to-end test now also drives a real report
+  repair through a fresh tool-less Codex session.
+- **Next step:** run a real scope 3 review of a small public repository
+  through a private test-owned registry, then complete the live
+  continuation/recovery, repair, and stop/timeout gates. Keep production registration absent until
   the full contract and live evidence pass.
 - **Done when:** all three scopes, native setup/package behavior,
   enforcement, recovery, repair, isolation, and cleanup satisfy the harness

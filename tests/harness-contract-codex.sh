@@ -1513,13 +1513,37 @@ while index < len(args) - 1:
     elif argument in {"--sandbox", "--cd", "--model", "--output-last-message"}:
         options[argument] = args[index + 1]
         index += 2
-    elif argument in {"--strict-config", "--ignore-rules", "--json", "--skip-git-repo-check"}:
+    elif argument in {"--strict-config", "--ignore-rules", "--json", "--skip-git-repo-check",
+                      "--ephemeral"}:
         options[argument] = True
         index += 1
     else:
         fail("unexpected argument " + argument)
 home = pathlib.Path(os.environ["CODEX_HOME"])
 config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+if options.get("--ephemeral"):
+    # The runner's fresh, tool-less confidence edit: no MCP server, no worker
+    # instructions, and an empty trusted working directory.
+    if (overrides or "model_instructions_file" in config
+            or options.get("--sandbox") != "read-only"
+            or not os.path.samefile(os.getcwd(), options["--cd"])
+            or os.listdir(os.getcwd())):
+        fail("the report repair session is not tool-less and isolated")
+    request = sys.stdin.read().splitlines()
+    descriptor = request[request.index("EXPECTED CONFIDENCE EDIT") + 1]
+    pathlib.Path(options["--output-last-message"]).write_text(descriptor, encoding="utf-8")
+    for event in (
+        {"type": "thread.started", "thread_id": "00000000-0000-4000-8000-0000000000e4"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+                                            "text": descriptor}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0,
+                                             "output_tokens": 1, "reasoning_output_tokens": 0}},
+    ):
+        print(json.dumps(event), flush=True)
+    (pathlib.Path(capture_path) / "report-repair.json").write_text(
+        json.dumps({"Descriptor": json.loads(descriptor)}), encoding="utf-8")
+    raise SystemExit(0)
 phase = "research" if "mcp_servers.rhyolite_research.command" in overrides else "review"
 instructions = pathlib.Path(config.get("model_instructions_file", "/nonexistent"))
 instruction_text = instructions.read_text(encoding="utf-8") if instructions.is_file() else ""
@@ -1590,6 +1614,14 @@ effort = config["model_reasoning_effort"]
 window = config["model_context_window"] * 95 // 100
 thread = "00000000-0000-4000-8000-0000000000e2" if phase == "review" else "00000000-0000-4000-8000-0000000000e3"
 reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
+if phase == "review" and pathlib.Path(__file__).with_name("repair-mode").exists():
+    # The compound value of a real incident: no deterministic normalization
+    # applies, so the runner must hand it to the isolated confidence edit.
+    reply = reply.replace(
+        "Confidence: High.",
+        "Confidence: High for counts and Medium for adoption interpretation.",
+        1,
+    )
 usage = {"input_tokens": 24000, "cached_input_tokens": 0, "output_tokens": 900,
          "reasoning_output_tokens": 0, "total_tokens": 24900}
 records = [
@@ -1797,5 +1829,61 @@ if (capture.Instructions !== "research-worker-instructions.md" || !capture.Promp
 JS
 [[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
     fail 'Codex end-to-end research run left a runtime home or broker runtime.'
+
+# A report whose assessment confidence needs the isolated confidence edit runs
+# the real report repair through a fresh, tool-less Codex session.
+touch -- "${codex_e2e_bin}/repair-mode"
+codex_e2e_repair_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-repair-workspace"
+    --output-root "${fixture_root}/codex-e2e-repair-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_repair_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-repair-plan.json" \
+    2> "${fixture_root}/codex-e2e-repair-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-repair-plan.stderr" >&2
+        fail 'Codex end-to-end repair plan failed.'
+    }
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_repair_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-repair-plan.json")" \
+    > "${fixture_root}/codex-e2e-repair.stdout" \
+    2> "${fixture_root}/codex-e2e-repair.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-repair.stdout" "${fixture_root}/codex-e2e-repair.stderr" >&2
+        cat -- "$(contract_run_path "${fixture_root}/codex-e2e-repair.stdout")/github--octocat--hello-world/errors.txt" >&2 || true
+        fail 'Codex end-to-end report repair failed.'
+    }
+rm -f -- "${codex_e2e_bin}/repair-mode"
+node - "$(contract_run_path "${fixture_root}/codex-e2e-repair.stdout")" \
+    "${codex_e2e_capture}" <<'JS'
+const fs = require("fs"), path = require("path");
+const [root, captureRoot] = process.argv.slice(2);
+const repo = path.join(root, "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repo, "state.json"), "utf8"));
+const report = fs.readFileSync(path.join(repo, "review.txt"), "utf8");
+const capture = JSON.parse(fs.readFileSync(path.join(captureRoot, "report-repair.json"), "utf8"));
+if (state.Status !== "Completed" || state.ReportRepair.Status !== "Succeeded" ||
+    state.ReportRepair.AttemptCount !== 1 ||
+    capture.Descriptor.Section !== "AGENT-TARGETING AND REVIEW MANIPULATION ASSESSMENT" ||
+    capture.Descriptor.ConservativeLevel !== "Medium" ||
+    !report.includes("Confidence: Medium - Original confidence detail: " +
+      "High for counts and Medium for adoption interpretation.")) {
+  throw new Error(`Codex report repair did not succeed: ${JSON.stringify(state.ReportRepair)}`);
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-repair.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex end-to-end report repair left a runtime home or final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'
