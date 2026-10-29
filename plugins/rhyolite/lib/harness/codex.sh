@@ -23,6 +23,7 @@ CODEX_APPROVED_MODEL=''
 CODEX_APPROVED_EFFORT=''
 CODEX_CONTEXT_TIER=''
 CODEX_TRANSCRIPT_STATUS=''
+CODEX_REVIEW_NOT_STARTED=0
 CODEX_REVIEW_FINAL_MESSAGE=''
 CODEX_REPAIR_WORKDIR=''
 CODEX_REPAIR_FINAL_MESSAGE=''
@@ -37,6 +38,10 @@ CODEX_RESEARCH_CONFIG_PATH=''
 CODEX_RESEARCH_BROKER_LAUNCHER=''
 CODEX_RESEARCH_TOOLS_JSON=''
 declare -a CODEX_RESEARCH_BROKER_ARGUMENTS=()
+# Codex 0.163.0 reads its system configuration from this fixed directory
+# (see codex_require_no_system_configuration). Assigned here, so the inherited
+# environment cannot move it.
+CODEX_SYSTEM_CONFIGURATION_DIRECTORY=/etc/codex
 
 codex_require_array_destination() {
     [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
@@ -296,6 +301,7 @@ codex_write_runtime_config() {
             'sandbox_mode = "read-only"' \
             'web_search = "disabled"' \
             'project_doc_max_bytes = 0' \
+            'project_root_markers = []' \
             'suppress_unstable_features_warning = true' \
             '' \
             '[agents]' \
@@ -417,6 +423,8 @@ codex_populate_worker_environment() {
     local destination_name="$1"
     local working_directory="$2"
     local runtime_home="$3"
+    local name
+    local -a inherited=()
 
     codex_require_array_destination "${destination_name}" || return 1
     [[ "${working_directory}" == /* && -d "${working_directory}" &&
@@ -427,6 +435,25 @@ codex_populate_worker_environment() {
             'The Codex worker environment paths are invalid.'
         return 1
     }
+    # The runtime home is the worker's only Codex configuration. Codex 0.163.0
+    # reads inherited CODEX_* variables that change its authority, such as
+    # CODEX_EXEC_SERVER_URL (remote execution), CODEX_SQLITE_HOME (state and
+    # memories outside the runtime home), and other credentials, so every one
+    # is removed except CODEX_CA_CERTIFICATE, which only adds TLS trust for
+    # the provider connection like the inherited SSL_CERT_FILE, and the
+    # approved provider credential. Other provider credentials and the
+    # built-in provider's base URL are removed as well.
+    while IFS='=' read -r -d '' name _; do
+        case "${name}" in
+            CODEX_HOME|CODEX_THREAD_ID|CODEX_SESSION_ID|CODEX_REMOTE|CODEX_CA_CERTIFICATE)
+                continue
+                ;;
+            CODEX_*|OPENAI_API_KEY|OPENAI_BASE_URL)
+                [[ "${name}" == "${CODEX_PROVIDER_ENV_KEY}" ]] ||
+                    inherited+=(-u "${name}")
+                ;;
+        esac
+    done < <(env -0 | LC_ALL=C sort -z)
     local -n codex_environment_ref="${destination_name}"
     codex_environment_ref=(
         -C "${working_directory}"
@@ -434,6 +461,7 @@ codex_populate_worker_environment() {
         -u CODEX_THREAD_ID
         -u CODEX_SESSION_ID
         -u CODEX_REMOTE
+        "${inherited[@]}"
         "HOME=${runtime_home}"
         "CODEX_HOME=${runtime_home}"
         "XDG_CONFIG_HOME=${runtime_home}"
@@ -444,6 +472,31 @@ codex_populate_worker_environment() {
         TERM=dumb
         RUST_LOG=off
     )
+}
+
+# Codex 0.163.0 merges /etc/codex/config.toml below the runtime home's
+# configuration, so every key the adapter does not set passes through, runs
+# that layer's hooks and /etc/codex/hooks.json as managed hooks without
+# approval, applies /etc/codex/requirements.toml constraints and managed
+# hooks, and layers the legacy /etc/codex/managed_config.toml above every
+# other source, including -c overrides. None of that is approval-bound, so a
+# worker cannot be kept within the approved plan while any of it exists. An
+# empty or absent directory is harmless.
+codex_require_no_system_configuration() {
+    local directory="${CODEX_SYSTEM_CONFIGURATION_DIRECTORY}"
+    local entry
+
+    if [[ ! -e "${directory}" && ! -L "${directory}" ]]; then
+        return 0
+    fi
+    if [[ -d "${directory}" && ! -L "${directory}" &&
+        -r "${directory}" && -x "${directory}" ]]; then
+        entry="$(find "${directory}" -mindepth 1 -print -quit 2>/dev/null)" || entry=unlisted
+        [[ -n "${entry}" ]] || return 0
+    fi
+    rhyolite_harness_set_error \
+        "Codex system configuration exists in ${directory}. Codex applies it to every session, including the legacy managed_config.toml that overrides command-line settings, so Rhyolite cannot keep the worker within the approved plan. Remove or relocate it, or use another harness."
+    return 1
 }
 
 codex_write_server_config_record() {
@@ -884,6 +937,7 @@ harness_resume_policy() {
 }
 
 harness_prepare_run() {
+    codex_require_no_system_configuration || return 1
     codex_load_provider_metadata || return 1
     [[ -n "${!CODEX_PROVIDER_ENV_KEY-}" ]] || {
         rhyolite_harness_set_error \
@@ -924,6 +978,7 @@ harness_prepare_worker_home() {
     CODEX_INSTRUCTIONS_HOME=''
     harness_validate_reasoning_effort "${reasoning_effort}" || return 1
     harness_validate_context_tier "${context_tier}" || return 1
+    codex_require_no_system_configuration || return 1
     [[ "${runtime_home}" == /* && -d "${runtime_home}" &&
         ! -L "${runtime_home}" ]] || {
         rhyolite_harness_set_error \
@@ -1049,6 +1104,7 @@ harness_worker_argv() {
     CODEX_CONTEXT_TIER="${context_tier}"
     CODEX_NATIVE_THREAD_ID=''
     CODEX_TRANSCRIPT_STATUS=''
+    CODEX_REVIEW_NOT_STARTED=0
     CODEX_REVIEW_FINAL_MESSAGE="${transcript_path}.codex-final"
     local -n codex_arguments_ref="${destination_name}"
     codex_arguments_ref=(
@@ -1294,6 +1350,9 @@ codex_final_message_for_phase() {
 harness_normalize_worker_output() {
     local final_message status=0
 
+    # Only a review invocation that this call proves never started may skip
+    # its session record, so an earlier invocation's verdict never carries over.
+    [[ "${1-}" != review ]] || CODEX_REVIEW_NOT_STARTED=0
     rhyolite_harness_validate_normalize_arguments "$@" || return 1
     final_message="$(codex_final_message_for_phase "$1")" || return 1
     codex_normalize_final_message "$@" "${final_message}" || status=$?
@@ -1318,6 +1377,23 @@ codex_normalize_final_message() {
         rhyolite_harness_set_error \
             'Codex did not write its exact final-message artifact.'
         return 1
+    fi
+    # When Codex fails before it starts a session, for example because a
+    # required MCP server did not start, it prints its error on stderr, which
+    # the runner records, and leaves no structured output, final message, or
+    # session record. No model request was made, so that is the worker's own
+    # failure: the narrative and the reply stay empty, and the isolation check
+    # accepts the missing record only for this invocation.
+    if [[ "${phase}" == review && "${CODEX_TRANSCRIPT_STATUS}" == missing &&
+        ! -e "${final_message}" && -f "${raw_output}" && ! -L "${raw_output}" ]] &&
+        ! grep -q '[^[:space:]]' "${raw_output}"; then
+        : > "${normalized_output}" && : > "${final_reply_output}" &&
+            chmod 600 -- "${normalized_output}" "${final_reply_output}" || {
+            rm -f -- "${normalized_output}" "${final_reply_output}"
+            return 1
+        }
+        CODEX_REVIEW_NOT_STARTED=1
+        return 0
     fi
     if [[ "${phase}" == review && "${CODEX_TRANSCRIPT_STATUS}" != verified ]]; then
         rhyolite_harness_set_error \
@@ -2102,7 +2178,9 @@ harness_verify_isolation() {
         return 1
     fi
     [[ "${CODEX_HOME_PHASE}" != review ||
-        "${CODEX_TRANSCRIPT_STATUS}" == verified ]] || {
+        "${CODEX_TRANSCRIPT_STATUS}" == verified ||
+        ( "${CODEX_TRANSCRIPT_STATUS}" == missing &&
+            "${CODEX_REVIEW_NOT_STARTED}" == 1 ) ]] || {
         rhyolite_harness_set_error \
             'The Codex review session record did not verify the approved execution identity.'
         return 1
@@ -2119,6 +2197,7 @@ harness_persist_agent_state() {
     local rendered="${runtime_home}/rhyolite-rendered-session.md"
     local result status native_id
 
+    CODEX_REVIEW_NOT_STARTED=0
     result="$(
         codex_verify_session_record \
             "${runtime_home}" "${rendered}" "${filtered}" \
@@ -2128,10 +2207,19 @@ harness_persist_agent_state() {
     native_id="${result#*$'\n'}"
     CODEX_TRANSCRIPT_STATUS="${status}"
     CODEX_NATIVE_THREAD_ID="${native_id}"
-    [[ "${status}" != unreadable ]] || {
-        rm -f -- "${filtered}" "${rendered}"
-        return 1
-    }
+    case "${status}" in
+        unreadable)
+            rm -f -- "${filtered}" "${rendered}"
+            return 1
+            ;;
+        missing)
+            # Codex failed before it created a session, so there is nothing
+            # to record. The normalizer and isolation check accept that only
+            # when the invocation also left no structured output or reply.
+            rm -f -- "${filtered}" "${rendered}"
+            return 0
+            ;;
+    esac
     mkdir -p -- "${codex_state}/sessions" &&
         chmod 700 -- "${codex_state}" "${codex_state}/sessions" || return 1
     if ! declare -F sanitize_review_text >/dev/null 2>&1; then

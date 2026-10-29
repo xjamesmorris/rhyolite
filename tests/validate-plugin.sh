@@ -8102,12 +8102,18 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
     mock_block_child_pid=""
     mock_block_exit() {
         local exit_code="$1"
+        local job_pid
 
-        trap - INT TERM HUP
-        if [[ -n "${mock_block_child_pid}" ]]; then
-            kill "${mock_block_child_pid}" 2>/dev/null || true
-            wait "${mock_block_child_pid}" 2>/dev/null || true
-        fi
+        # Ignore further stop signals instead of resetting them: Bash
+        # re-raises a still-pending one with its default action once the
+        # trap is reset, which would end the mock before it finishes.
+        trap '' INT TERM HUP
+        # Stop every background child, including a replacement started after
+        # the runner's child-first signal ended the first one.
+        for job_pid in ${mock_block_child_pid} $(jobs -p); do
+            kill "${job_pid}" 2>/dev/null || true
+            wait "${job_pid}" 2>/dev/null || true
+        done
         # Model a CLI that writes its session transcript while it stops.
         if [[ "${MOCK_COPILOT_INTERRUPT_OUTPUT-}" == "1" &&
             "${phase}" != 'report-repair' ]]; then
@@ -8135,8 +8141,12 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
     fi
     if [[ "${MOCK_COPILOT_INTERRUPT_OUTPUT-}" == "1" &&
         "${phase}" != 'report-repair' ]]; then
+        # Straight to the worker's stdout, as a streaming CLI writes it:
+        # captured output reaches stdout only from the exit trap, which a
+        # later stop signal can end first.
         printf '%s\n' \
-            'Mock interrupted review output for maintainer@example.com api_key=interrupt-output-secret'
+            'Mock interrupted review output for maintainer@example.com api_key=interrupt-output-secret' \
+            >&3
     fi
     sleep 300 &
     mock_block_child_pid=$!
@@ -8153,7 +8163,17 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
             printf '%s %s\n' "$$" "${mock_block_child_pid}" \
                 >> "${MOCK_COPILOT_READY_FILE}"
     fi
-    wait "${mock_block_child_pid}"
+    # The runner signals a worker tree child-first, so the child can end
+    # before this shell's own stop signal arrives. Keep waiting for that
+    # signal, so that its handler, as in a stopping CLI, still ends the mock.
+    mock_block_status=0
+    wait "${mock_block_child_pid}" || mock_block_status=$?
+    if ((mock_block_status == 129 || mock_block_status == 130 ||
+        mock_block_status == 143)); then
+        sleep 10 < /dev/null > /dev/null 2>&1 &
+        mock_block_child_pid=$!
+        wait "${mock_block_child_pid}" || true
+    fi
     exit 96
 fi
 
@@ -9181,8 +9201,12 @@ EVENTS
         fi
     fi
     if [[ -n "${MOCK_SCAN_BLOCK_PID_DIRECTORY-}" ]]; then
+        # Straight to the worker's stdout, as a streaming CLI writes it:
+        # captured output reaches stdout only from the exit trap, which the
+        # scan's own stop handler can end first.
         printf '%s\n' \
-            'Mock interrupted scan output for scanner@example.com token=scan-interrupt-secret'
+            'Mock interrupted scan output for scanner@example.com token=scan-interrupt-secret' \
+            >&3
         printf '%s\n' "$$" > "${MOCK_SCAN_BLOCK_PID_DIRECTORY}/${model}"
         sleep 300 &
         wait "$!"

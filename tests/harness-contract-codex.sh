@@ -272,6 +272,9 @@ assert config["model_auto_compact_token_limit"] == 784800
 assert config["approval_policy"] == "never"
 assert config["sandbox_mode"] == "read-only"
 assert config["web_search"] == "disabled"
+assert config["project_doc_max_bytes"] == 0
+# No project root above the working directory: Codex reads no ancestor .codex.
+assert config["project_root_markers"] == []
 assert config["agents"]["enabled"] is False
 for feature in (
     "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2",
@@ -318,6 +321,87 @@ grep -Fq 'RHYOLITE_AGENT_SELF_CHECK_V2' \
 [[ " ${codex_worker_env[*]} " == *" CODEX_HOME=${codex_runtime} "* &&
     " ${codex_worker_env[*]} " == *' NO_COLOR=1 '* ]] ||
     fail 'Codex review environment lost isolation.'
+
+# Inherited Codex control variables and other provider credentials never
+# reach the worker; the approved provider key and the CA certificate that only
+# adds TLS trust for the provider connection do.
+(
+    export CODEX_EXEC_SERVER_URL=http://127.0.0.1:9/fixture
+    export CODEX_SQLITE_HOME="${fixture_root}/codex-hostile-sqlite"
+    export CODEX_API_KEY=fixture-hostile-key
+    export CODEX_INTERNAL_ORIGINATOR_OVERRIDE=fixture-hostile-originator
+    export OPENAI_API_KEY=fixture-hostile-openai-key
+    export OPENAI_BASE_URL=http://127.0.0.1:9/v1
+    export CODEX_THREAD_ID=fixture-hostile-thread
+    export CODEX_CA_CERTIFICATE="${fixture_root}/codex-fixture-ca.pem"
+    declare -a codex_scrubbed_env=()
+    harness_worker_env codex_scrubbed_env ||
+        fail 'Codex review environment construction failed with inherited Codex variables.'
+    [[ "$(printf '%s\n' "${codex_scrubbed_env[@]}" | grep -cx CODEX_THREAD_ID)" == 1 ]] ||
+        fail 'Codex worker environment removed a fixed Codex variable twice.'
+    for name in CODEX_EXEC_SERVER_URL CODEX_SQLITE_HOME CODEX_API_KEY \
+        CODEX_INTERNAL_ORIGINATOR_OVERRIDE OPENAI_API_KEY OPENAI_BASE_URL \
+        CODEX_THREAD_ID; do
+        ! env "${codex_scrubbed_env[@]}" printenv "${name}" >/dev/null ||
+            fail "Codex worker environment kept inherited ${name}."
+    done
+    [[ "$(env "${codex_scrubbed_env[@]}" printenv CODEX_CA_CERTIFICATE)" == \
+        "${fixture_root}/codex-fixture-ca.pem" &&
+        "$(env "${codex_scrubbed_env[@]}" printenv FIXTURE_CODEX_KEY)" == \
+        fixture-secret-value &&
+        "$(env "${codex_scrubbed_env[@]}" printenv CODEX_HOME)" == \
+        "${codex_runtime}" ]] ||
+        fail 'Codex worker environment lost its provider trust, approved key, or runtime home.'
+    # A provider may name OPENAI_API_KEY itself as its approved key.
+    CODEX_PROVIDER_ENV_KEY=OPENAI_API_KEY
+    harness_worker_env codex_scrubbed_env ||
+        fail 'Codex review environment construction failed for an OPENAI_API_KEY provider.'
+    [[ "$(env "${codex_scrubbed_env[@]}" printenv OPENAI_API_KEY)" == \
+        fixture-hostile-openai-key ]] &&
+        ! env "${codex_scrubbed_env[@]}" printenv OPENAI_BASE_URL >/dev/null ||
+        fail 'Codex worker environment removed the approved provider key or kept another provider URL.'
+) || fail 'Codex worker environment scrub regression failed.'
+
+# Codex applies /etc/codex to every session, and its legacy managed
+# configuration overrides even command-line settings, so no run or worker home
+# is prepared while that directory has content or is not a plain directory.
+(
+    codex_system="${fixture_root}/codex-system-configuration"
+    CODEX_SYSTEM_CONFIGURATION_DIRECTORY="${codex_system}"
+    codex_require_no_system_configuration ||
+        fail 'Codex rejected an absent system configuration directory.'
+    mkdir -- "${codex_system}"
+    harness_prepare_run >/dev/null ||
+        fail 'Codex rejected an empty system configuration directory.'
+    printf '%s\n' 'model = "fixture-other"' > "${codex_system}/managed_config.toml"
+    if harness_prepare_run >/dev/null 2>&1; then
+        fail 'Codex prepared a run despite system configuration.'
+    fi
+    assert_equal \
+        "Codex system configuration exists in ${codex_system}. Codex applies it to every session, including the legacy managed_config.toml that overrides command-line settings, so Rhyolite cannot keep the worker within the approved plan. Remove or relocate it, or use another harness." \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Codex system configuration rejection'
+    codex_system_home="${fixture_root}/codex-system-runtime"
+    mkdir -m 700 -- "${codex_system_home}"
+    if harness_prepare_worker_home \
+        "${codex_system_home}" max long_context review >/dev/null 2>&1; then
+        fail 'Codex prepared a worker home despite system configuration.'
+    fi
+    [[ -z "$(find "${codex_system_home}" -mindepth 1 -print -quit)" ]] ||
+        fail 'Codex wrote a worker home despite system configuration.'
+    rm -f -- "${codex_system}/managed_config.toml"
+    rmdir -- "${codex_system}"
+    : > "${codex_system}"
+    if codex_require_no_system_configuration >/dev/null 2>&1; then
+        fail 'Codex accepted a non-directory system configuration path.'
+    fi
+    rm -f -- "${codex_system}"
+    mkdir -- "${codex_system}-target"
+    ln -s -- "${codex_system}-target" "${codex_system}"
+    if codex_require_no_system_configuration >/dev/null 2>&1; then
+        fail 'Codex accepted a symbolic link as its system configuration directory.'
+    fi
+) || fail 'Codex system configuration regression failed.'
 
 codex_snapshot_launcher="${fixture_root}/codex-snapshot-launcher"
 printf '#!/usr/bin/env bash\nexit 0\n' > "${codex_snapshot_launcher}"
@@ -572,6 +656,68 @@ harness_worker_continuation_argv \
     fail 'Codex continuation does not resume the mapped native thread.'
 [[ "$(printf '%s\n' "${codex_resumed_argv[@]}" | grep -cx resume)" == 1 ]] ||
     fail 'Codex continuation does not contain exactly one resume command.'
+
+# Codex fails before it creates a session when, for example, a required MCP
+# server does not start: its error goes to stderr, and it leaves no structured
+# output, final message, or session record. That is the worker's own failure,
+# never an adapter one, but only while all three are absent.
+(
+    codex_unstarted_home="${fixture_root}/codex-unstarted-runtime"
+    codex_unstarted_raw="${fixture_root}/codex-unstarted.raw"
+    codex_unstarted_normalized="${fixture_root}/codex-unstarted.normalized"
+    codex_unstarted_reply="${fixture_root}/codex-unstarted.reply"
+    mkdir -m 700 -- "${codex_unstarted_home}"
+    CODEX_RUNTIME_HOME="${codex_unstarted_home}"
+    CODEX_TRANSCRIPT_PATH="${fixture_root}/codex-unstarted-session.md"
+    : > "${codex_unstarted_raw}"
+    rm -f -- "${CODEX_REVIEW_FINAL_MESSAGE}"
+    harness_persist_agent_state \
+        "${codex_unstarted_home}" "${fixture_root}/codex-unstarted-state" \
+        max long_context ||
+        fail 'Codex reported a session that never started as a persistence failure.'
+    assert_equal missing "${CODEX_TRANSCRIPT_STATUS}" \
+        'Codex unstarted session status'
+    [[ ! -e "${CODEX_TRANSCRIPT_PATH}" &&
+        ! -e "${fixture_root}/codex-unstarted-state" ]] ||
+        fail 'Codex recorded session evidence for a session that never started.'
+    harness_normalize_worker_output \
+        review "${codex_unstarted_raw}" gpt-5.6-sol max \
+        "${codex_unstarted_normalized}" "${codex_unstarted_reply}" ||
+        fail 'Codex reported a session that never started as a normalization failure.'
+    [[ -f "${codex_unstarted_normalized}" && ! -s "${codex_unstarted_normalized}" &&
+        -f "${codex_unstarted_reply}" && ! -s "${codex_unstarted_reply}" ]] ||
+        fail 'Codex produced a narrative or reply for a session that never started.'
+    harness_verify_isolation "${codex_unstarted_normalized}" ||
+        fail 'Codex reported a session that never started as an isolation failure.'
+    rm -f -- "${codex_unstarted_normalized}" "${codex_unstarted_reply}"
+    printf '{"type":"thread.started","thread_id":"%s"}\n' "${codex_native_id}" \
+        > "${codex_unstarted_raw}"
+    if harness_normalize_worker_output \
+        review "${codex_unstarted_raw}" gpt-5.6-sol max \
+        "${codex_unstarted_normalized}" "${codex_unstarted_reply}" \
+        >/dev/null 2>&1; then
+        fail 'Codex accepted structured output without a session record.'
+    fi
+    assert_equal \
+        'The Codex review session record did not verify the approved model, effort, context, and no-subagent boundary.' \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Codex structured output without a session record'
+    if harness_verify_isolation "${codex_unstarted_normalized}" >/dev/null 2>&1; then
+        fail 'Codex accepted a missing session record after structured output.'
+    fi
+    : > "${codex_unstarted_raw}"
+    printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
+    if harness_normalize_worker_output \
+        review "${codex_unstarted_raw}" gpt-5.6-sol max \
+        "${codex_unstarted_normalized}" "${codex_unstarted_reply}" \
+        >/dev/null 2>&1; then
+        fail 'Codex accepted a final message without a session record.'
+    fi
+    assert_equal \
+        'The Codex review session record did not verify the approved model, effort, context, and no-subagent boundary.' \
+        "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Codex final message without a session record'
+) || fail 'Codex unstarted-session regression failed.'
 
 codex_reroute_raw="${fixture_root}/codex-reroute.raw"
 cat > "${codex_reroute_raw}" <<EOF
@@ -1631,6 +1777,17 @@ if (options.get("--sandbox") != "read-only"
     fail("unexpected sandbox or working directory")
 prompt = sys.stdin.read()
 
+# The real Codex 0.163.0 error when a required MCP server does not start: it
+# fails before it creates a session, so it leaves no structured output, final
+# message, or session record.
+if (phase == "review" and not resumed
+        and pathlib.Path(__file__).with_name("startup-failure-mode").exists()):
+    print("Error: thread/start: thread/start failed: error creating thread: Fatal error: "
+          "Failed to initialize session: required MCP servers failed to initialize: "
+          "rhyolite_snapshot: local stdio MCP server `rhyolite_snapshot` requires a local "
+          "environment (code -32603)", file=sys.stderr)
+    raise SystemExit(1)
+
 
 def use_server(server_name, calls):
     prefix = f"mcp_servers.{server_name}."
@@ -2173,5 +2330,56 @@ JS
     -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-timeout.stdout")" \
         -name '*.codex-final' -print -quit)" ]] ||
     fail 'Codex session timeout left a runtime home, broker runtime, or final-message file.'
+
+# Codex can fail before it creates a session, for example when a required MCP
+# server does not start. The run must report that worker failure with the
+# CLI's own error, not an adapter failure, and still clean up.
+touch -- "${codex_e2e_bin}/startup-failure-mode"
+codex_e2e_startup_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-startup-workspace"
+    --output-root "${fixture_root}/codex-e2e-startup-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_startup_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-startup-plan.json" \
+    2> "${fixture_root}/codex-e2e-startup-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-startup-plan.stderr" >&2
+        fail 'Codex end-to-end startup-failure plan failed.'
+    }
+if "${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_startup_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-startup-plan.json")" \
+    > "${fixture_root}/codex-e2e-startup.stdout" \
+    2> "${fixture_root}/codex-e2e-startup.stderr"; then
+    fail 'Codex end-to-end startup-failure fixture unexpectedly completed.'
+fi
+rm -f -- "${codex_e2e_bin}/startup-failure-mode"
+node - "$(contract_run_path "${fixture_root}/codex-e2e-startup.stdout")" <<'JS'
+const fs = require("fs"), path = require("path");
+const repo = path.join(process.argv[2], "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repo, "state.json"), "utf8"));
+const analysis = JSON.parse(fs.readFileSync(path.join(repo, "failure-analysis.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repo, "errors.txt"), "utf8");
+if (state.Status !== "ReviewFailed" || state.ExitCode !== 1 ||
+    analysis.Stage !== "worker analysis" ||
+    !errors.includes("Failed to initialize session: required MCP servers failed to initialize") ||
+    errors.includes("Harness failure stage:") || errors.includes("No such file or directory")) {
+  throw new Error(`a Codex startup failure was not reported as the worker's: ${state.Status}, ${analysis.Stage}\n${errors}`);
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-startup.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex startup failure left a runtime home, broker runtime, or final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
 printf 'Codex unregistered adapter contract validation passed.\n'

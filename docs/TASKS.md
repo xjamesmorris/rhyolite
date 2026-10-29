@@ -157,9 +157,13 @@ Status values:
   failure; both are fixed, and stop, timeout, and hard kill now leave
   truthful state and no process. A stopped worker's raw output, which the
   probe found left unsanitized for every harness, now survives only in its
-  sanitized timeline.
-- **Next step:** complete the hostile-configuration isolation gate, then
-  production enablement. Live
+  sanitized timeline. A hostile-configuration probe with the real CLI then
+  found that inherited Codex variables could redirect execution and state
+  and that system configuration in `/etc/codex` overrode the worker's
+  settings; the worker environment now removes those variables, the adapter
+  refuses to run while `/etc/codex` has content, and planted user, project,
+  workspace, and repository files had no effect before or after.
+- **Next step:** production enablement. Live
   report repair remains fixture-proven until a live run needs one. Keep
   production registration absent until the full contract and live evidence
   pass.

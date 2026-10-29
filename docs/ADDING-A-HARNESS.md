@@ -326,7 +326,7 @@ release artifacts.
 | `harness_research_worker_argv` | Destination array name, session root, plugin root, session name, session ID, model, reasoning effort, context tier, protected variable names, MCP config path, comma-separated broker tool names, and transcript path. Status only. | Populate the research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the named broker tools from that MCP configuration. Like `harness_worker_argv`, it runs before the research runtime home exists. |
 | `harness_research_worker_env` | Destination array name. Status only. | Populate the research `env` array for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | Research runtime-home path and raw research output path. Status only. | Run after the research child exits and before cleanup. Export the research transcript and fail when the session record shows another model or effort, a subagent turn, or a dossier without a record. An explicit success is allowed only when the harness already wrote its transcript. |
-| `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, subagent event, or subagent metric names a model or reasoning effort other than the approved values, and when any subagent event appears at all, because no Rhyolite worker receives a subagent tool; remove both outputs on failure. Normalize an ordinary failed turn, or a turn that a stop or timeout ended before any terminal event, to its narrative and an empty reply instead of failing: the runner classifies that failure from `harness_worker_outcome`, and it never continues a session after an adapter-function failure. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
+| `harness_normalize_worker_output` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, new normalized-output path, and new final-reply path. Status only. | Translate the raw stdout into a mode-0600 readable narrative and a mode-0600 exact final assistant reply. Validate the shared arguments with `rhyolite_harness_validate_normalize_arguments`. Fail with a sanitized detail when any recorded model call, tool call, usage checkpoint, subagent event, or subagent metric names a model or reasoning effort other than the approved values, and when any subagent event appears at all, because no Rhyolite worker receives a subagent tool; remove both outputs on failure. Normalize an ordinary failed turn, or a turn that a stop or timeout ended before any terminal event, to its narrative and an empty reply instead of failing: the runner classifies that failure from `harness_worker_outcome`, and it never continues a session after an adapter-function failure. Likewise, when the CLI failed before it started a session and left no structured output, final reply, or session record, normalize to an empty narrative and reply, and let `harness_persist_agent_state` and `harness_verify_isolation` accept the missing record for that invocation only; any output or reply without a session record still fails. A CLI whose print mode writes the exact reply may call `rhyolite_harness_normalize_worker_output_identity`. Never derive the reply from a rendered transcript or from terminal-rendered text, which wraps, renumbers, and escapes content. |
 | `harness_detect_worker_violation` | Phase (`review`, `research`, or `report-repair`), raw worker stdout path, approved model, approved reasoning effort, and a runner-owned cursor path. Status only. | Called every five seconds while the child runs. Validate the shared arguments with `rhyolite_harness_validate_violation_arguments`. Scan only the complete lines appended since the offset stored in the cursor file, then store the new offset in a mode-0600 cursor; a half-written final line is neither consumed nor judged. Return 0 when nothing outside the approved plan is recorded yet (including before any output exists), `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` with a sanitized detail on the first recorded model, effort, or subagent other than the approved plan, `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` with a sanitized detail when the provider declined a request to the approved model (a refusal outranks the fallback model it caused, a subagent outranks both), and 1 for any other failure, which the runner records once as a warning. Use the same evidence rules as the adapter's post-exit verification. A CLI that records no live evidence may call `rhyolite_harness_detect_worker_violation_none`. The runner terminates the child's process tree on the violation or refusal status and still runs the post-exit checks. |
 
 `harness_prepare_run` may inspect only the adapter's approved local
@@ -378,7 +378,12 @@ Worker environment must:
 - unset inherited allow-all state and harness-specific skill/custom-instruction
   discovery variables;
 - bind the unique runtime home explicitly;
-- forward only the approved provider environment-variable names;
+- forward only the approved provider environment-variable names, and unset
+  every other inherited variable that the CLI reads as configuration,
+  credentials, state location, or remote-execution control; for Codex that is
+  every `CODEX_*` variable except the TLS-trust `CODEX_CA_CERTIFICATE`, plus
+  `OPENAI_API_KEY` and `OPENAI_BASE_URL` unless the approved provider names
+  one of them as its key;
 - never copy all inherited variables into an intermediate file;
 - never inherit proxy, netrc, cookie, target, or repository configuration into
   anonymous Git or research boundaries;
@@ -472,6 +477,13 @@ Runtime-home requirements:
 - Configuration and bridge files are mode 0600.
 - The home contains no target checkout, writable report output, arbitrary user
   configuration, hook, project instruction, or unapproved plugin.
+- Configuration that the CLI reads from outside the runtime home is either
+  disabled by the runtime-home configuration or makes both
+  `harness_prepare_run` and `harness_prepare_worker_home` fail closed. Codex,
+  for example, sets `project_root_markers = []` so it reads no `.codex` folder
+  above its working directory, and refuses to run while `/etc/codex` has any
+  content, because its legacy managed configuration there overrides even
+  command-line settings.
 - The child has hooks disabled and only the required local bundled agent
   discovery.
 - Authentication bridge material is ephemeral and never persisted.
