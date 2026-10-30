@@ -352,7 +352,7 @@ if bash -c '
     fail 'Incomplete Copilot adapter unexpectedly loaded.'
 fi
 
-for unsupported_id in noop bogus codex gemini; do
+for unsupported_id in noop bogus example-cli gemini; do
     if bash -c '
         set -euo pipefail
         unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
@@ -376,10 +376,38 @@ assert_equal \
     "${PLUGIN_ROOT}/lib/harness/claude.sh" \
     "${production_registry_path}" \
     'Production fixed Claude Code registry path'
+rhyolite_harness_registry_lookup \
+    production_registry_path "${PLUGIN_ROOT}" codex ||
+    fail 'Production fixed registry did not resolve Codex.'
 assert_equal \
-    'copilot claude' \
+    "${PLUGIN_ROOT}/lib/harness/codex.sh" \
+    "${production_registry_path}" \
+    'Production fixed Codex registry path'
+assert_equal \
+    'copilot claude codex' \
     "$(rhyolite_harness_list_registered | tr '\n' ' ' | sed 's/ $//')" \
     'Production registered harness list'
+if ! bash -c '
+    set -euo pipefail
+    unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
+    # shellcheck source=/dev/null
+    source "$1"
+    rhyolite_harness_load "$2" codex
+    [[ "${RHYOLITE_HARNESS_LOADED_ID}" == codex ]]
+    for capability in shell_denial structured_questions web_research \
+        builtin_research_specialist final_message_file worker_continuation \
+        subagents builtin_security_specialist; do
+        [[ "$(harness_capability "${capability}")" != unverified ]]
+    done
+' bash \
+    "${HARNESS_COMMON}" \
+    "${PLUGIN_ROOT}" \
+    >"${fixture_root}/codex-load.stdout" \
+    2>"${fixture_root}/codex-load.stderr"; then
+    fail 'Codex harness adapter did not load from the production registry with resolved capabilities.'
+fi
+[[ ! -s "${fixture_root}/codex-load.stdout" ]] ||
+    fail 'Codex harness adapter load wrote unexpected stdout.'
 if ! bash -c '
     set -euo pipefail
     unset RHYOLITE_HARNESS RHYOLITE_LAUNCHER_HARNESS
@@ -3364,10 +3392,10 @@ assert_pre_activity_failure \
     bogus \
     unset
 assert_pre_activity_failure \
-    codex-load \
-    'harness codex load' \
+    example-cli-load \
+    'harness example-cli load' \
     explicit \
-    codex \
+    example-cli \
     unset
 assert_pre_activity_failure \
     gemini-load \
@@ -6448,8 +6476,10 @@ launcher_help="$(
 )"
 [[ "${launcher_help}" == *'--harness ID        Select a registered review harness.'* &&
     "${launcher_help}" == *'Available harnesses:'* &&
-    "${launcher_help}" == *'  - copilot'* ]] ||
-    fail 'Launcher help does not document the I1a Copilot harness selector.'
+    "${launcher_help}" == *'  - copilot'* &&
+    "${launcher_help}" == *'  - claude'* &&
+    "${launcher_help}" == *'  - codex'* ]] ||
+    fail 'Launcher help does not document the registered harness selector.'
 [[ "${launcher_help}" != *noop* ]] ||
     fail 'Launcher help exposed the development-only no-op harness.'
 [[ ! -e "${launcher_default_capture}" ]] ||

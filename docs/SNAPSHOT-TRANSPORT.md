@@ -1,10 +1,10 @@
 # Constrained snapshot-read transport
 
 The October 20, 2026 project decision authorizes an offline stdio MCP mode
-in the existing Python standard-library broker for the Codex workstream.
-This transport foundation does not register Codex or establish production
-harness support. Copilot and Claude Code continue to use their native
-snapshot readers.
+in the existing Python standard-library broker. The production Codex
+adapter, approved on October 29, 2026, reads the snapshot and the sanitized
+research files only through this transport. Copilot and Claude Code
+continue to use their native snapshot readers.
 
 ## Ownership and approval
 

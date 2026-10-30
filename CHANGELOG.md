@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- OpenAI Codex CLI is the third production review harness. Run
+  `./rhyolite --harness codex --repo <URL>` with Codex CLI 0.163.0 and an
+  explicitly configured Responses provider in your Codex `config.toml`
+  whose key is exported. Two short native Codex sessions ask the setup and
+  approval questions; the launcher then runs the approved review itself and
+  accepts exact `/rhyolite:status`, `stop`, and `cancel`. Codex workers read
+  the snapshot only through the bundled offline snapshot broker, run in
+  private Codex homes that ignore your other Codex settings and Codex
+  control variables, and support scopes 1, 2, and 3 with one model,
+  `gpt-5.6-sol`, and the single integrated security pass. Rhyolite refuses
+  other Codex releases and any content in `/etc/codex`. The launcher is the
+  only Codex entrypoint; there is no Codex marketplace plugin. See
+  [Use with OpenAI Codex CLI](README.md#use-with-openai-codex-cli).
+
 ### Fixed
 
 - A stopped or cancelled review no longer leaves the stopped worker's raw

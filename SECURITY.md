@@ -128,7 +128,7 @@ The supported runner path:
   login automatically.
 - Does not build, test, compile, install, load, or execute target code.
 - Uses the invoking user's Git identity and GitHub Copilot or Claude Code
-  sign-in; there is no service token.
+  sign-in or Codex provider key; there is no service token.
 - Resolves links and traversal in clone/output roots, checks that they
   are physically disjoint, creates the roots, and verifies them again
   before use.
@@ -268,6 +268,54 @@ the Claude Code adapter enforces these worker controls:
   Code's normal permission prompt unless the user launches with `--yolo`.
 - Claude Code `SessionStart` and `UserPromptSubmit` hooks are display-only and
   emit only a `systemMessage`.
+
+## Codex harness boundary
+
+With `--harness codex`, the runner applies the same repository, clone,
+snapshot, research, validation, and artifact controls, and the Codex adapter
+enforces these worker controls:
+
+- Codex reviews require exactly Codex CLI 0.163.0, the release whose
+  isolation and output were verified, and stop before any Codex process
+  starts while `/etc/codex` holds anything, because Codex applies that
+  system configuration to every session and its legacy managed
+  configuration overrides even command-line settings.
+- Each worker runs `codex exec` in a unique mode-0700 `CODEX_HOME` runtime
+  home that contains only a mode-0600 `config.toml`, a one-model catalog,
+  the phase's instruction bundle, and Codex's own session state. The
+  configuration copies only the provider's name, URL, and key-variable name
+  from the user's Codex configuration, sets the read-only sandbox,
+  `approval_policy = "never"`, disabled web search, no project instructions
+  (`project_doc_max_bytes = 0`), and no project root above the working
+  directory (`project_root_markers = []`), and disables the shell, patch,
+  agents and multi-agent, plugins and their hooks, skills, apps, plan
+  updates, questions, analytics, and metrics. The runner deletes the runtime
+  home after the worker exits, times out, or fails.
+- Workers read the snapshot only through the bundled offline snapshot
+  broker, a required local stdio MCP server whose four read-only tools are
+  each pre-approved by name; the research worker adds only the five local
+  broker tools. The report-repair child is a fresh `--ephemeral` session
+  with no MCP server, instructions, or tool in an empty working directory.
+- The worker environment drops every inherited `CODEX_*` variable except
+  `CODEX_CA_CERTIFICATE`, and `OPENAI_API_KEY` and `OPENAI_BASE_URL` unless
+  the provider names one of them as its key, so inherited variables cannot
+  redirect execution, credentials, or state outside the runtime home.
+- The adapter rejects a session whose event stream records a model reroute,
+  a collab or subagent item, or a tool outside the phase inventory, or whose
+  private rollout records another model, effort, context window, sandbox, or
+  approval policy. A content-filter stop, policy refusal, or reroute for
+  high-risk cyber activity is a provider refusal: the runner stops the
+  worker and never accepts the fallback output.
+- Persisted agent state is a filtered, redacted copy of the session record
+  with the session identity, turn contexts, and message text only.
+- The launcher's native setup and approval sessions run interactive Codex
+  in private temporary homes that hold only Rhyolite's two question skills,
+  installed through Codex's native local marketplace, with only the native
+  question tool enabled, the read-only sandbox, and `approval_policy =
+  "never"`. The controller accepts a session only when its record shows no
+  other tool or item and the approved model, effort, and context, and only
+  its strict one-line JSON result; the launcher's Bash controller, not a
+  model session, runs the review.
 
 ## Reporting a vulnerability
 

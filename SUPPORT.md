@@ -29,8 +29,9 @@ distribution and version, commands run, and results; see
 validation baseline.
 
 Support is best-effort and may vary by maintainer availability. Include
-the plugin version, the review harness (`copilot` or `claude`, shown on the
-`Harness:` line of `status`) and its CLI version, operating system,
+the plugin version, the review harness (`copilot`, `claude`, or `codex`,
+shown on the `Harness:` line of `status` or in the `Harness` field of the
+plan and `state.json`) and its CLI version, operating system,
 installation path, whether the load status and review-start plaque appeared,
 and sanitized logs when possible. For setup questions, include the
 `CURRENT SETUP STATUS` block or `status` output if it helps show the current

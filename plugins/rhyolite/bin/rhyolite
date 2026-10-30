@@ -1225,12 +1225,15 @@ Options:
                       With --harness claude, select from Rhyolite's Claude
                       Code catalog (default: claude-opus-5-5; alternate:
                       claude-opus-5).
+                      With --harness codex, gpt-5.6-sol is the only
+                      supported model.
                       --model default selects the remembered model, or the
                       default model, without asking.
   --allow-unlisted-model
                       Also accept a safe model ID that is missing from that
                       catalog; Copilot verifies availability when the review
                       runs, and the review never substitutes another model.
+                      Codex accepts no unlisted model.
   --reasoning-effort  Select high, xhigh, or max (recommended); default
                       selects the remembered or recommended effort.
   --context TIER      Select default or long_context (recommended). Here
@@ -1241,7 +1244,7 @@ Options:
                       on a different model, and a consolidation pass
                       verifies and merges their findings. 1 keeps the
                       integrated security pass. default uses the remembered
-                      count, or 2.
+                      count, or 2. Codex always uses 1.
   --scan-model SPEC   Model for the next extra scan (B, then C), as MODEL or
                       MODEL:EFFORT; repeat for scan C. default uses the
                       remembered model, or a suggested model from another
@@ -1265,7 +1268,7 @@ Options:
                       setup (output, scope, cookies, and lookback), so the
                       only remaining question is the final plan approval.
   --yolo         Start Copilot in YOLO mode for this launch (Claude Code:
-                 skip permission prompts).
+                 skip permission prompts; unavailable with Codex).
 
 Available harnesses:
 $(rhyolite_harness_list_registered | sed 's/^/  - /')
@@ -1273,8 +1276,10 @@ $(rhyolite_harness_list_registered | sed 's/^/  - /')
 Starts Copilot (or Claude Code with --harness claude) outside Git worktrees
 with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
 ${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
-immediately. Approved model, effort, context, and security scan settings
-are remembered per repository and harness.
+immediately. With --harness codex, short native Codex sessions ask the setup
+and approval questions, and the launcher itself runs the approved review.
+Approved model, effort, context, and security scan settings are remembered
+per repository and harness.
 
 Unknown options and GitHub URLs without a repository name are rejected before
 the harness starts. Put review request text that begins with a hyphen after --.
@@ -1785,19 +1790,23 @@ main() {
                 [ -f "${plugin_root}/${required_codex_asset}" ] ||
                     fail \
                         'plugin validation' \
-                        'A required staged Codex plugin asset is missing.' \
+                        'A required Codex plugin asset is missing.' \
                         "${required_codex_asset} was not found under ${plugin_root}." \
-                        'Restore the complete staged Rhyolite plugin installation and retry.' \
-                        2
+                        'Restore the complete Rhyolite plugin installation and retry.' \
+                        2 \
+                        'NONE' \
+                        'No Codex session or guided setup was started.'
             done
             [[ -x "${plugin_root}/scripts/run-codex-guided-stage.sh" &&
                 -x "${plugin_root}/scripts/run-codex-guided-review.sh" ]] ||
                 fail \
                     'plugin validation' \
-                    'A staged Codex guided helper is not executable.' \
+                    'A Codex guided helper is not executable.' \
                     'The Codex setup or review controller lost executable permission.' \
-                    'Restore the complete staged Rhyolite plugin installation and retry.' \
-                    2
+                    'Restore the complete Rhyolite plugin installation and retry.' \
+                    2 \
+                    'NONE' \
+                    'No Codex session or guided setup was started.'
             LAUNCHER_DEFAULT_MODEL="${RHYOLITE_DEFAULT_MODEL}"
             LAUNCHER_MODEL_IDS=(
                 "${RHYOLITE_DEFAULT_MODEL}"
@@ -1813,14 +1822,30 @@ main() {
                     'The OpenAI Codex CLI is not available.' \
                     "The '${harness_cli}' executable was not found on PATH." \
                     'Install Codex CLI 0.163.0 or add it to PATH, then retry.' \
-                    127
+                    127 \
+                    'NONE' \
+                    'No Codex session or guided setup was started.'
             ((yolo == 0)) ||
                 fail \
                     'launcher argument validation' \
-                    'YOLO mode is unavailable for the staged Codex flow.' \
+                    'YOLO mode is unavailable with Codex.' \
                     'Codex setup is question-only and Bash owns runner execution.' \
                     'Remove --yolo and retry.' \
-                    2
+                    2 \
+                    'NONE' \
+                    'No Codex session or guided setup was started.'
+            # Check offline, before any question or model request, that this
+            # environment can run a Codex review: no system configuration,
+            # the verified CLI release, a supported provider, and its key.
+            rhyolite_harness_invoke harness_prepare_run >/dev/null 2>&1 ||
+                fail \
+                    'Codex readiness' \
+                    'Codex cannot run a Rhyolite review in this environment.' \
+                    "${RHYOLITE_HARNESS_ERROR_DETAIL:-Codex run preparation failed.}" \
+                    'Correct the reported Codex installation, configuration, or provider key, then retry.' \
+                    2 \
+                    'NONE' \
+                    'No Codex session, review plan, or run output was created.'
             LAUNCHER_SINGLE_SECURITY_PASS=1
             ;;
         *)
@@ -1828,7 +1853,7 @@ main() {
                 'launcher harness validation' \
                 'The requested launcher harness has no supported outer session.' \
                 "Harness '${harness}' cannot start an interactive Rhyolite session." \
-                'Use --harness copilot or --harness claude with a complete Rhyolite plugin installation.' \
+                'Use --harness copilot, --harness claude, or --harness codex with a complete Rhyolite plugin installation.' \
                 2
             ;;
     esac
@@ -2453,7 +2478,7 @@ main() {
         if ((codex_exit_code != 0)); then
             fail \
                 'Codex guided review controller' \
-                'The staged Codex setup or Bash-owned review controller failed.' \
+                'The Codex setup or Bash-owned review controller failed.' \
                 "The controller returned exit code ${codex_exit_code}." \
                 'Review the private launcher session artifacts, correct the reported setup or runner failure, and retry.' \
                 "${codex_exit_code}" \

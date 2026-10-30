@@ -189,11 +189,12 @@ Options:
   --result-root PATH               Deprecated alias for --output-root
   --scope 1|2|3                    1 core, 2 public research, 3 exact-commit provenance
   --commit SHA                     Exact 40-character commit for one repository
-  --harness ID                     Review harness: copilot (default) or claude
+  --harness ID                     Review harness: copilot (default), claude, or codex
   --model MODEL                    gpt-5.6-sol (recommended), claude-opus-5.5,
                                    claude-fable-5.1,
                                    or another available model ID; with
-                                   --harness claude, claude-opus-5-5 (recommended)
+                                   --harness claude, claude-opus-5-5 (recommended);
+                                   with --harness codex, only gpt-5.6-sol
   --allow-unlisted-model           Accept a safe model ID that is missing from the
                                    harness's offline model catalog; the harness
                                    verifies availability when the review runs
@@ -249,6 +250,7 @@ Options:
 Available harnesses:
   - copilot
   - claude
+  - codex
 EOF
 }
 
@@ -886,7 +888,7 @@ errors_report_unavailable_model() {
 }
 
 # Adapter detail phrases that mean a session recorded a model, reasoning
-# effort, or subagent other than the approved plan, from either harness.
+# effort, or subagent other than the approved plan, from any harness.
 errors_report_approved_plan_violation() {
     grep -Eq \
         -e 'substituted output|substituted effort|unapproved subagent' \
@@ -917,7 +919,14 @@ errors_report_provider_refusal() {
         "$1" 2>/dev/null
 }
 
+# A harness that reads the snapshot through the offline transport keeps the
+# integrated security pass, so its plan can name no other model to take over.
 provider_refusal_remediation() {
+    if [[ "${SNAPSHOT_TRANSPORT_MODE}" != native ]]; then
+        printf '%s' \
+            'Read failure-analysis.md and errors.txt. The model provider declined the approved model for this repository; Rhyolite never retries a refusing model and never switches to a model outside the approved plan. This harness reads the snapshot through the offline snapshot transport, which allows no additional security scan models, so no other approved model could take over. Rerun later, or review this repository with --harness copilot or --harness claude and add --scan-model models from other vendors or families.'
+        return
+    fi
     printf '%s' \
         'Read failure-analysis.md and errors.txt. The model provider declined every approved model that could run for this repository; Rhyolite never retries a refusing model and never switches to a model outside the approved plan. Approve a plan that adds security scan models from other vendors or families, which also become report-writer and research candidates, then rerun.'
 }

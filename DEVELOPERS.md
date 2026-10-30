@@ -11,8 +11,8 @@ development contract for human contributors and coding agents.
 
 ## Development model
 
-Rhyolite is source-loaded by GitHub Copilot CLI and by Claude Code. There is
-no compile or package build step. Bash is the canonical implementation language for
+Rhyolite is source-loaded by GitHub Copilot CLI and by Claude Code, and its
+launcher drives OpenAI Codex CLI. There is no compile or package build step. Bash is the canonical implementation language for
 launchers, helpers, review orchestration, artifact rendering, and
 validation.
 
@@ -64,6 +64,12 @@ Install Claude Code (validated with 2.1.292) using an official method:
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
+Install OpenAI Codex CLI 0.163.0, the only Codex release Rhyolite accepts:
+
+```bash
+npm install -g @openai/codex@0.163.0
+```
+
 Verify the toolchain:
 
 ```bash
@@ -75,6 +81,7 @@ python3 --version
 curl --version
 copilot --version
 claude --version
+codex --version
 ```
 
 Git 2.41 or newer, Python 3, and curl are required for runner execution.
@@ -87,6 +94,10 @@ copilot login
 claude auth login
 ```
 
+For OpenAI Codex CLI, configure an explicit Responses provider in
+`~/.codex/config.toml` and export its key, as described in
+[Use with OpenAI Codex CLI](README.md#use-with-openai-codex-cli).
+
 ## Plugin discovery and launch
 
 From the repository root:
@@ -96,11 +107,13 @@ copilot --plugin-dir ./plugins/rhyolite plugin list
 claude plugin validate ./plugins/rhyolite
 ```
 
-Use the repository-root launcher, adding `--harness claude` for Claude Code:
+Use the repository-root launcher, adding `--harness claude` for Claude Code
+or `--harness codex` for OpenAI Codex CLI:
 
 ```bash
 ./rhyolite --repo https://github.com/owner/repository
 ./rhyolite --harness claude --repo https://github.com/owner/repository
+./rhyolite --harness codex --repo https://github.com/owner/repository
 ```
 
 The root wrapper remains delegation-only. The packaged implementation is
@@ -147,7 +160,10 @@ The fail-fast aggregate runs `tests/test-report-delivery.sh` (paged report
 delivery and collect-mode validation regressions) and
 `tests/validate-harness-contract.sh` before the legacy
 `tests/validate-plugin.sh` stage. The harness contract validator also
-runs the Claude Code adapter section, `tests/harness-contract-claude.sh`. Run it locally on Fedora Linux 44.
+runs the Claude Code and Codex adapter sections,
+`tests/harness-contract-claude.sh` and `tests/harness-contract-codex.sh`,
+and the offline snapshot transport section,
+`tests/harness-contract-snapshot.sh`. Run it locally on Fedora Linux 44.
 There is no hosted CI requirement.
 
 The plugin validator includes focused Bash helper regressions for shared
@@ -163,6 +179,7 @@ Changes to these surfaces normally move together:
 
 - `VERSION`, `plugins/rhyolite/plugin.json`,
   `plugins/rhyolite/.claude-plugin/plugin.json`,
+  `plugins/rhyolite/.codex-plugin/plugin.json`,
   `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
   `CHANGELOG.md` for releases.
 - `AGENTS.md`, tool-specific bootstrap pointers, `DEVELOPERS.md`, and
@@ -170,8 +187,13 @@ Changes to these surfaces normally move together:
 - `plugins/rhyolite/lib/harness/common.sh`, the selected adapter,
   `run-parallel-reviews.sh`, `tests/validate-harness-contract.sh`,
   `tests/harness-contract-claude.sh` for the Claude Code adapter,
+  `tests/harness-contract-codex.sh` for the Codex adapter,
   `docs/HARNESS-ARCHITECTURE.md`, and
   `docs/ADDING-A-HARNESS.md` for harness contract changes.
+- `.codex-plugin/plugin.json`, `codex/skills/`,
+  `scripts/run-codex-guided-stage.sh`, `scripts/run-codex-guided-review.sh`,
+  the launcher's Codex branch, and `tests/harness-contract-codex.sh` for the
+  Codex guided flow.
 - `branding/banner.txt`, `scripts/show-welcome-panel.sh`, the embedded
   prompt-native panels in both orchestrators, `claude/hooks.json`,
   `tests/validate-tui-runtime.mjs`, and `tests/validate-plugin.sh` for
@@ -202,14 +224,17 @@ Changes to these surfaces normally move together:
 Repository-only validator agents must never be packaged under
 `plugins/rhyolite/agents/`.
 
-GitHub Copilot CLI and Claude Code are the production harnesses. The no-op
+GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI are the production
+harnesses. The no-op
 adapter belongs only under `tests/fixtures` and may be loaded only through
 test-owned fixed fixture wiring. It must never be added to the production
 registry, plugin assets, launcher choices, marketplace metadata, or public
 support claims. Follow [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md)
-for Contract-v10 work and any future adapter.
-[docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) records the
-probes and real runs behind the Claude Code adapter's capability values.
+for Contract-v11 work and any future adapter.
+[docs/CLAUDE-HARNESS-EVIDENCE.md](docs/CLAUDE-HARNESS-EVIDENCE.md) and
+[docs/CODEX-HARNESS-EVIDENCE.md](docs/CODEX-HARNESS-EVIDENCE.md) record the
+probes and real runs behind the Claude Code and Codex adapters' capability
+values.
 
 `bash tests/test-report-repair.sh` covers the report-only confidence edit
 protocol and deterministic Markdown-table normalization. The aggregate gate

@@ -8,6 +8,8 @@
 
 **Offline snapshot-read broker mode approved:** October 20, 2026
 
+**OpenAI Codex CLI production harness approved:** October 29, 2026
+
 ## Decision
 
 Rhyolite is a **Linux-only, Bash-first** product for this release, with
@@ -21,22 +23,32 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
   implementation.
 - The bundled Python 3 standard-library research egress broker is the one
   approved constrained exception. Its separate offline snapshot-read MCP
-  mode is approved for the Codex workstream, using the same Python runtime
-  with no network/auth authority. This does not enable Codex production
-  support. Bash remains authoritative for
+  mode, using the same Python runtime with no network/auth authority, is how
+  Codex workers read the snapshot and the sanitized research files. Bash
+  remains authoritative for
   orchestration, planning, lifecycle, policy trust, cleanup, failure mapping,
   and artifact finalization.
 - Validation is local only. Hosted continuous integration is not part of
   the current release gate.
 - Non-Linux operating systems and alternate shells are not
   supported or validated.
-- GitHub Copilot CLI and Claude Code are the supported production review
-  harnesses. Claude Code was approved after the evidence recorded in
-  [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md). The fixed harness
-  registry remains limited to those two IDs. The Codex workstream now has an
-  unregistered Contract-v11 adapter candidate and focused synthetic integration
-  evidence; that does not change production support or launcher choices.
-  The Contract-v11 seam does not advertise or imply support for other CLIs.
+- GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI are the supported
+  production review harnesses. Claude Code was approved after the evidence
+  recorded in [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md), and
+  OpenAI Codex CLI 0.163.0 after the evidence recorded in
+  [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md). The fixed harness
+  registry is limited to those three IDs. The Contract-v11 seam does not
+  advertise or imply support for other CLIs.
+- Codex is supported only through the launcher. Codex model sessions only
+  ask the native setup and approval questions; the launcher's Bash
+  controller generates the plan, runs the approved review, and handles
+  status and stop, because a Codex session cannot run the runner without a
+  shell, which no Rhyolite model session receives. The launcher therefore
+  installs the two Codex question skills only into a private home for each
+  question session, and Rhyolite has no Codex marketplace: a user-level
+  install would add launcher-only skills to ordinary Codex sessions, where
+  they could never start a review. Codex supports one approved model, so
+  independent security scans and report-writer handover are unavailable.
 
 Contributions and test reports for other Linux flavors can help establish
 compatibility evidence, but do not replace the Fedora Linux 44 release gate.
@@ -89,7 +101,7 @@ decision; compatibility must not be preserved speculatively.
   the output appended since a runner-owned cursor, so a recorded model,
   effort, or subagent outside the approved plan terminates the worker within
   seconds instead of after the session completes. No worker receives a
-  subagent tool on either harness: Copilot CLI lets a `task` argument
+  subagent tool on any harness: Copilot CLI lets a `task` argument
   override every configured subagent model, so the Copilot review worker
   performs the dedicated security pass itself, like the Claude Code worker,
   and any recorded subagent fails the phase.
@@ -126,7 +138,7 @@ decision; compatibility must not be preserved speculatively.
   readers and introducing approval-bound `SnapshotTransport` only for the
   fixed offline MCP protocol. [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md)
   specifies exact tools/schemas, bounded grants, phase separation, and Bash
-  lifecycle. Codex remains unregistered until all harness gates pass.
+  lifecycle. The Codex adapter is the production user of that protocol.
 - `WorkerRecoveryPolicy.RetryBackoff` binds increasing transient/rate-limit
   delays to approval: 30 seconds initially, doubling to at most 300 seconds
   within the approved session timeout and unchanged retry limits.
@@ -147,8 +159,8 @@ decision; compatibility must not be preserved speculatively.
 - Any further production harness requires a separate explicit support
   decision, complete safety and capability evidence, Fedora validation,
   packaging and user-documentation updates, and a release. Contract
-  generalization alone is not that decision. The Claude Code decision followed
-  that process.
+  generalization alone is not that decision. The Claude Code and Codex
+  decisions followed that process.
 
 ## Refactor sequence
 

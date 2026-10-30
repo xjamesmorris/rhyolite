@@ -7,8 +7,9 @@ not part of the release script or checklist.
 
 Public release copy describes Rhyolite as an open-source software analysis
 platform and `repo-review` as its initial/default and currently only shipped
-module. This release is a GitHub Copilot plugin and a Claude Code plugin,
-with production harness support for GitHub Copilot CLI and Claude Code.
+module. This release is a GitHub Copilot plugin and a Claude Code plugin
+with a launcher-driven OpenAI Codex CLI path, with production harness support
+for GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI.
 
 The clean export and preflight remain mandatory release gates. They validate
 the exact candidate tree but do not create a separate history or release
@@ -119,6 +120,12 @@ repository.
     `rhyolite --harness claude`, confirm the aligned plaque, the guided
     pickers, and a completed review.
 
+12. Codex has no marketplace. From the released checkout, with Codex CLI
+    0.163.0 and a configured provider whose key is exported, run
+    `./rhyolite --harness codex --repo <public HTTPS URL>` and confirm the
+    offline readiness check, both native question sessions, the printed
+    JSON plan, exact `/rhyolite:status`, and a completed review.
+
 If public distribution is intended, separately verify repository visibility,
 GitHub private vulnerability reporting, support forms, anonymous marketplace
 installation, and update behavior before announcing the release. GitHub
@@ -126,9 +133,10 @@ Copilot plugins are public-preview features.
 
 ## Versioning
 
-- Keep `VERSION`, both `plugin.json` manifests
-  (`plugins/rhyolite/plugin.json` and
-  `plugins/rhyolite/.claude-plugin/plugin.json`), and both marketplace
+- Keep `VERSION`, all three plugin manifests
+  (`plugins/rhyolite/plugin.json`,
+  `plugins/rhyolite/.claude-plugin/plugin.json`, and
+  `plugins/rhyolite/.codex-plugin/plugin.json`), and both marketplace
   registries (`.github/plugin/marketplace.json` and
   `.claude-plugin/marketplace.json`) synchronized.
 - Also update both packaged version commands, both prompt-native help
@@ -175,6 +183,7 @@ that onboarding notice.
 
 1. Update `VERSION`, `plugins/rhyolite/plugin.json`,
    `plugins/rhyolite/.claude-plugin/plugin.json`,
+   `plugins/rhyolite/.codex-plugin/plugin.json`,
    `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
    `CHANGELOG.md`, plus the packaged version strings listed under
    [Versioning](#versioning).

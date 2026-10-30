@@ -4431,8 +4431,13 @@ def _():
             "Rhyolite stopped each refused session, never retried a refusing model, handed over to every "
             "other approved model it had not declined, and never accepted output from a model outside the approved plan."
             + budget_note(),
-            ["Approve a plan that adds security scan models from other vendors or families with --scan-model; they also become report-writer and research candidates. Then rerun.",
-             "If the same models are declined again at the same point, the provider is declining this repository's security content for them; keep the models that completed."],
+            # A plan with the offline snapshot transport keeps the integrated
+            # security pass, so it can name no other model to take over.
+            (["This harness reads the snapshot through the offline snapshot transport, which allows no additional security scan models, so no other approved model could take over. Rerun later, or review this repository with --harness copilot or --harness claude and add --scan-model models from other vendors or families.",
+              "If the provider declines the same request again, it is declining this repository's security content for this model."]
+             if isinstance(state.get("SnapshotTransport"), dict) and state.get("SnapshotTransport")
+             else ["Approve a plan that adds security scan models from other vendors or families with --scan-model; they also become report-writer and research candidates. Then rerun.",
+                   "If the same models are declined again at the same point, the provider is declining this repository's security content for them; keep the models that completed."]),
             ["Read the refusal records in state.json ProviderRefusals and the archived attempts under report-writer/attempts/ or research/attempts/ for the declined request."])
 
 

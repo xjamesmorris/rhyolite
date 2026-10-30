@@ -77,7 +77,7 @@ RHYOLITE_HARNESS_REQUIRED_FUNCTIONS=(
 )
 
 rhyolite_harness_list_registered() {
-    printf '%s\n' copilot claude
+    printf '%s\n' copilot claude codex
 }
 
 rhyolite_harness_set_error() {
@@ -464,6 +464,10 @@ rhyolite_harness_registry_lookup() {
         claude)
             printf -v "${output_variable}" '%s' \
                 "${plugin_root%/}/lib/harness/claude.sh"
+            ;;
+        codex)
+            printf -v "${output_variable}" '%s' \
+                "${plugin_root%/}/lib/harness/codex.sh"
             ;;
         *)
             rhyolite_harness_set_error \

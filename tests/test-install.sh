@@ -67,10 +67,22 @@ printf 'Unexpected launcher Copilot invocation\n' > "${INSTALL_COPILOT_PROBE_LOG
 exit 99
 SH
 chmod 700 -- "${TEST_ROOT}/launcher-probe-bin/copilot"
+cat > "${TEST_ROOT}/launcher-probe-bin/codex" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == --version ]]; then
+    printf '%s\n' 'codex-cli 0.163.0'
+    exit 0
+fi
+printf 'Unexpected launcher Codex invocation\n' > "${INSTALL_CODEX_PROBE_LOG:?}"
+exit 99
+SH
+chmod 700 -- "${TEST_ROOT}/launcher-probe-bin/codex"
 
 offline_launcher() {
     isolated_env env PATH="${TEST_ROOT}/launcher-probe-bin:${PATH}" \
-        INSTALL_COPILOT_PROBE_LOG="${TEST_ROOT}/launcher-copilot-called" "$@"
+        INSTALL_COPILOT_PROBE_LOG="${TEST_ROOT}/launcher-copilot-called" \
+        INSTALL_CODEX_PROBE_LOG="${TEST_ROOT}/launcher-codex-called" "$@"
 }
 
 assert_payload() {
@@ -277,7 +289,7 @@ assert_install() {
     local version="$2"
     local expected_payload="$3"
     local label="$4"
-    local launcher_version launcher_help load_status
+    local launcher_version launcher_help load_status codex_readiness_status
     local link_dir="${TEST_ROOT}/launcher links/${label}"
     local -a installed_start_commands=()
 
@@ -327,6 +339,21 @@ assert_install() {
         fail 'Installed launcher help failed.'
     [[ "${launcher_help}" == "Rhyolite v${version} Beta"$'\n'* ]] ||
         fail 'Installed launcher help version is stale.'
+    [[ "${launcher_help}" == *$'\n  - copilot\n  - claude\n  - codex\n'* ]] ||
+        fail 'Installed launcher help does not list the three production harnesses.'
+    # The installed package resolves Codex through the production registry
+    # and stops at the launcher's offline readiness check, before any Codex
+    # session, because this isolated home configures no Codex provider.
+    codex_readiness_status=0
+    offline_launcher "${link_dir}/rhyolite" --harness codex \
+        --repo https://github.com/octocat/Hello-World --auto-defaults \
+        > "${TEST_ROOT}/${label}-codex-readiness.stdout" \
+        2> "${TEST_ROOT}/${label}-codex-readiness.stderr" ||
+        codex_readiness_status=$?
+    ((codex_readiness_status == 2)) &&
+        grep -Fq 'Stage: Codex readiness' \
+            "${TEST_ROOT}/${label}-codex-readiness.stderr" ||
+        fail 'Installed launcher did not stop Codex at its offline readiness check.'
     summary_version="$(
         offline_launcher \
             "${installed_plugin_root}/bin/rhyolite-summary" --version
@@ -560,6 +587,8 @@ grep -Fq 'development-only artifact: scripts/__pycache__' \
 rmdir -- "${cache_fixture}"
 [[ ! -e "${TEST_ROOT}/launcher-copilot-called" ]] ||
     fail 'Offline launcher help, version, or failure checks unexpectedly invoked Copilot.'
+[[ ! -e "${TEST_ROOT}/launcher-codex-called" ]] ||
+    fail 'The offline Codex readiness check started a Codex session.'
 
 # Claude Code: validate both manifests, install from the local Claude Code
 # marketplace into an isolated configuration, and compare the installed

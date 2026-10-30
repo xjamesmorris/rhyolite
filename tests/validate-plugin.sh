@@ -257,12 +257,12 @@ grep -Fq '[AGENTS.md](../AGENTS.md)' "${COPILOT_INSTRUCTIONS}" &&
     fail 'Copilot bootstrap does not point to canonical AGENTS.md guidance.'
 grep -Fq '[AGENTS.md](AGENTS.md)' "${CLAUDE_GUIDANCE}" &&
     grep -Fq 'bootstrap pointer only' "${CLAUDE_GUIDANCE}" &&
-    grep -Fq 'production runtime harnesses are GitHub Copilot CLI and Claude' \
+    grep -Fq 'production runtime harnesses are GitHub Copilot CLI, Claude Code,' \
         "${CLAUDE_GUIDANCE}" ||
     fail 'Claude contributor pointer does not point to AGENTS.md and state the supported runtime harnesses.'
 tr '\r\n\t' '   ' < "${COPILOT_INSTRUCTIONS}" |
     sed -E 's/[[:space:]]+/ /g' |
-    grep -Fq 'Production runtime harness support covers GitHub Copilot CLI and Claude Code only.' ||
+    grep -Fq 'Production runtime harness support covers GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI only.' ||
     fail 'Copilot bootstrap does not state the supported runtime harnesses.'
 for support_claim_document in \
     "${README}" \
@@ -1781,7 +1781,7 @@ grep -Fq 'Rhyolite is an open-source software analysis platform.' \
         <<< "${normalized_readme}" &&
     grep -Fq 'This release is delivered as a GitHub Copilot plugin and a Claude Code plugin' \
         <<< "${normalized_readme}" &&
-    grep -Fq 'production runtime harness support covers GitHub Copilot CLI and Claude Code' \
+    grep -Fq 'production runtime harness support covers GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI' \
         <<< "${normalized_readme}" ||
     fail 'README does not preserve the canonical platform/module/runtime positioning.'
 normalized_publishing="$(
@@ -1902,7 +1902,7 @@ grep -Fq 'Rhyolite is an open-source software analysis platform.' \
     <<< "${normalized_agent_guidance}" &&
     grep -Fq '`repo-review` is its initial and default module and is currently the only shipped module.' \
         <<< "${normalized_agent_guidance}" &&
-    grep -Fq 'production harness support for GitHub Copilot CLI and Claude Code' \
+    grep -Fq 'production harness support for GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI' \
         <<< "${normalized_agent_guidance}" ||
     fail 'Canonical agent guidance does not preserve platform/module/runtime positioning.'
 grep -Fq 'bin/rhyolite' <<< "${normalized_agent_guidance}" &&

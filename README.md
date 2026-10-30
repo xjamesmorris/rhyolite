@@ -3,8 +3,8 @@
 Rhyolite is an open-source software analysis platform. `repo-review` is its
 initial and default module and is currently the only shipped module.
 This release is delivered as a GitHub Copilot plugin and a Claude Code
-plugin, and production runtime harness support covers GitHub Copilot CLI and
-Claude Code.
+plugin with a launcher-driven OpenAI Codex CLI path, and production runtime
+harness support covers GitHub Copilot CLI, Claude Code, and OpenAI Codex CLI.
 
 ![Rhyolite launcher starting guided repo-review setup in GitHub Copilot CLI](images/rhy-ss1.png)
 
@@ -18,8 +18,9 @@ of the public `rhyolite-test-1` test repository.
 ## Quickstart
 
 Requirements: Linux with Bash (validated on Fedora Linux 44), GitHub
-Copilot CLI or Claude Code, Git 2.41 or newer, Python 3, and curl. The steps
-below use GitHub Copilot CLI, the default harness.
+Copilot CLI, Claude Code, or OpenAI Codex CLI 0.163.0, Git 2.41 or newer,
+Python 3, and curl. The steps below use GitHub Copilot CLI, the default
+harness.
 
 Other Fedora versions and Linux distributions may work, but all validation
 so far has been on Fedora Linux 44. Contributions and test reports from
@@ -68,6 +69,11 @@ worktree and type `/rhyolite:start`.
 To review with Claude Code instead, sign in with `claude auth login` and run
 `./rhyolite --harness claude --repo https://github.com/owner/repository`;
 [Use with Claude Code](#use-with-claude-code) describes the differences.
+
+To review with OpenAI Codex CLI, configure its model provider as described
+in [Use with OpenAI Codex CLI](#use-with-openai-codex-cli), export the
+provider's key, and run
+`./rhyolite --harness codex --repo https://github.com/owner/repository`.
 
 ## What's included
 
@@ -123,11 +129,13 @@ other Linux flavors are welcome; this does not imply validated support.
 Non-Linux operating systems remain unsupported. See
 [docs/PLAN-OF-RECORD.md](docs/PLAN-OF-RECORD.md).
 
-**Review harness support:** GitHub Copilot CLI (`copilot`, the default) and
-Claude Code (`claude`, selected with `--harness claude`) are the production
-runtime harnesses. See [Use with Claude Code](#use-with-claude-code) for the
-Claude Code differences. The harness abstraction is a fixed, fail-closed
-internal seam; it does not make other CLIs supported.
+**Review harness support:** GitHub Copilot CLI (`copilot`, the default),
+Claude Code (`claude`, selected with `--harness claude`), and OpenAI Codex
+CLI (`codex`, selected with `--harness codex`) are the production runtime
+harnesses. See [Use with Claude Code](#use-with-claude-code) and
+[Use with OpenAI Codex CLI](#use-with-openai-codex-cli) for their
+differences. The harness abstraction is a fixed, fail-closed internal seam;
+it does not make other CLIs supported.
 
 Rhyolite is licensed under the GNU General Public License version 2
 only (`GPL-2.0-only`). See [LICENSE](LICENSE).
@@ -138,7 +146,8 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   maximum available reasoning effort and context (as of October 7, 2026,
   examples include GPT-5.6 Sol, Claude Opus 5.5, and Claude Fable 5.1).
 - Sign in before starting a review: run `copilot login` for GitHub Copilot
-  CLI, or `claude auth login` for Claude Code.
+  CLI, or `claude auth login` for Claude Code. For OpenAI Codex CLI,
+  configure its model provider and export the provider's key.
 - Use the issue templates in this repository and [SUPPORT.md](SUPPORT.md)
   for questions and feature requests.
 - Contributors should start with [Development](#development).
@@ -161,6 +170,12 @@ only (`GPL-2.0-only`). See [LICENSE](LICENSE).
   recovery and consolidation-ledger requests. Keep the host awake during a
   review; otherwise recovery can run out of time even when little model work
   has occurred.
+- **Codex harness scope:** Codex reviews are validated only with Codex CLI
+  0.163.0, one model (`gpt-5.6-sol`), and one explicitly configured provider
+  deployment. With one approved model, independent security scans and a
+  report-writer handover after a provider refusal are unavailable. The
+  confidence-edit report repair is proven with fixtures, not yet in a live
+  Codex review.
 
 ## Install from a published marketplace
 
@@ -279,6 +294,97 @@ To validate the development checkout's manifests:
 ```bash
 claude plugin validate ./plugins/rhyolite
 ```
+
+## Use with OpenAI Codex CLI
+
+OpenAI Codex CLI (`codex`) is the third production harness. Rhyolite is
+validated with Codex CLI 0.163.0 on Fedora Linux 44 and refuses to review
+with any other release, because its isolation and output checks are proven
+only for that release. The checkout launcher is the only Codex entrypoint;
+there is no Codex marketplace plugin to install. Start a guided review from
+the checkout:
+
+```bash
+./rhyolite --harness codex --repo https://github.com/owner/repository
+```
+
+- **Provider and key:** Rhyolite uses only the model provider settings in
+  `config.toml` in your Codex home (`$CODEX_HOME`, by default `~/.codex`),
+  and only in this form: a top-level `model_provider` that names a
+  `[model_providers.<id>]` table containing only `name`, `base_url`,
+  `env_key`, and `wire_api = "responses"`. The `base_url` must be an
+  `https` URL on port 443 without credentials, query, or fragment; a
+  top-level `model`, when present, must be `gpt-5.6-sol`; and no `profile`
+  may be selected. Export the variable that `env_key` names in the shell
+  that runs the launcher. Codex's built-in provider and ChatGPT sign-in are
+  not used. For example:
+
+  ```toml
+  model_provider = "example"
+
+  [model_providers.example]
+  name = "Example provider"
+  base_url = "https://provider.example.com/v1"
+  env_key = "EXAMPLE_PROVIDER_KEY"
+  wire_api = "responses"
+  ```
+
+  Validation used one explicitly configured provider deployment of
+  `gpt-5.6-sol`.
+- **Launcher checks and choices:** before any question, the launcher checks
+  offline that `/etc/codex` holds no configuration, that the CLI is 0.163.0,
+  and that the provider settings use the form above with their key
+  exported. `gpt-5.6-sol` is the only supported model, and
+  `--allow-unlisted-model` does not widen that. Reasoning effort is `max`
+  (recommended), `xhigh`, or `high`; Codex's `ultra` is rejected because it
+  enables automatic delegation. Context is `long_context` (recommended,
+  828,400 usable tokens) or `default` (258,400).
+- **Guided questions:** two short native Codex sessions ask the questions.
+  The first asks for the output folder and scope and, for scopes 2 and 3,
+  the research-cookie mode and provenance lookback. The second approves the
+  plan with `Run review`, `Edit setup`, or `Explain scope`. Each runs in a
+  private temporary Codex home that holds only Rhyolite's two question
+  skills and offers only Codex's native question tool, and each makes model
+  requests at the selected effort. After its one-line JSON result appears,
+  press Ctrl-D to return to the launcher. Between them, the launcher prints
+  the `EFFECTIVE REVIEW PLAN` as JSON. `--auto-defaults` skips the first
+  session (home output and scope 1), but the plan still needs approval.
+- **Running, status, and stop:** the launcher itself, not a model session,
+  runs the approved review in the same terminal and prints its progress.
+  Type exact `/rhyolite:status` for progress, or exact `stop` or `cancel` to
+  stop the review through the runner's verified stop request. On
+  completion, the launcher prints the run output folder. Codex sessions
+  write no executive summary, so open `index.html` in that folder.
+- **Workers:** review and research workers run `codex exec` in Codex's
+  read-only sandbox with no shell, file-edit, web-search, or subagent tool.
+  They read the snapshot only through the bundled offline snapshot broker's
+  four read-only tools; Codex's three MCP resource helpers expose no other
+  data. The research worker adds only the five local broker tools, and the
+  report-repair child has no tools. Each worker runs in a private temporary
+  Codex home, so no other Codex setting, `AGENTS.md` file, instruction,
+  skill, hook, rule, memory, or plugin reaches it, nor does a `.codex`
+  folder above its working directory. Its environment drops every inherited
+  `CODEX_*` variable except `CODEX_CA_CERTIFICATE`, and `OPENAI_API_KEY` and
+  `OPENAI_BASE_URL` unless the provider names one of them as its key.
+- **System configuration:** Codex applies `/etc/codex` to every session, and
+  its legacy managed configuration overrides even command-line settings, so
+  Rhyolite refuses to start a Codex review while `/etc/codex` holds anything.
+- **Security scans and launch options:** Codex keeps the single integrated
+  security pass, which is the same in every scope. `--security-scans 2` or
+  `3`, `--scan-model`, `--consolidation-model`, `--min-successful-scans`,
+  and `--reuse-scans` are rejected, and `--yolo` is unavailable.
+- **Model substitution and refusals:** when the provider answers with
+  another model, Codex records a `model rerouted` notice, and Rhyolite
+  rejects the session. A reroute for high-risk cyber activity or a
+  content-filter stop is a provider refusal of the approved model; with only
+  one approved model, the review then fails at stage `provider refusal`.
+  Rerun later, or review that repository with Copilot or Claude Code and add
+  scan models from other vendors.
+  Codex's own bounded retries, up to four per request and five per stream,
+  absorb transient provider errors and rate limits within a turn.
+- **Artifacts:** `session.md` is a rendered transcript, and `agent-state/`
+  keeps only a filtered session record: the session identity, each turn's
+  model, effort, and sandbox, and the message text.
 
 ## Use interactively
 
@@ -803,6 +909,9 @@ consolidate them into the one canonical report.
   review, so two scans use about three times the model sessions of a single
   integrated security pass. With Copilot CLI, the launcher also checks each
   additional model with one short request (one premium request each).
+- With OpenAI Codex CLI, Rhyolite approves only one model, so Codex always
+  keeps the single integrated security pass and rejects the other scan
+  options.
 
 The scan count, every scan model and effort, the consolidation model, the
 minimum successful scans, the same-session scan report request, and any
@@ -813,7 +922,9 @@ changing any of them requires a new approval.
 
 A model provider can decline a request (a content refusal), most often on
 security-heavy content. Copilot CLI and Claude Code then try an automatic
-fallback to another model. Rhyolite never accepts that fallback: it stops the
+fallback to another model, and Codex CLI reroutes a request that the provider
+flags for high-risk cyber activity to another model. Rhyolite never accepts
+that fallback: it stops the
 worker as soon as the refusal is recorded, reports it, and never retries the
 declined model for the same repository. The approval-bound `RefusalPolicy`
 in the effective plan lists what happens next:
@@ -947,6 +1058,11 @@ uses the Claude Code authentication described in
 [Use with Claude Code](#use-with-claude-code) and persists only the worker's
 settings and filtered session record.
 
+Add `--harness codex` to run OpenAI Codex CLI workers. The runner then uses
+the provider settings and key described in
+[Use with OpenAI Codex CLI](#use-with-openai-codex-cli), accepts only one
+security scan, and persists only a filtered session record.
+
 The report-repair child preserves that same authentication/provider/offline
 path and CLI cache resolution while using a separate fresh `COPILOT_HOME`.
 It does not copy or persist the analysis session, has no model-visible tools,
@@ -1074,7 +1190,7 @@ fixed `ReportRepairPolicy`, including `DeterministicNormalizations`, is
 disclosed by the effective plan and included in its approval hash.
 
 The approval-bound `WorkerRecoveryPolicy` adds bounded same-session recovery
-for the Copilot and Claude Code harnesses. When a report is missing, cut off
+for the Copilot, Claude Code, and Codex harnesses. When a report is missing, cut off
 at the model's per-response output limit, or rejected by strict validation,
 the runner keeps every valid section and asks the same review session, which
 still holds the analysis, to resend only the missing or invalid sections in
@@ -1240,15 +1356,21 @@ Important defaults:
   `Grep` (plus the five broker tools for research). Project instructions,
   hooks, memory, and slash commands are disabled, and a review fails if any
   worker turn used a model or effort other than the approved one.
+- Codex workers run `codex exec` in a read-only sandbox with no shell,
+  file, web-search, or subagent tool. They read the snapshot only through
+  the bundled offline snapshot broker (plus the five broker tools for
+  research), in a private Codex home that uses only the provider settings
+  from your Codex configuration, and a review fails if Codex rerouted a
+  worker turn or recorded a model or effort other than the approved one.
 - Copilot workers run with only `view`, `glob`, `rg`, and `skill`. No worker
-  on either harness can start a subagent, because a Copilot `task` call's
+  on any harness can start a subagent, because a Copilot `task` call's
   `model` argument overrides every configured subagent model; the worker
   performs the dedicated security pass itself. While a worker runs, the
   runner checks its recorded output every five seconds and terminates it on
   the first recorded model, effort, or subagent outside the approved plan,
   and the completed session is rejected on the same evidence.
 - Users run under their own Git identity and their own GitHub Copilot or
-  Claude Code sign-in.
+  Claude Code sign-in or Codex provider key.
 - No telemetry or report upload is implemented by this plugin.
 
 ## Name
@@ -1264,7 +1386,7 @@ Contributor and coding-agent guidance is canonicalized in
 [DEVELOPERS.md](DEVELOPERS.md) for environment setup and the validation
 matrix. The harness architecture is in
 [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md), and the
-Contract-v10 implementation playbook is in
+Contract-v11 implementation playbook is in
 [docs/ADDING-A-HARNESS.md](docs/ADDING-A-HARNESS.md). The no-op adapter and
 worker under `tests/fixtures/harnesses/` are development-only contract
 fixtures; they are not registered, packaged, selectable, or exposed in
@@ -1471,9 +1593,9 @@ Neither development agent is packaged with or invoked by installed
 Rhyolite sessions.
 
 `AGENTS.md` is the canonical development contract. Harness changes must also
-follow `docs/ADDING-A-HARNESS.md`; production support covers the `copilot`
-and `claude` adapters, and any other harness requires a separately approved
-adapter that satisfies that playbook in full.
+follow `docs/ADDING-A-HARNESS.md`; production support covers the `copilot`,
+`claude`, and `codex` adapters, and any other harness requires a separately
+approved adapter that satisfies that playbook in full.
 
 ### Publishing
 

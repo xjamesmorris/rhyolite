@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Codex adapter section of the focused harness contract validator.
-# Production common.sh intentionally remains a two-entry registry.
+# Codex is a registered production harness; these fixtures still load it
+# through a test-owned registry copy so that they never depend on the
+# production plugin tree.
 
 CODEX_HARNESS="${PLUGIN_ROOT}/lib/harness/codex.sh"
 CODEX_PLUGIN_MANIFEST="${PLUGIN_ROOT}/.codex-plugin/plugin.json"
@@ -13,7 +15,7 @@ for path in \
     "${CODEX_SETUP_SKILL}" \
     "${CODEX_APPROVAL_SKILL}" \
     "${CODEX_GUIDED_STAGE}"; do
-    [[ -f "${path}" ]] || fail "Required unregistered Codex asset is missing: ${path}"
+    [[ -f "${path}" ]] || fail "Required Codex asset is missing: ${path}"
 done
 bash -n "${CODEX_HARNESS}" ||
     fail 'Codex adapter has a Bash syntax error.'
@@ -24,8 +26,12 @@ bash -n "${CODEX_GUIDED_STAGE}" ||
 [[ "$(grep -Fc -- '-c features.plugins=true' "${CODEX_GUIDED_STAGE}")" == 3 &&
     "$(grep -Fc -- "-c 'plugins._default.enabled=true'" "${CODEX_GUIDED_STAGE}")" == 2 ]] ||
     fail 'Codex guided-stage plugin management or launch lost explicit enable overrides.'
+# The launcher is the only Codex entrypoint: it installs the setup and
+# approval skills into a private home for each stage. A root marketplace would
+# add those launcher-only skills to ordinary Codex sessions, where they can
+# never start a review.
 [[ ! -e "${ROOT}/.agents/plugins/marketplace.json" ]] ||
-    fail 'Codex marketplace registration was exposed before production enablement.'
+    fail 'A root Codex marketplace would expose the launcher-only Codex skills to ordinary Codex sessions.'
 node - "${CODEX_PLUGIN_MANIFEST}" "${ROOT}/VERSION" <<'JS'
 const fs = require("fs");
 const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -33,7 +39,7 @@ const version = fs.readFileSync(process.argv[3], "utf8").trim();
 if (manifest.name !== "rhyolite" || manifest.version !== version ||
     JSON.stringify(manifest.skills) !== JSON.stringify(["./codex/skills"]) ||
     "mcpServers" in manifest || "hooks" in manifest || "apps" in manifest) {
-  throw new Error("unregistered Codex plugin manifest changed");
+  throw new Error("Codex plugin manifest changed");
 }
 JS
 for skill in "${CODEX_SETUP_SKILL}" "${CODEX_APPROVAL_SKILL}"; do
@@ -990,6 +996,58 @@ set -e
 assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
     'collab/subagent' 'Codex collab rejection detail'
 
+# A recorded model, effort, or subagent outside the approved plan surfaces as
+# the runner's approved-model enforcement stage for every harness, so each
+# Codex detail must use the vocabulary of the runner's own classifier.
+(
+    eval "$(sed -n '/^errors_report_approved_plan_violation() {/,/^}/p' "${RUNNER}")"
+    declare -F errors_report_approved_plan_violation >/dev/null ||
+        fail 'The runner approved-plan violation classifier could not be read.'
+    codex_violation_detail_file="${fixture_root}/codex-violation-detail.txt"
+    codex_expect_enforcement_detail() {
+        printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            > "${codex_violation_detail_file}"
+        errors_report_approved_plan_violation "${codex_violation_detail_file}" ||
+            fail "Codex $1 detail would not reach the approved-model enforcement stage: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    }
+    codex_expect_live_violation() {
+        local raw="${fixture_root}/codex-live-$1.raw"
+        local status=0
+
+        printf '%s\n' "$2" > "${raw}"
+        rm -f -- "${fixture_root}/codex-live-$1.cursor"
+        harness_detect_worker_violation \
+            review "${raw}" gpt-5.6-sol max \
+            "${fixture_root}/codex-live-$1.cursor" || status=$?
+        ((status == RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS)) ||
+            fail "Codex live enforcement did not reject $1."
+        codex_expect_enforcement_detail "live $1"
+    }
+    codex_expect_live_violation reroute \
+        '{"type":"item.completed","item":{"id":"item-1","type":"error","message":"model rerouted: gpt-5.6-sol -> fixture-other (FixtureReason)"}}'
+    codex_expect_live_violation subagent \
+        '{"type":"item.completed","item":{"id":"item-1","type":"collab_tool_call","tool":"spawn_agent","status":"completed"}}'
+    CODEX_TRANSCRIPT_STATUS=verified
+    codex_collab_normalized_raw="${fixture_root}/codex-collab-normalized.raw"
+    printf '%s\n' \
+        "{\"type\":\"thread.started\",\"thread_id\":\"${codex_native_id}\"}" \
+        '{"type":"item.completed","item":{"id":"item-1","type":"collab_tool_call","tool":"spawn_agent","status":"completed"}}' \
+        '{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"EXACT_CODEX_FIXTURE_REPLY"}}' \
+        '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}' \
+        > "${codex_collab_normalized_raw}"
+    printf '%s' 'EXACT_CODEX_FIXTURE_REPLY' > "${CODEX_REVIEW_FINAL_MESSAGE}"
+    codex_failed_turn_rejected "${codex_collab_normalized_raw}" 'collab/subagent'
+    codex_expect_enforcement_detail 'normalized subagent'
+    for CODEX_TRANSCRIPT_STATUS in substituted effort-changed subagent; do
+        codex_review_record_error 'fixture fallback detail' || true
+        codex_expect_enforcement_detail "${CODEX_TRANSCRIPT_STATUS} session record"
+    done
+    CODEX_TRANSCRIPT_STATUS=unreadable
+    codex_review_record_error 'fixture fallback detail' || true
+    assert_equal 'fixture fallback detail' "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+        'Codex unverified session record detail'
+) || fail 'Codex approved-model enforcement vocabulary regression failed.'
+
 harness_allow_all_detected &&
     fail 'Codex inherited an allow-all signal.'
 
@@ -1655,6 +1713,55 @@ assert_contains "${fixture_root}/codex-launcher-scans.stderr" \
 [[ ! -e "${codex_launcher_capture}" ]] ||
     fail 'Staged Codex launcher started its controller after rejecting scans.'
 
+# Before any question or model request, the launcher stops when this
+# environment cannot run a Codex review: here another CLI release, then a
+# missing provider key.
+codex_other_version_bin="${fixture_root}/codex-other-version-bin"
+mkdir -p -- "${codex_other_version_bin}"
+printf '%s\n' '#!/usr/bin/env bash' \
+    'if [[ "${1-}" == --version ]]; then printf "%s\n" "codex-cli 0.164.0"; exit 0; fi' \
+    'exit 99' > "${codex_other_version_bin}/codex"
+chmod 700 -- "${codex_other_version_bin}/codex"
+codex_launcher_not_ready() {
+    local name="$1"
+    local expected="$2"
+    shift 2
+
+    rm -f -- "${codex_launcher_capture}"
+    if (
+        cd -- "${codex_launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            "$@" \
+            HOME="${fixture_root}/codex-launcher-home" \
+            CODEX_HOME="${codex_home}" \
+            XDG_STATE_HOME="${codex_launcher_state}" \
+            RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+            "${codex_launcher_plugin}/bin/rhyolite" \
+            --harness codex \
+            --repo https://github.com/octocat/Hello-World \
+            --auto-defaults
+    ) > "${fixture_root}/codex-launcher-${name}.stdout" \
+        2> "${fixture_root}/codex-launcher-${name}.stderr"; then
+        fail "Codex launcher started despite ${name}."
+    fi
+    assert_contains "${fixture_root}/codex-launcher-${name}.stderr" \
+        'Stage: Codex readiness' "Codex launcher ${name} stage"
+    assert_contains "${fixture_root}/codex-launcher-${name}.stderr" \
+        "${expected}" "Codex launcher ${name} detail"
+    assert_not_contains "${fixture_root}/codex-launcher-${name}.stderr" \
+        'fixture-secret-value' "Codex launcher ${name} secret"
+    [[ ! -e "${codex_launcher_capture}" ]] ||
+        fail "Codex launcher started its controller despite ${name}."
+}
+codex_launcher_not_ready other-cli-release \
+    'the installed CLI reported codex-cli 0.164.0' \
+    FIXTURE_CODEX_KEY='fixture-secret-value' \
+    PATH="${codex_other_version_bin}:/usr/bin:/bin"
+codex_launcher_not_ready missing-provider-key \
+    'The configured Codex provider environment variable FIXTURE_CODEX_KEY is not set.' \
+    -u FIXTURE_CODEX_KEY \
+    PATH="${codex_fake_bin}:/usr/bin:/bin"
+
 # The real runner drives the Codex adapter end to end with a fake Codex
 # worker: worker argv before runtime-home preparation, the isolated
 # environment, the snapshot broker launched from the adapter's own MCP
@@ -1931,6 +2038,13 @@ transient = phase == "review" and pathlib.Path(__file__).with_name("transient-mo
 # output ends mid-turn without a terminal event or final message, and the
 # runner sees the 124 exit status of `timeout`.
 stopped = phase == "review" and pathlib.Path(__file__).with_name("timeout-mode").exists()
+# A provider that answers with another model makes Codex record a reroute
+# notice before the reply; Rhyolite never accepts that output.
+rerouted = phase == "review" and pathlib.Path(__file__).with_name("reroute-mode").exists()
+# The provider's content filter declines the approved model, the only one a
+# Codex plan can name.
+refused = (phase == "review" and not resumed
+           and pathlib.Path(__file__).with_name("refusal-mode").exists())
 reply = pathlib.Path(report_path).read_text(encoding="utf-8").rstrip("\n") if phase == "review" else ""
 if phase == "review" and pathlib.Path(__file__).with_name("repair-mode").exists():
     # The compound value of a real incident: no deterministic normalization
@@ -1945,7 +2059,7 @@ records = [
                                          "cli_version": "0.163.0", "source": "exec"}},
     *turn_records,
 ]
-if phase == "review" and not transient and not stopped:
+if phase == "review" and not transient and not stopped and not refused:
     records.append(assistant(reply))
 sessions = home / "sessions" / "2026" / "10" / "01"
 sessions.mkdir(parents=True)
@@ -1966,12 +2080,24 @@ elif transient:
         {"type": "error", "message": failure},
         {"type": "turn.failed", "error": {"message": failure}},
     )
+elif refused:
+    refusal = ("stream disconnected before completion: "
+               "Incomplete response returned, reason: content_filter")
+    events = (
+        snapshot_read,
+        {"type": "error", "message": refusal},
+        {"type": "turn.failed", "error": {"message": refusal}},
+    )
 elif phase == "review":
     pathlib.Path(options["--output-last-message"]).write_text(reply, encoding="utf-8")
+    reroute = ({"type": "item.completed", "item": {
+        "id": "item_r", "type": "error",
+        "message": f"model rerouted: {model} -> fixture-other-model (FixtureReason)"}},)
     events = (
         {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected before completion: "
                                      "The server had an error processing your request.)"},
         snapshot_read,
+        *(reroute if rerouted else ()),
         {"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": reply}},
         {"type": "turn.completed", "usage": usage},
     )
@@ -1988,7 +2114,7 @@ emit(events)
     "Instructions": instructions.name, "SnapshotTools": tools, "ResearchTools": research_tools,
     "PromptHasCommit": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" in prompt,
 }), encoding="utf-8")
-raise SystemExit(124 if stopped else 0 if phase == "review" and not transient else 1)
+raise SystemExit(124 if stopped else 0 if phase == "review" and not transient and not refused else 1)
 CODEX_E2E_WORKER
 {
     printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
@@ -2381,5 +2507,115 @@ JS
     -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-startup.stdout")" \
         -name '*.codex-final' -print -quit)" ]] ||
     fail 'Codex startup failure left a runtime home, broker runtime, or final-message file.'
+
+# A provider that answers with another model is never accepted: the run must
+# fail at the runner's approved-model enforcement stage, as with every other
+# harness, and must not continue the session.
+touch -- "${codex_e2e_bin}/reroute-mode"
+codex_e2e_reroute_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-reroute-workspace"
+    --output-root "${fixture_root}/codex-e2e-reroute-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_reroute_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-reroute-plan.json" \
+    2> "${fixture_root}/codex-e2e-reroute-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-reroute-plan.stderr" >&2
+        fail 'Codex end-to-end reroute plan failed.'
+    }
+if "${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_reroute_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-reroute-plan.json")" \
+    > "${fixture_root}/codex-e2e-reroute.stdout" \
+    2> "${fixture_root}/codex-e2e-reroute.stderr"; then
+    fail 'Codex end-to-end reroute fixture unexpectedly completed.'
+fi
+rm -f -- "${codex_e2e_bin}/reroute-mode"
+node - "$(contract_run_path "${fixture_root}/codex-e2e-reroute.stdout")" <<'JS'
+const fs = require("fs"), path = require("path");
+const repo = path.join(process.argv[2], "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repo, "state.json"), "utf8"));
+const analysis = JSON.parse(fs.readFileSync(path.join(repo, "failure-analysis.json"), "utf8"));
+const errors = fs.readFileSync(path.join(repo, "errors.txt"), "utf8");
+if (state.Status !== "ReviewFailed" || analysis.Stage !== "approved model enforcement" ||
+    !errors.includes("does not accept substituted output") ||
+    state.WorkerRecovery.Continuations !== 0 ||
+    fs.readFileSync(path.join(repo, "review.txt"), "utf8").includes("FINDINGS")) {
+  throw new Error(`a Codex model reroute was not rejected at approved-model enforcement: ${state.Status}, ${analysis.Stage}\n${errors}`);
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-reroute.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex reroute rejection left a runtime home, broker runtime, or final-message file.'
+
+# A provider refusal of the only approved model fails the review at stage
+# `provider refusal`, and the remediation must not suggest scan models that
+# a Codex plan cannot add.
+touch -- "${codex_e2e_bin}/refusal-mode"
+codex_e2e_refusal_arguments=(
+    --harness codex
+    --repo https://github.com/octocat/Hello-World
+    --commit 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+    --scope 1
+    --model gpt-5.6-sol
+    --reasoning-effort max
+    --context long_context
+    --security-scans 1
+    --workspace-root "${fixture_root}/codex-e2e-refusal-workspace"
+    --output-root "${fixture_root}/codex-e2e-refusal-output"
+    --non-interactive
+    --no-open-html
+)
+"${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_refusal_arguments[@]}" --plan-only \
+    > "${fixture_root}/codex-e2e-refusal-plan.json" \
+    2> "${fixture_root}/codex-e2e-refusal-plan.stderr" || {
+        cat -- "${fixture_root}/codex-e2e-refusal-plan.stderr" >&2
+        fail 'Codex end-to-end refusal plan failed.'
+    }
+if "${codex_e2e_environment[@]}" "${codex_e2e_runner}" \
+    "${codex_e2e_refusal_arguments[@]}" \
+    --expected-plan-hash "$(contract_plan_hash "${fixture_root}/codex-e2e-refusal-plan.json")" \
+    > "${fixture_root}/codex-e2e-refusal.stdout" \
+    2> "${fixture_root}/codex-e2e-refusal.stderr"; then
+    fail 'Codex end-to-end refusal fixture unexpectedly completed.'
+fi
+rm -f -- "${codex_e2e_bin}/refusal-mode"
+assert_contains "${fixture_root}/codex-e2e-refusal.stdout" \
+    'allows no additional security scan models' \
+    'Codex provider refusal remediation'
+assert_not_contains "${fixture_root}/codex-e2e-refusal.stdout" \
+    'Approve a plan that adds security scan models' \
+    'Codex provider refusal remediation'
+node - "$(contract_run_path "${fixture_root}/codex-e2e-refusal.stdout")" <<'JS'
+const fs = require("fs"), path = require("path");
+const repo = path.join(process.argv[2], "github--octocat--hello-world");
+const state = JSON.parse(fs.readFileSync(path.join(repo, "state.json"), "utf8"));
+const analysis = JSON.parse(fs.readFileSync(path.join(repo, "failure-analysis.json"), "utf8"));
+const actions = analysis.RecommendedActions.join("\n");
+const events = (state.ProviderRefusals || {}).Events || [];
+if (state.Status !== "ReviewFailed" || analysis.Stage !== "provider refusal" ||
+    events.length !== 1 || events[0].Model !== "gpt-5.6-sol" ||
+    !actions.includes("allows no additional security scan models") ||
+    actions.includes("Approve a plan that adds security scan models") ||
+    state.WorkerRecovery.Continuations !== 0) {
+  throw new Error(`a Codex provider refusal was not reported with a Codex remediation: ${state.Status}, ${analysis.Stage}\n${actions}`);
+}
+JS
+[[ -z "$(find "${codex_e2e_tmp}" -mindepth 1 -maxdepth 1 -print -quit)" &&
+    -z "$(find "$(contract_run_path "${fixture_root}/codex-e2e-refusal.stdout")" \
+        -name '*.codex-final' -print -quit)" ]] ||
+    fail 'Codex refusal left a runtime home, broker runtime, or final-message file.'
 unset CODEX_HOME FIXTURE_CODEX_KEY
-printf 'Codex unregistered adapter contract validation passed.\n'
+printf 'Codex adapter contract validation passed.\n'

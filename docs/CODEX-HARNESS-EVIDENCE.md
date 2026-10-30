@@ -2,8 +2,11 @@
 
 ## Status
 
-Codex is not a supported production Rhyolite harness. Its adapter candidate
-remains unregistered, with no production registry or root marketplace entry.
+OpenAI Codex CLI 0.163.0 is a supported production Rhyolite harness, approved
+on October 29, 2026. Its adapter is registered in the fixed production
+registry. The launcher is its only entrypoint, and Rhyolite has no Codex
+marketplace; see [Production enablement](#production-enablement). The
+history below records how the candidate reached that point.
 
 Initial discovery found no ordinary snapshot file-read or search tools in
 the tested shell-free Codex configuration. Advertising those tools in a
@@ -20,14 +23,13 @@ explicit-thread history restoration, and a fresh zero-tool session. These
 are bounded interface proofs, not completed review/recovery/repair protocols.
 A single maintainer-run authenticated call then returned the exact expected
 reply without a timeout, rate limit, quota error, or reroute warning. An
-unregistered adapter candidate now implements the Contract-v11 functions and
-passes focused fixture validation plus an exact pinned-CLI snapshot integration.
-The remaining live eligibility and product-integration gates are still
-unverified.
+unregistered adapter candidate then implemented the Contract-v11 functions
+and passed focused fixture validation plus an exact pinned-CLI snapshot
+integration. The live and offline gates in [Results](#results) followed.
 
 This record describes Codex CLI 0.163.0 only. It does not establish the
-behavior of another release, an internally configured provider, or a
-completed Rhyolite review.
+behavior of another release or of a provider other than the explicitly
+configured deployment used for the live gates.
 
 ## Environment and provenance
 
@@ -185,7 +187,59 @@ Official source references:
 - `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/handlers/mcp_resource/read_mcp_resource.rs`
 - `https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/rmcp-client/src/stdio_server_launcher.rs`
 
-## Approved snapshot transport and remaining gates
+## Production enablement
+
+On October 29, 2026, after the live and offline gates above, the maintainer
+approved OpenAI Codex CLI as Rhyolite's third production harness. The
+enablement change:
+
+- adds the literal `codex` entry to the fixed registry in
+  `plugins/rhyolite/lib/harness/common.sh`; every other safe ID, including
+  `noop`, still fails before loading a file;
+- keeps the launcher as the only Codex entrypoint. Codex model sessions only
+  ask questions, so a Codex session cannot run the runner, and a user-level
+  Codex marketplace install would add the two launcher-only question skills
+  to ordinary Codex sessions. Rhyolite therefore ships no Codex marketplace;
+  the launcher installs those skills through Codex's native local
+  marketplace into a private home for each question session;
+- makes `harness_prepare_run`, and through it the launcher before any
+  question, require exactly `codex-cli 0.163.0`, an empty or absent
+  `/etc/codex`, a supported provider form, and its exported key;
+- words every recorded model, effort, or subagent violation so that the
+  runner reports it at its `approved model enforcement` stage, as for the
+  other harnesses, with a mocked end-to-end reroute through the real runner;
+- gives a provider refusal on an offline-transport plan its own remediation
+  in the runner and the failure analysis, because such a plan can add no
+  scan model to take over; the shared advice to add `--scan-model` models
+  would have sent Codex users to an option the launcher rejects. A mocked
+  end-to-end content-filter refusal through the real runner covers it;
+- updates the user, contributor, security, privacy, threat-model, support,
+  and publishing documentation, the plan of record, and the validators that
+  pin supported-harness wording.
+
+Playbook completion evidence:
+
+| Requirement | Evidence |
+| --- | --- |
+| Fixed registry and rejection of other IDs | `tests/validate-harness-contract.sh` resolves and loads `codex` from the production registry with resolved capabilities, lists exactly `copilot claude codex`, and rejects `noop`, `bogus`, `example-cli`, and `gemini` before any activity. |
+| Contract-v11 function inventory | The production loader requires every Contract-v11 function before it loads `codex.sh`. |
+| Capability decisions | `structured_questions`, `web_research`, `builtin_research_specialist`, `shell_denial`, `final_message_file`, and `worker_continuation` are `yes`; `subagents` and `builtin_security_specialist` are `no`; none is `unverified`. The rows above give the evidence; [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) tabulates the values. |
+| Model, effort, authentication, and provider summary | `gpt-5.6-sol` only; efforts `high`, `xhigh`, `max`; contexts `default` and `long_context`; one forwarded key variable named by the explicit provider; provider summary `codex-<id>` with the provider host. Pinned by the Codex contract section. |
+| Argv, environment, runtime home, and persistence | The Codex contract section pins the review, research, and repair argv, the runtime configuration and model catalog, the environment vector with hostile-variable removal, file permissions, and the filtered session record. |
+| Report repair | A mocked end-to-end confidence edit through a fresh `--ephemeral` session with no tools passes unchanged strict validation; no live Codex review has needed a repair. |
+| Plan, state, and approval identity | Codex plans use plan schema 5 and state schema 6 with the approval-bound `SnapshotTransport` object; the mocked end-to-end runs execute only with the matching approval hash. |
+| Negative and lifecycle failures | Normalizer, outcome, live-monitor, refusal, reroute, subagent, forbidden-tool, unfinished-turn, never-started, timeout, stop, hard-kill, hostile-configuration, and system-configuration cases, plus mocked end-to-end reroute, provider-refusal, timeout, and never-started runs through the real runner, with mutation checks for the hostile-configuration, enforcement-vocabulary, and refusal-remediation fixes. |
+| Real runs | Live adapter smoke, live guided setup and approval, live scope 1, 2, and 3 reviews, and live same-session continuation, each recorded in [Results](#results). |
+| Copilot and Claude Code compatibility | The full Fedora gate, including the Copilot and Claude Code contract sections and the plugin validator, passes unchanged. |
+| Packaging and export | The installation test checks the complete package, including every Codex asset, and the public-release audit excludes `tests/fixtures`. |
+
+Known limitations at enablement: only Codex CLI 0.163.0, one model, and one
+explicitly configured provider deployment are validated; with one approved
+model, independent security scans and report-writer handover are
+unavailable; report repair is fixture-proven only; and backend model
+identity is not independently attested.
+
+## Snapshot transport and gate history
 
 Do not enable shell commands as a substitute for snapshot reads, introduce
 an unapproved broker/runtime, or register a partial harness.
@@ -252,6 +306,5 @@ environment now removes those variables, the adapter refuses to run while
 The earlier HTTP 401 came from the native default endpoint; with the
 explicitly configured provider, the adapter smoke passed. Do not substitute
 an endpoint or authentication method.
-Production enablement still requires the complete
-[harness playbook](ADDING-A-HARNESS.md), automated coverage, real-run
-evidence, and Fedora validation.
+These gates, the complete [harness playbook](ADDING-A-HARNESS.md), and
+Fedora validation preceded the production enablement described above.

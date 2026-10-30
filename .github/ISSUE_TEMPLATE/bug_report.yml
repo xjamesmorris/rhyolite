@@ -31,10 +31,11 @@ body:
     id: harness
     attributes:
       label: Review harness
-      description: Which CLI ran the review? The `Harness:` line in `status` shows it.
+      description: Which CLI ran the review? The `Harness:` line in `status`, or the `Harness` field of the plan or `state.json`, shows it.
       options:
         - GitHub Copilot CLI (copilot)
         - Claude Code (claude)
+        - OpenAI Codex CLI (codex)
     validations:
       required: true
   - type: dropdown

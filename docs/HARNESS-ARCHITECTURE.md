@@ -4,11 +4,11 @@
 
 **Initial implementation:** I1a
 
-**Supported harnesses:** `copilot` (default) and `claude`
+**Supported harnesses:** `copilot` (default), `claude`, and `codex`
 
-The source tree also contains an unregistered `codex` adapter candidate under
-focused development. It is not discoverable or selectable through the
-production registry.
+The `codex` adapter has no native file reader: its workers read the snapshot
+through the offline snapshot transport, and only the launcher starts a Codex
+review.
 
 ## Purpose
 
@@ -34,7 +34,7 @@ Contract v7 adds live enforcement: while a worker runs, the runner polls the
 adapter's `harness_detect_worker_violation` every five seconds, and the first
 recorded model, reasoning effort, or subagent outside the approved plan
 terminates the worker immediately instead of after completion. No worker on
-either harness receives a subagent tool, because Copilot CLI lets a `task`
+any harness receives a subagent tool, because Copilot CLI lets a `task`
 argument override every configured subagent model. Contract v8 adds bounded
 same-session recovery: after every worker invocation the adapter classifies
 the outcome through `harness_worker_outcome`, and when the adapter has
@@ -81,7 +81,7 @@ MCP mode reuses the approved bundled Python broker, with Bash owning bounded
 snapshot grants and lifecycle. Its policy, exact tools/schemas, limits, and
 phase grant profiles are approval-bound `SnapshotTransport` data.
 [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines the complete interface.
-The Codex workstream remains unregistered until all eligibility gates pass.
+The Codex adapter is the production user of that transport.
 Transient and token-rate-limit retries use approval-bound increasing
 backoff in `WorkerRecoveryPolicy.RetryBackoff`: 30 seconds initially,
 doubling to at most 300 seconds within the approved session timeout and
@@ -108,9 +108,9 @@ playbook for Contract v11 and any future production adapter.
   entry. Safe syntax alone does not make an adapter supported.
 - Unknown IDs, unsafe IDs, missing adapter files, incomplete adapters, and
   adapter-function failures stop the operation. There is no fallback.
-- `bogus` and `codex` do not select Copilot and do not load another adapter.
-  In I1a, `claude` was likewise unregistered; it now selects the registered
-  Claude Code adapter.
+- `bogus` does not select Copilot and does not load another adapter. In
+  I1a, `claude` and `codex` were likewise unregistered; they now select the
+  registered Claude Code and Codex adapters.
 - The Copilot adapter preserves the existing worker and outer-launcher
   argument vectors byte for byte after Rhyolite consumes `--harness`.
 - Capability values are exactly `yes`, `no`, or `unverified`.
@@ -298,16 +298,16 @@ because its CLI has a similarly named option.
 
 Contract v5 retains these capability keys:
 
-| Capability | Copilot | Claude Code |
-| --- | --- | --- |
-| `structured_questions` | `yes` | `yes` |
-| `subagents` | `no` | `no` |
-| `builtin_security_specialist` | `no` | `no` |
-| `builtin_research_specialist` | `yes` | `yes` |
-| `web_research` | `yes` | `yes` |
-| `shell_denial` | `yes` | `yes` |
-| `final_message_file` | `no` | `no` |
-| `worker_continuation` | `yes` | `yes` |
+| Capability | Copilot | Claude Code | Codex |
+| --- | --- | --- | --- |
+| `structured_questions` | `yes` | `yes` | `yes` |
+| `subagents` | `no` | `no` | `no` |
+| `builtin_security_specialist` | `no` | `no` | `no` |
+| `builtin_research_specialist` | `yes` | `yes` | `yes` |
+| `web_research` | `yes` | `yes` | `yes` |
+| `shell_denial` | `yes` | `yes` | `yes` |
+| `final_message_file` | `no` | `no` | `yes` |
+| `worker_continuation` | `yes` | `yes` | `yes` |
 
 Copilot reports `subagents` and `builtin_security_specialist` as `no` since
 Contract v7. A live probe showed that a `task` call's `model` argument
@@ -318,8 +318,11 @@ configuration. The review worker therefore receives no `task`,
 `list_agents`, or `read_agent` tool, performs the dedicated security pass
 itself, and any recorded subagent event fails the phase.
 
-[CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) records the probe and
-real-run evidence behind each Claude Code value.
+[CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) and
+[CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md) record the probe and
+real-run evidence behind each Claude Code and Codex value. Codex's
+`structured_questions` value covers only the launcher's native setup and
+approval sessions; its review and research workers have no question tool.
 
 An unknown capability returns `unverified`; it is never silently promoted to
 `yes`.
@@ -601,6 +604,94 @@ The outer launcher starts Claude Code from a clean non-Git directory with
 `RHYOLITE_LAUNCHER_SETUP_V1` block in `--append-system-prompt`. `--yolo` adds
 `--dangerously-skip-permissions`.
 
+## Codex adapter baseline
+
+- Canonical ID: `codex`
+- Display name: `OpenAI Codex CLI`
+- CLI: `codex`, exactly `codex-cli 0.163.0`. `harness_prepare_run` and every
+  guided stage refuse another release, because every isolation,
+  tool-inventory, output, and lifecycle proof was made with that release.
+- Model: `gpt-5.6-sol` only; every other ID is rejected outright, so
+  `--allow-unlisted-model` does not apply.
+- Reasoning effort: `max` recommended; `xhigh` and `high` selectable.
+  `ultra` is rejected because Codex couples it to automatic delegation.
+- Context tier: `long_context` (872,000 configured, 828,400 usable tokens)
+  recommended; `default` (272,000 configured, 258,400 usable) valid.
+- Provider: only an explicit `model_provider` whose
+  `[model_providers.<id>]` table in the user's Codex `config.toml` holds
+  exactly `name`, an `https` port-443 `base_url`, `env_key`, and
+  `wire_api = "responses"`, with no `profile` and no top-level model other
+  than `gpt-5.6-sol`. The provider summary ID is `codex-<id>`, its host is
+  the `base_url` host, and its only forwarded name is the `env_key`
+  variable. Codex's built-in provider and ChatGPT sign-in are never used.
+- Run preparation fails closed while `/etc/codex` has any content or is not
+  a plain readable directory, because Codex merges that system layer into
+  every session and its legacy managed configuration overrides even
+  command-line settings.
+- Resume policy: continue only through the trusted Rhyolite runner; do not
+  invoke `codex exec resume` directly.
+- Login remediation: export the configured `env_key` variable in the shell
+  that launches Rhyolite.
+
+Each worker runtime home is a mode-0700 `CODEX_HOME` that contains only
+`config.toml`, a one-model `model-catalog.json` that disables the shell
+and exposes MCP tools directly, the phase's instruction bundle, and Codex's
+own session state. The configuration sets the provider (with Codex's own 4 request and 5
+stream retries and no WebSocket transport), model catalog, effort, context
+window and compaction limit, instruction file, `approval_policy = "never"`,
+`sandbox_mode = "read-only"`, `web_search = "disabled"`,
+`project_doc_max_bytes = 0`, and `project_root_markers = []`; it disables
+agents, the shell, unified exec, patch, JavaScript, goals, image viewing,
+multi-agent, plugins and their hooks, tool and skill search, host skill
+discovery, worktrees, the daemon, plan updates, questions, bundled skills,
+apps, analytics, and metrics. The review worker argv is:
+
+```text
+--no-daemon exec --strict-config --ignore-rules --sandbox read-only --json
+--skip-git-repo-check --cd <session-root> --model gpt-5.6-sol
+--output-last-message <transcript>.codex-final
+-c mcp_servers.rhyolite_snapshot.* ... -
+```
+
+The snapshot overrides configure one required stdio server, the bundled
+supervised snapshot broker, with exactly four enabled tools, each
+pre-approved by name, and its trusted-owner environment; the request
+arrives on stdin. The environment vector starts with `-C <session-root>`,
+unsets `CODEX_HOME`, `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, `CODEX_REMOTE`,
+every other inherited `CODEX_*` variable except `CODEX_CA_CERTIFICATE`, and
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` unless the provider names one as its
+key, and sets `HOME`, `CODEX_HOME`, and the XDG directories to the runtime
+home, `TMPDIR` inside it, `NO_COLOR=1`, `TERM=dumb`, and `RUST_LOG=off`.
+
+The research worker uses the same argv with the research worker agent and
+`research-source-assessment` instructions and adds a second required stdio
+server for exactly the five research broker tools. The report-repair child
+adds `--ephemeral`, runs in an empty trusted working directory, and has no
+MCP server, instructions, or tool.
+
+Codex writes the exact final reply only through `--output-last-message`,
+and no file at all for a failed, interrupted, or never-started turn. The
+normalizer rejects recorded reroutes, refusals, collab items, and tools
+outside the phase inventory, and normalizes an ordinary failed, unfinished,
+or never-started turn to its narrative and an empty reply so that the
+runner classifies it from the worker outcome. The private rollout under
+`sessions/` supplies each turn's model, effort, sandbox, approval policy,
+and usable context window; `harness_persist_agent_state` keeps only a
+filtered copy (session identity, turn contexts, and message text) and
+renders `session.md`. Continuation resumes the same rollout with
+`exec resume <thread>`.
+
+The outer launcher checks Codex readiness offline before any question,
+keeps one security scan, rejects `--yolo`, and runs
+`scripts/run-codex-guided-review.sh`. That controller runs one native
+interactive Codex session for setup and one for approval through
+`scripts/run-codex-guided-stage.sh`, each in a private home where Codex's
+native local marketplace installs only the two Rhyolite question skills and
+only `request_user_input` is enabled; it validates each session record and
+strict JSON result, generates and prints the plan, runs the approved review
+itself, and handles exact `/rhyolite:status`, `stop`, and `cancel` through
+the runner's `--request-stop`. There is no root Codex marketplace.
+
 ## Lifecycle
 
 1. **Resolve** the harness from CLI, environment, or default.
@@ -861,10 +952,9 @@ tools and argv, and reject offline configuration. An adapter that reports
 bundled broker's offline snapshot mode, under runner-created grants that
 [SNAPSHOT-TRANSPORT.md](SNAPSHOT-TRANSPORT.md) defines. Only such plans carry
 the approval-bound `SnapshotTransport` object; native plans and states keep
-their existing bytes. The work that motivated Contract v11 is the
-unregistered Codex adapter candidate, whose shell-free configuration has no
-other snapshot reader; that candidate does not change the supported
-harnesses.
+their existing bytes. The work that motivated Contract v11 is the Codex
+adapter, whose shell-free configuration has no other snapshot reader and
+which reports `local-stdio-mcp-snapshot-read-v1`.
 
 ## Adding a future adapter
 
@@ -915,8 +1005,9 @@ distinct approval hashes, cross-harness approval rejection in both directions,
 empty authentication, adapter-owned argv/environment/runtime-home/persistence/
 cleanup/extraction, diagnostic non-review output, state/manifest/handoff
 identity, capability-based research rejection, and injected lifecycle failure
-stages. Production `common.sh` registers only `copilot` and `claude`; the
-no-op fixture never enters production manifests, help, or plugin assets.
+stages. Production `common.sh` registers only `copilot`, `claude`, and
+`codex`; the no-op fixture never enters production manifests, help, or
+plugin assets.
 
 The Claude Code section, `tests/harness-contract-claude.sh`, runs inside the
 same validator. It pins the Claude worker, research, and repair argv,
@@ -925,6 +1016,19 @@ isolation verification, and output-limit joins. It also drives the real
 runner through a mock `claude` for completed, recovered, substituted,
 unavailable, unsafe, repaired, and research runs, and checks the launcher
 and hooks.
+
+The Codex section, `tests/harness-contract-codex.sh`, runs inside the same
+validator. It loads the adapter through a test-owned registry copy and pins
+the review, research, and repair argv, runtime configuration, model catalog,
+and environment vectors, including the removal of hostile inherited
+variables and the `/etc/codex` and CLI-release checks. It covers outcome
+classification, live enforcement in the runner's own vocabulary, session
+verification and persistence, the native setup and approval stages under a
+connected pseudo-terminal, and the launcher's Codex branch and readiness
+check. It also drives the real runner and the real snapshot and research
+brokers through a fake Codex worker for completed, recovered, repaired,
+timed-out, rerouted, refused, and never-started reviews and a scope-2
+research launch.
 
 The Copilot runner-level checks compare captured worker argv and relevant
 environment exactly against the golden contract, compare default and explicit

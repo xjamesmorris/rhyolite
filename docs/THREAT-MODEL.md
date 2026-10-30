@@ -3,8 +3,8 @@
 ## Assets
 
 - The reviewer's workstation and files.
-- The reviewer's GitHub and Copilot identity, and their Claude Code sign-in
-  or API credentials.
+- The reviewer's GitHub and Copilot identity, their Claude Code sign-in or
+  API credentials, and the key of their configured Codex provider.
 - Source code outside the target checkout.
 - Accuracy and integrity of generated reports.
 - People and projects discussed in provenance findings about agentically
@@ -15,8 +15,8 @@
 
 - Repository files and Git objects.
 - Repository instruction, agent, prompt, and skill files, including
-  `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` rules, skills,
-  settings, and hooks.
+  `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/` and `.codex/`
+  rules, skills, settings, and hooks.
 - Source comments, strings, generated files, and documentation.
 - Issues, pull requests, release notes, and commit messages.
 - Public web pages, mailing-list posts, social media, and search
@@ -124,6 +124,13 @@
     lost; or a scan report reused from an earlier run is altered after
     approval, comes from another repository, commit, harness, or model, or
     is read from a folder that another user controls.
+38. Configuration outside a Codex worker's runtime home changes the worker:
+    inherited `CODEX_*` variables redirect execution to a remote server or
+    move Codex state elsewhere, system configuration in `/etc/codex` runs
+    hooks, MCP servers, or notify commands or overrides command-line
+    settings, a `.codex` folder above the working directory is loaded as a
+    trusted project layer, or a newer Codex release adds an unverified
+    configuration surface or tool.
 
 ## Controls
 
@@ -458,7 +465,7 @@
   another model or effort, a safeguard handover, an advisor model, a
   subagent turn, or an unreadable record.
 - Copilot workers receive only `view`, `glob`, `rg`, and `skill`. No
-  Rhyolite worker on either harness receives a subagent tool: a live probe
+  Rhyolite worker on any harness receives a subagent tool: a live probe
   showed that a Copilot `task` call's `model` argument overrides every
   configured `subagents.agents.<name>.model` value, so a specialist could
   silently run on another model while the main session stayed on the
@@ -480,6 +487,24 @@
 - The Claude Code credential bridge copies only `.credentials.json` into a
   mode-0700 runtime home when no supported authentication variable is set,
   and deletes it with that home.
+- Codex workers run `codex exec` in the read-only sandbox with no shell,
+  patch, web-search, plan, question, agent, or plugin tool. They read the
+  snapshot only through the bundled offline snapshot broker under
+  runner-created grants (plus the five broker tools for research), and the
+  report-repair child is a fresh `--ephemeral` session with no tool. Each
+  runtime home copies only the provider's name, URL, and key-variable name
+  from the user's Codex configuration and disables project instructions and
+  project roots above the working directory; the environment drops every
+  other inherited `CODEX_*` variable except `CODEX_CA_CERTIFICATE`, and
+  OpenAI credentials and base URLs that the provider does not name. Codex
+  reviews require exactly Codex CLI 0.163.0 and stop before any Codex
+  process starts while `/etc/codex` holds anything. An offline probe with
+  the real CLI planted hostile files and variables in every surface that
+  release reads, and none took effect.
+- Codex model sessions never run the runner. The launcher's native setup and
+  approval sessions in private temporary homes may only ask questions and
+  return strict JSON, and the launcher's Bash controller generates the plan,
+  runs the review, and handles status and stop.
 
 ### Same-session worker recovery
 
@@ -595,8 +620,16 @@
 
 ## Residual risks
 
-- Copilot, Claude Code's model provider, and public search services process
-  prompts and public source content.
+- Copilot, Claude Code's model provider, the configured Codex provider, and
+  public search services process prompts and public source content.
+- Codex's session rollout and exec event formats are internal and
+  version-dependent. Rhyolite pins Codex CLI 0.163.0, parses both
+  defensively, and fails closed on unreadable records; another release needs
+  new isolation and output evidence before Rhyolite accepts it.
+- Rhyolite cannot attest which backend model a Codex provider actually ran.
+  It verifies the requested and natively recorded model and effort and
+  rejects any recorded reroute, but a provider that silently substitutes a
+  model without reporting it is not detectable.
 - Claude Code's session record format is internal and version-dependent.
   Rhyolite parses it defensively and fails closed on unreadable records, but
   a format change can stop reviews until the adapter is updated.

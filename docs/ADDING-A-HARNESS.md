@@ -11,11 +11,15 @@ Read [../AGENTS.md](../AGENTS.md) and
 
 - The implemented production seam is Contract v11.
 - The current review plan is schema 5 and repository/run state is schema 6.
-- Production supports exactly two harnesses: GitHub Copilot CLI (`copilot`)
-  and Claude Code (`claude`). A contract refactor does not itself add another
-  supported harness. The Claude Code adapter is the worked example of this
-  playbook; [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) records
-  its evidence.
+- Production supports exactly three harnesses: GitHub Copilot CLI
+  (`copilot`), Claude Code (`claude`), and OpenAI Codex CLI (`codex`). A
+  contract refactor does not itself add another supported harness. The
+  Claude Code and Codex adapters are the worked examples of this playbook;
+  [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) and
+  [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md) record their
+  evidence. Codex is also the worked example of a harness without native
+  file reads, which uses the offline snapshot transport and a launcher-only
+  guided flow.
 - The no-op adapter and worker under `tests/fixtures/harnesses/` are
   development-only contract fixtures. They are never registered by production
   `common.sh`, copied into the plugin, selectable through the launcher or
@@ -767,7 +771,8 @@ claiming another production integration. Its adapter is
 The focused validator copies the production plugin surfaces into an isolated
 temporary tree, explicitly replaces only that copied tree's fixed registry
 helper with a two-entry `copilot`/`noop` map, and invokes the copied runner
-directly. Production `common.sh` continues to map exactly `copilot` and `claude`.
+directly. Production `common.sh` continues to map exactly `copilot`,
+`claude`, and `codex`.
 
 The fixture should:
 
@@ -821,7 +826,7 @@ At minimum, add deterministic coverage for:
 - explicit CLI precedence over `RHYOLITE_HARNESS`;
 - malformed, empty, and mismatched `RHYOLITE_LAUNCHER_HARNESS`;
 - missing, unreadable, syntax-failing, wrong-ID, and incomplete adapters;
-- production rejection of `noop`, `codex`, and other unregistered
+- production rejection of `noop` and other unregistered
   IDs before output, CLI discovery, Git, DNS, or network activity;
 - proof that no ID becomes a path and no fallback occurs.
 
@@ -886,7 +891,7 @@ At minimum, add deterministic coverage for:
 - plugin discovery still reports only supported production assets;
 - public-release export excludes `tests/fixtures` and the no-op adapter;
 - production help, README usage, launcher choices, and metadata list only
-  `copilot` and `claude` until another adapter is approved;
+  `copilot`, `claude`, and `codex` until another adapter is approved;
 - no hosted CI or alternate-platform path is introduced.
 
 ## Required end-to-end tests
@@ -925,18 +930,21 @@ bash ./tests/validate-all.sh
 
 ## User documentation and release surfaces
 
-Production support covers `copilot` and `claude`:
+Production support covers `copilot`, `claude`, and `codex`:
 
-- README and usage examples identify GitHub Copilot CLI and Claude Code as
-  the supported runtime harnesses and document the Claude Code differences.
-- `docs/HARNESS-ARCHITECTURE.md` describes the seam and both adapter
-  baselines, and labels the no-op adapter development-only.
+- README and usage examples identify GitHub Copilot CLI, Claude Code, and
+  OpenAI Codex CLI as the supported runtime harnesses and document the
+  Claude Code and Codex differences.
+- `docs/HARNESS-ARCHITECTURE.md` describes the seam and every adapter
+  baseline, and labels the no-op adapter development-only.
 - `DEVELOPERS.md`, `AGENTS.md`, and this playbook expose contributor workflow.
 - `CLAUDE.md` and `.github/copilot-instructions.md` remain contributor
   bootstrap pointers to `AGENTS.md`.
-- Each harness has its own plugin manifest and marketplace registry; the
-  launcher, help, support, and publishing surfaces list only these two
-  harnesses.
+- Copilot and Claude Code each have their own plugin manifest and
+  marketplace registry. Codex has its own plugin manifest for the launcher's
+  private per-stage installs but no marketplace registry, because the
+  launcher is its only entrypoint. The launcher, help, support, and
+  publishing surfaces list only these three harnesses.
 
 When another production adapter is separately approved, review and update all
 affected surfaces:

@@ -42,6 +42,9 @@ declare -a CODEX_RESEARCH_BROKER_ARGUMENTS=()
 # (see codex_require_no_system_configuration). Assigned here, so the inherited
 # environment cannot move it.
 CODEX_SYSTEM_CONFIGURATION_DIRECTORY=/etc/codex
+# Every isolation, tool-inventory, output, and lifecycle proof was made with
+# this exact CLI release; another release needs that evidence again.
+CODEX_PINNED_CLI_VERSION='codex-cli 0.163.0'
 
 codex_require_array_destination() {
     [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
@@ -499,6 +502,18 @@ codex_require_no_system_configuration() {
     return 1
 }
 
+codex_require_pinned_cli() {
+    local reported=''
+
+    reported="$(codex --version 2>/dev/null)" || reported=''
+    [[ "${reported}" == "${CODEX_PINNED_CLI_VERSION}" ]] && return 0
+    [[ "${reported}" =~ ^codex-cli\ [0-9A-Za-z.+-]{1,32}$ ]] ||
+        reported='an unrecognized version'
+    rhyolite_harness_set_error \
+        "Rhyolite supports only Codex CLI 0.163.0, the release whose isolation and output it has verified, but the installed CLI reported ${reported}. Install Codex CLI 0.163.0, or use another harness."
+    return 1
+}
+
 codex_write_server_config_record() {
     local config_path="$1"
     local server="$2"
@@ -938,6 +953,7 @@ harness_resume_policy() {
 
 harness_prepare_run() {
     codex_require_no_system_configuration || return 1
+    codex_require_pinned_cli || return 1
     codex_load_provider_metadata || return 1
     [[ -n "${!CODEX_PROVIDER_ENV_KEY-}" ]] || {
         rhyolite_harness_set_error \
@@ -1324,7 +1340,7 @@ harness_finalize_research_session() {
             ;;
         subagent)
             rhyolite_harness_set_error \
-                'Codex recorded a research subagent although subagents are disabled.'
+                'Codex recorded a subagent in the research session although subagents are disabled; Rhyolite does not accept output from an unapproved subagent.'
             ;;
         *)
             rhyolite_harness_set_error \
@@ -1341,6 +1357,33 @@ codex_final_message_for_phase() {
         research) printf '%s\n' "${CODEX_RESEARCH_FINAL_MESSAGE}" ;;
         report-repair) printf '%s\n' "${CODEX_REPAIR_FINAL_MESSAGE}" ;;
         *) return 1 ;;
+    esac
+}
+
+# Name a recorded model, effort, or subagent outside the approved plan in the
+# words that the runner maps to its approved-model enforcement stage; any
+# other unverified review session record keeps the given detail.
+codex_review_record_error() {
+    case "${CODEX_TRANSCRIPT_STATUS}" in
+        substituted)
+            rhyolite_harness_set_error \
+                'The Codex review session record shows a model other than the approved model; Rhyolite does not accept substituted output.'
+            ;;
+        effort-changed)
+            rhyolite_harness_set_error \
+                'The Codex review session record shows a reasoning effort other than the approved effort; Rhyolite does not accept downgraded or substituted effort.'
+            ;;
+        subagent)
+            rhyolite_harness_set_error \
+                'The Codex review session record shows a collab/subagent item; Rhyolite does not accept output from an unapproved subagent.'
+            ;;
+        context-changed)
+            rhyolite_harness_set_error \
+                'The Codex review session record shows a context window other than the approved tier.'
+            ;;
+        *)
+            rhyolite_harness_set_error "$1"
+            ;;
     esac
 }
 
@@ -1396,7 +1439,7 @@ codex_normalize_final_message() {
         return 0
     fi
     if [[ "${phase}" == review && "${CODEX_TRANSCRIPT_STATUS}" != verified ]]; then
-        rhyolite_harness_set_error \
+        codex_review_record_error \
             'The Codex review session record did not verify the approved model, effort, context, and no-subagent boundary.'
         return 1
     fi
@@ -1556,7 +1599,7 @@ PY
             ;;
         subagent)
             rhyolite_harness_set_error \
-                'Codex recorded a collab/subagent tool call although subagents are disabled.'
+                'Codex recorded a collab/subagent tool call although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent.'
             ;;
         forbidden-tool)
             rhyolite_harness_set_error \
@@ -1744,11 +1787,17 @@ def watch():
             continue
         kind, value = observation
         if kind == "subagent":
-            status, detail = "violation", "Codex recorded a collab/subagent tool call."
+            status, detail = "violation", (
+                "Codex recorded a collab/subagent tool call; Rhyolite does not "
+                "accept output from an unapproved subagent."
+            )
         elif kind == "forbidden":
             status, detail = "violation", "Codex recorded a tool outside the approved phase inventory."
         elif kind == "reroute":
-            status, detail = "violation", "Codex recorded an automatic model reroute."
+            status, detail = "violation", (
+                "Codex recorded an automatic model reroute away from the approved "
+                "model; Rhyolite does not accept substituted output."
+            )
         elif kind == "reroute-refusal":
             status, detail = "refusal", (
                 f"The model provider declined the approved model {approved_model} "
@@ -2181,7 +2230,7 @@ harness_verify_isolation() {
         "${CODEX_TRANSCRIPT_STATUS}" == verified ||
         ( "${CODEX_TRANSCRIPT_STATUS}" == missing &&
             "${CODEX_REVIEW_NOT_STARTED}" == 1 ) ]] || {
-        rhyolite_harness_set_error \
+        codex_review_record_error \
             'The Codex review session record did not verify the approved execution identity.'
         return 1
     }
