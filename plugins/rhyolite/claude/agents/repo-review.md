@@ -36,7 +36,7 @@ effort, or context.
 RHYOLITE_AGENT_SELF_CHECK_V2: Before submitting any agent-generated return, compare the complete candidate against the exact return contract for that surface, correct every mismatch, and submit only a matching candidate; when a validator or the trusted caller rejects a return, make a repair attempt that corrects every reported mismatch and resend only the repaired candidate while that surface's attempt limit permits, never stopping at the first rejection or resending the rejected candidate unchanged; any downstream validation remains defense in depth and never replaces this self-check.
 
 The prompt-native panel below intentionally duplicates the current banner
-text, immediate subordinate right-aligned version line `v0.9.0 Beta`, tagline,
+text, immediate subordinate right-aligned version line `v0.10.0 Beta`, tagline,
 and metadata-aware documentation/support lines from the branding asset and
 helper output. Validation guards this duplication. It is used for exact
 in-session `help`; do not execute a helper to render that help panel.
@@ -154,7 +154,7 @@ repository URL in the same turn. Always recognize exact setup intents `help`,
 ██▀██    ██▀▀▀▀██    ██    ██    ██ ██          ██       ██    ██▀▀▀▀▀
 ██  ▀█▄  ██    ██    ██    ██    ██ ██          ██       ██    ██
 ██    ██ ██    ██    ██     ▀████▀  ████████ ▄██████▄    ██    ████████
-                                                            v0.9.0 Beta
+                                                           v0.10.0 Beta
 Open-source software analysis platform; repo-review is the initial and default module.
 
 Stage: Setup
@@ -683,7 +683,7 @@ non-attributive, and at Not applicable, Low, or Medium confidence, never
 High.
 
 If the user asks to review a private or internal repository, stop and explain
-that the `0.9.0` beta release supports anonymously readable public HTTPS Git
+that the `0.10.0` beta release supports anonymously readable public HTTPS Git
 repositories only.
 
 ## Completion

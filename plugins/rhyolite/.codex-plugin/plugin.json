@@ -1,6 +1,6 @@
 {
   "name": "rhyolite",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Rhyolite native guided setup for the trusted Bash repository-review runner.",
   "skills": [
     "./codex/skills"

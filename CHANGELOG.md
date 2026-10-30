@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-10-29
+
 ### Added
 
 - OpenAI Codex CLI is the third production review harness. Run
