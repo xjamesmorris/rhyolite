@@ -124,8 +124,8 @@ repository.
     0.163.0 and a configured provider whose key is exported, run
     `./rhyolite --harness codex --repo <public HTTPS URL>` and confirm the
     offline readiness check, the plaque, the terminal setup and approval
-    questions, the printed JSON plan, exact `/rhyolite:status`, and a
-    completed review.
+    questions, the printed JSON plan, the live review view and its status
+    line, exact `/rhyolite:status`, and a completed review.
 
 If public distribution is intended, separately verify repository visibility,
 GitHub private vulnerability reporting, support forms, anonymous marketplace

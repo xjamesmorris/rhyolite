@@ -2482,6 +2482,10 @@ main() {
         printf '\n' >&2
         bash "${plugin_root}/scripts/show-welcome-panel.sh" \
             --mode codex-launcher-plaque >&2 || true
+        # The controller's live review view puts the terminal in character
+        # mode and restores it when it ends; restore it here as well, in case
+        # the controller is killed before it can.
+        codex_terminal_state="$(stty -g 2>/dev/null)" || codex_terminal_state=''
         set +e
         (
             cd "${launch_dir}" &&
@@ -2489,14 +2493,22 @@ main() {
         )
         codex_exit_code=$?
         set -e
+        if [[ -n "${codex_terminal_state}" ]]; then
+            stty "${codex_terminal_state}" 2>/dev/null || true
+        fi
         if ((codex_exit_code != 0)); then
+            # A review that ran has already reported its own outcome in this
+            # terminal.
+            [[ ! -f "${session_dir}/codex-review-reported" ]] ||
+                exit "${codex_exit_code}"
             fail \
                 'Codex guided review controller' \
                 'The Codex guided setup and review controller failed.' \
                 "The controller returned exit code ${codex_exit_code}." \
                 'Review the private launcher session artifacts, correct the reported setup or runner failure, and retry.' \
                 "${codex_exit_code}" \
-                "${session_dir}/launch-context.txt; ${session_dir}"
+                "${session_dir}/launch-context.txt; ${session_dir}" \
+                'The Codex guided review did not start or complete.'
         fi
         return 0
     fi

@@ -107,8 +107,19 @@ supported and must not drive new work.
   at any question leaves without one. The launcher and the controller refuse
   to run without a terminal on standard input and standard error, so piped
   or redirected input never approves a plan. It then runs the approved review
-  itself and handles exact `/rhyolite:status`, `stop`, and `cancel`. Codex
-  runs only as the runner's isolated workers.
+  itself in a live review view: the runner's output goes to private session
+  files, progress milestones appear as timestamped lines without the
+  runner's copy of the approved plan or its heartbeats, and a status line
+  at the bottom shows the stage, elapsed time, and typed command while the
+  terminal is in character mode. It restores the terminal when the review
+  ends. Ctrl-Z stops the launcher, controller, and runner, whose shell
+  restores its own terminal mode, and `fg` resumes character mode and
+  redraws; a running Codex worker, which `timeout` keeps in its own process
+  group, goes on, and its time limit keeps counting. A `TERM=dumb` terminal
+  gets plain lines. It handles
+  exact `/rhyolite:status`, `stop`, `cancel`, and Ctrl-C, and a review that
+  reported its own outcome gets no second launcher error block. Codex runs
+  only as the runner's isolated workers.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual

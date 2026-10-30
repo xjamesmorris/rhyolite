@@ -15,6 +15,22 @@
   piped or redirected input now stops it with a `Codex terminal` error
   before any question. The Codex plugin manifest and its two question
   skills are removed.
+- A Codex review now runs in a live review view instead of printing the
+  runner's raw output, which repeated the whole plan and added a heartbeat
+  line every 30 seconds. Progress milestones appear as timestamped lines,
+  and a status line at the bottom shows a spinner, the elapsed time, the
+  current stage, and the command being typed. Ctrl-C stops the review like
+  `stop`. Ctrl-Z pauses the live view and the runner, with the terminal
+  back in its normal mode, and `fg` resumes them; a Codex worker that is
+  already running keeps working, so use `stop` to end a review. The
+  runner's complete output stays in the launcher's private session
+  directory.
+
+### Fixed
+
+- A failed Codex review no longer ends with a second `RHYOLITE ERROR` block
+  from the launcher, which said that the controller failed and that Copilot
+  did not start, after the runner had already reported the failure.
 
 ## 0.10.0 - 2026-10-29
 

@@ -354,13 +354,21 @@ the checkout:
   terminal, so a Codex launch with piped or redirected input stops before
   asking anything; script reviews with the direct runner instead.
 - **Running, status, and stop:** the launcher itself, not a model session,
-  runs the approved review in the same terminal and prints its progress.
+  runs the approved review in the same terminal. It prints each progress
+  milestone as a timestamped line and keeps a status line at the bottom
+  with a spinner, the elapsed time, the current stage, and the command you
+  are typing; a `TERM=dumb` terminal gets the lines without the status line.
   Type exact `/rhyolite:status` for the current stage, elapsed time, and
-  review settings, or exact `stop` or `cancel` to
-  stop the review through the runner's verified stop request. On
-  completion, the launcher prints the run output folder. No model
-  orchestrates a Codex review, so there is no executive summary; open
-  `index.html` in that folder.
+  review settings, or exact `stop` or `cancel`, or press Ctrl-C, to stop the
+  review through the runner's verified stop request. Ctrl-Z pauses the
+  live view and the runner, and `fg` resumes them, but a Codex worker that
+  is already running keeps working and its session time limit keeps
+  counting, so type `stop` to end a review and its model use. The runner's
+  complete output, including its heartbeats and its text copy of the
+  approved plan, is saved in the launcher's private session directory,
+  whose path the launcher prints. On completion, the launcher names the
+  outcome and the run's `index.html`. No model orchestrates a Codex review,
+  so there is no executive summary; open `index.html` to read the results.
 - **Workers:** review and research workers run `codex exec` in Codex's
   read-only sandbox with no shell, file-edit, web-search, or subagent tool.
   They read the snapshot only through the bundled offline snapshot broker's

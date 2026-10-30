@@ -1002,6 +1002,10 @@ call_count="${call_count//[[:space:]]/}"
 printf '%s\0' "$@" > "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/call-$((call_count + 1)).nul"
 if [[ " $* " == *' --request-stop '* ]]; then
     touch "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/stop-called"
+    if [[ "${RHYOLITE_CODEX_CONTROLLER_STOP:-}" == fail ]]; then
+        printf '%s\n' 'Fixture stop request could not verify the runner.'
+        exit 2
+    fi
     if [[ -f "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/runner.pid" ]]; then
         runner_pid="$(< "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/runner.pid")"
         [[ "${runner_pid}" =~ ^[1-9][0-9]*$ ]]
@@ -1025,6 +1029,38 @@ if [[ "${RHYOLITE_CODEX_CONTROLLER_MODE:-}" == mismatch &&
     printf '%s\n' 'Review execution did not start: the approved plan changed; regenerate and reconfirm.' >&2
     exit 2
 fi
+# The live mode prints what the real runner prints: its text copy of the
+# plan, progress with a heartbeat, plain lines, a stderr line, and bash's
+# notice for a sleep that a stop ended. It completes once the test creates
+# finish-live in the capture folder.
+if [[ "${RHYOLITE_CODEX_CONTROLLER_MODE:-}" == live ]]; then
+    run_folder="${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/live-run"
+    mkdir -p -- "${run_folder}"
+    # Only this runner's own stdout and stderr may refer to the session files.
+    find "/proc/$$/fd" -lname '*/codex-run.std*' | wc -l \
+        > "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/session-file-descriptors"
+    : > "${run_folder}/index.html"
+    delimiter='================================================================================'
+    printf '%s\n' "${delimiter}" 'EFFECTIVE REVIEW PLAN' "${delimiter}" \
+        'Fixture runner plan body line' "${delimiter}" \
+        'Starting 1 - Core repository review; public research disabled; provenance disabled.'
+    printf 'RHYOLITE PROGRESS | run | started | 1 repositories; output %s\n' \
+        "${run_folder}"
+    printf '%s\n' \
+        'RHYOLITE PROGRESS | github--octocat--hello-world | preflight | anonymous access confirmed' \
+        'RHYOLITE PROGRESS | github--octocat--hello-world | analysis | gpt-5.6-sol review started; scope 1' \
+        'RHYOLITE PROGRESS | github--octocat--hello-world | analysis | still running; elapsed 0m 30s'
+    printf '%s\n' 'Fixture runner stderr line' 'Terminated                 sleep 1' >&2
+    for _ in {1..300}; do
+        [[ ! -e "${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/finish-live" ]] || break
+        sleep 0.1
+    done
+    printf '%s\n' \
+        'https://github.com/octocat/Hello-World                                 Completed' \
+        '' "Run output:    ${run_folder}"
+    printf 'RHYOLITE PROGRESS | run | completed | Completed; %s\n' "${run_folder}"
+    exit 0
+fi
 if [[ "${RHYOLITE_CODEX_CONTROLLER_MODE:-}" == stop ]]; then
     run_folder="${RHYOLITE_CODEX_CONTROLLER_CAPTURE}/live-run"
     mkdir -p -- "${run_folder}"
@@ -1043,48 +1079,84 @@ chmod 700 -- \
     "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
     "${codex_controller_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
 
-# Drive one command at a pseudo-terminal: its stdin and stderr are the
-# terminal unless --stdin or --stderr names a file for that stream instead,
-# its stdout goes to the first file, and everything the terminal showed to
-# the second. Each "<text>\t<answer>" line of the steps file waits until
-# <text> appears on the terminal after the previous step, or for
-# "stdout:<text>" in the stdout file, and then types <answer> and Enter;
-# <EOF> types Ctrl-D instead.
-#   driver <stdout> <terminal> <steps> [--stdin FILE] [--stderr FILE] -- command...
+# Drive one command at a pseudo-terminal that is its controlling terminal, so
+# that Ctrl-C and Ctrl-Z signal it. Its stdin and stderr are the terminal
+# unless --stdin or --stderr names a file instead, and its stdout goes to the
+# first file unless --stdout-tty puts it on the terminal too. Everything the
+# terminal showed goes to the second file, and each resize to that file with
+# a .resizes suffix as "<byte offset> <columns>". --size sets the starting
+# window size (default 120x40).
+#
+# Each "<wait>\t<action>" line of the steps file waits, then acts. A wait is
+# empty, terminal text that appears after the previous wait, stdout:<text>
+# in the stdout file, tty:raw or tty:cooked for the terminal mode, or
+# sleep:<seconds>. An action types its text and Enter, or is <EOF> (Ctrl-D),
+# <CTRL-C>, <CTRL-Z>, <CONT> (SIGCONT to the process group), <RESIZE CxR>,
+# <TOUCH path>, or <NONE>.
+#
+# The driver fails when the terminal is left without line editing or echo.
+#   driver <stdout> <terminal> <steps> [option...] -- command...
 codex_terminal_driver="${fixture_root}/codex-terminal-driver.py"
 cat > "${codex_terminal_driver}" <<'PY'
 import errno
+import fcntl
 import os
 import pathlib
 import pty
 import select
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 
 arguments = sys.argv[1:sys.argv.index("--")]
-stdout_path, terminal_path, steps_path = arguments[:3]
-options = dict(zip(arguments[3::2], arguments[4::2]))
-assert set(options) <= {"--stdin", "--stderr"}, options
 command = sys.argv[sys.argv.index("--") + 1:]
+stdout_path, terminal_path, steps_path = arguments[:3]
+options = {}
+remaining = arguments[3:]
+while remaining:
+    option = remaining.pop(0)
+    if option == "--stdout-tty":
+        options[option] = True
+    elif option in ("--stdin", "--stderr", "--size") and remaining:
+        options[option] = remaining.pop(0)
+    else:
+        raise SystemExit(f"terminal driver: unknown option {option}")
+columns, rows = (int(value) for value in options.get("--size", "120x40").split("x"))
 steps = [
     tuple(line.split("\t", 1)) if "\t" in line else (line, "")
     for line in pathlib.Path(steps_path).read_text(encoding="utf-8").splitlines()
     if line
 ]
 master, slave = pty.openpty()
+fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
 stdin = open(options["--stdin"], "rb") if "--stdin" in options else slave
 stderr = open(options["--stderr"], "wb") if "--stderr" in options else slave
-with open(stdout_path, "wb") as stdout:
-    process = subprocess.Popen(
-        command, stdin=stdin, stdout=stdout, stderr=stderr, start_new_session=True,
-    )
-for stream in (stdin, stderr):
+stdout_file = open(stdout_path, "wb")
+stdout = slave if "--stdout-tty" in options else stdout_file
+terminal_fd = next(
+    (number for number, stream in ((0, stdin), (2, stderr), (1, stdout))
+     if stream is slave),
+    None,
+)
+
+
+def own_terminal():
+    if terminal_fd is not None:
+        fcntl.ioctl(terminal_fd, termios.TIOCSCTTY, 0)
+
+
+process = subprocess.Popen(
+    command, stdin=stdin, stdout=stdout, stderr=stderr,
+    start_new_session=True, preexec_fn=own_terminal,
+)
+for stream in (stdin, stderr, stdout_file):
     if stream is not slave:
         stream.close()
-os.close(slave)
 terminal = bytearray()
+resizes = []
 position = 0
 
 
@@ -1102,8 +1174,14 @@ def pump(timeout):
     return bool(chunk)
 
 
+def cooked():
+    flags = termios.tcgetattr(master)[3]
+    return bool(flags & termios.ICANON) and bool(flags & termios.ECHO)
+
+
 def finish(status, message=""):
     if process.poll() is None:
+        os.killpg(process.pid, signal.SIGCONT)
         os.killpg(process.pid, signal.SIGTERM)
         try:
             process.wait(timeout=5)
@@ -1112,39 +1190,178 @@ def finish(status, message=""):
             process.wait(timeout=5)
     while pump(0.1):
         pass
-    os.close(master)
+    if terminal_fd is not None and not cooked():
+        status, message = 97, "the terminal was left without line editing or echo"
     pathlib.Path(terminal_path).write_bytes(bytes(terminal))
+    pathlib.Path(terminal_path + ".resizes").write_text(
+        "".join(f"{offset} {width}\n" for offset, width in resizes), encoding="utf-8")
+    os.close(slave)
+    os.close(master)
     if message:
         print(f"terminal driver: {message}", file=sys.stderr)
     sys.exit(status)
 
 
-def seen(text):
+def ready(wait):
     global position
-    if text.startswith("stdout:"):
-        return text[7:].encode() in pathlib.Path(stdout_path).read_bytes()
-    index = terminal.find(text.encode(), position)
+    if not wait:
+        return True
+    if wait.startswith("stdout:"):
+        return wait[7:].encode() in pathlib.Path(stdout_path).read_bytes()
+    if wait in ("tty:raw", "tty:cooked"):
+        return cooked() == (wait == "tty:cooked")
+    index = terminal.find(wait.encode(), position)
     if index < 0:
         return False
-    position = index + len(text.encode())
+    position = index + len(wait.encode())
     return True
 
 
-for text, answer in steps:
-    deadline = time.monotonic() + 30
-    while not seen(text):
-        if not pump(0.1) and process.poll() is not None and not seen(text):
-            finish(98, f"the command ended before {text!r}")
-        if time.monotonic() > deadline:
-            finish(98, f"timed out waiting for {text!r}")
+def act(action):
+    if action == "<EOF>":
+        os.write(master, b"\x04")
+    elif action == "<CTRL-C>":
+        os.write(master, b"\x03")
+    elif action == "<CTRL-Z>":
+        os.write(master, b"\x1a")
+    elif action == "<CONT>":
+        os.killpg(process.pid, signal.SIGCONT)
+    elif action.startswith("<RESIZE ") and action.endswith(">"):
+        width, height = (int(value) for value in action[8:-1].split("x"))
+        while pump(0.05):
+            pass
+        resizes.append((len(terminal), width))
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
+    elif action.startswith("<TOUCH ") and action.endswith(">"):
+        pathlib.Path(action[7:-1]).touch()
+    elif action != "<NONE>":
+        os.write(master, action.encode() + b"\n")
+
+
+for wait, action in steps:
+    if wait.startswith("sleep:"):
+        deadline = time.monotonic() + float(wait[6:])
+        while time.monotonic() < deadline:
+            pump(0.05)
+    else:
+        deadline = time.monotonic() + 30
+        while not ready(wait):
+            if not pump(0.1) and process.poll() is not None and not ready(wait):
+                finish(98, f"the command ended before {wait!r}")
+            if time.monotonic() > deadline:
+                finish(98, f"timed out waiting for {wait!r}")
     time.sleep(0.05)
-    os.write(master, b"\x04" if answer == "<EOF>" else answer.encode() + b"\n")
-try:
-    process.wait(timeout=60)
-except subprocess.TimeoutExpired:
-    finish(98, "the command did not finish")
+    act(action)
+deadline = time.monotonic() + 60
+while process.poll() is None:
+    pump(0.1)
+    if time.monotonic() > deadline:
+        finish(98, "the command did not finish")
 finish(process.returncode)
 PY
+
+# Check a live review view as a terminal shows it: every status line fits the
+# window, allowing the few draws that a resize overtakes, no status line is
+# left behind unless --stale-status yes allows the one that Ctrl-Z leaves
+# above a job-control shell's notice, and each --expect text is on the screen
+# while each --absent text is not.
+#   codex_terminal_screen <terminal> <starting columns> [--expect|--absent text]...
+codex_terminal_screen() {
+    python3 -I - "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+transcript = pathlib.Path(sys.argv[1])
+columns = int(sys.argv[2])
+checks = list(zip(sys.argv[3::2], sys.argv[4::2]))
+raw = transcript.read_bytes()
+text = raw.decode("utf-8", "replace")
+events = []
+for line in pathlib.Path(f"{transcript}.resizes").read_text(encoding="utf-8").splitlines():
+    offset, width = (int(value) for value in line.split())
+    events.append((len(raw[:offset].decode("utf-8", "ignore")), width))
+CSI = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
+FOOTER = re.compile(r"^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏|/\\-] \d+m \d+s")
+
+
+def width_at(index):
+    width = columns
+    for offset, value in events:
+        if index >= offset:
+            width = value
+    return width
+
+
+problems = []
+draws_since_resize = {offset: 0 for offset, _ in events}
+for match in re.finditer(r"\r\x1b\[K", text):
+    end = min((index for index in (text.find("\r", match.end()), text.find("\n", match.end()))
+               if index != -1), default=len(text))
+    visible = CSI.sub("", text[match.end():end])
+    if not FOOTER.match(visible):
+        continue
+    latest = max((offset for offset, _ in events if offset <= match.start()), default=None)
+    if latest is not None:
+        draws_since_resize[latest] += 1
+    if len(visible) > width_at(match.start()) - 1 and (
+            latest is None or draws_since_resize[latest] > 3):
+        problems.append(f"status line wider than the window: {visible!r}")
+
+for offset, count in draws_since_resize.items():
+    if count == 0:
+        problems.append(f"no status line after the resize at {offset}")
+
+screen, row, column, index = [[]], 0, 0, 0
+continued = set()
+while index < len(text):
+    width = width_at(index)
+    character = text[index]
+    match = CSI.match(text, index)
+    if match:
+        if match.group(2) == "K":
+            del screen[row][column:]
+        elif match.group(2) == "D":
+            column = max(0, column - int(match.group(1) or "1"))
+        index = match.end()
+        continue
+    if character == "\r":
+        column = 0
+    elif character == "\n":
+        row += 1
+        screen.append([]) if row == len(screen) else None
+    elif character >= " " and character != "\x7f":
+        if column >= width:
+            row, column = row + 1, 0
+            screen.append([]) if row == len(screen) else None
+            continued.add(row)
+        line = screen[row]
+        line.extend(" " * (column - len(line)))
+        line[column:column + 1] = [character]
+        column += 1
+    index += 1
+lines = []
+for number, line in enumerate(screen):
+    text_line = "".join(line)
+    if number in continued and lines:
+        lines[-1] += text_line
+    else:
+        lines.append(text_line)
+lines = [line.rstrip() for line in lines]
+shown = "\n".join(lines)
+if ("--stale-status", "yes") not in checks:
+    problems.extend(f"status line left on the screen: {line!r}"
+                    for line in lines if FOOTER.match(line))
+for kind, value in checks:
+    if kind == "--expect" and value not in shown:
+        problems.append(f"missing from the screen: {value!r}")
+    if kind == "--absent" and value in shown:
+        problems.append(f"unexpected on the screen: {value!r}")
+if problems:
+    print("\n".join(problems + ["--- screen ---", shown]), file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
 
 # Print driver steps from prompt and answer pairs.
 codex_steps() {
@@ -1155,6 +1372,9 @@ codex_steps() {
 # prompts as the steps say. The case's session and runner-call folders are
 # codex-controller-<name>-session and codex-controller-<name>-capture under
 # the fixture root; its terminal output is codex-controller-<name>.terminal.
+# CODEX_CASE_TERM and CODEX_CASE_LOCALE set the terminal type and locale
+# (default xterm-256color and C.UTF-8), and CODEX_DRIVER_OPTIONS adds driver
+# options.
 #   codex_controller_case <name> <steps> [controller option...]
 codex_controller_case() {
     local name="$1"
@@ -1162,16 +1382,21 @@ codex_controller_case() {
     shift 2
     local session="${fixture_root}/codex-controller-${name}-session"
     local capture="${fixture_root}/codex-controller-${name}-capture"
+    local -a driver_options=()
 
     mkdir -p -- "${session}" "${capture}"
     printf '%s\n' "${steps}" > "${fixture_root}/codex-controller-${name}.steps"
+    read -r -a driver_options <<< "${CODEX_DRIVER_OPTIONS-}"
     RHYOLITE_CODEX_CONTROLLER_CAPTURE="${capture}" \
     RHYOLITE_CODEX_FAKE_CALLS="${codex_controller_calls}" \
     HOME="${codex_controller_home}" \
+    TERM="${CODEX_CASE_TERM:-xterm-256color}" \
+    LC_ALL="${CODEX_CASE_LOCALE:-C.UTF-8}" \
     python3 -I "${codex_terminal_driver}" \
         "${fixture_root}/codex-controller-${name}.stdout" \
         "${fixture_root}/codex-controller-${name}.terminal" \
         "${fixture_root}/codex-controller-${name}.steps" \
+        "${driver_options[@]}" \
         -- \
         "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
         --plugin-root "${codex_controller_plugin}" \
@@ -1475,7 +1700,7 @@ codex_controller_stop_capture="${fixture_root}/codex-controller-stop-capture"
 RHYOLITE_CODEX_CONTROLLER_MODE=stop \
     codex_controller_case stop "$(codex_steps \
         'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
-        'stdout:RHYOLITE PROGRESS | run | started' '/rhyolite:status' \
+        'stdout:1 repositories; output ' '/rhyolite:status' \
         'stdout:RHYOLITE STATUS' stop)" ||
     fail 'Codex guided controller did not treat exact stop as a clean terminal state.'
 [[ -f "${codex_controller_stop_capture}/stop-called" ]] ||
@@ -1498,6 +1723,190 @@ for codex_status_line in \
 done
 assert_contains "${fixture_root}/codex-controller-stop.terminal" \
     'Rhyolite review stopped.' 'Codex controller stopped state'
+codex_terminal_screen "${fixture_root}/codex-controller-stop.terminal" 120 \
+    --expect '› stop' ||
+    fail 'Codex guided controller left its status line on the screen after stop.'
+
+# When the verified stop request fails, the controller shows why and stops
+# the runner that it started itself.
+codex_fallback_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'stdout:1 repositories; output ' stop)"
+RHYOLITE_CODEX_CONTROLLER_MODE=stop RHYOLITE_CODEX_CONTROLLER_STOP=fail \
+    codex_controller_case stop-fallback "${codex_fallback_steps}" ||
+    fail 'Codex guided controller did not stop the runner after a failed stop request.'
+assert_contains "${fixture_root}/codex-controller-stop-fallback.terminal" \
+    'Fixture stop request could not verify the runner.' \
+    'Codex controller failed stop request detail'
+assert_contains "${fixture_root}/codex-controller-stop-fallback.terminal" \
+    'Rhyolite review stopped.' 'Codex controller fallback stop'
+
+# After approval, the review keeps the interactive screen: readable milestone
+# lines without the runner's copy of the plan or its heartbeats, the runner's
+# stderr without bash's notice for a sleep that a stop ended, the typed
+# command echoed, and a status line that fits the window, follows a resize,
+# and is gone when the review ends. The runner's complete output stays in the
+# session files.
+codex_live_capture="${fixture_root}/codex-controller-live-capture"
+codex_live_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'gpt-5.6-sol review started; scope 1' '/rhyolite:status' \
+    'RHYOLITE STATUS' hello \
+    'During review execution, enter exact stop, cancel, or /rhyolite:status.' '<RESIZE 64x30>' \
+    'sleep:1' "<TOUCH ${codex_live_capture}/finish-live>")"
+RHYOLITE_CODEX_CONTROLLER_MODE=live CODEX_DRIVER_OPTIONS='--stdout-tty' \
+    codex_controller_case live "${codex_live_steps}" ||
+    fail 'Codex guided controller failed in its live review view.'
+codex_terminal_screen "${fixture_root}/codex-controller-live.terminal" 120 \
+    --expect 'Review running' \
+    --expect '  Source: https://github.com/octocat/Hello-World' \
+    --expect '  Runtime: codex, gpt-5.6-sol, max, long_context; scope 1' \
+    --expect "  Full runner output: ${fixture_root}/codex-controller-live-session/codex-run.stdout" \
+    --expect 'Type stop or cancel to stop the review, or /rhyolite:status for its current state. Ctrl-C also stops it.' \
+    --expect 'Starting 1 - Core repository review; public research disabled; provenance disabled.' \
+    --expect "Started        1 repositories; output ${codex_live_capture}/live-run" \
+    --expect 'Preflight      anonymous access confirmed' \
+    --expect 'Analysis       gpt-5.6-sol review started; scope 1' \
+    --expect 'Fixture runner stderr line' \
+    --expect 'RHYOLITE STATUS' \
+    --expect '› /rhyolite:status' \
+    --expect '› hello' \
+    --expect 'During review execution, enter exact stop, cancel, or /rhyolite:status.' \
+    --expect 'https://github.com/octocat/Hello-World                                 Completed' \
+    --expect "Completed      Completed; ${codex_live_capture}/live-run" \
+    --expect "Review finished: Completed. Open ${codex_live_capture}/live-run/index.html to read the results." \
+    --absent 'Fixture runner plan body line' \
+    --absent 'EFFECTIVE REVIEW PLAN
+====' \
+    --absent 'Analysis       still running; elapsed' \
+    --absent 'Terminated                 sleep 1' \
+    --absent 'RHYOLITE PROGRESS' ||
+    fail 'Codex guided controller showed a broken live review view.'
+grep -Fq 'type stop, cancel, or /rhyolite:status' \
+    "${fixture_root}/codex-controller-live.terminal" ||
+    fail 'Codex guided controller drew no status line.'
+assert_contains "${fixture_root}/codex-controller-live-session/codex-run.stdout" \
+    'Fixture runner plan body line' 'Codex runner plan copy in the session file'
+assert_contains "${fixture_root}/codex-controller-live-session/codex-run.stdout" \
+    'still running; elapsed 0m 30s' 'Codex runner heartbeat in the session file'
+assert_contains "${fixture_root}/codex-controller-live-session/codex-run.stderr" \
+    'Terminated                 sleep 1' 'Codex runner stderr in the session file'
+[[ "$(tr -d '[:space:]' < "${codex_live_capture}/session-file-descriptors")" == 2 ]] ||
+    fail 'The Codex runner inherited the live view descriptors.'
+[[ -f "${fixture_root}/codex-controller-live-session/codex-review-reported" &&
+    ! -e "${fixture_root}/codex-controller-mismatch-session/codex-review-reported" ]] ||
+    fail 'Codex guided controller did not record only a reported review outcome.'
+
+# A dumb terminal gets the same lines, with heartbeats, but no status line,
+# escape sequence, or character mode, and still takes typed commands.
+codex_dumb_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'gpt-5.6-sol review started; scope 1' '/rhyolite:status' \
+    'RHYOLITE STATUS' "<TOUCH ${fixture_root}/codex-controller-dumb-capture/finish-live>")"
+RHYOLITE_CODEX_CONTROLLER_MODE=live CODEX_DRIVER_OPTIONS='--stdout-tty' \
+    CODEX_CASE_TERM=dumb \
+    codex_controller_case dumb "${codex_dumb_steps}" ||
+    fail 'Codex guided controller failed at a dumb terminal.'
+codex_terminal_screen "${fixture_root}/codex-controller-dumb.terminal" 120 \
+    --expect 'Analysis       gpt-5.6-sol review started; scope 1' \
+    --expect 'Analysis       still running; elapsed 0m 30s' \
+    --expect 'RHYOLITE STATUS' \
+    --expect 'Review finished: Completed.' \
+    --absent 'Fixture runner plan body line' ||
+    fail 'Codex guided controller showed broken progress at a dumb terminal.'
+! grep -Fq $'\033' "${fixture_root}/codex-controller-dumb.terminal" ||
+    fail 'Codex guided controller wrote escape sequences to a dumb terminal.'
+
+# Ctrl-C stops the review through the verified stop request, as stop does,
+# and a locale without UTF-8 gets ASCII status-line glyphs.
+codex_interrupt_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'stdout:1 repositories; output ' '<NONE>' \
+    'type stop, cancel, or /rhyolite:status' '<CTRL-C>')"
+RHYOLITE_CODEX_CONTROLLER_MODE=stop CODEX_CASE_LOCALE=C \
+    codex_controller_case interrupt "${codex_interrupt_steps}" ||
+    fail 'Codex guided controller did not stop the review on Ctrl-C.'
+assert_contains "${fixture_root}/codex-controller-interrupt.terminal" \
+    'Stopping Rhyolite review (signal)...' 'Codex controller Ctrl-C stop'
+assert_contains "${fixture_root}/codex-controller-interrupt.terminal" \
+    'Rhyolite review stopped.' 'Codex controller Ctrl-C stopped state'
+[[ -f "${fixture_root}/codex-controller-interrupt-capture/stop-called" ]] ||
+    fail 'Codex guided controller did not use the verified stop request on Ctrl-C.'
+! LC_ALL=C grep -q $'\xe2' "${fixture_root}/codex-controller-interrupt.terminal" ||
+    fail 'Codex guided controller drew UTF-8 glyphs in a locale without UTF-8.'
+# The runner ends without output after a stop, so only the controller can
+# clear the status line it last drew.
+codex_terminal_screen "${fixture_root}/codex-controller-interrupt.terminal" 120 \
+    --expect 'Rhyolite review stopped.' ||
+    fail 'Codex guided controller left its status line on the screen after Ctrl-C.'
+
+# Without a job-control shell, the controller's process group is orphaned
+# and the kernel discards Ctrl-Z, so the review goes on in character mode and
+# still takes commands.
+codex_orphan_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'stdout:1 repositories; output ' '<NONE>' \
+    'tty:raw' '<CTRL-Z>' \
+    'sleep:0.5' '<NONE>' \
+    'tty:raw' stop)"
+RHYOLITE_CODEX_CONTROLLER_MODE=stop \
+    codex_controller_case suspend-orphaned "${codex_orphan_steps}" ||
+    fail 'Codex guided controller stopped responding after Ctrl-Z without a job-control shell.'
+assert_contains "${fixture_root}/codex-controller-suspend-orphaned.terminal" \
+    'Rhyolite review stopped.' 'Codex controller stop after a discarded Ctrl-Z'
+
+# Under a job-control shell, Ctrl-Z stops the whole review job and the shell
+# gets back a terminal in its own mode; fg resumes the live view in character
+# mode, where stop still works.
+codex_job_session="${fixture_root}/codex-controller-job-session"
+codex_job_capture="${fixture_root}/codex-controller-job-capture"
+mkdir -p -- "${codex_job_session}" "${codex_job_capture}"
+printf -v codex_job_command '%q ' \
+    "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+    --plugin-root "${codex_controller_plugin}" \
+    --working-directory "${codex_controller_work}" \
+    --session-directory "${codex_job_session}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context \
+    --repo https://github.com/octocat/Hello-World
+codex_steps \
+    'codex-job$ ' "${codex_job_command}" \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+    'stdout:1 repositories; output ' '<NONE>' \
+    'tty:raw' '<CTRL-Z>' \
+    'Stopped' '<NONE>' \
+    'tty:cooked' '<RESIZE 64x30>' \
+    'sleep:0.3' fg \
+    'tty:raw' '<NONE>' \
+    'sleep:1.5' stop \
+    'Rhyolite review stopped.' '<NONE>' \
+    'codex-job$ ' exit \
+    > "${fixture_root}/codex-controller-job.steps"
+RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_job_capture}" \
+RHYOLITE_CODEX_CONTROLLER_MODE=stop \
+RHYOLITE_CODEX_FAKE_CALLS="${codex_controller_calls}" \
+HOME="${codex_controller_home}" \
+TERM=xterm-256color \
+LC_ALL=C.UTF-8 \
+PS1='codex-job$ ' \
+python3 -I "${codex_terminal_driver}" \
+    "${fixture_root}/codex-controller-job.stdout" \
+    "${fixture_root}/codex-controller-job.terminal" \
+    "${fixture_root}/codex-controller-job.steps" \
+    -- \
+    /usr/bin/bash --norc --noprofile --noediting -i || {
+        cat -- "${fixture_root}/codex-controller-job.terminal" >&2 || true
+        fail 'Codex guided controller mishandled Ctrl-Z and fg under a job-control shell.'
+    }
+[[ -f "${codex_job_capture}/stop-called" ]] ||
+    fail 'Codex guided controller did not stop the review after fg.'
+# A resize while the job was stopped reaches only the shell, so the status
+# line fits the new window only when the controller measures it on fg.
+codex_terminal_screen "${fixture_root}/codex-controller-job.terminal" 120 \
+    --stale-status yes \
+    --expect 'Rhyolite review stopped.' ||
+    fail 'Codex guided controller did not fit its status line to the window after fg.'
 
 # At a terminal, answers typed before the plan appeared never approve it: the
 # controller discards them, and only an answer given at the approval
@@ -1524,6 +1933,8 @@ environment = dict(
     RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
     RHYOLITE_CODEX_FAKE_CALLS=sys.argv[3],
     HOME=str(root / "codex-controller-home"),
+    TERM="xterm-256color",
+    LC_ALL="C.UTF-8",
 )
 master, slave = pty.openpty()
 # Enter for the output and scope defaults, then an early approval.
@@ -1585,7 +1996,7 @@ text = terminal.decode("utf-8", errors="replace")
 assert process.returncode == 0, text
 assert text.count("Select action: ") == 1, text
 assert "Enter 1, 2, or 3, or type stop." not in text, text
-assert "Review started. Type exact stop or cancel to interrupt" in text, text
+assert b"Review running" in stdout and b"Ctrl-C also stops it." in stdout, stdout
 assert b"/tmp/rhyolite-controller-run" in stdout
 assert len(list(capture.glob("call-*.nul"))) == 2
 PY
@@ -1625,6 +2036,19 @@ cat > "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh" <<'CODEX_LAU
 set -euo pipefail
 printf '%s\n' 'FIXTURE CODEX CONTROLLER STARTED' >&2
 printf '%s\0' "$@" > "${RHYOLITE_CODEX_LAUNCHER_CAPTURE:?}"
+# RHYOLITE_CODEX_LAUNCHER_EXIT ends the fixture with that status, after a
+# review that reported its own outcome when RHYOLITE_CODEX_LAUNCHER_REPORTED
+# is 1.
+if [[ -n "${RHYOLITE_CODEX_LAUNCHER_EXIT-}" ]]; then
+    session=''
+    while (($# > 0)); do
+        [[ "$1" != --session-directory ]] || session="$2"
+        shift
+    done
+    [[ "${RHYOLITE_CODEX_LAUNCHER_REPORTED-}" != 1 ]] ||
+        : > "${session}/codex-review-reported"
+    exit "${RHYOLITE_CODEX_LAUNCHER_EXIT}"
+fi
 CODEX_LAUNCHER_CONTROLLER
 chmod 700 -- "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh"
 # The Codex questions need a terminal on stdin and stderr. With stdout
@@ -1784,6 +2208,50 @@ codex_launcher_no_terminal_case piped-stdin \
     --stdin "${fixture_root}/codex-launcher-piped.stdin"
 codex_launcher_no_terminal_case redirected-stderr \
     --stderr "${fixture_root}/codex-launcher-redirected-stderr.stderr"
+
+# A review that ran reported its own outcome, so a failed review adds no
+# second RHYOLITE ERROR block; a controller that failed on its own gets one
+# that names the Codex consequence.
+codex_launcher_outcome_case() {
+    local name="$1"
+    local reported="$2"
+    local status=0
+
+    rm -f -- "${codex_launcher_capture}"
+    (
+        cd -- "${codex_launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            HOME="${fixture_root}/codex-launcher-home" \
+            CODEX_HOME="${codex_home}" \
+            FIXTURE_CODEX_KEY='fixture-secret-value' \
+            XDG_STATE_HOME="${codex_launcher_state}" \
+            RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+            RHYOLITE_CODEX_LAUNCHER_EXIT=3 \
+            RHYOLITE_CODEX_LAUNCHER_REPORTED="${reported}" \
+            RHYOLITE_CODEX_FAKE_CALLS="${codex_launcher_calls}" \
+            PATH="${codex_fake_bin}:/usr/bin:/bin" \
+            python3 -I "${codex_terminal_driver}" \
+            "${fixture_root}/codex-launcher-${name}.stdout" \
+            "${fixture_root}/codex-launcher-${name}.terminal" \
+            "${fixture_root}/codex-launcher.steps" \
+            -- \
+            "${codex_launcher_plugin}/bin/rhyolite" \
+            --harness codex \
+            --repo https://github.com/octocat/Hello-World \
+            --auto-defaults
+    ) || status=$?
+    ((status == 3)) ||
+        fail "Staged Codex launcher returned ${status} instead of 3 for ${name}."
+}
+codex_launcher_outcome_case reported 1
+assert_not_contains "${fixture_root}/codex-launcher-reported.terminal" \
+    'RHYOLITE ERROR' 'Staged Codex launcher after a reported review'
+codex_launcher_outcome_case controller-failure 0
+assert_contains "${fixture_root}/codex-launcher-controller-failure.terminal" \
+    'Stage: Codex guided review controller' 'Staged Codex launcher controller failure'
+assert_contains "${fixture_root}/codex-launcher-controller-failure.terminal" \
+    'Consequence: The Codex guided review did not start or complete.' \
+    'Staged Codex launcher controller failure consequence'
 rm -f -- "${codex_launcher_capture}"
 if (
     cd -- "${codex_launcher_caller}"

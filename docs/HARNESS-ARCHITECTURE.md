@@ -693,8 +693,11 @@ with numbered Bash prompts in the launcher's terminal, generates and prints
 the plan with a short summary, and asks for approval with no default answer
 after discarding input typed before the plan appeared. The launcher and the
 controller refuse to run without a terminal on standard input and standard
-error. It runs the approved review itself and handles exact
-`/rhyolite:status`, `stop`, and `cancel`
+error. It runs the approved review itself in a live review view, with the
+runner's output in private session files, timestamped milestone lines, and
+a bottom status line in character mode that it restores when the review ends
+and resumes after Ctrl-Z and `fg`, and handles exact `/rhyolite:status`,
+`stop`, `cancel`, and Ctrl-C
 through the runner's `--request-stop`. Rhyolite ships no Codex plugin
 manifest, skill, or marketplace.
 
