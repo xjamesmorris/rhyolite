@@ -355,7 +355,8 @@ the checkout:
   scope 1), but the plan still needs approval.
 - **Running, status, and stop:** the launcher itself, not a model session,
   runs the approved review in the same terminal and prints its progress.
-  Type exact `/rhyolite:status` for progress, or exact `stop` or `cancel` to
+  Type exact `/rhyolite:status` for the current stage, elapsed time, and
+  review settings, or exact `stop` or `cancel` to
   stop the review through the runner's verified stop request. On
   completion, the launcher prints the run output folder. Codex sessions
   write no executive summary, so open `index.html` in that folder.
@@ -370,6 +371,8 @@ the checkout:
   folder above its working directory. Its environment drops every inherited
   `CODEX_*` variable except `CODEX_CA_CERTIFICATE`, and `OPENAI_API_KEY` and
   `OPENAI_BASE_URL` unless the provider names one of them as its key.
+  Rhyolite also turns off Codex's shell environment snapshot, so your
+  environment, including the provider key, is never written to that home.
 - **System configuration:** Codex applies `/etc/codex` to every session, and
   its legacy managed configuration overrides even command-line settings, so
   Rhyolite refuses to start a Codex review while `/etc/codex` holds anything.

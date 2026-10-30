@@ -158,8 +158,8 @@ print_scope_explanation() {
 # Codex 0.163.0 submits an empty answer to a question asked outside Plan mode
 # after 60 seconds plus a visible 60-second countdown; any key pressed in the
 # question stops that countdown. The skills report an unanswered question as
-# a cancel, which the controller cannot tell apart from a deliberate one.
-readonly CODEX_QUESTION_TIMEOUT_NOTE='Codex cancels a question that is not answered within two minutes; pressing any key in the question stops that countdown.'
+# a cancel, which the controller cannot tell apart from a deliberate one. The
+# stage helper names the countdown before each question session.
 
 # The key choices of the authoritative plan, printed after its full JSON so
 # that they sit directly above the approval question.
@@ -184,8 +184,11 @@ for source in plan.get("Sources") or []:
     if isinstance(source, dict):
         commit = source.get("RequestedCommit") or "the default branch at clone time"
         print(f"  Source: {text(source.get('RemoteUrl'))} at {text(commit)}")
-scope = plan.get("Scope") if isinstance(plan.get("Scope"), dict) else {}
-print(f"  Scope: {text(scope.get('Number'))} - {text(scope.get('Name'))}")
+scope = plan.get("Scope")
+if isinstance(scope, dict):
+    # The scope name already starts with its number.
+    scope = scope.get("Name") or scope.get("Number")
+print(f"  Scope: {text(scope)}")
 print(f"  Output: {text(plan.get('OutputRoot'))}")
 print("  Runtime: " + ", ".join(text(plan.get(key)) for key in (
     "Harness", "Model", "ReasoningEffort", "ContextTier")))
@@ -218,39 +221,71 @@ offer_question_again() {
     return 1
 }
 
+# Report the live review: the runner writes the run's state.json only when it
+# finishes, so the latest progress line from its output is the current stage.
+#   print_run_status <run folder or empty> <runner stdout copy>
 print_run_status() {
     local run_folder="$1"
-    local state_path="${run_folder}/state.json"
+    local runner_output="$2"
+    local progress='' elapsed='UNAVAILABLE' seconds
 
-    if [[ -f "${state_path}" && ! -L "${state_path}" ]]; then
-        python3 -I - "${state_path}" <<'PY' || true
+    if [[ -f "${runner_output}" && ! -L "${runner_output}" ]]; then
+        progress="$(
+            sed -n 's/^RHYOLITE PROGRESS | //p' "${runner_output}" | tail -n 1
+        )"
+    fi
+    if [[ -n "${run_started_epoch-}" ]]; then
+        seconds=$(($(date +%s) - run_started_epoch))
+        elapsed="$((seconds / 60))m $((seconds % 60))s"
+    fi
+    python3 -I - "${run_folder}" "${progress}" "${elapsed}" "${model}" \
+        "${reasoning_effort}" "${context_tier}" "${current_scope}" \
+        "${repositories[@]}" <<'PY' || true
 import json
+import pathlib
 import sys
 
-try:
-    with open(sys.argv[1], encoding="utf-8") as stream:
-        value = json.load(stream)
-except (OSError, ValueError):
-    raise SystemExit(1)
+(run_folder, progress, elapsed, model, effort, context, scope,
+ *sources) = sys.argv[1:]
+
+
+def text(value):
+    return "".join(character for character in str(value) if character.isprintable())
+
+
+state = {}
+if run_folder:
+    path = pathlib.Path(run_folder) / "state.json"
+    if path.is_file() and not path.is_symlink():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+    state = state if isinstance(state, dict) else {}
 print("RHYOLITE STATUS")
-print(f"Run: {value.get('RunId', 'UNKNOWN')}")
-print(f"Status: {value.get('Status', 'UNKNOWN')}")
-repositories = value.get("Repositories")
+print("Command: repo-review")
+print(f"Stage: {text(progress) if progress else 'STARTING'}")
+print(f"Elapsed: {text(elapsed)}")
+print("Harness: codex")
+print(f"Source: {text(', '.join(sources))}")
+print(f"Model: {text(model)} ({text(effort)}, {text(context)})")
+print(f"Scope: {text(scope)}")
+print(f"Output: {text(run_folder) if run_folder else 'NOT AVAILABLE YET'}")
+if run_folder:
+    run_id = state.get("RunId") or pathlib.Path(run_folder).name
+    print(f"Review run: {text(run_id)} ({text(state.get('Status') or 'Running')})")
+else:
+    print("Review run: NOT STARTED")
+repositories = state.get("Repositories")
 if isinstance(repositories, list):
     counts = {}
     for repository in repositories:
         if isinstance(repository, dict):
-            status = str(repository.get("Status", "UNKNOWN"))
+            status = text(repository.get("Status", "UNKNOWN"))
             counts[status] = counts.get(status, 0) + 1
     if counts:
-        print("Repositories: " + ", ".join(
-            f"{key}={counts[key]}" for key in sorted(counts)
-        ))
-print(f"Output: {value.get('Paths', {}).get('WritableOutput', sys.argv[1][:-11])}")
+        print("Repositories: " + ", ".join(f"{key}={counts[key]}" for key in sorted(counts)))
 PY
-        return
-    fi
-    printf 'RHYOLITE STATUS\nStatus: STARTING\nOutput: %s\n' "${run_folder}"
 }
 
 while true; do
@@ -368,8 +403,7 @@ PY
     # starts as soon as it appears.
     if [[ -t 0 ]]; then
         printf '%s\n' \
-            'Read the plan, then press Enter to answer the approval question in Codex, or type stop to leave without starting a review.' \
-            "${CODEX_QUESTION_TIMEOUT_NOTE}" >&2
+            'Read the plan, then press Enter to answer the approval question in Codex, or type stop to leave without starting a review.' >&2
         plan_answer=''
         IFS= read -r plan_answer || plan_answer=stop
         if [[ "${plan_answer}" == stop || "${plan_answer}" == cancel ]]; then
@@ -428,6 +462,7 @@ PY
                         kill -TERM "${runner_pid}" 2>/dev/null || true
                     fi
                 }
+                run_started_epoch="$(date +%s)"
                 trap 'stop_active_runner signal' INT TERM HUP
                 if [[ -t 0 ]]; then
                     printf '%s\n' \
@@ -440,15 +475,18 @@ PY
                     > >(tee "${execution_stdout}") \
                     2> >(tee "${execution_stderr}" >&2) &
                 runner_pid=$!
+                # The runner names its run output folder when the run starts.
+                refresh_active_run_folder() {
+                    [[ -z "${active_run_folder}" ]] || return 0
+                    active_run_folder="$(
+                        sed -n \
+                            's/^RHYOLITE PROGRESS | run | started | .* output //p' \
+                            "${execution_stdout}" |
+                            tail -n 1
+                    )"
+                }
                 while kill -0 "${runner_pid}" 2>/dev/null; do
-                    if [[ -z "${active_run_folder}" ]]; then
-                        active_run_folder="$(
-                            sed -n \
-                                's/^RHYOLITE PROGRESS | run | started | .* output //p' \
-                                "${execution_stdout}" |
-                                tail -n 1
-                        )"
-                    fi
+                    refresh_active_run_folder
                     if ((controller_input)); then
                         command=''
                         IFS= read -r -t 1 command
@@ -456,17 +494,14 @@ PY
                         if ((read_status == 0)); then
                             case "${command}" in
                                 stop|cancel)
+                                    refresh_active_run_folder
                                     stop_active_runner "${command}"
                                     ;;
                                 /rhyolite:status)
-                                    if [[ -n "${active_run_folder}" ]]; then
-                                        print_run_status "${active_run_folder}"
-                                    else
-                                        printf '%s\n' \
-                                            'RHYOLITE STATUS' \
-                                            'Status: STARTING' \
-                                            'Output: NOT AVAILABLE YET'
-                                    fi
+                                    refresh_active_run_folder
+                                    print_run_status \
+                                        "${active_run_folder}" \
+                                        "${execution_stdout}"
                                     ;;
                                 '')
                                     ;;

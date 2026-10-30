@@ -481,6 +481,11 @@ Runtime-home requirements:
 - Configuration and bridge files are mode 0600.
 - The home contains no target checkout, writable report output, arbitrary user
   configuration, hook, project instruction, or unapproved plugin.
+- Turn off CLI features that copy the inherited environment or credentials
+  into the runtime home when the worker does not need them. Codex, for
+  example, disables its shell environment snapshot, which otherwise starts a
+  login shell and writes the whole environment, including the provider key,
+  into the runtime home although its workers have no shell tool.
 - Configuration that the CLI reads from outside the runtime home is either
   disabled by the runtime-home configuration or makes both
   `harness_prepare_run` and `harness_prepare_worker_home` fail closed. Codex,

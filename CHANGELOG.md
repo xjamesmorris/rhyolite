@@ -15,7 +15,8 @@
   `stop`, and `cancel`. Codex workers read
   the snapshot only through the bundled offline snapshot broker, run in
   private Codex homes that ignore your other Codex settings and Codex
-  control variables, and support scopes 1, 2, and 3 with one model,
+  control variables and never receive a copy of your environment, and
+  support scopes 1, 2, and 3 with one model,
   `gpt-5.6-sol`, and the single integrated security pass. Rhyolite refuses
   other Codex releases and any content in `/etc/codex`. The launcher is the
   only Codex entrypoint; there is no Codex marketplace plugin. See

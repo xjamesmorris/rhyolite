@@ -493,8 +493,10 @@
   runner-created grants (plus the five broker tools for research), and the
   report-repair child is a fresh `--ephemeral` session with no tool. Each
   runtime home copies only the provider's name, URL, and key-variable name
-  from the user's Codex configuration and disables project instructions and
-  project roots above the working directory; the environment drops every
+  from the user's Codex configuration and disables project instructions,
+  project roots above the working directory, and Codex's shell environment
+  snapshot, which would otherwise write the inherited environment, including
+  the provider key, to disk; the environment drops every
   other inherited `CODEX_*` variable except `CODEX_CA_CERTIFICATE`, and
   OpenAI credentials and base URLs that the provider does not name. Codex
   reviews require exactly Codex CLI 0.163.0 and stop before any Codex

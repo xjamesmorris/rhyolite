@@ -30,7 +30,6 @@ Status values:
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
 | T25 | P2 | Verify | Observe a reused-scan review and a scan report request live |
-| T17 | P2 | Verify | Run a live Codex review through the production launcher |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
@@ -51,29 +50,6 @@ Status values:
   reports' digests verified, and a live scan report request is recorded or
   the project records that none has occurred.
 - **Source:** [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
-
-### T17 (P2, Verify): Run a live Codex review through the production launcher
-
-- **Problem:** Codex became a production harness on 2026-10-29 after live
-  scope 1, 2, and 3 reviews, live guided setup and approval, live
-  same-session continuation, and offline lifecycle and
-  hostile-configuration gates. Every live run so far started the guided
-  controller or the runner directly from a private plugin copy, so no live
-  review has gone through `./rhyolite --harness codex` with the production
-  registry.
-  The first run through it, on 2026-10-29, stopped without a review: Codex
-  cancelled the approval question after two minutes without an answer. The
-  launcher now waits for Enter before that question and offers to ask a
-  cancelled question again.
-- **Next step:** from a non-Git directory, with Codex CLI 0.163.0 and the
-  configured provider key exported, run a scope-1 review of a small public
-  repository at a pinned commit through `./rhyolite --harness codex`, and
-  check the readiness check, both native question sessions, the plan,
-  `/rhyolite:status`, the completed review, and the saved preferences.
-- **Done when:** that review completes and its evidence is recorded in
-  [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md); then remove this
-  task.
-- **Source:** [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md).
 
 ### T20 (P3, Open): Report security-relevant files that the security pass did not open
 

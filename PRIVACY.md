@@ -169,8 +169,11 @@ With `--harness codex`, `agent-state/codex-home/` contains only a filtered,
 redacted session record: the session identity, each turn's model, effort,
 sandbox, and approval policy, and the message text. `session.md` is a
 rendered transcript of that record. Each worker reads the provider key from
-the environment variable that your Codex configuration names; the key is
-never written to the runtime home, `agent-state/`, or any artifact. The plan
+the environment variable that your Codex configuration names. Rhyolite turns
+off Codex's shell environment snapshot, which would otherwise write the whole
+inherited environment, including that key, into the temporary runtime home,
+so the key is not written to the runtime home, `agent-state/`, or any
+artifact. The plan
 and state record the provider's host name and the name of that variable,
 never its value. The launcher's two native question sessions run in
 temporary Codex homes that are deleted when each session ends; the

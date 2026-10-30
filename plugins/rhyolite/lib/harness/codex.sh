@@ -274,6 +274,11 @@ JSON
     chmod 600 -- "${destination}"
 }
 
+# Codex 0.163.0 starts a login shell when a session starts and writes its
+# whole environment, including the provider key, to shell_snapshots/ in the
+# runtime home unless the stable shell_snapshot feature is off
+# (codex-rs/core/src/session/session.rs). Workers have no shell tool, so the
+# snapshot has no use.
 codex_write_runtime_config() {
     local destination="$1"
     local reasoning_effort="$2"
@@ -312,6 +317,7 @@ codex_write_runtime_config() {
             '' \
             '[features]' \
             'shell_tool = false' \
+            'shell_snapshot = false' \
             'unified_exec = false' \
             'apply_patch_freeform = false' \
             'js_repl = false' \

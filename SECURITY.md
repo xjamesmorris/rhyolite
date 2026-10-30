@@ -287,10 +287,13 @@ enforces these worker controls:
   from the user's Codex configuration, sets the read-only sandbox,
   `approval_policy = "never"`, disabled web search, no project instructions
   (`project_doc_max_bytes = 0`), and no project root above the working
-  directory (`project_root_markers = []`), and disables the shell, patch,
-  agents and multi-agent, plugins and their hooks, skills, apps, plan
-  updates, questions, analytics, and metrics. The runner deletes the runtime
-  home after the worker exits, times out, or fails.
+  directory (`project_root_markers = []`), and disables the shell, Codex's
+  shell environment snapshot, patch, agents and multi-agent, plugins and
+  their hooks, skills, apps, plan updates, questions, analytics, and
+  metrics. Without that snapshot setting, Codex would start a login shell at
+  session start and write the whole inherited environment, including the
+  provider key, into the runtime home. The runner deletes the runtime home
+  after the worker exits, times out, or fails.
 - Workers read the snapshot only through the bundled offline snapshot
   broker, a required local stdio MCP server whose four read-only tools are
   each pre-approved by name; the research worker adds only the five local

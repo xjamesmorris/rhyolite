@@ -283,8 +283,9 @@ assert config["project_doc_max_bytes"] == 0
 assert config["project_root_markers"] == []
 assert config["agents"]["enabled"] is False
 for feature in (
-    "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2",
-    "plugins", "plugin_hooks", "worktrees", "daemon_auto_start",
+    "shell_tool", "shell_snapshot", "unified_exec", "multi_agent",
+    "multi_agent_v2", "plugins", "plugin_hooks", "worktrees",
+    "daemon_auto_start",
 ):
     assert config["features"][feature] is False
 assert provider["base_url"] == "https://fixture.example.org/v1"
@@ -1320,7 +1321,7 @@ if [[ " $* " == *' --request-stop '* ]]; then
 fi
 if [[ " $* " == *' --plan-only '* ]]; then
     printf '%s\n' \
-        '{"ApprovalHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Harness":"codex","Model":"gpt-5.6-sol","ReasoningEffort":"max","ContextTier":"long_context","Scope":1}'
+        '{"ApprovalHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Harness":"codex","Model":"gpt-5.6-sol","ReasoningEffort":"max","ContextTier":"long_context","Scope":{"Number":1,"Name":"1 - Core repository review"}}'
     exit 0
 fi
 [[ " $* " == *' --expected-plan-hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '* ]]
@@ -1517,6 +1518,20 @@ HOME="${fixture_root}/codex-controller-home" \
     fail 'Codex guided controller did not invoke the trusted request-stop path.'
 assert_contains "${fixture_root}/codex-controller-stop.stdout" \
     'RHYOLITE STATUS' 'Codex controller status command'
+# The status reports the live stage from the runner's progress output, since
+# the runner writes its run state only when it finishes.
+for codex_status_line in \
+    'Command: repo-review' \
+    'Stage: run | started | 1 repositories; output ' \
+    'Elapsed: 0m ' \
+    'Harness: codex' \
+    'Source: https://github.com/octocat/Hello-World' \
+    'Model: gpt-5.6-sol (max, long_context)' \
+    'Scope: 1' \
+    'Review run: fixture-run (Running)'; do
+    assert_contains "${fixture_root}/codex-controller-stop.stdout" \
+        "${codex_status_line}" 'Codex controller status field'
+done
 assert_contains "${fixture_root}/codex-controller-stop.stderr" \
     'Rhyolite review stopped.' 'Codex controller stopped state'
 
@@ -1627,7 +1642,6 @@ for notice in (
     "The setup questions were cancelled, or Codex cancelled it after two minutes",
     "The approval question was cancelled, or Codex cancelled it after two minutes",
     "press Enter to answer the approval question in Codex",
-    "Codex cancels a question that is not answered within two minutes",
 ):
     assert notice in text, f"missing terminal notice: {notice}\n{text}"
 assert b"PLAN SUMMARY" in stdout and b"/tmp/rhyolite-controller-run" in stdout
@@ -1722,7 +1736,10 @@ for stage in ("setup", "approval"):
         f"{stage} UI kept the worker terminal type"
     assert marker not in stdout, f"{stage} UI contaminated controller stdout"
 assert b"EFFECTIVE REVIEW PLAN" in stdout and b"PLAN SUMMARY" in stdout
-assert b"Codex cancels a question that is not answered within two minutes" in terminal
+assert b"  Scope: 1 - Core repository review\n" in stdout, \
+    "the plan summary repeated or lost the scope"
+# The stage helper names the countdown once before each question session.
+assert terminal.count(b"Codex cancels a question that is not answered within two minutes") == 2
 assert b"/tmp/rhyolite-controller-run" in stdout
 assert b"codex-setup-1.json" not in stdout
 assert b"codex-approval-1.json" not in stdout

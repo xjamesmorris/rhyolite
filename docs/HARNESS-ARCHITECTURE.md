@@ -641,7 +641,10 @@ stream retries and no WebSocket transport), model catalog, effort, context
 window and compaction limit, instruction file, `approval_policy = "never"`,
 `sandbox_mode = "read-only"`, `web_search = "disabled"`,
 `project_doc_max_bytes = 0`, and `project_root_markers = []`; it disables
-agents, the shell, unified exec, patch, JavaScript, goals, image viewing,
+agents, the shell, the shell environment snapshot (which would otherwise
+start a login shell and write the inherited environment, including the
+provider key, into the runtime home), unified exec, patch, JavaScript,
+goals, image viewing,
 multi-agent, plugins and their hooks, tool and skill search, host skill
 discovery, worktrees, the daemon, plan updates, questions, bundled skills,
 apps, analytics, and metrics. The review worker argv is:
