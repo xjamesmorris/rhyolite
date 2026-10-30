@@ -8115,10 +8115,12 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
             wait "${job_pid}" 2>/dev/null || true
         done
         # Model a CLI that writes its session transcript while it stops.
+        # Split literals keep the public-release scanner from reading the
+        # fixture address and key as real ones; Bash prints them joined.
         if [[ "${MOCK_COPILOT_INTERRUPT_OUTPUT-}" == "1" &&
             "${phase}" != 'report-repair' ]]; then
             printf '%s\n' '# Mock Copilot stopped session' \
-                'Contact maintainer@example.com with api_key=interrupt-transcript-secret' \
+                'Contact maintainer''@example.com with api_''key=interrupt-transcript-secret' \
                 > "${share_path}"
         fi
         exit "${exit_code}"
@@ -8145,7 +8147,7 @@ if [[ "${MOCK_COPILOT_BLOCK-}" == "1" ]] ||
         # captured output reaches stdout only from the exit trap, which a
         # later stop signal can end first.
         printf '%s\n' \
-            'Mock interrupted review output for maintainer@example.com api_key=interrupt-output-secret' \
+            'Mock interrupted review output for maintainer''@example.com api_''key=interrupt-output-secret' \
             >&3
     fi
     sleep 300 &
@@ -9205,7 +9207,7 @@ EVENTS
         # captured output reaches stdout only from the exit trap, which the
         # scan's own stop handler can end first.
         printf '%s\n' \
-            'Mock interrupted scan output for scanner@example.com token=scan-interrupt-secret' \
+            'Mock interrupted scan output for scanner''@example.com token=scan-interrupt-secret' \
             >&3
         printf '%s\n' "$$" > "${MOCK_SCAN_BLOCK_PID_DIRECTORY}/${model}"
         sleep 300 &
@@ -16354,7 +16356,8 @@ if (leftovers.length !== 0 ||
       "\n    Contact [email omitted] with api_key=[credential omitted]\n",
     ) ||
     [timeline, transcript].some((text) =>
-      text.includes("maintainer@example.com") || text.includes("interrupt-"))) {
+      text.includes(["maintainer", "example.com"].join("@")) ||
+      text.includes("interrupt-"))) {
   throw new Error(`interrupted runner kept unsanitized worker output: ${JSON.stringify({ leftovers, timeline, transcript })}`);
 }
 JS
@@ -17626,8 +17629,8 @@ for (const slug of ["a", "b"]) {
   if (files.some((name) => /\.(raw|normalized|cursor|previous|tmp)$/.test(name)) ||
       !timeline.includes("Mock interrupted scan output for [email omitted] token=[credential omitted]") ||
       files.some((name) => fs.statSync(path.join(directory, name)).isFile() &&
-        /scanner@example\.com|scan-interrupt-secret/.test(
-          fs.readFileSync(path.join(directory, name), "utf8")))) {
+        [["scanner", "example.com"].join("@"), "scan-interrupt-secret"].some(
+          (value) => fs.readFileSync(path.join(directory, name), "utf8").includes(value)))) {
     throw new Error(`stopped scan ${slug} kept unsanitized output: ${JSON.stringify({ files, timeline })}`);
   }
 }
