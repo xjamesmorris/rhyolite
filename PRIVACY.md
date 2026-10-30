@@ -2,7 +2,7 @@
 
 ## Release scope
 
-Version `0.10.0` reviews anonymously readable public HTTPS Git
+Version `0.11.0` reviews anonymously readable public HTTPS Git
 repositories.
 
 Do not use this version with:

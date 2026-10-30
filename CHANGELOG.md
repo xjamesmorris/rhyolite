@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-30
+
 ### Changed
 
 - With `--harness codex`, the launcher now prints the Rhyolite plaque and
