@@ -690,7 +690,13 @@ native local marketplace installs only the two Rhyolite question skills and
 only `request_user_input` is enabled; it validates each session record and
 strict JSON result, generates and prints the plan, runs the approved review
 itself, and handles exact `/rhyolite:status`, `stop`, and `cancel` through
-the runner's `--request-stop`. There is no root Codex marketplace.
+the runner's `--request-stop`. Outside Plan mode, Codex 0.163.0 marks a
+question non-blocking and answers it with nothing after a 60-second grace
+period and a 60-second visible countdown, unless a key is pressed; the
+skills report that as a cancel. The controller therefore prints a short
+plan summary, waits for Enter before the approval question, and at a
+terminal offers to ask a cancelled question again. There is no root Codex
+marketplace.
 
 ## Lifecycle
 

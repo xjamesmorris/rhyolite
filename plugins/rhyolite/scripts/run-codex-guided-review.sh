@@ -155,6 +155,69 @@ print_scope_explanation() {
         'All timing ranges are rough and can increase substantially for large repositories or broad topics.'
 }
 
+# Codex 0.163.0 submits an empty answer to a question asked outside Plan mode
+# after 60 seconds plus a visible 60-second countdown; any key pressed in the
+# question stops that countdown. The skills report an unanswered question as
+# a cancel, which the controller cannot tell apart from a deliberate one.
+readonly CODEX_QUESTION_TIMEOUT_NOTE='Codex cancels a question that is not answered within two minutes; pressing any key in the question stops that countdown.'
+
+# The key choices of the authoritative plan, printed after its full JSON so
+# that they sit directly above the approval question.
+print_plan_summary() {
+    local plan="$1"
+
+    python3 -I - "${plan}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    plan = json.load(stream)
+
+
+def text(value):
+    value = "NOT SELECTED" if value in (None, "") else str(value)
+    return "".join(character for character in value if character.isprintable())
+
+
+print("PLAN SUMMARY (the full plan above is authoritative)")
+for source in plan.get("Sources") or []:
+    if isinstance(source, dict):
+        commit = source.get("RequestedCommit") or "the default branch at clone time"
+        print(f"  Source: {text(source.get('RemoteUrl'))} at {text(commit)}")
+scope = plan.get("Scope") if isinstance(plan.get("Scope"), dict) else {}
+print(f"  Scope: {text(scope.get('Number'))} - {text(scope.get('Name'))}")
+print(f"  Output: {text(plan.get('OutputRoot'))}")
+print("  Runtime: " + ", ".join(text(plan.get(key)) for key in (
+    "Harness", "Model", "ReasoningEffort", "ContextTier")))
+scans = plan.get("SecurityScans") if isinstance(plan.get("SecurityScans"), dict) else {}
+print(f"  Security scans: {text(scans.get('Count'))}")
+research = plan.get("ResearchTransport") if isinstance(plan.get("ResearchTransport"), dict) else {}
+print(f"  Public research: {'enabled' if research.get('Enabled') is True else 'disabled'}")
+print(f"  Session time limit: {text(plan.get('SessionTimeoutMinutes'))} minutes")
+print(f"  Approval hash: {text(plan.get('ApprovalHash'))}")
+PY
+}
+
+# After a cancelled question, offer to ask it again when a person is at the
+# terminal. Returns 0 to ask again; otherwise reports the stop and returns 1.
+#   offer_question_again <what was cancelled>
+offer_question_again() {
+    local answer=''
+
+    printf '%s\n' \
+        "The $1 cancelled, or Codex cancelled it after two minutes without an answer." >&2
+    if [[ -t 0 ]]; then
+        printf '%s\n' \
+            'Press Enter to ask again, or type stop to leave without starting a review.' >&2
+        IFS= read -r answer || answer=stop
+        if [[ "${answer}" != stop && "${answer}" != cancel ]]; then
+            return 0
+        fi
+    fi
+    printf '%s\n' 'Rhyolite stopped without starting a review.' >&2
+    return 1
+}
+
 print_run_status() {
     local run_folder="$1"
     local state_path="${run_folder}/state.json"
@@ -229,7 +292,10 @@ while true; do
             --context "${context_tier}" >/dev/null ||
             fail_controller setup
         read_setup_result "${setup_result}" || fail_controller setup-result
-        [[ "${setup_values[0]}" != cancel ]] || exit 0
+        if [[ "${setup_values[0]}" == cancel ]]; then
+            offer_question_again 'setup questions were' || exit 0
+            continue
+        fi
         [[ "${setup_values[0]}" == continue ]] || fail_controller setup-action
         current_output="${setup_values[1]}"
         current_scope="${setup_values[2]}"
@@ -295,6 +361,22 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     value = json.load(stream)
 print(json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True))
 PY
+    printf '\n'
+    print_plan_summary "${plan_path}" || fail_controller plan-summary
+    printf 'The full plan is also saved at %s.\n' "${plan_path}"
+    # Let the user read the plan first: the approval question's countdown
+    # starts as soon as it appears.
+    if [[ -t 0 ]]; then
+        printf '%s\n' \
+            'Read the plan, then press Enter to answer the approval question in Codex, or type stop to leave without starting a review.' \
+            "${CODEX_QUESTION_TIMEOUT_NOTE}" >&2
+        plan_answer=''
+        IFS= read -r plan_answer || plan_answer=stop
+        if [[ "${plan_answer}" == stop || "${plan_answer}" == cancel ]]; then
+            printf '%s\n' 'Rhyolite stopped without starting a review.' >&2
+            exit 0
+        fi
+    fi
 
     while true; do
         approval_sequence=$((approval_sequence + 1))
@@ -429,7 +511,8 @@ PY
                 continue
                 ;;
             cancel)
-                exit 0
+                offer_question_again 'approval question was' || exit 0
+                continue
                 ;;
             *)
                 fail_controller approval-action

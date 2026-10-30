@@ -8,8 +8,11 @@
   `./rhyolite --harness codex --repo <URL>` with Codex CLI 0.163.0 and an
   explicitly configured Responses provider in your Codex `config.toml`
   whose key is exported. Two short native Codex sessions ask the setup and
-  approval questions; the launcher then runs the approved review itself and
-  accepts exact `/rhyolite:status`, `stop`, and `cancel`. Codex workers read
+  approval questions; the launcher prints a short plan summary, waits for
+  Enter before the approval question because Codex cancels a question left
+  unanswered for two minutes, offers to ask a cancelled question again, then
+  runs the approved review itself and accepts exact `/rhyolite:status`,
+  `stop`, and `cancel`. Codex workers read
   the snapshot only through the bundled offline snapshot broker, run in
   private Codex homes that ignore your other Codex settings and Codex
   control variables, and support scopes 1, 2, and 3 with one model,

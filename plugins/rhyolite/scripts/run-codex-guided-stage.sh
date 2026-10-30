@@ -188,7 +188,8 @@ prompt="$(
     cat -- "${input_path}"
 )"
 printf '%s\n' \
-    'Complete the native Rhyolite questions. After the one-line JSON result appears, press Ctrl-D to return to the launcher.' >&2
+    'Complete the native Rhyolite questions. After the one-line JSON result appears, press Ctrl-D to return to the launcher.' \
+    'Codex cancels a question that is not answered within two minutes; pressing any key in the question stops that countdown.' >&2
 set +e
 # Keep the native UI on the terminal when the controller discards result stdout.
 env "${stage_environment[@]}" "TERM=${stage_terminal_type}" \

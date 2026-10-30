@@ -105,9 +105,12 @@ supported and must not drive new work.
   setup and approval question session, validates the session record and the
   strict JSON result, and removes the home, and
   `scripts/run-codex-guided-review.sh` generates the effective plan, prints
-  it, runs the approved review itself, and handles exact `/rhyolite:status`,
-  `stop`, and `cancel`. Codex model sessions only ask questions; they never
-  run the runner.
+  it with a short summary, runs the approved review itself, and handles exact
+  `/rhyolite:status`, `stop`, and `cancel`. Codex 0.163.0 cancels a question
+  left unanswered for two minutes outside Plan mode, so the controller waits
+  for Enter after printing the plan and, at a terminal, offers to ask a
+  cancelled setup or approval question again. Codex model sessions only ask
+  questions; they never run the runner.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual

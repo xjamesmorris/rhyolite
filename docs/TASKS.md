@@ -61,6 +61,10 @@ Status values:
   controller or the runner directly from a private plugin copy, so no live
   review has gone through `./rhyolite --harness codex` with the production
   registry.
+  The first run through it, on 2026-10-29, stopped without a review: Codex
+  cancelled the approval question after two minutes without an answer. The
+  launcher now waits for Enter before that question and offers to ask a
+  cancelled question again.
 - **Next step:** from a non-Git directory, with Codex CLI 0.163.0 and the
   configured provider key exported, run a scope-1 review of a small public
   repository at a pinned commit through `./rhyolite --harness codex`, and

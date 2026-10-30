@@ -1251,19 +1251,46 @@ while (($# > 0)); do
         *) shift ;;
     esac
 done
+# RHYOLITE_CODEX_CONTROLLER_SETUP and RHYOLITE_CODEX_CONTROLLER_APPROVAL set
+# to cancel-once answer the first question of that stage with a cancel, as a
+# Codex question left unanswered for two minutes does; cancel always does.
+cancel_this_time() {
+    local mode="$1"
+    local marker="${RHYOLITE_CODEX_CONTROLLER_CAPTURE:?}/$2-cancelled"
+
+    case "${mode}" in
+        cancel) return 0 ;;
+        cancel-once)
+            [[ ! -e "${marker}" ]] || return 1
+            : > "${marker}"
+            return 0
+            ;;
+    esac
+    return 1
+}
 case "${stage}" in
     setup)
-        printf '%s\n' \
-            '{"Action":"continue","OutputRoot":"'"${RHYOLITE_CODEX_CONTROLLER_OUTPUT:?}"'","Protocol":"RHYOLITE_CODEX_SETUP_V1","ProvenanceLookbackMonths":null,"ResearchCookies":null,"Scope":1}' \
-            > "${result}"
+        if cancel_this_time "${RHYOLITE_CODEX_CONTROLLER_SETUP:-}" setup; then
+            printf '%s\n' \
+                '{"Action":"cancel","OutputRoot":null,"Protocol":"RHYOLITE_CODEX_SETUP_V1","ProvenanceLookbackMonths":null,"ResearchCookies":null,"Scope":null}' \
+                > "${result}"
+        else
+            printf '%s\n' \
+                '{"Action":"continue","OutputRoot":"'"${RHYOLITE_CODEX_CONTROLLER_OUTPUT:?}"'","Protocol":"RHYOLITE_CODEX_SETUP_V1","ProvenanceLookbackMonths":null,"ResearchCookies":null,"Scope":1}' \
+                > "${result}"
+        fi
         ;;
     approval)
         hash="$(
             grep -h -Eo '[0-9a-f]{64}' "${RHYOLITE_CODEX_CONTROLLER_SESSION:?}"/codex-approval-*.txt |
                 tail -n 1
         )"
-        printf '{"Action":"run","ApprovalHash":"%s","Protocol":"RHYOLITE_CODEX_APPROVAL_V1"}\n' \
-            "${hash}" > "${result}"
+        action=run
+        if cancel_this_time "${RHYOLITE_CODEX_CONTROLLER_APPROVAL:-}" approval; then
+            action=cancel
+        fi
+        printf '{"Action":"%s","ApprovalHash":"%s","Protocol":"RHYOLITE_CODEX_APPROVAL_V1"}\n' \
+            "${action}" "${hash}" > "${result}"
         ;;
     *) exit 2 ;;
 esac
@@ -1493,6 +1520,124 @@ assert_contains "${fixture_root}/codex-controller-stop.stdout" \
 assert_contains "${fixture_root}/codex-controller-stop.stderr" \
     'Rhyolite review stopped.' 'Codex controller stopped state'
 
+# Codex 0.163.0 answers a question left unanswered for two minutes with an
+# empty answer, which the skills report as a cancel. Without a terminal the
+# controller explains the stop and starts nothing.
+codex_cancel_session="${fixture_root}/codex-controller-cancel-session"
+codex_cancel_capture="${fixture_root}/codex-controller-cancel-capture"
+mkdir -p -- "${codex_cancel_session}" "${codex_cancel_capture}"
+RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
+RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_cancel_session}" \
+RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_cancel_capture}" \
+RHYOLITE_CODEX_CONTROLLER_APPROVAL=cancel \
+HOME="${fixture_root}/codex-controller-home" \
+"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+    --plugin-root "${codex_controller_plugin}" \
+    --working-directory "${codex_controller_work}" \
+    --session-directory "${codex_cancel_session}" \
+    --model gpt-5.6-sol \
+    --reasoning-effort max \
+    --context long_context \
+    --repo https://github.com/octocat/Hello-World \
+    < /dev/null \
+    > "${fixture_root}/codex-controller-cancel.stdout" \
+    2> "${fixture_root}/codex-controller-cancel.stderr" ||
+    fail 'Codex guided controller failed after a cancelled approval question.'
+assert_contains "${fixture_root}/codex-controller-cancel.stdout" \
+    'PLAN SUMMARY' 'Codex controller plan summary'
+assert_contains "${fixture_root}/codex-controller-cancel.stderr" \
+    'The approval question was cancelled, or Codex cancelled it after two minutes without an answer.' \
+    'Codex controller cancelled approval notice'
+assert_contains "${fixture_root}/codex-controller-cancel.stderr" \
+    'Rhyolite stopped without starting a review.' 'Codex controller cancelled stop'
+[[ "$(find "${codex_cancel_capture}" -name 'call-*.nul' | wc -l)" == 1 ]] ||
+    fail 'Codex guided controller started a review after a cancelled approval question.'
+
+# At a terminal, the controller waits for Enter before the approval question
+# and asks a cancelled setup or approval question again.
+python3 -I - "${codex_controller_plugin}" "${fixture_root}" \
+    "${codex_controller_output}" <<'PY'
+import errno
+import os
+import pathlib
+import pty
+import signal
+import subprocess
+import sys
+
+plugin, root, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+session = root / "codex-controller-retry-session"
+capture = root / "codex-controller-retry-capture"
+for path in (session, capture):
+    path.mkdir(mode=0o700)
+environment = dict(
+    os.environ,
+    RHYOLITE_CODEX_CONTROLLER_OUTPUT=output,
+    RHYOLITE_CODEX_CONTROLLER_SESSION=str(session),
+    RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
+    RHYOLITE_CODEX_CONTROLLER_SETUP="cancel-once",
+    RHYOLITE_CODEX_CONTROLLER_APPROVAL="cancel-once",
+    HOME=str(root / "codex-controller-home"),
+)
+master, slave = pty.openpty()
+# Enter to ask the setup questions again, Enter after reading the plan, and
+# Enter to ask the approval question again.
+os.write(master, b"\n\n\n")
+process = subprocess.Popen(
+    [
+        str(plugin / "scripts/run-codex-guided-review.sh"),
+        "--plugin-root", str(plugin),
+        "--working-directory", str(root / "codex-controller-work"),
+        "--session-directory", str(session),
+        "--model", "gpt-5.6-sol",
+        "--reasoning-effort", "max",
+        "--context", "long_context",
+        "--repo", "https://github.com/octocat/Hello-World",
+    ],
+    env=environment,
+    stdin=slave,
+    stdout=subprocess.PIPE,
+    stderr=slave,
+    start_new_session=True,
+)
+try:
+    stdout, _ = process.communicate(timeout=30)
+finally:
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=5)
+    os.close(slave)
+terminal = bytearray()
+try:
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            break
+        if not chunk:
+            break
+        terminal.extend(chunk)
+finally:
+    os.close(master)
+text = terminal.decode("utf-8", errors="replace")
+assert process.returncode == 0, text
+for notice in (
+    "The setup questions were cancelled, or Codex cancelled it after two minutes",
+    "The approval question was cancelled, or Codex cancelled it after two minutes",
+    "press Enter to answer the approval question in Codex",
+    "Codex cancels a question that is not answered within two minutes",
+):
+    assert notice in text, f"missing terminal notice: {notice}\n{text}"
+assert b"PLAN SUMMARY" in stdout and b"/tmp/rhyolite-controller-run" in stdout
+assert sorted(p.name for p in session.glob("codex-setup-*.json")) == [
+    "codex-setup-1.json", "codex-setup-2.json"]
+assert sorted(p.name for p in session.glob("codex-approval-*.json")) == [
+    "codex-approval-1.json", "codex-approval-2.json"]
+assert len(list(capture.glob("call-*.nul"))) == 2, "expected one plan and one run"
+PY
+
 cp -- "${CODEX_GUIDED_STAGE}" \
     "${codex_controller_plugin}/scripts/run-codex-guided-stage.sh"
 mkdir -p -- "${codex_controller_plugin}/lib/harness"
@@ -1525,6 +1670,8 @@ environment = dict(
     TMPDIR=str(temporary),
 )
 master, slave = pty.openpty()
+# Enter after reading the plan, before the approval question opens.
+os.write(master, b"\n")
 process = subprocess.Popen(
     [
         str(plugin / "scripts/run-codex-guided-review.sh"),
@@ -1574,7 +1721,8 @@ for stage in ("setup", "approval"):
     assert f"{stage} TERM=xterm-256color".encode() in terminal, \
         f"{stage} UI kept the worker terminal type"
     assert marker not in stdout, f"{stage} UI contaminated controller stdout"
-assert b"EFFECTIVE REVIEW PLAN" in stdout
+assert b"EFFECTIVE REVIEW PLAN" in stdout and b"PLAN SUMMARY" in stdout
+assert b"Codex cancels a question that is not answered within two minutes" in terminal
 assert b"/tmp/rhyolite-controller-run" in stdout
 assert b"codex-setup-1.json" not in stdout
 assert b"codex-approval-1.json" not in stdout

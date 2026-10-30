@@ -347,8 +347,12 @@ the checkout:
   skills and offers only Codex's native question tool, and each makes model
   requests at the selected effort. After its one-line JSON result appears,
   press Ctrl-D to return to the launcher. Between them, the launcher prints
-  the `EFFECTIVE REVIEW PLAN` as JSON. `--auto-defaults` skips the first
-  session (home output and scope 1), but the plan still needs approval.
+  the `EFFECTIVE REVIEW PLAN` as JSON with a short `PLAN SUMMARY`, and waits
+  for Enter before it opens the approval question. Codex cancels a question
+  that is not answered within two minutes (pressing any key in the question
+  stops that countdown); after a cancelled question the launcher offers to
+  ask it again. `--auto-defaults` skips the first session (home output and
+  scope 1), but the plan still needs approval.
 - **Running, status, and stop:** the launcher itself, not a model session,
   runs the approved review in the same terminal and prints its progress.
   Type exact `/rhyolite:status` for progress, or exact `stop` or `cancel` to
