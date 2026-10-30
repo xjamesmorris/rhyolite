@@ -30,7 +30,9 @@ Status values:
 | ID | Priority | Status | Task |
 | --- | --- | --- | --- |
 | T25 | P2 | Verify | Observe a reused-scan review and a scan report request live |
+| T26 | P2 | Needs triage | Check Claude Code's managed settings before a review |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
+| T27 | P3 | Open | Check `/etc/codex` when a direct-runner Codex plan is made |
 | T11 | P3 | Deferred | Deferred review and platform features |
 
 ## Tasks
@@ -51,6 +53,28 @@ Status values:
   the project records that none has occurred.
 - **Source:** [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
 
+### T26 (P2, Needs triage): Check Claude Code's managed settings before a review
+
+- **Problem:** Rhyolite refuses to start a Codex review while `/etc/codex`
+  holds anything, because Codex applies that system configuration to every
+  session and it can add hooks, MCP servers, or notify commands to a worker.
+  The Claude Code adapter has no equivalent check. Claude Code applies
+  administrator-managed settings above every other source: on Linux,
+  `managed-settings.json`, `managed-settings.d/`, and `managed-mcp.json` in
+  `/etc/claude-code/`, and settings that it fetches from the administrator
+  console for an organization account. Rhyolite has not verified which of
+  them reach a worker despite its isolated runtime home and restricted
+  command line.
+- **Next step:** with the installed Claude Code release, find which managed
+  sources and keys still apply to a worker that the runner starts, then
+  decide whether the adapter refuses to start while they exist, as Codex
+  does, or shows that they cannot widen the worker's authority.
+- **Done when:** a Claude Code review either refuses to start or is shown to
+  stay isolated when managed settings exist, with a regression test, and
+  the threat model covers the case.
+- **Source:** Codex hostile-configuration isolation gate, 2026-10-29
+  ([CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md)).
+
 ### T20 (P3, Open): Report security-relevant files that the security pass did not open
 
 - **Problem:** In the T18 comparison neither review opened every
@@ -63,6 +87,19 @@ Status values:
 - **Done when:** a review discloses security-relevant files that its
   security pass did not open, or the project records why it cannot.
 - **Source:** 2026-10-25 T18 comparison.
+
+### T27 (P3, Open): Check `/etc/codex` when a direct-runner Codex plan is made
+
+- **Problem:** The Codex adapter refuses content in `/etc/codex` when the
+  runner prepares its run and again before each worker starts, and the
+  launcher runs that check before its first question. The direct runner's
+  `--plan-only` mode does not, so a direct-runner user can approve a Codex
+  plan that execution then refuses before any worker starts.
+- **Next step:** decide whether plan-only resolution, which must stay
+  offline, runs the same local directory check for the `codex` harness.
+- **Done when:** a direct-runner Codex plan fails while `/etc/codex` holds
+  anything, or the project records why the execution-time check suffices.
+- **Source:** Codex hostile-configuration isolation gate, 2026-10-29.
 
 ### T11 (P3, Deferred): Deferred review and platform features
 
