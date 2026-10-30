@@ -123,8 +123,9 @@ repository.
 12. Codex has no marketplace. From the released checkout, with Codex CLI
     0.163.0 and a configured provider whose key is exported, run
     `./rhyolite --harness codex --repo <public HTTPS URL>` and confirm the
-    offline readiness check, both native question sessions, the printed
-    JSON plan, exact `/rhyolite:status`, and a completed review.
+    offline readiness check, the plaque, the terminal setup and approval
+    questions, the printed JSON plan, exact `/rhyolite:status`, and a
+    completed review.
 
 If public distribution is intended, separately verify repository visibility,
 GitHub private vulnerability reporting, support forms, anonymous marketplace
@@ -133,10 +134,8 @@ Copilot plugins are public-preview features.
 
 ## Versioning
 
-- Keep `VERSION`, all three plugin manifests
-  (`plugins/rhyolite/plugin.json`,
-  `plugins/rhyolite/.claude-plugin/plugin.json`, and
-  `plugins/rhyolite/.codex-plugin/plugin.json`), and both marketplace
+- Keep `VERSION`, both plugin manifests (`plugins/rhyolite/plugin.json`
+  and `plugins/rhyolite/.claude-plugin/plugin.json`), and both marketplace
   registries (`.github/plugin/marketplace.json` and
   `.claude-plugin/marketplace.json`) synchronized.
 - Also update both packaged version commands, both prompt-native help
@@ -183,7 +182,6 @@ that onboarding notice.
 
 1. Update `VERSION`, `plugins/rhyolite/plugin.json`,
    `plugins/rhyolite/.claude-plugin/plugin.json`,
-   `plugins/rhyolite/.codex-plugin/plugin.json`,
    `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
    `CHANGELOG.md`, plus the packaged version strings listed under
    [Versioning](#versioning).

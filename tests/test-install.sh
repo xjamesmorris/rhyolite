@@ -125,9 +125,6 @@ const required = [
     "lib/harness/common.sh", "lib/harness/copilot.sh", "lib/harness/claude.sh",
     "lib/harness/codex.sh",
     "scripts/launcher-preferences.sh", ".claude-plugin/plugin.json",
-    ".codex-plugin/plugin.json",
-    "codex/skills/repo-review-setup/SKILL.md",
-    "codex/skills/repo-review-approval/SKILL.md",
     "claude/agents/repo-review.md", "claude/agents/repo-review-worker.md",
     "claude/agents/repo-research-worker.md", "claude/commands/start.md", "claude/commands/repo-review.md",
     "claude/commands/help.md", "claude/commands/status.md",
@@ -141,7 +138,6 @@ const required = [
 ];
 const executables = [
     "bin/rhyolite", "bin/rhyolite-summary", "scripts/show-welcome-panel.sh",
-    "scripts/run-codex-guided-stage.sh",
     "scripts/run-codex-guided-review.sh",
     "skills/readonly-repository-review/scripts/discover-repositories.sh",
     "skills/readonly-repository-review/scripts/run-parallel-reviews.sh",

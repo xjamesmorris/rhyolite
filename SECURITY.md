@@ -311,14 +311,13 @@ enforces these worker controls:
   worker and never accepts the fallback output.
 - Persisted agent state is a filtered, redacted copy of the session record
   with the session identity, turn contexts, and message text only.
-- The launcher's native setup and approval sessions run interactive Codex
-  in private temporary homes that hold only Rhyolite's two question skills,
-  installed through Codex's native local marketplace, with only the native
-  question tool enabled, the read-only sandbox, and `approval_policy =
-  "never"`. The controller accepts a session only when its record shows no
-  other tool or item and the approved model, effort, and context, and only
-  its strict one-line JSON result; the launcher's Bash controller, not a
-  model session, runs the review.
+- No interactive Codex session runs. The launcher's Bash controller asks
+  the setup and approval questions itself in the terminal and runs the
+  review. A review starts only after an explicit approval answer typed at
+  the terminal after the plan appeared: the launcher and the controller
+  refuse to run without a terminal on standard input and standard error, the
+  controller discards earlier input, and the approval question has no
+  default.
 
 ## Reporting a vulnerability
 

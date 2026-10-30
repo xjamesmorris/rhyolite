@@ -503,10 +503,13 @@
   process starts while `/etc/codex` holds anything. An offline probe with
   the real CLI planted hostile files and variables in every surface that
   release reads, and none took effect.
-- Codex model sessions never run the runner. The launcher's native setup and
-  approval sessions in private temporary homes may only ask questions and
-  return strict JSON, and the launcher's Bash controller generates the plan,
-  runs the review, and handles status and stop.
+- No Codex model session asks the setup or approval questions or runs the
+  runner. The launcher's Bash controller asks those questions in the
+  terminal, generates the plan, runs the review, and handles status and
+  stop. Only an explicit approval answer typed at the terminal after the plan
+  appeared starts a review: the launcher and the controller refuse piped or
+  redirected input, the controller discards earlier input, and the approval
+  question has no default.
 
 ### Same-session worker recovery
 

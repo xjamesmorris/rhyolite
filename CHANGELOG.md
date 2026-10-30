@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+
+- With `--harness codex`, the launcher now prints the Rhyolite plaque and
+  asks the setup and approval questions itself in the same terminal, with
+  numbered prompts like its model prompts. No Codex session opens for these
+  questions, so there is no generic Codex screen, no Ctrl-D to return to the
+  launcher, no two-minute answer timeout, and no model request before the
+  review. The approval question has no default, and anything typed before
+  the plan appeared is discarded, so only an answer given after the plan
+  starts a review. As before, a Codex launch needs an interactive terminal;
+  piped or redirected input now stops it with a `Codex terminal` error
+  before any question. The Codex plugin manifest and its two question
+  skills are removed.
+
 ## 0.10.0 - 2026-10-29
 
 ### Added

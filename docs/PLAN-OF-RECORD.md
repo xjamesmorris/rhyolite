@@ -10,6 +10,9 @@
 
 **OpenAI Codex CLI production harness approved:** October 29, 2026
 
+**Codex setup and approval questions moved to the launcher terminal:**
+October 30, 2026
+
 ## Decision
 
 Rhyolite is a **Linux-only, Bash-first** product for this release, with
@@ -39,16 +42,17 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
   [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md). The fixed harness
   registry is limited to those three IDs. The Contract-v11 seam does not
   advertise or imply support for other CLIs.
-- Codex is supported only through the launcher. Codex model sessions only
-  ask the native setup and approval questions; the launcher's Bash
-  controller generates the plan, runs the approved review, and handles
-  status and stop, because a Codex session cannot run the runner without a
-  shell, which no Rhyolite model session receives. The launcher therefore
-  installs the two Codex question skills only into a private home for each
-  question session, and Rhyolite has no Codex marketplace: a user-level
-  install would add launcher-only skills to ordinary Codex sessions, where
-  they could never start a review. Codex supports one approved model, so
-  independent security scans and report-writer handover are unavailable.
+- Codex is supported only through the launcher, and no interactive Codex
+  session runs. The launcher's Bash controller asks the setup and approval
+  questions itself in the terminal, generates the plan, runs the approved
+  review, and handles status and stop, because a Codex session cannot run
+  the runner without a shell, which no Rhyolite model session receives.
+  Since the October 30, 2026 decision, no native Codex question session
+  asks those questions: each needed a manual Ctrl-D to return to the
+  launcher, showed Codex's generic interface, and cancelled a question left
+  unanswered for two minutes. Rhyolite ships no Codex plugin manifest,
+  skill, or marketplace. Codex supports one approved model, so independent
+  security scans and report-writer handover are unavailable.
 
 Contributions and test reports for other Linux flavors can help establish
 compatibility evidence, but do not replace the Fedora Linux 44 release gate.

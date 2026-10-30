@@ -89,10 +89,16 @@ done
     ${#repositories[@]} -gt 0 ]] || fail_controller validation
 [[ -z "${commit}" || ${#repositories[@]} -eq 1 ]] ||
     fail_controller validation
+# Only a person at the terminal answers these questions; piped or redirected
+# input never approves a plan.
+if [[ ! -t 0 || ! -t 2 ]]; then
+    printf '%s\n' \
+        'The Codex setup and approval questions need an interactive terminal on standard input and standard error.' >&2
+    fail_controller terminal
+fi
 
-stage_helper="${plugin_root}/scripts/run-codex-guided-stage.sh"
 runner="${plugin_root}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
-[[ -x "${stage_helper}" && -x "${runner}" ]] || fail_controller assets
+[[ -x "${runner}" ]] || fail_controller assets
 
 current_output="${initial_output:-NOT SELECTED}"
 current_scope='NOT SELECTED'
@@ -100,51 +106,13 @@ current_lookback='NOT SELECTED'
 current_cookies='NOT SELECTED'
 setup_sequence=0
 approval_sequence=0
-# A plan mismatch regenerates the plan from the preserved setup answers.
-reuse_setup=0
-
-read_setup_result() {
-    local path="$1"
-    local output=''
-
-    output="$(
-        python3 -I - "${path}" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    value = json.load(stream)
-for key in (
-    "Action", "OutputRoot", "Scope",
-    "ProvenanceLookbackMonths", "ResearchCookies",
-):
-    item = value[key]
-    print("NULL" if item is None else item)
-PY
-    )" || return 1
-    mapfile -t setup_values <<< "${output}"
-    ((${#setup_values[@]} == 5)) || return 1
-}
-
-read_approval_result() {
-    local path="$1"
-    local expected_hash="$2"
-    local output=''
-
-    output="$(
-        python3 -I - "${path}" "${expected_hash}" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    value = json.load(stream)
-if value["ApprovalHash"] != sys.argv[2]:
-    raise SystemExit(1)
-print(value["Action"])
-PY
-    )" || return 1
-    approval_action="${output}"
-}
+# full asks every setup question, scope asks only the scope and its follow-up
+# questions, auto takes the --auto-defaults answers, and reuse keeps the
+# answers after a plan mismatch so that only the plan and approval repeat.
+next_setup=full
+if ((auto_defaults)); then
+    next_setup=auto
+fi
 
 print_scope_explanation() {
     printf '%s\n' \
@@ -152,14 +120,250 @@ print_scope_explanation() {
         'Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.' \
         'Scope 3 adds whole-repository provenance evidence gathering, uses the most AI credits and network requests, and requires human review before sharing.' \
         'Every scope runs the same full security pass with the same approved model, reasoning effort, context tier, and session time limit.' \
-        'All timing ranges are rough and can increase substantially for large repositories or broad topics.'
+        'All timing ranges are rough and can increase substantially for large repositories or broad topics.' >&2
 }
 
-# Codex 0.163.0 submits an empty answer to a question asked outside Plan mode
-# after 60 seconds plus a visible 60-second countdown; any key pressed in the
-# question stops that countdown. The skills report an unanswered question as
-# a cancel, which the controller cannot tell apart from a deliberate one. The
-# stage helper names the countdown before each question session.
+# The setup and approval questions use the launcher's numbered prompts on
+# stderr. End of input, or exact stop or cancel, at any question leaves
+# without starting a review.
+stop_without_review() {
+    printf '%s\n' 'Rhyolite stopped without starting a review.' >&2
+    exit 0
+}
+
+# Read one answer into prompt_answer.
+#   ask <prompt>
+ask() {
+    printf '%s' "$1" >&2
+    prompt_answer=''
+    if ! IFS= read -r prompt_answer; then
+        printf '\n' >&2
+        stop_without_review
+    fi
+    case "${prompt_answer}" in
+        stop|cancel) stop_without_review ;;
+    esac
+}
+
+valid_output_root() {
+    [[ "$1" == /* && "$1" != *[[:cntrl:]]* &&
+        "$(printf '%s' "$1" | wc -c)" -le 4096 ]]
+}
+
+ask_output() {
+    local current_choice="${working_directory%/}/rhyolite-output/repo-review"
+    local home_choice="${HOME%/}/rhyolite-output/repo-review"
+    local -a paths=() labels=()
+    local index other
+
+    if [[ "${current_choice}" == "${home_choice}" ]]; then
+        paths=("${current_choice}")
+        labels=("Current directory - ${current_choice}")
+    elif [[ "${current_output}" == "${home_choice}" ]]; then
+        paths=("${home_choice}" "${current_choice}")
+        labels=(
+            "Home directory - ${home_choice}"
+            "Current directory - ${current_choice}"
+        )
+    else
+        paths=("${current_choice}" "${home_choice}")
+        labels=(
+            "Current directory - ${current_choice}"
+            "Home directory - ${home_choice}"
+        )
+    fi
+    # Another path chosen earlier stays the default, as a remembered choice
+    # does in the launcher.
+    if [[ "${current_output}" != 'NOT SELECTED' &&
+        "${current_output}" != "${current_choice}" &&
+        "${current_output}" != "${home_choice}" ]]; then
+        paths=("${current_output}" "${paths[@]}")
+        labels=("Keep current output - ${current_output}" "${labels[@]}")
+    fi
+    other=$((${#paths[@]} + 1))
+    while true; do
+        printf '\nOutput location\n' >&2
+        for index in "${!labels[@]}"; do
+            printf '  %d. %s\n' "$((index + 1))" "${labels[index]}" >&2
+        done
+        printf '  %d. Enter another absolute path\n' "${other}" >&2
+        ask 'Select output [1]: '
+        prompt_answer="${prompt_answer:-1}"
+        if [[ "${prompt_answer}" =~ ^[1-9][0-9]{0,2}$ ]] &&
+            ((prompt_answer <= ${#paths[@]})); then
+            current_output="${paths[prompt_answer - 1]}"
+            return
+        fi
+        if [[ "${prompt_answer}" == "${other}" ]]; then
+            ask 'Absolute output path: '
+            if valid_output_root "${prompt_answer}"; then
+                current_output="${prompt_answer}"
+                return
+            fi
+            printf '%s\n' \
+                'Enter an absolute path without control characters.' >&2
+            continue
+        fi
+        printf '%s\n' 'Enter one of the displayed choice numbers.' >&2
+    done
+}
+
+ask_lookback() {
+    local -a months=(6 3 12 24)
+    local -a labels=(
+        '6 months (Recommended)'
+        '3 months'
+        '12 months'
+        '24 months'
+    )
+    local index other
+
+    if [[ "${current_lookback}" =~ ^[1-9][0-9]?$ &&
+        " ${months[*]} " != *" ${current_lookback} "* ]]; then
+        months=("${current_lookback}" "${months[@]}")
+        labels=("Keep current lookback - ${current_lookback} months" "${labels[@]}")
+    fi
+    other=$((${#months[@]} + 1))
+    while true; do
+        printf '\nProvenance lookback\n' >&2
+        for index in "${!labels[@]}"; do
+            printf '  %d. %s\n' "$((index + 1))" "${labels[index]}" >&2
+        done
+        printf '  %d. Enter another number of months from 1 through 60\n' \
+            "${other}" >&2
+        ask 'Select lookback [1]: '
+        prompt_answer="${prompt_answer:-1}"
+        if [[ "${prompt_answer}" =~ ^[1-9][0-9]{0,2}$ ]] &&
+            ((prompt_answer <= ${#months[@]})); then
+            current_lookback="${months[prompt_answer - 1]}"
+            return
+        fi
+        if [[ "${prompt_answer}" == "${other}" ]]; then
+            ask 'Months (1-60): '
+            if [[ "${prompt_answer}" =~ ^[1-9][0-9]?$ ]] &&
+                ((prompt_answer <= 60)); then
+                current_lookback="${prompt_answer}"
+                return
+            fi
+            printf '%s\n' 'Enter a whole number from 1 through 60.' >&2
+            continue
+        fi
+        printf '%s\n' 'Enter one of the displayed choice numbers.' >&2
+    done
+}
+
+ask_cookies() {
+    local default=1
+
+    [[ "${current_cookies}" != ephemeral ]] || default=2
+    printf '\n%s\n' \
+        'Raw Set-Cookie values from research stay only in a private per-repository ledger and never reach a model or rendered report.' >&2
+    while true; do
+        printf '\nResearch cookies\n' >&2
+        printf '%s\n' \
+            '  1. Do not replay research cookies (Recommended)' \
+            '  2. Allow a fresh per-repository research cookie jar' >&2
+        ask "Select cookies [${default}]: "
+        case "${prompt_answer:-${default}}" in
+            1) current_cookies=off; return ;;
+            2) current_cookies=ephemeral; return ;;
+        esac
+        printf '%s\n' 'Enter one of the displayed choice numbers.' >&2
+    done
+}
+
+# The scope question, then the lookback and cookie questions that the chosen
+# scope needs.
+ask_scope() {
+    local default="${current_scope}"
+
+    [[ "${default}" =~ ^[123]$ ]] || default=1
+    printf '\n' >&2
+    print_scope_explanation
+    while true; do
+        printf '\nReview scope\n' >&2
+        printf '%s\n' \
+            '  1. Scope 1 - Core repository review (Recommended) - 15-45 minutes' \
+            '  2. Scope 2 - Core + public prior-art/community research - 30-90+ minutes' \
+            '  3. Scope 3 - Full + generated-code provenance review - 60-120+ minutes' >&2
+        ask "Select scope [${default}]: "
+        case "${prompt_answer:-${default}}" in
+            1|2|3)
+                current_scope="${prompt_answer:-${default}}"
+                break
+                ;;
+        esac
+        printf '%s\n' 'Enter one of the displayed choice numbers.' >&2
+    done
+    if [[ "${current_scope}" == 3 ]]; then
+        ask_lookback
+    else
+        current_lookback=NULL
+    fi
+    if [[ "${current_scope}" == 1 ]]; then
+        current_cookies=NULL
+    else
+        ask_cookies
+    fi
+}
+
+# Keep each answer in the private launcher session for later diagnosis.
+#   write_session_record <path> <action> [approval hash]
+write_session_record() {
+    python3 -I - "$1" "$2" "${3-}" "${current_output}" "${current_scope}" \
+        "${current_lookback}" "${current_cookies}" <<'PY'
+import json
+import os
+import sys
+
+path, action, approval_hash, output, scope, lookback, cookies = sys.argv[1:8]
+if approval_hash:
+    value = {"Action": action, "ApprovalHash": approval_hash}
+else:
+    value = {
+        "Action": action,
+        "OutputRoot": output,
+        "Scope": int(scope),
+        "ProvenanceLookbackMonths": int(lookback) if scope == "3" else None,
+        "ResearchCookies": cookies if scope in {"2", "3"} else None,
+    }
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+    json.dump(value, stream, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    stream.write("\n")
+PY
+}
+
+# Discard anything typed before the plan appeared, so that only an answer
+# given after it can start a review.
+discard_typed_ahead_input() {
+    [[ -t 0 ]] || return 0
+    python3 -I -c \
+        'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)' \
+        2>/dev/null || true
+}
+
+# Starting a review needs an explicit answer, so this question has no
+# default.
+ask_approval() {
+    discard_typed_ahead_input
+    while true; do
+        printf '\nEffective review plan\n' >&2
+        printf '%s\n' \
+            '  1. Run review' \
+            '  2. Edit setup' \
+            '  3. Explain scope' \
+            'Type stop to leave without starting a review.' >&2
+        ask 'Select action: '
+        case "${prompt_answer}" in
+            1|'Run review') approval_action=run; return ;;
+            2|'Edit setup') approval_action=edit; return ;;
+            3|'Explain scope') approval_action=explain; return ;;
+            'Change scope') approval_action=change-scope; return ;;
+        esac
+        printf '%s\n' 'Enter 1, 2, or 3, or type stop.' >&2
+    done
+}
 
 # The key choices of the authoritative plan, printed after its full JSON so
 # that they sit directly above the approval question.
@@ -199,26 +403,6 @@ print(f"  Public research: {'enabled' if research.get('Enabled') is True else 'd
 print(f"  Session time limit: {text(plan.get('SessionTimeoutMinutes'))} minutes")
 print(f"  Approval hash: {text(plan.get('ApprovalHash'))}")
 PY
-}
-
-# After a cancelled question, offer to ask it again when a person is at the
-# terminal. Returns 0 to ask again; otherwise reports the stop and returns 1.
-#   offer_question_again <what was cancelled>
-offer_question_again() {
-    local answer=''
-
-    printf '%s\n' \
-        "The $1 cancelled, or Codex cancelled it after two minutes without an answer." >&2
-    if [[ -t 0 ]]; then
-        printf '%s\n' \
-            'Press Enter to ask again, or type stop to leave without starting a review.' >&2
-        IFS= read -r answer || answer=stop
-        if [[ "${answer}" != stop && "${answer}" != cancel ]]; then
-            return 0
-        fi
-    fi
-    printf '%s\n' 'Rhyolite stopped without starting a review.' >&2
-    return 1
 }
 
 # Report the live review: the runner writes the run's state.json only when it
@@ -290,53 +474,34 @@ PY
 
 while true; do
     setup_sequence=$((setup_sequence + 1))
-    if ((reuse_setup)); then
-        reuse_setup=0
-    elif ((auto_defaults && setup_sequence == 1)); then
-        # --auto-defaults accepts the home output and scope 1 without a setup
-        # question; the effective plan still needs explicit approval.
-        current_output="${HOME%/}/rhyolite-output/repo-review"
-        current_scope=1
-        current_lookback=NULL
-        current_cookies=NULL
-    else
-        setup_input="${session_directory}/codex-setup-${setup_sequence}.txt"
-        setup_result="${session_directory}/codex-setup-${setup_sequence}.json"
-        rm -f -- "${setup_result}"
-        {
-            printf '%s\n' 'RHYOLITE_CODEX_SETUP_INPUT_V1'
-            printf 'CurrentDirectoryOutput=%s/rhyolite-output/repo-review\n' \
-                "${working_directory%/}"
-            printf 'HomeDirectoryOutput=%s/rhyolite-output/repo-review\n' \
-                "${HOME%/}"
-            printf 'CurrentOutput=%s\n' "${current_output}"
-            printf 'CurrentScope=%s\n' "${current_scope}"
-            printf 'CurrentProvenanceLookbackMonths=%s\n' "${current_lookback}"
-            printf 'CurrentResearchCookies=%s\n' "${current_cookies}"
-            printf '%s\n' 'END_RHYOLITE_CODEX_SETUP_INPUT_V1'
-        } > "${setup_input}"
-        chmod 600 -- "${setup_input}"
-        "${stage_helper}" \
-            --stage setup \
-            --plugin-root "${plugin_root}" \
-            --working-directory "${working_directory}" \
-            --input "${setup_input}" \
-            --result "${setup_result}" \
-            --model "${model}" \
-            --reasoning-effort "${reasoning_effort}" \
-            --context "${context_tier}" >/dev/null ||
-            fail_controller setup
-        read_setup_result "${setup_result}" || fail_controller setup-result
-        if [[ "${setup_values[0]}" == cancel ]]; then
-            offer_question_again 'setup questions were' || exit 0
-            continue
-        fi
-        [[ "${setup_values[0]}" == continue ]] || fail_controller setup-action
-        current_output="${setup_values[1]}"
-        current_scope="${setup_values[2]}"
-        current_lookback="${setup_values[3]}"
-        current_cookies="${setup_values[4]}"
-    fi
+    case "${next_setup}" in
+        auto)
+            # --auto-defaults accepts the home output and scope 1 without a
+            # setup question; the effective plan still needs explicit approval.
+            current_output="${HOME%/}/rhyolite-output/repo-review"
+            current_scope=1
+            current_lookback=NULL
+            current_cookies=NULL
+            ;;
+        full)
+            ask_output
+            ask_scope
+            write_session_record \
+                "${session_directory}/codex-setup-${setup_sequence}.json" \
+                continue || fail_controller session-record
+            ;;
+        scope)
+            ask_scope
+            write_session_record \
+                "${session_directory}/codex-setup-${setup_sequence}.json" \
+                continue || fail_controller session-record
+            ;;
+        reuse)
+            ;;
+        *)
+            fail_controller setup-mode
+            ;;
+    esac
 
     # The offline snapshot transport keeps the integrated security pass.
     declare -a runner_arguments=(
@@ -399,43 +564,14 @@ PY
     printf '\n'
     print_plan_summary "${plan_path}" || fail_controller plan-summary
     printf 'The full plan is also saved at %s.\n' "${plan_path}"
-    # Let the user read the plan first: the approval question's countdown
-    # starts as soon as it appears.
-    if [[ -t 0 ]]; then
-        printf '%s\n' \
-            'Read the plan, then press Enter to answer the approval question in Codex, or type stop to leave without starting a review.' >&2
-        plan_answer=''
-        IFS= read -r plan_answer || plan_answer=stop
-        if [[ "${plan_answer}" == stop || "${plan_answer}" == cancel ]]; then
-            printf '%s\n' 'Rhyolite stopped without starting a review.' >&2
-            exit 0
-        fi
-    fi
 
     while true; do
         approval_sequence=$((approval_sequence + 1))
-        approval_input="${session_directory}/codex-approval-${approval_sequence}.txt"
-        approval_result="${session_directory}/codex-approval-${approval_sequence}.json"
-        rm -f -- "${approval_result}"
-        {
-            printf '%s\n' 'RHYOLITE_CODEX_APPROVAL_INPUT_V1'
-            printf 'ApprovalHash=%s\n' "${approval_hash}"
-            printf 'Scope=%s\n' "${current_scope}"
-            printf '%s\n' 'END_RHYOLITE_CODEX_APPROVAL_INPUT_V1'
-        } > "${approval_input}"
-        chmod 600 -- "${approval_input}"
-        "${stage_helper}" \
-            --stage approval \
-            --plugin-root "${plugin_root}" \
-            --working-directory "${working_directory}" \
-            --input "${approval_input}" \
-            --result "${approval_result}" \
-            --model "${model}" \
-            --reasoning-effort "${reasoning_effort}" \
-            --context "${context_tier}" >/dev/null ||
-            fail_controller approval
-        read_approval_result "${approval_result}" "${approval_hash}" ||
-            fail_controller approval-result
+        ask_approval
+        write_session_record \
+            "${session_directory}/codex-approval-${approval_sequence}.json" \
+            "${approval_action}" \
+            "${approval_hash}" || fail_controller session-record
         case "${approval_action}" in
             run)
                 execution_stdout="${session_directory}/codex-run.stdout"
@@ -533,20 +669,21 @@ PY
                     "${execution_stderr}"; then
                     printf '%s\n' \
                         'The approved effective plan changed; regenerating it with the preserved setup.' >&2
-                    reuse_setup=1
+                    next_setup=reuse
                     break
                 fi
                 exit "${execution_status}"
                 ;;
             edit)
+                next_setup=full
+                break
+                ;;
+            change-scope)
+                next_setup=scope
                 break
                 ;;
             explain)
                 print_scope_explanation
-                continue
-                ;;
-            cancel)
-                offer_question_again 'approval question was' || exit 0
                 continue
                 ;;
             *)

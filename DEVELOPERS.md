@@ -179,7 +179,6 @@ Changes to these surfaces normally move together:
 
 - `VERSION`, `plugins/rhyolite/plugin.json`,
   `plugins/rhyolite/.claude-plugin/plugin.json`,
-  `plugins/rhyolite/.codex-plugin/plugin.json`,
   `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
   `CHANGELOG.md` for releases.
 - `AGENTS.md`, tool-specific bootstrap pointers, `DEVELOPERS.md`, and
@@ -190,10 +189,9 @@ Changes to these surfaces normally move together:
   `tests/harness-contract-codex.sh` for the Codex adapter,
   `docs/HARNESS-ARCHITECTURE.md`, and
   `docs/ADDING-A-HARNESS.md` for harness contract changes.
-- `.codex-plugin/plugin.json`, `codex/skills/`,
-  `scripts/run-codex-guided-stage.sh`, `scripts/run-codex-guided-review.sh`,
-  the launcher's Codex branch, and `tests/harness-contract-codex.sh` for the
-  Codex guided flow.
+- `scripts/run-codex-guided-review.sh`, the launcher's Codex branch, the
+  welcome helper's Codex launcher plaque, and
+  `tests/harness-contract-codex.sh` for the Codex guided flow.
 - `branding/banner.txt`, `scripts/show-welcome-panel.sh`, the embedded
   prompt-native panels in both orchestrators, `claude/hooks.json`,
   `tests/validate-tui-runtime.mjs`, and `tests/validate-plugin.sh` for

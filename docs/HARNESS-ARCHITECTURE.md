@@ -321,8 +321,9 @@ itself, and any recorded subagent event fails the phase.
 [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) and
 [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md) record the probe and
 real-run evidence behind each Claude Code and Codex value. Codex's
-`structured_questions` value covers only the launcher's native setup and
-approval sessions; its review and research workers have no question tool.
+`structured_questions` value rests on the launcher's own numbered terminal
+setup and approval questions; no Codex session asks them, and its review and
+research workers have no question tool.
 
 An unknown capability returns `unverified`; it is never silently promoted to
 `yes`.
@@ -608,9 +609,9 @@ The outer launcher starts Claude Code from a clean non-Git directory with
 
 - Canonical ID: `codex`
 - Display name: `OpenAI Codex CLI`
-- CLI: `codex`, exactly `codex-cli 0.163.0`. `harness_prepare_run` and every
-  guided stage refuse another release, because every isolation,
-  tool-inventory, output, and lifecycle proof was made with that release.
+- CLI: `codex`, exactly `codex-cli 0.163.0`. `harness_prepare_run` refuses
+  another release, because every isolation, tool-inventory, output, and
+  lifecycle proof was made with that release.
 - Model: `gpt-5.6-sol` only; every other ID is rejected outright, so
   `--allow-unlisted-model` does not apply.
 - Reasoning effort: `max` recommended; `xhigh` and `high` selectable.
@@ -685,21 +686,17 @@ renders `session.md`. Continuation resumes the same rollout with
 `exec resume <thread>`.
 
 The outer launcher checks Codex readiness offline before any question,
-keeps one security scan, rejects `--yolo`, and runs
-`scripts/run-codex-guided-review.sh`. That controller runs one native
-interactive Codex session for setup and one for approval through
-`scripts/run-codex-guided-stage.sh`, each in a private home where Codex's
-native local marketplace installs only the two Rhyolite question skills and
-only `request_user_input` is enabled; it validates each session record and
-strict JSON result, generates and prints the plan, runs the approved review
-itself, and handles exact `/rhyolite:status`, `stop`, and `cancel` through
-the runner's `--request-stop`. Outside Plan mode, Codex 0.163.0 marks a
-question non-blocking and answers it with nothing after a 60-second grace
-period and a 60-second visible countdown, unless a key is pressed; the
-skills report that as a cancel. The controller therefore prints a short
-plan summary, waits for Enter before the approval question, and at a
-terminal offers to ask a cancelled question again. There is no root Codex
-marketplace.
+keeps one security scan, rejects `--yolo`, prints the plaque itself because
+no harness hook runs, and runs `scripts/run-codex-guided-review.sh`. No
+interactive Codex session runs. That controller asks the setup questions
+with numbered Bash prompts in the launcher's terminal, generates and prints
+the plan with a short summary, and asks for approval with no default answer
+after discarding input typed before the plan appeared. The launcher and the
+controller refuse to run without a terminal on standard input and standard
+error. It runs the approved review itself and handles exact
+`/rhyolite:status`, `stop`, and `cancel`
+through the runner's `--request-stop`. Rhyolite ships no Codex plugin
+manifest, skill, or marketplace.
 
 ## Lifecycle
 
@@ -1032,9 +1029,9 @@ the review, research, and repair argv, runtime configuration, model catalog,
 and environment vectors, including the removal of hostile inherited
 variables and the `/etc/codex` and CLI-release checks. It covers outcome
 classification, live enforcement in the runner's own vocabulary, session
-verification and persistence, the native setup and approval stages under a
-connected pseudo-terminal, and the launcher's Codex branch and readiness
-check. It also drives the real runner and the real snapshot and research
+verification and persistence, the controller's terminal setup and approval
+questions, including typed-ahead input under a pseudo-terminal, and the
+launcher's Codex branch, plaque, and readiness check. It also drives the real runner and the real snapshot and research
 brokers through a fake Codex worker for completed, recovered, repaired,
 timed-out, rerouted, refused, and never-started reviews and a scope-2
 research launch.

@@ -1276,8 +1276,8 @@ $(rhyolite_harness_list_registered | sed 's/^/  - /')
 Starts Copilot (or Claude Code with --harness claude) outside Git worktrees
 with the checkout-loaded Rhyolite plugin, collects launcher settings, selects
 ${RHYOLITE_AGENT}, starts explicit interactive mode, and begins guided setup
-immediately. With --harness codex, short native Codex sessions ask the setup
-and approval questions, and the launcher itself runs the approved review.
+immediately. With --harness codex, the launcher asks the setup and approval
+questions in this terminal and runs the approved review itself.
 Approved model, effort, context, and security scan settings are remembered
 per repository and harness.
 
@@ -1782,11 +1782,8 @@ main() {
             ;;
         codex)
             for required_codex_asset in \
-                .codex-plugin/plugin.json \
-                codex/skills/repo-review-setup/SKILL.md \
-                codex/skills/repo-review-approval/SKILL.md \
-                scripts/run-codex-guided-stage.sh \
-                scripts/run-codex-guided-review.sh; do
+                scripts/run-codex-guided-review.sh \
+                scripts/show-welcome-panel.sh; do
                 [ -f "${plugin_root}/${required_codex_asset}" ] ||
                     fail \
                         'plugin validation' \
@@ -1797,12 +1794,11 @@ main() {
                         'NONE' \
                         'No Codex session or guided setup was started.'
             done
-            [[ -x "${plugin_root}/scripts/run-codex-guided-stage.sh" &&
-                -x "${plugin_root}/scripts/run-codex-guided-review.sh" ]] ||
+            [[ -x "${plugin_root}/scripts/run-codex-guided-review.sh" ]] ||
                 fail \
                     'plugin validation' \
-                    'A Codex guided helper is not executable.' \
-                    'The Codex setup or review controller lost executable permission.' \
+                    'The Codex guided review controller is not executable.' \
+                    'The Codex review controller lost executable permission.' \
                     'Restore the complete Rhyolite plugin installation and retry.' \
                     2 \
                     'NONE' \
@@ -2468,6 +2464,24 @@ main() {
         if ((LAUNCHER_AUTO_DEFAULTS)); then
             codex_arguments+=(--auto-defaults)
         fi
+        # The controller asks the setup and approval questions on stdin and
+        # stderr, and discards input typed before the plan appeared; neither
+        # works without a terminal, so a Codex review is never approved from
+        # piped or redirected input.
+        [[ -t 0 && -t 2 ]] ||
+            fail \
+                'Codex terminal' \
+                'The Codex guided review needs an interactive terminal.' \
+                'Standard input or standard error is not a terminal, so Rhyolite cannot ask the Codex setup and approval questions.' \
+                "Run the launcher from an interactive terminal, or script a review with the direct runner's --plan-only and --expected-plan-hash options." \
+                2 \
+                "${session_dir}/launch-context.txt" \
+                'No Codex question was asked, and no review plan or run output was created.'
+        # No harness hook runs before the controller's terminal questions, so
+        # the launcher prints the display-only plaque itself.
+        printf '\n' >&2
+        bash "${plugin_root}/scripts/show-welcome-panel.sh" \
+            --mode codex-launcher-plaque >&2 || true
         set +e
         (
             cd "${launch_dir}" &&
@@ -2478,7 +2492,7 @@ main() {
         if ((codex_exit_code != 0)); then
             fail \
                 'Codex guided review controller' \
-                'The Codex setup or Bash-owned review controller failed.' \
+                'The Codex guided setup and review controller failed.' \
                 "The controller returned exit code ${codex_exit_code}." \
                 'Review the private launcher session artifacts, correct the reported setup or runner failure, and retry.' \
                 "${codex_exit_code}" \

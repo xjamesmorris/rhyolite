@@ -175,10 +175,10 @@ inherited environment, including that key, into the temporary runtime home,
 so the key is not written to the runtime home, `agent-state/`, or any
 artifact. The plan
 and state record the provider's host name and the name of that variable,
-never its value. The launcher's two native question sessions run in
-temporary Codex homes that are deleted when each session ends; the
-controller keeps their inputs and strict one-line results, the plan, and the
-runner's terminal output in the launcher's private session directory.
+never its value. The launcher asks the setup and approval questions itself,
+without a Codex session or model request, and keeps the answers, the plan,
+and the runner's terminal output in the launcher's private session
+directory.
 
 The plugin omits author email addresses by default. Users are
 responsible for storing, sharing, and deleting reports according to
@@ -211,9 +211,8 @@ Copilot for `--harness copilot`, Anthropic or the provider configured for
 Claude Code for `--harness claude`, and the provider configured for Codex for
 `--harness codex`. Claude Code workers run with nonessential traffic and
 auto-update disabled; the outer Claude Code session uses the user's own
-Claude Code settings. Codex workers and question sessions run with analytics
-and metrics export disabled and use only the provider settings from your
-Codex configuration.
+Claude Code settings. Codex workers run with analytics and metrics export
+disabled and use only the provider settings from your Codex configuration.
 
 No telemetry, report upload, background network requests, or reusable
 cross-run research cookie store is implemented by this plugin.

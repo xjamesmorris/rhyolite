@@ -97,20 +97,18 @@ supported and must not drive new work.
   agents under `claude/agents/`, commands under `claude/commands/`, and
   display-only hooks in `claude/hooks.json`. Skills, scripts, libraries, the
   launcher, and branding are shared by every harness.
-- `plugins/rhyolite/.codex-plugin/plugin.json` registers only the two Codex
-  question skills under `codex/skills/`. There is no root Codex marketplace,
-  because the launcher is the only Codex entrypoint:
-  `scripts/run-codex-guided-stage.sh` installs those skills through Codex's
-  native local marketplace into a private, per-stage Codex home for each
-  setup and approval question session, validates the session record and the
-  strict JSON result, and removes the home, and
-  `scripts/run-codex-guided-review.sh` generates the effective plan, prints
-  it with a short summary, runs the approved review itself, and handles exact
-  `/rhyolite:status`, `stop`, and `cancel`. Codex 0.163.0 cancels a question
-  left unanswered for two minutes outside Plan mode, so the controller waits
-  for Enter after printing the plan and, at a terminal, offers to ask a
-  cancelled setup or approval question again. Codex model sessions only ask
-  questions; they never run the runner.
+- Codex has no Rhyolite plugin manifest, skill, or marketplace: the launcher
+  is the only Codex entrypoint, and no interactive Codex session runs.
+  `scripts/run-codex-guided-review.sh` asks the setup and approval questions
+  itself in the launcher's terminal with numbered Bash prompts, generates the
+  effective plan, and prints it with a short summary. It discards input typed
+  before the plan appeared and asks for approval with no default answer, so
+  only an explicit answer starts a review; end of input, `stop`, or `cancel`
+  at any question leaves without one. The launcher and the controller refuse
+  to run without a terminal on standard input and standard error, so piped
+  or redirected input never approves a plan. It then runs the approved review
+  itself and handles exact `/rhyolite:status`, `stop`, and `cancel`. Codex
+  runs only as the runner's isolated workers.
 - The local `sessionStart` hook is display-only: it emits either the ordinary
   version/start line or the exactly-once launcher plaque. The
   `userPromptSubmitted` hook is also display-only and recognizes exact manual
@@ -177,7 +175,8 @@ supported and must not drive new work.
   before any question, that `/etc/codex` holds nothing, that Codex CLI
   0.163.0 is installed, and that the provider settings and key are usable;
   keeps the single integrated security pass, rejecting every scan option and
-  `--yolo`; and hands the trusted selections to
+  `--yolo`; prints the launcher plaque itself, because no harness hook runs
+  before the terminal questions; and hands the trusted selections to
   `scripts/run-codex-guided-review.sh`.
 - `plugins/rhyolite/bin/rhyolite-summary` is the standalone, read-only saved
   output inventory utility. It performs a bounded top-level scan, uses JSON as
@@ -240,7 +239,9 @@ supported and must not drive new work.
   the fallback.
 - Finite choice lists rely on Copilot CLI's automatic final custom-answer
   option and Claude Code's automatic free-text answer. Do not add an explicit
-  `Other` choice.
+  `Other` choice. The launcher's and the Codex controller's numbered terminal
+  prompts have no automatic answer, so they list an explicit entry choice,
+  such as `Enter another absolute path`.
 - `repo-review-worker.agent.md` is the non-user-invocable, write-disabled main
   child. It analyzes one isolated snapshot and consumes only a validated,
   sanitized research dossier/summary when research is enabled.
@@ -912,7 +913,6 @@ supported and must not drive new work.
 
 - For a release, synchronize `VERSION`, `plugins/rhyolite/plugin.json`,
   `plugins/rhyolite/.claude-plugin/plugin.json`,
-  `plugins/rhyolite/.codex-plugin/plugin.json`,
   `.github/plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and
   `CHANGELOG.md`.
 - Run `git diff --check`, the narrow checks relevant to the change, and the

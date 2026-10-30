@@ -5,49 +5,21 @@
 # production plugin tree.
 
 CODEX_HARNESS="${PLUGIN_ROOT}/lib/harness/codex.sh"
-CODEX_PLUGIN_MANIFEST="${PLUGIN_ROOT}/.codex-plugin/plugin.json"
-CODEX_SETUP_SKILL="${PLUGIN_ROOT}/codex/skills/repo-review-setup/SKILL.md"
-CODEX_APPROVAL_SKILL="${PLUGIN_ROOT}/codex/skills/repo-review-approval/SKILL.md"
-CODEX_GUIDED_STAGE="${PLUGIN_ROOT}/scripts/run-codex-guided-stage.sh"
-for path in \
-    "${CODEX_HARNESS}" \
-    "${CODEX_PLUGIN_MANIFEST}" \
-    "${CODEX_SETUP_SKILL}" \
-    "${CODEX_APPROVAL_SKILL}" \
-    "${CODEX_GUIDED_STAGE}"; do
+CODEX_GUIDED_REVIEW="${PLUGIN_ROOT}/scripts/run-codex-guided-review.sh"
+for path in "${CODEX_HARNESS}" "${CODEX_GUIDED_REVIEW}"; do
     [[ -f "${path}" ]] || fail "Required Codex asset is missing: ${path}"
 done
 bash -n "${CODEX_HARNESS}" ||
     fail 'Codex adapter has a Bash syntax error.'
-bash -n "${CODEX_GUIDED_STAGE}" ||
-    fail 'Codex guided-stage helper has a Bash syntax error.'
-[[ -x "${CODEX_GUIDED_STAGE}" ]] ||
-    fail 'Codex guided-stage helper is not executable.'
-[[ "$(grep -Fc -- '-c features.plugins=true' "${CODEX_GUIDED_STAGE}")" == 3 &&
-    "$(grep -Fc -- "-c 'plugins._default.enabled=true'" "${CODEX_GUIDED_STAGE}")" == 2 ]] ||
-    fail 'Codex guided-stage plugin management or launch lost explicit enable overrides.'
-# The launcher is the only Codex entrypoint: it installs the setup and
-# approval skills into a private home for each stage. A root marketplace would
-# add those launcher-only skills to ordinary Codex sessions, where they can
-# never start a review.
+bash -n "${CODEX_GUIDED_REVIEW}" ||
+    fail 'Codex guided review controller has a Bash syntax error.'
+[[ -x "${CODEX_GUIDED_REVIEW}" ]] ||
+    fail 'Codex guided review controller is not executable.'
+# The launcher is the only Codex entrypoint and asks Rhyolite's questions in
+# its own terminal. A root marketplace would offer Rhyolite to ordinary Codex
+# sessions, which can never start a review.
 [[ ! -e "${ROOT}/.agents/plugins/marketplace.json" ]] ||
-    fail 'A root Codex marketplace would expose the launcher-only Codex skills to ordinary Codex sessions.'
-node - "${CODEX_PLUGIN_MANIFEST}" "${ROOT}/VERSION" <<'JS'
-const fs = require("fs");
-const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const version = fs.readFileSync(process.argv[3], "utf8").trim();
-if (manifest.name !== "rhyolite" || manifest.version !== version ||
-    JSON.stringify(manifest.skills) !== JSON.stringify(["./codex/skills"]) ||
-    "mcpServers" in manifest || "hooks" in manifest || "apps" in manifest) {
-  throw new Error("Codex plugin manifest changed");
-}
-JS
-for skill in "${CODEX_SETUP_SKILL}" "${CODEX_APPROVAL_SKILL}"; do
-    grep -Fq 'request_user_input' "${skill}" ||
-        fail "Codex guided skill lost native question instructions: ${skill}"
-    ! grep -Eqi 'Bash\(|shell tool|execute the runner' "${skill}" ||
-        fail "Codex guided skill gained shell authority: ${skill}"
-done
+    fail 'A root Codex marketplace would expose Rhyolite to ordinary Codex sessions.'
 
 codex_test_plugin="${fixture_root}/codex-test-plugin"
 mkdir -p -- "${codex_test_plugin}/lib/harness"
@@ -106,55 +78,12 @@ if [[ "${1-}" == --version ]]; then
     printf '%s\n' 'codex-cli 0.163.0'
     exit 0
 fi
-if [[ "${1-}" == plugin ]]; then
-    printf '%s\n' '{}'
-    exit 0
+# Rhyolite starts Codex only as the runner's isolated workers, which these
+# fixtures never reach: record any other call and fail it.
+if [[ -n "${RHYOLITE_CODEX_FAKE_CALLS-}" ]]; then
+    printf '%s\0' "$@" >> "${RHYOLITE_CODEX_FAKE_CALLS}"
 fi
-if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
-    [[ -t 0 && -t 1 ]] || {
-        printf '%s\n' 'Native Codex stage lost its terminal.' >&2
-        exit 2
-    }
-fi
-prompt="${!#}"
-case "${prompt}" in
-    *'$rhyolite:repo-review-setup'*)
-        native_stage=setup
-        final='{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":1,"ProvenanceLookbackMonths":null,"ResearchCookies":null}'
-        ;;
-    *'$rhyolite:repo-review-approval'*)
-        native_stage=approval
-        approval_hash="$(
-            grep -Eo '[0-9a-f]{64}' <<< "${prompt}" | head -n 1
-        )"
-        [[ -n "${approval_hash}" ]]
-        final="{\"Protocol\":\"RHYOLITE_CODEX_APPROVAL_V1\",\"Action\":\"run\",\"ApprovalHash\":\"${approval_hash}\"}"
-        ;;
-    *)
-        exit 2
-        ;;
-esac
-final="${RHYOLITE_CODEX_FAKE_FINAL:-${final}}"
-native_tool="${RHYOLITE_CODEX_FAKE_TOOL:-request_user_input}"
-# A real model's interactive session records its reasoning as a completed item.
-native_item="${RHYOLITE_CODEX_FAKE_ITEM:-Reasoning}"
-if [[ "${RHYOLITE_CODEX_REQUIRE_TTY:-0}" == 1 ]]; then
-    printf 'RHYOLITE_CODEX_NATIVE_UI %s TERM=%s\n' "${native_stage}" "${TERM-}"
-fi
-escaped_final="${final//\\/\\\\}"
-escaped_final="${escaped_final//\"/\\\"}"
-session_id='00000000-0000-4000-8000-000000000044'
-session_dir="${CODEX_HOME}/sessions/2026/10/21"
-mkdir -p -- "${session_dir}"
-cat > "${session_dir}/rollout.jsonl" <<EOF
-{"type":"session_meta","payload":{"session_id":"${session_id}","id":"${session_id}","originator":"codex_cli","cli_version":"0.163.0","source":"cli"}}
-{"type":"event_msg","payload":{"type":"task_started","model_context_window":828400}}
-{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"read-only"},"model":"gpt-5.6-sol","effort":"max","multi_agent_version":"disabled","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.6-sol","reasoning_effort":"max"}}}}
-{"type":"event_msg","payload":{"type":"item_completed","thread_id":"${session_id}","turn_id":"fixture-turn","item":{"type":"${native_item}","id":"fixture-item","summary_text":[],"raw_content":[]}}}
-{"type":"response_item","payload":{"type":"function_call","name":"${native_tool}","arguments":"{}","call_id":"fixture-call"}}
-{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"${escaped_final}"}]}}
-EOF
-exit 0
+exit 2
 CODEX_FAKE
 chmod 700 -- "${codex_fake_bin}/codex"
 
@@ -440,9 +369,9 @@ done
     *'RHYOLITE_BROKER_OWNER_START_TIME="'* ]] ||
     fail 'Codex snapshot MCP did not bind the detached broker to its trusted runner owner.'
 
-# A home prepared before any worker argv, as the guided stage does, gets no
-# worker instructions; the worker environment then fails closed instead of
-# launching an uninstructed worker. Each pending record is consumed once.
+# A home prepared before any worker argv gets no worker instructions; the
+# worker environment then fails closed instead of launching an uninstructed
+# worker. Each pending record is consumed once.
 (
     codex_order_runtime="${fixture_root}/codex-order-runtime"
     mkdir -- "${codex_order_runtime}" "${codex_order_runtime}-second"
@@ -1052,251 +981,16 @@ assert_contains <(printf '%s\n' "${RHYOLITE_HARNESS_ERROR_DETAIL}") \
 harness_allow_all_detected &&
     fail 'Codex inherited an allow-all signal.'
 
-codex_guided_work="${fixture_root}/codex-guided-work"
-mkdir -- "${codex_guided_work}"
-# Run one command with a pseudo-terminal on stdin and stderr, where the
-# native Codex questions appear, its stdout in the first named file, and the
-# terminal output in the second.
-codex_run_with_terminal() {
-    local stdout_path="$1"
-    local terminal_path="$2"
-    shift 2
-    python3 -I - "${stdout_path}" "${terminal_path}" "$@" <<'PY'
-import errno
-import os
-import pty
-import subprocess
-import sys
-
-stdout_path, terminal_path, command = sys.argv[1], sys.argv[2], sys.argv[3:]
-master, slave = pty.openpty()
-with open(stdout_path, "wb") as stdout:
-    process = subprocess.Popen(
-        command, stdin=slave, stdout=stdout, stderr=slave,
-        start_new_session=True,
-    )
-    status = process.wait(timeout=60)
-os.close(slave)
-terminal = bytearray()
-while True:
-    try:
-        chunk = os.read(master, 65536)
-    except OSError as error:
-        if error.errno != errno.EIO:
-            raise
-        break
-    if not chunk:
-        break
-    terminal.extend(chunk)
-os.close(master)
-with open(terminal_path, "wb") as output:
-    output.write(bytes(terminal))
-sys.exit(status)
-PY
-}
-codex_setup_input="${fixture_root}/codex-setup-input.txt"
-cat > "${codex_setup_input}" <<'SETUP_INPUT'
-RHYOLITE_CODEX_SETUP_INPUT_V1
-CurrentDirectoryOutput=/tmp/current/rhyolite-output/repo-review
-HomeDirectoryOutput=/tmp/home/rhyolite-output/repo-review
-CurrentOutput=NOT SELECTED
-CurrentScope=NOT SELECTED
-CurrentProvenanceLookbackMonths=NOT SELECTED
-CurrentResearchCookies=NOT SELECTED
-END_RHYOLITE_CODEX_SETUP_INPUT_V1
-SETUP_INPUT
-codex_setup_result="${fixture_root}/codex-setup-result.json"
-if "${CODEX_GUIDED_STAGE}" \
-    --stage setup \
-    --plugin-root "${PLUGIN_ROOT}" \
-    --working-directory "${codex_guided_work}" \
-    --input "${codex_setup_input}" \
-    --result "${codex_setup_result}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    < /dev/null > /dev/null 2> "${fixture_root}/codex-stage-no-terminal.stderr"; then
-    fail 'Codex guided setup ran without a terminal.'
-fi
-assert_contains "${fixture_root}/codex-stage-no-terminal.stderr" \
-    'Codex guided stage failed: terminal' 'Codex guided stage terminal check'
-[[ ! -e "${codex_setup_result}" ]] ||
-    fail 'Codex guided setup wrote a result without a terminal.'
-codex_run_with_terminal "${fixture_root}/codex-setup.stdout" \
-    "${fixture_root}/codex-setup.terminal" \
-    "${CODEX_GUIDED_STAGE}" \
-    --stage setup \
-    --plugin-root "${PLUGIN_ROOT}" \
-    --working-directory "${codex_guided_work}" \
-    --input "${codex_setup_input}" \
-    --result "${codex_setup_result}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context ||
-    fail 'Codex guided setup helper failed with the fixture CLI.'
-node - "${codex_setup_result}" <<'JS'
-const fs = require("fs");
-const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-if (value.Protocol !== "RHYOLITE_CODEX_SETUP_V1" ||
-    value.Action !== "continue" ||
-    value.OutputRoot !== "/tmp/rhyolite-output" ||
-    value.Scope !== 1 ||
-    value.ProvenanceLookbackMonths !== null ||
-    value.ResearchCookies !== null) {
-  throw new Error("Codex guided setup result changed");
-}
-JS
-codex_approval_hash="$(printf 'a%.0s' {1..64})"
-codex_approval_input="${fixture_root}/codex-approval-input.txt"
-cat > "${codex_approval_input}" <<EOF
-RHYOLITE_CODEX_APPROVAL_INPUT_V1
-ApprovalHash=${codex_approval_hash}
-END_RHYOLITE_CODEX_APPROVAL_INPUT_V1
-EOF
-codex_approval_result="${fixture_root}/codex-approval-result.json"
-codex_run_with_terminal "${fixture_root}/codex-approval.stdout" \
-    "${fixture_root}/codex-approval.terminal" \
-    "${CODEX_GUIDED_STAGE}" \
-    --stage approval \
-    --plugin-root "${PLUGIN_ROOT}" \
-    --working-directory "${codex_guided_work}" \
-    --input "${codex_approval_input}" \
-    --result "${codex_approval_result}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context ||
-    fail 'Codex guided approval helper failed with the fixture CLI.'
-node - "${codex_approval_result}" "${codex_approval_hash}" <<'JS'
-const fs = require("fs");
-const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-if (value.Protocol !== "RHYOLITE_CODEX_APPROVAL_V1" ||
-    value.Action !== "run" ||
-    value.ApprovalHash !== process.argv[3]) {
-  throw new Error("Codex guided approval result changed");
-}
-JS
-# A native reply outside the strict stage contract, or any tool other than
-# the native question tool, writes no result.
-codex_invalid_stage_case() {
-    local name="$1"
-    local stage="$2"
-    local input="$3"
-    local final="$4"
-    local tool="$5"
-    local item="${6:-Reasoning}"
-    local detail="${7-}"
-    local result="${fixture_root}/codex-invalid-${name}.json"
-
-    if RHYOLITE_CODEX_FAKE_FINAL="${final}" RHYOLITE_CODEX_FAKE_TOOL="${tool}" \
-        RHYOLITE_CODEX_FAKE_ITEM="${item}" \
-        codex_run_with_terminal "${fixture_root}/codex-invalid-${name}.stdout" \
-        "${fixture_root}/codex-invalid-${name}.terminal" \
-        "${CODEX_GUIDED_STAGE}" \
-        --stage "${stage}" \
-        --plugin-root "${PLUGIN_ROOT}" \
-        --working-directory "${codex_guided_work}" \
-        --input "${input}" \
-        --result "${result}" \
-        --model gpt-5.6-sol \
-        --reasoning-effort max \
-        --context long_context; then
-        fail "Codex guided stage accepted the invalid ${name} reply."
-    fi
-    assert_contains "${fixture_root}/codex-invalid-${name}.terminal" \
-        "Codex guided stage failed: result${detail:+ (${detail})}" \
-        "Codex invalid ${name} reply"
-    [[ ! -e "${result}" ]] ||
-        fail "Codex guided stage wrote a result for the invalid ${name} reply."
-    if [[ -n "${detail}" ]]; then
-        assert_equal "result: ${detail}" "$(cat -- "${result%.json}.failure")" \
-            "Codex invalid ${name} failure record"
-    fi
-}
-codex_invalid_stage_case setup-scope setup "${codex_setup_input}" \
-    '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":4,"ProvenanceLookbackMonths":null,"ResearchCookies":null}' \
-    request_user_input
-codex_invalid_stage_case setup-extra setup "${codex_setup_input}" \
-    '{"Protocol":"RHYOLITE_CODEX_SETUP_V1","Action":"continue","OutputRoot":"/tmp/rhyolite-output","Scope":1,"ProvenanceLookbackMonths":null,"ResearchCookies":null,"Shell":"allowed"}' \
-    request_user_input
-codex_invalid_stage_case setup-tool setup "${codex_setup_input}" '' shell \
-    Reasoning 'unexpected tool call shell'
-codex_invalid_stage_case setup-command-item setup "${codex_setup_input}" '' \
-    request_user_input CommandExecution 'unexpected completed item CommandExecution'
-codex_invalid_stage_case approval-action approval "${codex_approval_input}" \
-    "{\"Protocol\":\"RHYOLITE_CODEX_APPROVAL_V1\",\"Action\":\"execute\",\"ApprovalHash\":\"${codex_approval_hash}\"}" \
-    request_user_input
-
 codex_controller_plugin="${fixture_root}/codex-controller-plugin"
-codex_controller_session="${fixture_root}/codex-controller-session"
 codex_controller_work="${fixture_root}/codex-controller-work"
-codex_controller_output="${fixture_root}/codex-controller-output"
-codex_controller_capture="${fixture_root}/codex-controller-capture"
+codex_controller_home="${fixture_root}/codex-controller-home"
+codex_controller_calls="${fixture_root}/codex-controller-codex-calls"
 mkdir -p -- \
     "${codex_controller_plugin}/scripts" \
     "${codex_controller_plugin}/skills/readonly-repository-review/scripts" \
-    "${codex_controller_session}" \
     "${codex_controller_work}" \
-    "${codex_controller_output}" \
-    "${codex_controller_capture}"
-cp -- "${PLUGIN_ROOT}/scripts/run-codex-guided-review.sh" \
-    "${codex_controller_plugin}/scripts/"
-cat > "${codex_controller_plugin}/scripts/run-codex-guided-stage.sh" <<'CODEX_STAGE_FIXTURE'
-#!/usr/bin/env bash
-set -euo pipefail
-stage=''
-result=''
-while (($# > 0)); do
-    case "$1" in
-        --stage) stage="$2"; shift 2 ;;
-        --result) result="$2"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-# RHYOLITE_CODEX_CONTROLLER_SETUP and RHYOLITE_CODEX_CONTROLLER_APPROVAL set
-# to cancel-once answer the first question of that stage with a cancel, as a
-# Codex question left unanswered for two minutes does; cancel always does.
-cancel_this_time() {
-    local mode="$1"
-    local marker="${RHYOLITE_CODEX_CONTROLLER_CAPTURE:?}/$2-cancelled"
-
-    case "${mode}" in
-        cancel) return 0 ;;
-        cancel-once)
-            [[ ! -e "${marker}" ]] || return 1
-            : > "${marker}"
-            return 0
-            ;;
-    esac
-    return 1
-}
-case "${stage}" in
-    setup)
-        if cancel_this_time "${RHYOLITE_CODEX_CONTROLLER_SETUP:-}" setup; then
-            printf '%s\n' \
-                '{"Action":"cancel","OutputRoot":null,"Protocol":"RHYOLITE_CODEX_SETUP_V1","ProvenanceLookbackMonths":null,"ResearchCookies":null,"Scope":null}' \
-                > "${result}"
-        else
-            printf '%s\n' \
-                '{"Action":"continue","OutputRoot":"'"${RHYOLITE_CODEX_CONTROLLER_OUTPUT:?}"'","Protocol":"RHYOLITE_CODEX_SETUP_V1","ProvenanceLookbackMonths":null,"ResearchCookies":null,"Scope":1}' \
-                > "${result}"
-        fi
-        ;;
-    approval)
-        hash="$(
-            grep -h -Eo '[0-9a-f]{64}' "${RHYOLITE_CODEX_CONTROLLER_SESSION:?}"/codex-approval-*.txt |
-                tail -n 1
-        )"
-        action=run
-        if cancel_this_time "${RHYOLITE_CODEX_CONTROLLER_APPROVAL:-}" approval; then
-            action=cancel
-        fi
-        printf '{"Action":"%s","ApprovalHash":"%s","Protocol":"RHYOLITE_CODEX_APPROVAL_V1"}\n' \
-            "${action}" "${hash}" > "${result}"
-        ;;
-    *) exit 2 ;;
-esac
-chmod 600 -- "${result}"
-CODEX_STAGE_FIXTURE
+    "${codex_controller_home}"
+cp -- "${CODEX_GUIDED_REVIEW}" "${codex_controller_plugin}/scripts/"
 cat > "${codex_controller_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" <<'CODEX_RUNNER_FIXTURE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1346,174 +1040,444 @@ fi
 printf '%s\n' '/tmp/rhyolite-controller-run'
 CODEX_RUNNER_FIXTURE
 chmod 700 -- \
-    "${codex_controller_plugin}/scripts/run-codex-guided-stage.sh" \
     "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
     "${codex_controller_plugin}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh"
-RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
-RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_controller_session}" \
-RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_controller_capture}" \
-HOME="${fixture_root}/codex-controller-home" \
-"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
-    --plugin-root "${codex_controller_plugin}" \
-    --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_controller_session}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    --repo https://github.com/octocat/Hello-World \
-    > "${fixture_root}/codex-controller.stdout" \
-    2> "${fixture_root}/codex-controller.stderr" ||
-    fail 'Codex guided review controller failed with fixture stages.'
-assert_contains "${fixture_root}/codex-controller.stdout" \
-    'EFFECTIVE REVIEW PLAN' 'Codex controller plan display'
-assert_contains "${fixture_root}/codex-controller.stdout" \
-    '/tmp/rhyolite-controller-run' 'Codex controller execution output'
-[[ -z "$(cat "${fixture_root}/codex-controller.stderr")" ]] ||
-    fail 'Codex guided review controller emitted fixture errors.'
-controller_call_count="$(
-    find "${codex_controller_capture}" -type f -name 'call-*.nul' | wc -l
-)"
-[[ "${controller_call_count//[[:space:]]/}" == 2 ]] ||
-    fail 'Codex guided controller did not invoke one plan and one execution.'
-python3 -I - "${codex_controller_capture}" <<'PY'
+
+# Drive one command at a pseudo-terminal: its stdin and stderr are the
+# terminal unless --stdin or --stderr names a file for that stream instead,
+# its stdout goes to the first file, and everything the terminal showed to
+# the second. Each "<text>\t<answer>" line of the steps file waits until
+# <text> appears on the terminal after the previous step, or for
+# "stdout:<text>" in the stdout file, and then types <answer> and Enter;
+# <EOF> types Ctrl-D instead.
+#   driver <stdout> <terminal> <steps> [--stdin FILE] [--stderr FILE] -- command...
+codex_terminal_driver="${fixture_root}/codex-terminal-driver.py"
+cat > "${codex_terminal_driver}" <<'PY'
+import errno
+import os
 import pathlib
+import pty
+import select
+import signal
+import subprocess
+import sys
+import time
+
+arguments = sys.argv[1:sys.argv.index("--")]
+stdout_path, terminal_path, steps_path = arguments[:3]
+options = dict(zip(arguments[3::2], arguments[4::2]))
+assert set(options) <= {"--stdin", "--stderr"}, options
+command = sys.argv[sys.argv.index("--") + 1:]
+steps = [
+    tuple(line.split("\t", 1)) if "\t" in line else (line, "")
+    for line in pathlib.Path(steps_path).read_text(encoding="utf-8").splitlines()
+    if line
+]
+master, slave = pty.openpty()
+stdin = open(options["--stdin"], "rb") if "--stdin" in options else slave
+stderr = open(options["--stderr"], "wb") if "--stderr" in options else slave
+with open(stdout_path, "wb") as stdout:
+    process = subprocess.Popen(
+        command, stdin=stdin, stdout=stdout, stderr=stderr, start_new_session=True,
+    )
+for stream in (stdin, stderr):
+    if stream is not slave:
+        stream.close()
+os.close(slave)
+terminal = bytearray()
+position = 0
+
+
+def pump(timeout):
+    ready, _, _ = select.select([master], [], [], timeout)
+    if not ready:
+        return False
+    try:
+        chunk = os.read(master, 65536)
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        return False
+    terminal.extend(chunk)
+    return bool(chunk)
+
+
+def finish(status, message=""):
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+    while pump(0.1):
+        pass
+    os.close(master)
+    pathlib.Path(terminal_path).write_bytes(bytes(terminal))
+    if message:
+        print(f"terminal driver: {message}", file=sys.stderr)
+    sys.exit(status)
+
+
+def seen(text):
+    global position
+    if text.startswith("stdout:"):
+        return text[7:].encode() in pathlib.Path(stdout_path).read_bytes()
+    index = terminal.find(text.encode(), position)
+    if index < 0:
+        return False
+    position = index + len(text.encode())
+    return True
+
+
+for text, answer in steps:
+    deadline = time.monotonic() + 30
+    while not seen(text):
+        if not pump(0.1) and process.poll() is not None and not seen(text):
+            finish(98, f"the command ended before {text!r}")
+        if time.monotonic() > deadline:
+            finish(98, f"timed out waiting for {text!r}")
+    time.sleep(0.05)
+    os.write(master, b"\x04" if answer == "<EOF>" else answer.encode() + b"\n")
+try:
+    process.wait(timeout=60)
+except subprocess.TimeoutExpired:
+    finish(98, "the command did not finish")
+finish(process.returncode)
+PY
+
+# Print driver steps from prompt and answer pairs.
+codex_steps() {
+    printf '%s\t%s\n' "$@"
+}
+
+# Run the controller for one named case at a pseudo-terminal, answering its
+# prompts as the steps say. The case's session and runner-call folders are
+# codex-controller-<name>-session and codex-controller-<name>-capture under
+# the fixture root; its terminal output is codex-controller-<name>.terminal.
+#   codex_controller_case <name> <steps> [controller option...]
+codex_controller_case() {
+    local name="$1"
+    local steps="$2"
+    shift 2
+    local session="${fixture_root}/codex-controller-${name}-session"
+    local capture="${fixture_root}/codex-controller-${name}-capture"
+
+    mkdir -p -- "${session}" "${capture}"
+    printf '%s\n' "${steps}" > "${fixture_root}/codex-controller-${name}.steps"
+    RHYOLITE_CODEX_CONTROLLER_CAPTURE="${capture}" \
+    RHYOLITE_CODEX_FAKE_CALLS="${codex_controller_calls}" \
+    HOME="${codex_controller_home}" \
+    python3 -I "${codex_terminal_driver}" \
+        "${fixture_root}/codex-controller-${name}.stdout" \
+        "${fixture_root}/codex-controller-${name}.terminal" \
+        "${fixture_root}/codex-controller-${name}.steps" \
+        -- \
+        "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+        --plugin-root "${codex_controller_plugin}" \
+        --working-directory "${codex_controller_work}" \
+        --session-directory "${session}" \
+        --model gpt-5.6-sol \
+        --reasoning-effort max \
+        --context long_context \
+        --repo https://github.com/octocat/Hello-World \
+        "$@" || {
+            cat -- "${fixture_root}/codex-controller-${name}.terminal" >&2 || true
+            return 1
+        }
+}
+
+# Compare one case's runner calls and session records with expectations.
+#   codex_controller_expect <name> <python expectations>
+codex_controller_expect() {
+    python3 -I - \
+        "${fixture_root}/codex-controller-$1-capture" \
+        "${fixture_root}/codex-controller-$1-session" \
+        "${codex_controller_work}" \
+        "${codex_controller_home}" \
+        "$2" <<'PY'
+import json
+import pathlib
+import stat
 import sys
 
-root = pathlib.Path(sys.argv[1])
-calls = []
-for path in sorted(root.glob("call-*.nul")):
-    raw = path.read_bytes().split(b"\0")
-    calls.append([item.decode() for item in raw if item])
+capture, session = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+work, home, expectations = sys.argv[3], sys.argv[4], sys.argv[5]
+calls = [
+    [item.decode() for item in path.read_bytes().split(b"\0") if item]
+    for path in sorted(capture.glob("call-*.nul"), key=lambda p: int(p.stem[5:]))
+]
+
+
+def records(kind):
+    paths = sorted(session.glob(f"codex-{kind}-*.json"), key=lambda p: int(p.stem.split("-")[-1]))
+    for path in paths:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
+    return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+
+
+def value(call, option):
+    return call[call.index(option) + 1] if option in call else None
+
+
+current_output = f"{work}/rhyolite-output/repo-review"
+home_output = f"{home}/rhyolite-output/repo-review"
+setups, approvals = records("setup"), records("approval")
+exec(expectations)
+PY
+}
+
+codex_default_steps="$(codex_steps \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1)"
+codex_controller_case defaults "${codex_default_steps}" ||
+    fail 'Codex guided review controller failed with default answers.'
+codex_controller_expect defaults '
 assert len(calls) == 2
 plan, run = calls
 assert "--plan-only" in plan and "--expected-plan-hash" not in plan
-assert "--plan-only" not in run
-assert run[run.index("--expected-plan-hash") + 1] == "a" * 64
+assert "--plan-only" not in run and value(run, "--expected-plan-hash") == "a" * 64
+assert value(plan, "--output-root") == current_output
 assert "--fleet-mode" not in plan and "--commit" not in plan
-assert plan[plan.index("--security-scans") + 1] == "1"
 for expected in (
     "--harness", "codex", "--security-scans", "1",
     "--model", "gpt-5.6-sol", "--reasoning-effort", "max",
     "--context", "long_context", "--scope", "1",
-    "--non-interactive", "--no-open-html",
+    "--remember-preferences", "--non-interactive", "--no-open-html",
     "--repo", "https://github.com/octocat/Hello-World",
 ):
-    assert expected in plan and expected in run
-PY
+    assert expected in plan and expected in run, expected
+assert "--research-cookies" not in plan and "--provenance-lookback-months" not in plan
+assert setups == [{"Action": "continue", "OutputRoot": current_output,
+                   "ProvenanceLookbackMonths": None, "ResearchCookies": None, "Scope": 1}]
+assert approvals == [{"Action": "run", "ApprovalHash": "a" * 64}]
+'
+assert_contains "${fixture_root}/codex-controller-defaults.stdout" \
+    'EFFECTIVE REVIEW PLAN' 'Codex controller plan display'
+assert_contains "${fixture_root}/codex-controller-defaults.stdout" \
+    '  Scope: 1 - Core repository review' 'Codex controller plan summary scope'
+assert_contains "${fixture_root}/codex-controller-defaults.stdout" \
+    '/tmp/rhyolite-controller-run' 'Codex controller execution output'
+for codex_prompt_line in \
+    'Output location' \
+    "  1. Current directory - ${codex_controller_work}/rhyolite-output/repo-review" \
+    "  2. Home directory - ${codex_controller_home}/rhyolite-output/repo-review" \
+    '  3. Enter another absolute path' \
+    'Select output [1]: ' \
+    'Scope 1 covers source, history, architecture, quality, and the full dedicated security pass' \
+    '  1. Scope 1 - Core repository review (Recommended) - 15-45 minutes' \
+    '  3. Scope 3 - Full + generated-code provenance review - 60-120+ minutes' \
+    'Select scope [1]: ' \
+    '  1. Run review' \
+    '  2. Edit setup' \
+    '  3. Explain scope' \
+    'Type stop to leave without starting a review.' \
+    'Select action: '; do
+    assert_contains "${fixture_root}/codex-controller-defaults.terminal" \
+        "${codex_prompt_line}" 'Codex controller terminal question'
+done
+for codex_absent_line in 'Provenance lookback' 'Research cookies' 'RHYOLITE ERROR'; do
+    assert_not_contains "${fixture_root}/codex-controller-defaults.terminal" \
+        "${codex_absent_line}" 'Codex controller scope-1 setup'
+done
 
-codex_auto_session="${fixture_root}/codex-controller-auto-session"
-codex_auto_capture="${fixture_root}/codex-controller-auto-capture"
+# --auto-defaults skips only the setup questions: the plan still needs an
+# explicit approval.
 codex_auto_commit="$(printf 'b%.0s' {1..40})"
-mkdir -p -- "${codex_auto_session}" "${codex_auto_capture}"
-RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
-RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_auto_session}" \
-RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_auto_capture}" \
-HOME="${fixture_root}/codex-controller-home" \
-"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
-    --plugin-root "${codex_controller_plugin}" \
-    --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_auto_session}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    --repo https://github.com/octocat/Hello-World \
-    --commit "${codex_auto_commit}" \
-    --auto-defaults \
-    > "${fixture_root}/codex-controller-auto.stdout" \
-    2> "${fixture_root}/codex-controller-auto.stderr" ||
+codex_controller_case auto "$(codex_steps 'Select action: ' 1)" \
+    --commit "${codex_auto_commit}" --auto-defaults ||
     fail 'Codex guided controller failed with --auto-defaults.'
-[[ -z "$(find "${codex_auto_session}" -name 'codex-setup-*' -print -quit)" &&
-    -n "$(find "${codex_auto_session}" -name 'codex-approval-*.json' -print -quit)" ]] ||
-    fail 'Codex --auto-defaults did not skip only the setup questions.'
-python3 -I - "${codex_auto_capture}" "${fixture_root}/codex-controller-home" \
-    "${codex_auto_commit}" <<'PY'
-import pathlib
-import sys
-
-root, home, commit = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-calls = [
-    [item.decode() for item in path.read_bytes().split(b"\0") if item]
-    for path in sorted(root.glob("call-*.nul"))
-]
-assert len(calls) == 2
+codex_controller_expect auto '
+assert len(calls) == 2 and setups == []
+assert approvals == [{"Action": "run", "ApprovalHash": "a" * 64}]
 for call in calls:
-    assert call[call.index("--commit") + 1] == commit
-    assert call[call.index("--scope") + 1] == "1"
-    assert call[call.index("--output-root") + 1] == f"{home}/rhyolite-output/repo-review"
-PY
+    assert value(call, "--commit") == "b" * 40
+    assert value(call, "--scope") == "1"
+    assert value(call, "--output-root") == home_output
+'
+assert_not_contains "${fixture_root}/codex-controller-auto.terminal" \
+    'Output location' 'Codex --auto-defaults setup questions'
 if "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
     --plugin-root "${codex_controller_plugin}" \
     --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_auto_session}" \
+    --session-directory "${fixture_root}/codex-controller-defaults-session" \
     --model gpt-5.6-sol \
     --reasoning-effort max \
     --context long_context \
     --repo https://github.com/octocat/Hello-World \
     --repo https://github.com/octocat/Spoon-Knife \
     --commit "${codex_auto_commit}" \
-    >/dev/null 2>&1; then
+    < /dev/null > /dev/null 2> "${fixture_root}/codex-controller-several-commit.stderr"; then
     fail 'Codex guided controller pinned one commit for several repositories.'
 fi
+assert_contains "${fixture_root}/codex-controller-several-commit.stderr" \
+    'Codex guided review controller failed: validation' \
+    'Codex controller several-repository commit validation'
+
+# The questions need stdin and stderr on a terminal. With either one
+# redirected, the controller asks nothing and starts nothing, so piped answers
+# never approve a plan even when the questions would show on a terminal.
+printf '\n\n1\n' > "${fixture_root}/codex-controller-piped.stdin"
+codex_controller_no_terminal_case() {
+    local name="$1"
+    shift
+    local capture="${fixture_root}/codex-controller-${name}-capture"
+    local combined="${fixture_root}/codex-controller-${name}.combined"
+
+    mkdir -p -- "${capture}" "${fixture_root}/codex-controller-${name}-session"
+    : > "${fixture_root}/codex-controller-${name}.steps"
+    if RHYOLITE_CODEX_CONTROLLER_CAPTURE="${capture}" \
+        RHYOLITE_CODEX_FAKE_CALLS="${codex_controller_calls}" \
+        HOME="${codex_controller_home}" \
+        python3 -I "${codex_terminal_driver}" \
+            "${fixture_root}/codex-controller-${name}.stdout" \
+            "${fixture_root}/codex-controller-${name}.terminal" \
+            "${fixture_root}/codex-controller-${name}.steps" \
+            "$@" \
+            -- \
+            "${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
+            --plugin-root "${codex_controller_plugin}" \
+            --working-directory "${codex_controller_work}" \
+            --session-directory "${fixture_root}/codex-controller-${name}-session" \
+            --model gpt-5.6-sol \
+            --reasoning-effort max \
+            --context long_context \
+            --repo https://github.com/octocat/Hello-World; then
+        fail "Codex guided controller ran its questions with ${name}."
+    fi
+    cat -- "${fixture_root}/codex-controller-${name}.terminal" \
+        "${fixture_root}/codex-controller-${name}".stderr \
+        > "${combined}" 2>/dev/null || true
+    assert_contains "${combined}" \
+        'The Codex setup and approval questions need an interactive terminal on standard input and standard error.' \
+        "Codex controller terminal requirement with ${name}"
+    assert_not_contains "${combined}" 'Output location' \
+        "Codex controller question with ${name}"
+    [[ -z "$(find "${capture}" -name 'call-*.nul' -print -quit)" ]] ||
+        fail "Codex guided controller planned a review with ${name}."
+}
+codex_controller_no_terminal_case piped-stdin \
+    --stdin "${fixture_root}/codex-controller-piped.stdin"
+codex_controller_no_terminal_case redirected-stderr \
+    --stderr "${fixture_root}/codex-controller-redirected-stderr.stderr"
 
 # A plan mismatch keeps the setup answers: the controller regenerates the
 # plan and asks only for approval again.
-codex_mismatch_session="${fixture_root}/codex-controller-mismatch-session"
-codex_mismatch_capture="${fixture_root}/codex-controller-mismatch-capture"
-mkdir -p -- "${codex_mismatch_session}" "${codex_mismatch_capture}"
-RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
-RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_mismatch_session}" \
-RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_mismatch_capture}" \
 RHYOLITE_CODEX_CONTROLLER_MODE=mismatch \
-HOME="${fixture_root}/codex-controller-home" \
-"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
-    --plugin-root "${codex_controller_plugin}" \
-    --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_mismatch_session}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    --repo https://github.com/octocat/Hello-World \
-    > "${fixture_root}/codex-controller-mismatch.stdout" \
-    2> "${fixture_root}/codex-controller-mismatch.stderr" ||
+    codex_controller_case mismatch "$(codex_steps \
+        'Select output [1]: ' '' 'Select scope [1]: ' '' \
+        'Select action: ' 1 'Select action: ' 1)" ||
     fail 'Codex guided controller did not recover from a plan mismatch.'
-assert_contains "${fixture_root}/codex-controller-mismatch.stderr" \
+assert_contains "${fixture_root}/codex-controller-mismatch.terminal" \
     'regenerating it with the preserved setup' 'Codex plan mismatch notice'
-[[ "$(find "${codex_mismatch_session}" -name 'codex-setup-*.json' | wc -l)" == 1 &&
-    "$(find "${codex_mismatch_session}" -name 'codex-approval-*.json' | wc -l)" == 2 &&
-    "$(find "${codex_mismatch_capture}" -name 'call-*.nul' | wc -l)" == 4 ]] ||
-    fail 'Codex plan mismatch did not regenerate the plan from preserved setup answers.'
+codex_controller_expect mismatch '
+assert len(calls) == 4 and len(setups) == 1
+assert [item["Action"] for item in approvals] == ["run", "run"]
+assert [value(call, "--output-root") for call in calls] == [current_output] * 4
+'
+[[ "$(grep -c '^Output location' "${fixture_root}/codex-controller-mismatch.terminal")" == 1 ]] ||
+    fail 'Codex plan mismatch asked the setup questions again.'
 
-codex_controller_stop_session="${fixture_root}/codex-controller-stop-session"
+# Every setup path: another output path after invalid answers, scope 2 with
+# its cookie question, a rejected empty approval, Change scope to scope 3
+# with a custom lookback after an out-of-range one, Explain scope, and Edit
+# setup back to the home output and scope 1, whose defaults are the current
+# answers.
+codex_custom_output="${fixture_root}/codex-custom-output"
+codex_edit_steps="$(codex_steps \
+    'Select output [1]: ' 3 \
+    'Absolute output path: ' relative/path \
+    'Select output [1]: ' 9 \
+    'Select output [1]: ' 3 \
+    'Absolute output path: ' "${codex_custom_output}" \
+    'Select scope [1]: ' 2 \
+    'Select cookies [1]: ' '' \
+    'Select action: ' '' \
+    'Select action: ' 'Change scope' \
+    'Select scope [2]: ' 3 \
+    'Select lookback [1]: ' 5 \
+    'Months (1-60): ' 61 \
+    'Select lookback [1]: ' 5 \
+    'Months (1-60): ' 9 \
+    'Select cookies [1]: ' 2 \
+    'Select action: ' 'Explain scope' \
+    'Select action: ' 'Edit setup' \
+    'Select output [1]: ' 3 \
+    'Select scope [3]: ' 1 \
+    'Select action: ' 'Run review')"
+codex_controller_case edits "${codex_edit_steps}" ||
+    fail 'Codex guided controller failed through edit, change-scope, and explain answers.'
+codex_controller_expect edits '
+custom = sys.argv[3].rsplit("/", 1)[0] + "/codex-custom-output"
+assert len(calls) == 4
+plans, run = calls[:3], calls[3]
+assert all("--plan-only" in call for call in plans)
+assert [value(call, "--output-root") for call in calls] == [custom, custom, home_output, home_output]
+assert [value(call, "--scope") for call in calls] == ["2", "3", "1", "1"]
+assert [value(call, "--research-cookies") for call in calls] == ["off", "ephemeral", None, None]
+assert [value(call, "--provenance-lookback-months") for call in calls] == [None, "9", None, None]
+assert [call for call in run if call != "--expected-plan-hash" and call != "a" * 64] == \
+    [call for call in plans[2] if call != "--plan-only"]
+assert setups == [
+    {"Action": "continue", "OutputRoot": custom, "ProvenanceLookbackMonths": None,
+     "ResearchCookies": "off", "Scope": 2},
+    {"Action": "continue", "OutputRoot": custom, "ProvenanceLookbackMonths": 9,
+     "ResearchCookies": "ephemeral", "Scope": 3},
+    {"Action": "continue", "OutputRoot": home_output, "ProvenanceLookbackMonths": None,
+     "ResearchCookies": None, "Scope": 1},
+]
+assert [item["Action"] for item in approvals] == ["change-scope", "explain", "edit", "run"]
+'
+for codex_prompt_line in \
+    'Enter an absolute path without control characters.' \
+    'Enter one of the displayed choice numbers.' \
+    'Raw Set-Cookie values from research stay only in a private per-repository ledger' \
+    '  1. Do not replay research cookies (Recommended)' \
+    'Enter 1, 2, or 3, or type stop.' \
+    'Select scope [2]: ' \
+    '  1. 6 months (Recommended)' \
+    '  5. Enter another number of months from 1 through 60' \
+    'Enter a whole number from 1 through 60.' \
+    "  1. Keep current output - ${codex_custom_output}" \
+    "  3. Home directory - ${codex_controller_home}/rhyolite-output/repo-review" \
+    'Select scope [3]: '; do
+    assert_contains "${fixture_root}/codex-controller-edits.terminal" \
+        "${codex_prompt_line}" 'Codex controller edit path'
+done
+[[ "$(grep -c '^Scope 2 adds public prior-art/community research' "${fixture_root}/codex-controller-edits.terminal")" == 4 ]] ||
+    fail 'Codex controller did not explain the scopes before each scope question and on request.'
+
+# End of input, or exact stop or cancel, at any question leaves without a
+# review; only an answered setup reaches plan generation.
+codex_controller_stop_case() {
+    local name="$1"
+    local calls="$2"
+    shift 2
+
+    codex_controller_case "${name}" "$(codex_steps "$@")" ||
+        fail "Codex guided controller failed after ${name}."
+    assert_contains "${fixture_root}/codex-controller-${name}.terminal" \
+        'Rhyolite stopped without starting a review.' \
+        "Codex controller ${name} stop"
+    codex_controller_expect "${name}" "
+assert len(calls) == ${calls}, calls
+assert approvals == []
+"
+}
+codex_controller_stop_case eof-setup 0 'Select output [1]: ' '<EOF>'
+codex_controller_stop_case cancel-scope 0 \
+    'Select output [1]: ' '' 'Select scope [1]: ' cancel
+codex_controller_stop_case stop-approval 1 \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' stop
+codex_controller_stop_case eof-approval 1 \
+    'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' '<EOF>'
+
 codex_controller_stop_capture="${fixture_root}/codex-controller-stop-capture"
-mkdir -p -- "${codex_controller_stop_session}" "${codex_controller_stop_capture}"
-(
-    sleep 1
-    printf '%s\n' '/rhyolite:status'
-    sleep 1
-    printf '%s\n' stop
-) |
-RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
-RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_controller_stop_session}" \
-RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_controller_stop_capture}" \
 RHYOLITE_CODEX_CONTROLLER_MODE=stop \
-HOME="${fixture_root}/codex-controller-home" \
-"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
-    --plugin-root "${codex_controller_plugin}" \
-    --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_controller_stop_session}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    --repo https://github.com/octocat/Hello-World \
-    > "${fixture_root}/codex-controller-stop.stdout" \
-    2> "${fixture_root}/codex-controller-stop.stderr" || {
-        cat -- \
-            "${fixture_root}/codex-controller-stop.stdout" \
-            "${fixture_root}/codex-controller-stop.stderr" >&2
-        find "${codex_controller_stop_capture}" -maxdepth 2 -type f \
-            -printf '%P\n' >&2 || true
-        fail 'Codex guided controller did not treat exact stop as a clean terminal state.'
-    }
+    codex_controller_case stop "$(codex_steps \
+        'Select output [1]: ' '' 'Select scope [1]: ' '' 'Select action: ' 1 \
+        'stdout:RHYOLITE PROGRESS | run | started' '/rhyolite:status' \
+        'stdout:RHYOLITE STATUS' stop)" ||
+    fail 'Codex guided controller did not treat exact stop as a clean terminal state.'
 [[ -f "${codex_controller_stop_capture}/stop-called" ]] ||
     fail 'Codex guided controller did not invoke the trusted request-stop path.'
 assert_contains "${fixture_root}/codex-controller-stop.stdout" \
@@ -1532,72 +1496,38 @@ for codex_status_line in \
     assert_contains "${fixture_root}/codex-controller-stop.stdout" \
         "${codex_status_line}" 'Codex controller status field'
 done
-assert_contains "${fixture_root}/codex-controller-stop.stderr" \
+assert_contains "${fixture_root}/codex-controller-stop.terminal" \
     'Rhyolite review stopped.' 'Codex controller stopped state'
 
-# Codex 0.163.0 answers a question left unanswered for two minutes with an
-# empty answer, which the skills report as a cancel. Without a terminal the
-# controller explains the stop and starts nothing.
-codex_cancel_session="${fixture_root}/codex-controller-cancel-session"
-codex_cancel_capture="${fixture_root}/codex-controller-cancel-capture"
-mkdir -p -- "${codex_cancel_session}" "${codex_cancel_capture}"
-RHYOLITE_CODEX_CONTROLLER_OUTPUT="${codex_controller_output}" \
-RHYOLITE_CODEX_CONTROLLER_SESSION="${codex_cancel_session}" \
-RHYOLITE_CODEX_CONTROLLER_CAPTURE="${codex_cancel_capture}" \
-RHYOLITE_CODEX_CONTROLLER_APPROVAL=cancel \
-HOME="${fixture_root}/codex-controller-home" \
-"${codex_controller_plugin}/scripts/run-codex-guided-review.sh" \
-    --plugin-root "${codex_controller_plugin}" \
-    --working-directory "${codex_controller_work}" \
-    --session-directory "${codex_cancel_session}" \
-    --model gpt-5.6-sol \
-    --reasoning-effort max \
-    --context long_context \
-    --repo https://github.com/octocat/Hello-World \
-    < /dev/null \
-    > "${fixture_root}/codex-controller-cancel.stdout" \
-    2> "${fixture_root}/codex-controller-cancel.stderr" ||
-    fail 'Codex guided controller failed after a cancelled approval question.'
-assert_contains "${fixture_root}/codex-controller-cancel.stdout" \
-    'PLAN SUMMARY' 'Codex controller plan summary'
-assert_contains "${fixture_root}/codex-controller-cancel.stderr" \
-    'The approval question was cancelled, or Codex cancelled it after two minutes without an answer.' \
-    'Codex controller cancelled approval notice'
-assert_contains "${fixture_root}/codex-controller-cancel.stderr" \
-    'Rhyolite stopped without starting a review.' 'Codex controller cancelled stop'
-[[ "$(find "${codex_cancel_capture}" -name 'call-*.nul' | wc -l)" == 1 ]] ||
-    fail 'Codex guided controller started a review after a cancelled approval question.'
-
-# At a terminal, the controller waits for Enter before the approval question
-# and asks a cancelled setup or approval question again.
+# At a terminal, answers typed before the plan appeared never approve it: the
+# controller discards them, and only an answer given at the approval
+# question starts the review.
 python3 -I - "${codex_controller_plugin}" "${fixture_root}" \
-    "${codex_controller_output}" <<'PY'
+    "${codex_controller_calls}" <<'PY'
 import errno
 import os
 import pathlib
 import pty
+import select
 import signal
 import subprocess
 import sys
+import time
 
-plugin, root, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
-session = root / "codex-controller-retry-session"
-capture = root / "codex-controller-retry-capture"
+plugin, root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+session = root / "codex-controller-terminal-session"
+capture = root / "codex-controller-terminal-capture"
 for path in (session, capture):
     path.mkdir(mode=0o700)
 environment = dict(
     os.environ,
-    RHYOLITE_CODEX_CONTROLLER_OUTPUT=output,
-    RHYOLITE_CODEX_CONTROLLER_SESSION=str(session),
     RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
-    RHYOLITE_CODEX_CONTROLLER_SETUP="cancel-once",
-    RHYOLITE_CODEX_CONTROLLER_APPROVAL="cancel-once",
+    RHYOLITE_CODEX_FAKE_CALLS=sys.argv[3],
     HOME=str(root / "codex-controller-home"),
 )
 master, slave = pty.openpty()
-# Enter to ask the setup questions again, Enter after reading the plan, and
-# Enter to ask the approval question again.
-os.write(master, b"\n\n\n")
+# Enter for the output and scope defaults, then an early approval.
+os.write(master, b"\n\n1\n")
 process = subprocess.Popen(
     [
         str(plugin / "scripts/run-codex-guided-review.sh"),
@@ -1615,144 +1545,58 @@ process = subprocess.Popen(
     stderr=slave,
     start_new_session=True,
 )
+os.close(slave)
+terminal = bytearray()
+
+
+def read_terminal(timeout):
+    ready, _, _ = select.select([master], [], [], timeout)
+    if not ready:
+        return False
+    try:
+        chunk = os.read(master, 65536)
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        return False
+    terminal.extend(chunk)
+    return bool(chunk)
+
+
 try:
+    deadline = time.monotonic() + 30
+    while b"Select action: " not in terminal and time.monotonic() < deadline:
+        read_terminal(0.2)
+    assert b"Select action: " in terminal, terminal.decode("utf-8", "replace")
+    time.sleep(0.5)
+    while read_terminal(0.1):
+        pass
+    assert len(list(capture.glob("call-*.nul"))) == 1, "an early answer approved the plan"
+    os.write(master, b"1\n")
     stdout, _ = process.communicate(timeout=30)
+    while read_terminal(0.2):
+        pass
 finally:
     if process.poll() is None:
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=5)
-    os.close(slave)
-terminal = bytearray()
-try:
-    while True:
-        try:
-            chunk = os.read(master, 65536)
-        except OSError as error:
-            if error.errno != errno.EIO:
-                raise
-            break
-        if not chunk:
-            break
-        terminal.extend(chunk)
-finally:
     os.close(master)
 text = terminal.decode("utf-8", errors="replace")
 assert process.returncode == 0, text
-for notice in (
-    "The setup questions were cancelled, or Codex cancelled it after two minutes",
-    "The approval question was cancelled, or Codex cancelled it after two minutes",
-    "press Enter to answer the approval question in Codex",
-):
-    assert notice in text, f"missing terminal notice: {notice}\n{text}"
-assert b"PLAN SUMMARY" in stdout and b"/tmp/rhyolite-controller-run" in stdout
-assert sorted(p.name for p in session.glob("codex-setup-*.json")) == [
-    "codex-setup-1.json", "codex-setup-2.json"]
-assert sorted(p.name for p in session.glob("codex-approval-*.json")) == [
-    "codex-approval-1.json", "codex-approval-2.json"]
-assert len(list(capture.glob("call-*.nul"))) == 2, "expected one plan and one run"
-PY
-
-cp -- "${CODEX_GUIDED_STAGE}" \
-    "${codex_controller_plugin}/scripts/run-codex-guided-stage.sh"
-mkdir -p -- "${codex_controller_plugin}/lib/harness"
-cp -- "${HARNESS_COMMON}" "${CODEX_HARNESS}" \
-    "${codex_controller_plugin}/lib/harness/"
-cp -a -- "${PLUGIN_ROOT}/.codex-plugin" "${PLUGIN_ROOT}/codex" \
-    "${codex_controller_plugin}/"
-python3 -I - "${codex_controller_plugin}" "${fixture_root}" <<'PY'
-import errno
-import os
-import pathlib
-import pty
-import signal
-import subprocess
-import sys
-
-plugin = pathlib.Path(sys.argv[1])
-root = pathlib.Path(sys.argv[2])
-session = root / "codex-controller-terminal-session"
-capture = root / "codex-controller-terminal-capture"
-temporary = session / "tmp"
-for path in (session, capture, temporary):
-    path.mkdir(mode=0o700)
-environment = dict(
-    os.environ,
-    RHYOLITE_CODEX_REQUIRE_TTY="1",
-    TERM="dumb",
-    RHYOLITE_CODEX_CONTROLLER_SESSION=str(session),
-    RHYOLITE_CODEX_CONTROLLER_CAPTURE=str(capture),
-    TMPDIR=str(temporary),
-)
-master, slave = pty.openpty()
-# Enter after reading the plan, before the approval question opens.
-os.write(master, b"\n")
-process = subprocess.Popen(
-    [
-        str(plugin / "scripts/run-codex-guided-review.sh"),
-        "--plugin-root", str(plugin),
-        "--working-directory", str(root / "codex-controller-work"),
-        "--session-directory", str(session),
-        "--model", "gpt-5.6-sol",
-        "--reasoning-effort", "max",
-        "--context", "long_context",
-        "--repo", "https://github.com/octocat/Hello-World",
-    ],
-    env=environment,
-    stdin=slave,
-    stdout=subprocess.PIPE,
-    stderr=slave,
-    start_new_session=True,
-)
-try:
-    stdout, _ = process.communicate(timeout=30)
-finally:
-    if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5)
-    os.close(slave)
-terminal = bytearray()
-try:
-    while True:
-        try:
-            chunk = os.read(master, 65536)
-        except OSError as error:
-            if error.errno != errno.EIO:
-                raise
-            break
-        if not chunk:
-            break
-        terminal.extend(chunk)
-finally:
-    os.close(master)
-assert process.returncode == 0, terminal.decode("utf-8", errors="replace")
-for stage in ("setup", "approval"):
-    marker = f"RHYOLITE_CODEX_NATIVE_UI {stage}".encode()
-    assert marker in terminal, f"{stage} UI did not reach the terminal"
-    assert f"{stage} TERM=xterm-256color".encode() in terminal, \
-        f"{stage} UI kept the worker terminal type"
-    assert marker not in stdout, f"{stage} UI contaminated controller stdout"
-assert b"EFFECTIVE REVIEW PLAN" in stdout and b"PLAN SUMMARY" in stdout
-assert b"  Scope: 1 - Core repository review\n" in stdout, \
-    "the plan summary repeated or lost the scope"
-# The stage helper names the countdown once before each question session.
-assert terminal.count(b"Codex cancels a question that is not answered within two minutes") == 2
+assert text.count("Select action: ") == 1, text
+assert "Enter 1, 2, or 3, or type stop." not in text, text
+assert "Review started. Type exact stop or cancel to interrupt" in text, text
 assert b"/tmp/rhyolite-controller-run" in stdout
-assert b"codex-setup-1.json" not in stdout
-assert b"codex-approval-1.json" not in stdout
-assert (session / "codex-setup-1.json").is_file()
-assert (session / "codex-approval-1.json").is_file()
 assert len(list(capture.glob("call-*.nul"))) == 2
-assert not list(temporary.iterdir()), "guided-stage runtime was not removed"
 PY
+[[ ! -e "${codex_controller_calls}" ]] ||
+    fail 'The Codex guided review controller started a Codex session.'
 
 codex_launcher_plugin="${fixture_root}/codex-launcher-plugin"
 codex_launcher_caller="${fixture_root}/codex-launcher-caller"
 codex_launcher_state="${fixture_root}/codex-launcher-state"
 codex_launcher_capture="${fixture_root}/codex-launcher.capture"
+codex_launcher_calls="${fixture_root}/codex-launcher-codex-calls"
 cp -a -- "${PLUGIN_ROOT}" "${codex_launcher_plugin}"
 mkdir -p -- "${codex_launcher_caller}" "${codex_launcher_state}"
 cat >> "${codex_launcher_plugin}/lib/harness/common.sh" <<'CODEX_LAUNCHER_TEST_REGISTRY'
@@ -1779,9 +1623,13 @@ CODEX_LAUNCHER_TEST_REGISTRY
 cat > "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh" <<'CODEX_LAUNCHER_CONTROLLER'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' 'FIXTURE CODEX CONTROLLER STARTED' >&2
 printf '%s\0' "$@" > "${RHYOLITE_CODEX_LAUNCHER_CAPTURE:?}"
 CODEX_LAUNCHER_CONTROLLER
 chmod 700 -- "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh"
+# The Codex questions need a terminal on stdin and stderr. With stdout
+# captured, the launcher asks none of its own questions.
+: > "${fixture_root}/codex-launcher.steps"
 (
     cd -- "${codex_launcher_caller}"
     env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
@@ -1790,7 +1638,13 @@ chmod 700 -- "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh"
         FIXTURE_CODEX_KEY='fixture-secret-value' \
         XDG_STATE_HOME="${codex_launcher_state}" \
         RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+        RHYOLITE_CODEX_FAKE_CALLS="${codex_launcher_calls}" \
         PATH="${codex_fake_bin}:/usr/bin:/bin" \
+        python3 -I "${codex_terminal_driver}" \
+        "${fixture_root}/codex-launcher.stdout" \
+        "${fixture_root}/codex-launcher.terminal" \
+        "${fixture_root}/codex-launcher.steps" \
+        -- \
         "${codex_launcher_plugin}/bin/rhyolite" \
         --harness codex \
         --repo https://github.com/octocat/Hello-World \
@@ -1798,9 +1652,10 @@ chmod 700 -- "${codex_launcher_plugin}/scripts/run-codex-guided-review.sh"
         --model gpt-5.6-sol \
         --reasoning-effort max \
         --context long_context
-) > "${fixture_root}/codex-launcher.stdout" \
-    2> "${fixture_root}/codex-launcher.stderr" ||
+) || {
+    cat -- "${fixture_root}/codex-launcher.terminal" >&2 || true
     fail 'Staged Codex launcher branch failed.'
+}
 [[ -f "${codex_launcher_capture}" ]] ||
     fail 'Staged Codex launcher did not invoke its Bash controller.'
 python3 -I - \
@@ -1824,8 +1679,30 @@ assert value("--reasoning-effort") == "max"
 assert value("--context") == "long_context"
 assert value("--repo") == "https://github.com/octocat/Hello-World"
 PY
-assert_not_contains "${fixture_root}/codex-launcher.stderr" \
+assert_not_contains "${fixture_root}/codex-launcher.terminal" \
     'RHYOLITE ERROR' 'Staged Codex launcher error output'
+# No harness hook runs before the terminal setup questions, so the launcher
+# prints the plaque itself, before the controller starts.
+python3 -I - "${fixture_root}/codex-launcher.terminal" \
+    "${PLUGIN_ROOT}/branding/banner.txt" "${ROOT}/VERSION" <<'PY'
+import pathlib
+import re
+import sys
+
+text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+text = text.replace("\r", "")
+banner = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").rstrip("\n").split("\n")
+version = pathlib.Path(sys.argv[3]).read_text(encoding="utf-8").strip()
+width = max(len(line) for line in banner)
+version_line = f"v{version} Beta".rjust(width)
+plaque = "\n".join(banner + [version_line, "",
+    "Rhyolite is an open-source software analysis platform.",
+    "repo-review is its initial and default module; automatic guided setup is starting.",
+    "Answer the setup questions below; during the review, use /rhyolite:status for current progress.",
+]) + "\n"
+assert text.count(plaque) == 1, text
+assert text.index(plaque) < text.index("FIXTURE CODEX CONTROLLER STARTED"), text
+PY
 codex_launcher_commit="$(printf 'c%.0s' {1..40})"
 rm -f -- "${codex_launcher_capture}"
 (
@@ -1836,15 +1713,22 @@ rm -f -- "${codex_launcher_capture}"
         FIXTURE_CODEX_KEY='fixture-secret-value' \
         XDG_STATE_HOME="${codex_launcher_state}" \
         RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+        RHYOLITE_CODEX_FAKE_CALLS="${codex_launcher_calls}" \
         PATH="${codex_fake_bin}:/usr/bin:/bin" \
+        python3 -I "${codex_terminal_driver}" \
+        "${fixture_root}/codex-launcher-auto.stdout" \
+        "${fixture_root}/codex-launcher-auto.terminal" \
+        "${fixture_root}/codex-launcher.steps" \
+        -- \
         "${codex_launcher_plugin}/bin/rhyolite" \
         --harness codex \
         --repo https://github.com/octocat/Hello-World \
         --commit "${codex_launcher_commit}" \
         --auto-defaults
-) > "${fixture_root}/codex-launcher-auto.stdout" \
-    2> "${fixture_root}/codex-launcher-auto.stderr" ||
+) || {
+    cat -- "${fixture_root}/codex-launcher-auto.terminal" >&2 || true
     fail 'Staged Codex launcher failed with --auto-defaults.'
+}
 python3 -I - "${codex_launcher_capture}" "${codex_launcher_commit}" <<'PY'
 import pathlib
 import sys
@@ -1854,6 +1738,52 @@ assert args[args.index("--commit") + 1] == sys.argv[2]
 assert "--auto-defaults" in args
 assert args[args.index("--model") + 1] == "gpt-5.6-sol"
 PY
+# A launch with stdin or stderr off the terminal stops before the plaque and
+# the controller, even when the other stream is a terminal.
+printf '1\n' > "${fixture_root}/codex-launcher-piped.stdin"
+codex_launcher_no_terminal_case() {
+    local name="$1"
+    shift
+    local combined="${fixture_root}/codex-launcher-${name}.combined"
+
+    rm -f -- "${codex_launcher_capture}"
+    if (
+        cd -- "${codex_launcher_caller}"
+        env -u RHYOLITE_HARNESS -u RHYOLITE_LAUNCHER_HARNESS \
+            HOME="${fixture_root}/codex-launcher-home" \
+            CODEX_HOME="${codex_home}" \
+            FIXTURE_CODEX_KEY='fixture-secret-value' \
+            XDG_STATE_HOME="${codex_launcher_state}" \
+            RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+            RHYOLITE_CODEX_FAKE_CALLS="${codex_launcher_calls}" \
+            PATH="${codex_fake_bin}:/usr/bin:/bin" \
+            python3 -I "${codex_terminal_driver}" \
+            "${fixture_root}/codex-launcher-${name}.stdout" \
+            "${fixture_root}/codex-launcher-${name}.terminal" \
+            "${fixture_root}/codex-launcher.steps" \
+            "$@" \
+            -- \
+            "${codex_launcher_plugin}/bin/rhyolite" \
+            --harness codex \
+            --repo https://github.com/octocat/Hello-World \
+            --auto-defaults
+    ); then
+        fail "Staged Codex launcher started with ${name}."
+    fi
+    cat -- "${fixture_root}/codex-launcher-${name}.terminal" \
+        "${fixture_root}/codex-launcher-${name}".stderr \
+        > "${combined}" 2>/dev/null || true
+    assert_contains "${combined}" 'Stage: Codex terminal' \
+        "Staged Codex launcher terminal stage with ${name}"
+    assert_not_contains "${combined}" 'automatic guided setup is starting' \
+        "Staged Codex launcher plaque with ${name}"
+    [[ ! -e "${codex_launcher_capture}" ]] ||
+        fail "Staged Codex launcher started its controller with ${name}."
+}
+codex_launcher_no_terminal_case piped-stdin \
+    --stdin "${fixture_root}/codex-launcher-piped.stdin"
+codex_launcher_no_terminal_case redirected-stderr \
+    --stderr "${fixture_root}/codex-launcher-redirected-stderr.stderr"
 rm -f -- "${codex_launcher_capture}"
 if (
     cd -- "${codex_launcher_caller}"
@@ -1863,6 +1793,7 @@ if (
         FIXTURE_CODEX_KEY='fixture-secret-value' \
         XDG_STATE_HOME="${codex_launcher_state}" \
         RHYOLITE_CODEX_LAUNCHER_CAPTURE="${codex_launcher_capture}" \
+        RHYOLITE_CODEX_FAKE_CALLS="${codex_launcher_calls}" \
         PATH="${codex_fake_bin}:/usr/bin:/bin" \
         "${codex_launcher_plugin}/bin/rhyolite" \
         --harness codex \
@@ -1926,6 +1857,8 @@ codex_launcher_not_ready missing-provider-key \
     'The configured Codex provider environment variable FIXTURE_CODEX_KEY is not set.' \
     -u FIXTURE_CODEX_KEY \
     PATH="${codex_fake_bin}:/usr/bin:/bin"
+[[ ! -e "${codex_launcher_calls}" ]] ||
+    fail 'The Codex launcher started a Codex session.'
 
 # The real runner drives the Codex adapter end to end with a fake Codex
 # worker: worker argv before runtime-home preparation, the isolated

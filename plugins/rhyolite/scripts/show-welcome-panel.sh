@@ -122,6 +122,17 @@ version_line() {
 }
 
 plaque_sentences() {
+    # Codex launches ask their setup questions in this terminal, and accept
+    # /rhyolite:status only while the review runs.
+    if [[ "${mode}" == "codex-launcher-plaque" ]]; then
+        printf '%s\n' \
+            '' \
+            'Rhyolite is an open-source software analysis platform.' \
+            'repo-review is its initial and default module; automatic guided setup is starting.' \
+            'Answer the setup questions below; during the review, use /rhyolite:status for current progress.'
+        return
+    fi
+
     if launcher_started_immediately; then
         printf '%s\n' \
             '' \
@@ -228,11 +239,14 @@ while (($# > 0)); do
         --claude-prompt-plaque)
             mode="claude-prompt-plaque"
             ;;
+        --codex-launcher-plaque)
+            mode="codex-launcher-plaque"
+            ;;
         --mode)
             shift
             [[ $# -gt 0 ]] || fail 'missing value after --mode'
             case "$1" in
-                panel|progress|prompt-plaque|claude-session-start|claude-prompt-plaque)
+                panel|progress|prompt-plaque|claude-session-start|claude-prompt-plaque|codex-launcher-plaque)
                     mode="$1"
                     ;;
                 *)
@@ -338,6 +352,13 @@ if [[ "${mode}" == "claude-prompt-plaque" ]]; then
         printf '{"systemMessage":"%s"}\n' \
             "$(json_escape $'\n'"$(review_plaque)")"
     fi
+    exit 0
+fi
+
+# No harness hook runs before the Codex launcher's terminal setup questions,
+# so the launcher prints the plaque itself as plain terminal text.
+if [[ "${mode}" == "codex-launcher-plaque" ]]; then
+    review_plaque
     exit 0
 fi
 

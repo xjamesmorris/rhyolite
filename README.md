@@ -339,27 +339,28 @@ the checkout:
   (recommended), `xhigh`, or `high`; Codex's `ultra` is rejected because it
   enables automatic delegation. Context is `long_context` (recommended,
   828,400 usable tokens) or `default` (258,400).
-- **Guided questions:** two short native Codex sessions ask the questions.
-  The first asks for the output folder and scope and, for scopes 2 and 3,
-  the research-cookie mode and provenance lookback. The second approves the
-  plan with `Run review`, `Edit setup`, or `Explain scope`. Each runs in a
-  private temporary Codex home that holds only Rhyolite's two question
-  skills and offers only Codex's native question tool, and each makes model
-  requests at the selected effort. After its one-line JSON result appears,
-  press Ctrl-D to return to the launcher. Between them, the launcher prints
-  the `EFFECTIVE REVIEW PLAN` as JSON with a short `PLAN SUMMARY`, and waits
-  for Enter before it opens the approval question. Codex cancels a question
-  that is not answered within two minutes (pressing any key in the question
-  stops that countdown); after a cancelled question the launcher offers to
-  ask it again. `--auto-defaults` skips the first session (home output and
-  scope 1), but the plan still needs approval.
+- **Guided questions:** the launcher prints the Rhyolite plaque and then
+  asks the setup questions in the same terminal with numbered prompts, like
+  its model prompts: the output folder, the scope, the provenance lookback
+  for scope 3, and the research-cookie mode for scopes 2 and 3. No Codex
+  session or model request is involved. It then prints the
+  `EFFECTIVE REVIEW PLAN` as JSON with a short `PLAN SUMMARY` and asks you to
+  choose `Run review`, `Edit setup`, or `Explain scope`. That question has
+  no default, and the launcher discards anything typed before the plan
+  appeared, so only an answer given after the plan starts a review. Type
+  `stop` at any question to leave without starting a review.
+  `--auto-defaults` skips the setup questions (home output and scope 1), but
+  the plan still needs approval. These questions need an interactive
+  terminal, so a Codex launch with piped or redirected input stops before
+  asking anything; script reviews with the direct runner instead.
 - **Running, status, and stop:** the launcher itself, not a model session,
   runs the approved review in the same terminal and prints its progress.
   Type exact `/rhyolite:status` for the current stage, elapsed time, and
   review settings, or exact `stop` or `cancel` to
   stop the review through the runner's verified stop request. On
-  completion, the launcher prints the run output folder. Codex sessions
-  write no executive summary, so open `index.html` in that folder.
+  completion, the launcher prints the run output folder. No model
+  orchestrates a Codex review, so there is no executive summary; open
+  `index.html` in that folder.
 - **Workers:** review and research workers run `codex exec` in Codex's
   read-only sandbox with no shell, file-edit, web-search, or subagent tool.
   They read the snapshot only through the bundled offline snapshot broker's

@@ -145,6 +145,7 @@ broker lifecycle and removed its transient runtime.
 | First live production launcher run | On October 29, after registration at `54434ce`, the maintainer ran `./rhyolite --harness codex` from the checkout for a scope-1 review of the same pinned repository, with the production registry. The launcher prompts, the offline readiness check, and the native setup session worked: both setup questions were answered and the strict setup result validated within 35 seconds, and the controller generated and printed the plan (`codex`, `gpt-5.6-sol`, `max`, `long_context`, one security scan, snapshot contract 11). The approval question then received no answer for about two minutes, and Codex answered it with nothing, so the approval skill returned `cancel` as instructed and the launcher exited with status 0, without a review and without saying why. Pinned 0.163.0 source explains the timing: `codex-rs/core/src/tools/handlers/request_user_input.rs` marks a question blocking only in Plan mode, and `codex-rs/tui/src/bottom_pane/request_user_input/mod.rs` submits an empty answer to a non-blocking question after a 60-second hidden grace period and a 60-second visible countdown, unless a key is pressed in the question. The setup session had been answered well within that time; the approval question followed a plan printed as about 360 lines of JSON. The controller now prints a short plan summary after the full plan, waits for Enter before it opens the approval question, explains a cancelled question, and at a terminal offers to ask it again; the stage notice names the two-minute countdown. Pseudo-terminal regressions cover the pause and a cancelled setup and approval question that are asked again, and a cancelled question without a terminal stops with an explanation. No leftover process, runtime home, final-message file, or provider-key value remained. | The launcher, readiness check, setup session, and plan generation work live with the production registry. The approval question's timeout is a Codex 0.163.0 interface property that the controller must accommodate; the live launcher review gate stays open until a rerun passes. |
 | Live production launcher review | Later on October 29, the maintainer reran `./rhyolite --harness codex` at `e56af29` with the production registry for the same scope-1 review. The readiness check, launcher prompts, and setup session passed again; the launcher printed the plan with its summary and waited for Enter, and the approval question was answered `Run review` within 11 seconds. The launcher then ran the review in the same terminal: anonymous preflight, exact-commit clone, read-only snapshot, and one native turn on `gpt-5.6-sol` at `max` in the read-only sandbox with `approval_policy` `never`, which used three snapshot tools (capabilities, one listing, one read) without a retry, refusal, or error notice, and 89,691 input tokens (59,284 cached) and 11,591 output tokens. The canonical report passed strict validation without repair or recovery, with every scope-1 section and two Low findings. The launcher remembered the approved settings for the repository under the Codex harness, and no process, temporary runtime, final-message file, or file containing the provider key remained. A typed `/rhyolite:status` answered, but reported only `STARTING` while the analysis ran, because the runner writes the run's state only when it finishes; the status now reports the latest progress line, the elapsed time, and the review settings. | The live production launcher gate passes: the production registry, readiness check, native setup and approval sessions, plan generation, launcher-owned execution, and completion all work live. The status improvement is covered by controller fixtures, not yet by a live run. |
 | Shell environment snapshot | During that live review, the worker's private runtime home held a `shell_snapshots/` file: Codex 0.163.0 starts the user's shell as a login shell when a session starts and writes its functions, aliases, options, and whole inherited environment into that file, unless the stable `shell_snapshot` feature is off (`codex-rs/core/src/session/session.rs`, `codex-rs/shell-command/src/shell_snapshot_capture.rs`). It is on by default even when the shell tool is disabled. A check that printed only file names showed that this mode-0600 file in the user-only runtime home was the only file holding the provider key's value; Codex's logs, databases, and session record did not, and the runtime home was deleted when the worker ended. Workers have no shell tool, so the adapter now sets `shell_snapshot = false`. An offline lifecycle probe with the real CLI and runner held a worker's session open mid-turn: with the committed adapter, the runtime home had a snapshot file containing the fixture key's value; with the fix, it had no `shell_snapshots` folder and no file containing the key, and the session otherwise behaved identically. | The provider key no longer reaches disk in a Codex runtime home, and a worker session no longer starts a login shell to capture that snapshot. Verified offline with the real CLI; the live review above ran before the fix. |
+| Terminal setup and approval questions | On October 30, the maintainer ran `./rhyolite --harness codex` at `e4ccf5c` for a scope-1 review of another public repository at `high` effort, observed through a read-only capture of the terminal. The review completed, but the guided flow showed no plaque, because no harness hook runs for Codex. Each native question session opened Codex's generic welcome screen with Codex's own commands, echoed Rhyolite's internal request block, ended with a raw JSON line, and stayed open until Ctrl-D, after which Codex printed token usage and a `codex resume` hint for a session whose private home was already deleted. In the pinned TUI source, an interactive session exits only when the user presses Ctrl-D or types `/quit`, `/archive`, or `/delete`, and it installs no SIGTERM handler, so ending it from outside would leave the terminal in raw mode. The launcher now prints the plaque itself, and its Bash controller asks the setup and approval questions in the same terminal with numbered prompts. The approval question has no default and follows a flush of input typed before the plan appeared, and the launcher and controller refuse to run without a terminal, as the removed question sessions did. The Codex plugin manifest, its two question skills, and the guided-stage helper are removed. | Fixture-proven: answers typed at a pseudo-terminal by the test driver through every setup, edit, change-scope, explain, stop, end-of-input, and plan-mismatch path; a pseudo-terminal case in which a typed-ahead approval is discarded; the launcher's plaque before its controller; and launcher and controller refusals when only stdin or only stderr is off the terminal, with mutation checks for the flush, a default approval, the plaque, and each half of both terminal checks. A live run of the new flow is pending. |
 
 Confidence is **High** for the captured pinned-CLI request inventories and
 configuration results: they came from the pinned executable, not a model's
@@ -199,12 +200,13 @@ enablement change:
 - adds the literal `codex` entry to the fixed registry in
   `plugins/rhyolite/lib/harness/common.sh`; every other safe ID, including
   `noop`, still fails before loading a file;
-- keeps the launcher as the only Codex entrypoint. Codex model sessions only
-  ask questions, so a Codex session cannot run the runner, and a user-level
-  Codex marketplace install would add the two launcher-only question skills
-  to ordinary Codex sessions. Rhyolite therefore ships no Codex marketplace;
-  the launcher installs those skills through Codex's native local
-  marketplace into a private home for each question session;
+- keeps the launcher as the only Codex entrypoint. At enablement, Codex
+  model sessions only asked questions, so a Codex session could not run the
+  runner, and a user-level Codex marketplace install would have added the
+  two launcher-only question skills to ordinary Codex sessions. Rhyolite
+  therefore shipped no Codex marketplace; the launcher installed those skills
+  through Codex's native local marketplace into a private home for each
+  question session, until the October 30 change below;
 - makes `harness_prepare_run`, and through it the launcher before any
   question, require exactly `codex-cli 0.163.0`, an empty or absent
   `/etc/codex`, a supported provider form, and its exported key;
@@ -225,7 +227,12 @@ enablement change:
 - after the live production launcher review, turns off Codex's shell
   environment snapshot, which wrote the inherited environment, including the
   provider key, into the runtime home, and makes `/rhyolite:status` report
-  the review's current stage.
+  the review's current stage;
+- after a further live launcher review on October 30, asks the setup and
+  approval questions in the launcher's own terminal instead of two native
+  Codex sessions, prints the plaque, and removes the Codex plugin manifest
+  and its question skills, which also retires the Enter wait and the offer
+  to ask a cancelled question again.
 
 Playbook completion evidence:
 
@@ -233,7 +240,7 @@ Playbook completion evidence:
 | --- | --- |
 | Fixed registry and rejection of other IDs | `tests/validate-harness-contract.sh` resolves and loads `codex` from the production registry with resolved capabilities, lists exactly `copilot claude codex`, and rejects `noop`, `bogus`, `example-cli`, and `gemini` before any activity. |
 | Contract-v11 function inventory | The production loader requires every Contract-v11 function before it loads `codex.sh`. |
-| Capability decisions | `structured_questions`, `web_research`, `builtin_research_specialist`, `shell_denial`, `final_message_file`, and `worker_continuation` are `yes`; `subagents` and `builtin_security_specialist` are `no`; none is `unverified`. The rows above give the evidence; [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) tabulates the values. |
+| Capability decisions | `structured_questions`, `web_research`, `builtin_research_specialist`, `shell_denial`, `final_message_file`, and `worker_continuation` are `yes`; `subagents` and `builtin_security_specialist` are `no`; none is `unverified`. Since October 30, the launcher's own terminal questions provide the structured setup and approval questions. The rows above give the evidence; [HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md) tabulates the values. |
 | Model, effort, authentication, and provider summary | `gpt-5.6-sol` only; efforts `high`, `xhigh`, `max`; contexts `default` and `long_context`; one forwarded key variable named by the explicit provider; provider summary `codex-<id>` with the provider host. Pinned by the Codex contract section. |
 | Argv, environment, runtime home, and persistence | The Codex contract section pins the review, research, and repair argv, the runtime configuration and model catalog, the environment vector with hostile-variable removal, file permissions, and the filtered session record. |
 | Report repair | A mocked end-to-end confidence edit through a fresh `--ephemeral` session with no tools passes unchanged strict validation; no live Codex review has needed a repair. |
@@ -284,7 +291,8 @@ fake Codex worker. Live public research with an accepted dossier and live
 reviews in all three scopes are now proven. The
 first live guided run failed at the stage validator; the rerun with the
 corrected validator passed the real staged native setup, approval, and
-controller path.
+controller path. On October 30 the launcher's terminal questions replaced
+those native question sessions.
 The first live scope-1 review failed before its worker launched because the
 adapter built worker arguments that depended on a runtime home the runner
 had not yet created; after that fix, the live rerun passed. The first live

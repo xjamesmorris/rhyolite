@@ -946,10 +946,10 @@ Production support covers `copilot`, `claude`, and `codex`:
 - `CLAUDE.md` and `.github/copilot-instructions.md` remain contributor
   bootstrap pointers to `AGENTS.md`.
 - Copilot and Claude Code each have their own plugin manifest and
-  marketplace registry. Codex has its own plugin manifest for the launcher's
-  private per-stage installs but no marketplace registry, because the
-  launcher is its only entrypoint. The launcher, help, support, and
-  publishing surfaces list only these three harnesses.
+  marketplace registry. Codex has neither, because the launcher is its only
+  entrypoint and asks its setup and approval questions in the terminal. The
+  launcher, help, support, and publishing surfaces list only these three
+  harnesses.
 
 When another production adapter is separately approved, review and update all
 affected surfaces:
