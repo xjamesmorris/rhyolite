@@ -9745,6 +9745,11 @@ cat > "${plaintext_copilot_home}/config.json" <<'EOF'
   "copilotTokens": {
     "plaintext-user": "repo-reviewer-secret-sentinel"
   },
+  "authTokens": {
+    "https://github.com:plaintext-user": {
+      "token": "repo-reviewer-auth-tokens-sentinel"
+    }
+  },
   "unrelatedSetting": "must-not-cross"
 }
 EOF
@@ -11685,7 +11690,9 @@ function readFiles(root) {
 const persisted = Buffer.concat(readFiles(repository));
 for (const forbidden of [
   "repo-reviewer-secret-sentinel",
+  "repo-reviewer-auth-tokens-sentinel",
   "copilotTokens",
+  "authTokens",
   "lastLoggedInUser",
   "unrelatedSetting",
 ]) {

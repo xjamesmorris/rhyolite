@@ -2117,6 +2117,49 @@ assert_contains \
 harness_sanitize_runtime_home "${metadata_runtime_home}" ||
     fail 'Copilot adapter could not clean the metadata-only runtime home.'
 
+# Copilot CLI 1.0.110 stores plaintext login tokens under "authTokens" rather
+# than "copilotTokens"; the bridge must forward that key and switch the child
+# to plaintext-token mode, or the child falls back to the slow GitHub CLI
+# token lookup and fails to load models.
+auth_tokens_copilot_home="${fixture_root}/auth-tokens-copilot-home"
+auth_tokens_runtime_home="${fixture_root}/auth-tokens-runtime-home"
+mkdir -m 700 -- "${auth_tokens_copilot_home}" "${auth_tokens_runtime_home}"
+cat > "${auth_tokens_copilot_home}/config.json" <<'EOF'
+// User settings belong in settings.json.
+// This file is managed automatically.
+{
+  "lastLoggedInUser": "auth-tokens-user",
+  "loggedInUsers": ["auth-tokens-user"],
+  "authTokens": {
+    "https://github.com:auth-tokens-user": {
+      "token": "auth-tokens-bridge-secret"
+    }
+  },
+  "copilotTokens": {},
+  "recentModelIds": ["must-not-bridge-model"],
+  "unrelatedSetting": "must-not-bridge"
+}
+EOF
+chmod 600 -- "${auth_tokens_copilot_home}/config.json"
+COPILOT_HOME="${auth_tokens_copilot_home}"
+COPILOT_AUTH_BRIDGE_INITIALIZED=0
+COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT=0
+COPILOT_AUTH_BRIDGE_JSON='{}'
+harness_prepare_run >/dev/null ||
+    fail 'Copilot adapter could not prepare authTokens authentication.'
+[[ "${COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT}" == 1 ]] ||
+    fail 'Copilot adapter did not detect plaintext tokens under authTokens.'
+harness_prepare_worker_home     "${auth_tokens_runtime_home}" max long_context ||
+    fail 'Copilot adapter could not prepare an authTokens worker home.'
+assert_contains     "${auth_tokens_runtime_home}/settings.json"     '"storeTokenPlaintext": true'     'Copilot authTokens plaintext-token setting'
+assert_contains     "${auth_tokens_runtime_home}/config.json"     '"authTokens":{"https://github.com:auth-tokens-user":{"token":"auth-tokens-bridge-secret"}}'     'Copilot authTokens bridge'
+assert_contains     "${auth_tokens_runtime_home}/config.json"     '"lastLoggedInUser":"auth-tokens-user"'     'Copilot authTokens login metadata bridge'
+assert_not_contains     "${auth_tokens_runtime_home}/config.json"     'must-not-bridge'     'Copilot authTokens bridge allowlist'
+harness_sanitize_runtime_home "${auth_tokens_runtime_home}" ||
+    fail 'Copilot adapter could not clean the authTokens runtime home.'
+[[ ! -e "${auth_tokens_runtime_home}" ]] ||
+    fail 'Copilot authTokens runtime home survived sanitization.'
+
 assert_fail_soft_auth_config() {
     local name="$1"
     local fixture_mode="$2"

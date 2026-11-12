@@ -513,13 +513,19 @@ if path.is_file():
         config = json.loads(text)
         if not isinstance(config, dict):
             config = {}
+        # Copilot CLI 1.0.110 keeps plaintext login tokens under
+        # "authTokens"; older releases used "copilotTokens". Without the
+        # current key the child falls back to the GitHub CLI token lookup,
+        # which the CLI abandons after five seconds.
         for name in (
             "lastLoggedInUser",
             "loggedInUsers",
             "copilotTokens",
+            "authTokens",
             "last_logged_in_user",
             "logged_in_users",
             "copilot_tokens",
+            "auth_tokens",
         ):
             if name in config:
                 bridge[name] = config[name]
@@ -528,7 +534,7 @@ if path.is_file():
 
 has_plaintext_tokens = any(
     isinstance(bridge.get(name), dict) and bridge[name]
-    for name in ("copilotTokens", "copilot_tokens")
+    for name in ("copilotTokens", "authTokens", "copilot_tokens", "auth_tokens")
 )
 print("1" if has_plaintext_tokens else "0")
 print(json.dumps(bridge, separators=(",", ":")))

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Copilot review, security-scan, research, and report-repair children now
+  receive the login token that Copilot CLI 1.0.110 stores under `authTokens`
+  in the ephemeral authentication bridge, alongside the older `copilotTokens`
+  key. Without it every child fell back to the GitHub CLI token lookup, which
+  the CLI abandons after five seconds, and failed with `Failed to load
+  models` before any scan or review ran. Bridged `authTokens` values are
+  never persisted with review artifacts.
+
 ## 0.11.0 - 2026-10-30
 
 ### Changed
