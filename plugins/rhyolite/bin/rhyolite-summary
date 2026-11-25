@@ -585,7 +585,10 @@ def classify_directory(directory):
         if (
             compact(state_data.get("Repository"))
             or isinstance(state_data.get("Source"), dict)
-            and compact(state_data["Source"].get("RemoteUrl"))
+            and compact(
+                state_data["Source"].get("RemoteUrl")
+                or state_data["Source"].get("LocalPath")
+            )
         ):
             return "review", state_data
     manifest_data = load_json(
@@ -661,6 +664,8 @@ def merge_dictionary(primary, fallback):
 
 def repository_key(data):
     source = data.get("Source") if isinstance(data.get("Source"), dict) else {}
+    if source.get("Kind") == "LocalPath":
+        return compact(source.get("LocalPath") or data.get("Repository"))
     return compact(data.get("Repository") or source.get("RemoteUrl"))
 
 
@@ -1278,9 +1283,7 @@ for run_index, run_entry in enumerate(run_entries, start=1):
             if isinstance(repository_state.get("Source"), dict)
             else {}
         )
-        repository = compact(
-            repository_state.get("Repository") or source.get("RemoteUrl")
-        )
+        repository = repository_key(repository_state)
         state_relative = (
             relative_path(state_path) if is_regular_file(state_path) else None
         )

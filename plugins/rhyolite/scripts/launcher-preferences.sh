@@ -371,6 +371,75 @@ rhyolite_sha256() {
     return 1
 }
 
+RHYOLITE_LOCAL_CONSENT_RECORD_VERSION='rhyolite-local-provider-consent-v1'
+
+# The digest binds one terminal affirmation to the exact local source and
+# provider, so the record never stores the source path itself.
+rhyolite_local_consent_digest() {
+    printf '%s\nPath=%s\nIdentity=%s\nCommit=%s\nProvider=%s\n' \
+        "${RHYOLITE_LOCAL_CONSENT_RECORD_VERSION}" "$1" "$2" "$3" "$4" |
+        rhyolite_sha256
+}
+
+rhyolite_local_consent_record_path() {
+    printf '%s/local-provider-consent\n' "${1%/}"
+}
+
+rhyolite_write_local_consent_record() {
+    local session_dir="$1"
+    local digest
+    local record
+    local temporary
+
+    digest="$(rhyolite_local_consent_digest "$2" "$3" "$4" "$5")" ||
+        return 1
+    [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
+    record="$(rhyolite_local_consent_record_path "${session_dir}")"
+    temporary="${record}.tmp"
+    rm -f -- "${temporary}" || return 1
+    (
+        umask 077
+        set -o noclobber
+        printf '%s %s\n' \
+            "${RHYOLITE_LOCAL_CONSENT_RECORD_VERSION}" "${digest}" \
+            > "${temporary}"
+    ) || return 1
+    chmod 600 -- "${temporary}" &&
+        mv -f -- "${temporary}" "${record}"
+}
+
+# Succeeds only for a private record in a launcher session directory that
+# names exactly this local source and provider.
+rhyolite_local_consent_record_matches() {
+    local session_dir="$1"
+    local expected_uid
+    local record
+    local digest
+    local line
+    local record_size
+
+    [[ "${session_dir}" == /* &&
+        "${session_dir##*/}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+(-[0-9]+)?$ &&
+        "${session_dir%/*}" == "$(rhyolite_launcher_home)/sessions" ]] ||
+        return 1
+    rhyolite_secure_user_path \
+        "$(rhyolite_launcher_state_anchor)" "${session_dir}" || return 1
+    expected_uid="$(id -u 2>/dev/null)" || return 1
+    [[ -d "${session_dir}" && ! -L "${session_dir}" &&
+        "$(stat -c '%u %a' -- "${session_dir}" 2>/dev/null)" == \
+            "${expected_uid} 700" ]] || return 1
+    record="$(rhyolite_local_consent_record_path "${session_dir}")"
+    record_size=$((${#RHYOLITE_LOCAL_CONSENT_RECORD_VERSION} + 66))
+    [[ -f "${record}" && ! -L "${record}" &&
+        "$(stat -c '%u %a %h %s' -- "${record}" 2>/dev/null)" == \
+            "${expected_uid} 600 1 ${record_size}" ]] || return 1
+    digest="$(rhyolite_local_consent_digest "$2" "$3" "$4" "$5")" ||
+        return 1
+    [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
+    IFS= read -r line < "${record}" || return 1
+    [[ "${line}" == "${RHYOLITE_LOCAL_CONSENT_RECORD_VERSION} ${digest}" ]]
+}
+
 rhyolite_json_escape() {
     local value="$1"
     value="${value//\\/\\\\}"

@@ -13,6 +13,8 @@
 **Codex setup and approval questions moved to the launcher terminal:**
 October 30, 2026
 
+**Explicit, isolated local Git review approved:** November 18, 2026
+
 ## Decision
 
 Rhyolite is a **Linux-only, Bash-first** product for this release, with
@@ -42,6 +44,17 @@ Rhyolite is a **Linux-only, Bash-first** product for this release, with
   [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md). The fixed harness
   registry is limited to those three IDs. The Contract-v11 seam does not
   advertise or imply support for other CLIs.
+- Public HTTPS sources retain anonymous, pinned transport. A separate
+  `--repo-path` selection permits only committed content from an explicitly
+  selected, self-contained local Git repository. The runner binds its path,
+  filesystem identity, and HEAD commit to the plan, imports objects without
+  sharing them with the source, and keeps the snapshot and isolated clone
+  read-only before workers start. It never reads dirty worktree files or
+  runs target code. Local review uses scope 1 without public research;
+  before any model sees the local source, the operator must separately
+  affirm that its path and committed content are non-sensitive and
+  authorized for the selected model provider ID and host. A local source does not make
+  provider-backed review offline. URL and local sources cannot be mixed.
 - Codex is supported only through the launcher, and no interactive Codex
   session runs. The launcher's Bash controller asks the setup and approval
   questions itself in the terminal, generates the plan, runs the approved
@@ -84,10 +97,12 @@ decision; compatibility must not be preserved speculatively.
   Contract-v11 seam.
 - [ADDING-A-HARNESS.md](ADDING-A-HARNESS.md) is the required implementation
   playbook for Contract v11 and any future production adapter.
-- The contract retains approval-bound harness execution identity and validated runtime
-  selection into approval-bound data using plan schema 5 and state schema 6.
-  Its provider summary is a validated
-  object with `Id`, `Host`, and `ForwardedEnvVarNames`.
+- The contract retains approval-bound harness execution identity and
+  validated runtime selection. Remote sources keep plan schema 5 and
+  state schema 6; explicit local sources use plan schema 6 and state
+  schema 7 to bind `LocalIdentity`, nullable `RemoteUrl`, and
+  `LocalDisclosure`. The validated provider summary has `Id`, `Host`,
+  and `ForwardedEnvVarNames`.
 - Contract v5 moves the dedicated scope 2/3 research worker behind four
   adapter functions and gates scope 2/3 on the adapter's `web_research`
   capability. The runner keeps broker lifecycle, validation, cleanup, and

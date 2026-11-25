@@ -12,7 +12,10 @@ context_tier=''
 initial_output=''
 commit=''
 auto_defaults=0
+local_repository=''
+local_consent_provider=''
 declare -a repositories=()
+declare -a display_repositories=()
 
 fail_controller() {
     printf 'Codex guided review controller failed: %s\n' "$1" >&2
@@ -61,6 +64,19 @@ while (($# > 0)); do
             repositories+=("$2")
             shift 2
             ;;
+        --repo-path)
+            [[ $# -ge 2 && -n "$2" &&
+                -z "${local_repository}" ]] || fail_controller arguments
+            local_repository="$2"
+            shift 2
+            ;;
+        --local-provider-consent)
+            [[ $# -ge 2 && -n "$2" &&
+                -z "${local_consent_provider}" ]] ||
+                fail_controller arguments
+            local_consent_provider="$2"
+            shift 2
+            ;;
         --commit)
             [[ $# -ge 2 && -z "${commit}" &&
                 "$2" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] ||
@@ -85,9 +101,24 @@ done
     "${session_directory}" == /* && -d "${session_directory}" &&
     ! -L "${session_directory}" &&
     "${model}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
-    "${reasoning_effort}" =~ ^[a-z]{1,32}$ &&
-    ${#repositories[@]} -gt 0 ]] || fail_controller validation
-[[ -z "${commit}" || ${#repositories[@]} -eq 1 ]] ||
+    "${reasoning_effort}" =~ ^[a-z]{1,32}$ ]] &&
+    [[ ${#repositories[@]} -gt 0 || -n "${local_repository}" ]] ||
+    fail_controller validation
+if [[ -n "${local_repository}" ]]; then
+    [[ ${#repositories[@]} -eq 0 &&
+        "${local_repository}" =~ ^/[A-Za-z0-9._/@+=,:\ -]+$ &&
+        -d "${local_repository}" &&
+        "$(realpath -e -- "${local_repository}")" == \
+            "${local_repository}" &&
+        "${local_consent_provider}" =~ \
+            ^[a-z][a-z0-9-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] ||
+        fail_controller validation
+    display_repositories=("${local_repository}")
+else
+    [[ -z "${local_consent_provider}" ]] || fail_controller validation
+    display_repositories=("${repositories[@]}")
+fi
+[[ -z "${commit}" || ${#display_repositories[@]} -eq 1 ]] ||
     fail_controller validation
 # Only a person at the terminal answers these questions; piped or redirected
 # input never approves a plan.
@@ -115,6 +146,11 @@ if ((auto_defaults)); then
 fi
 
 print_scope_explanation() {
+    if [[ -n "${local_repository}" ]]; then
+        printf '%s\n' \
+            'Local Git review uses scope 1 only. It reads a committed snapshot without public research; the selected model provider still processes source content.' >&2
+        return
+    fi
     printf '%s\n' \
         'Scope 1 covers source, history, architecture, quality, and the full dedicated security pass with the fewest AI credits and only anonymous Git network access.' \
         'Scope 2 adds public prior-art/community research, public network requests, and materially higher resource use.' \
@@ -277,6 +313,13 @@ ask_cookies() {
 ask_scope() {
     local default="${current_scope}"
 
+    if [[ -n "${local_repository}" ]]; then
+        current_scope=1
+        current_lookback=NULL
+        current_cookies=NULL
+        print_scope_explanation
+        return
+    fi
     [[ "${default}" =~ ^[123]$ ]] || default=1
     printf '\n' >&2
     print_scope_explanation
@@ -387,7 +430,8 @@ print("PLAN SUMMARY (the full plan above is authoritative)")
 for source in plan.get("Sources") or []:
     if isinstance(source, dict):
         commit = source.get("RequestedCommit") or "the default branch at clone time"
-        print(f"  Source: {text(source.get('RemoteUrl'))} at {text(commit)}")
+        path = source.get("LocalPath") if source.get("Kind") == "LocalPath" else source.get("RemoteUrl")
+        print(f"  Source: {text(path)} at {text(commit)}")
 scope = plan.get("Scope")
 if isinstance(scope, dict):
     # The scope name already starts with its number.
@@ -424,7 +468,7 @@ print_run_status() {
     fi
     python3 -I - "${run_folder}" "${progress}" "${elapsed}" "${model}" \
         "${reasoning_effort}" "${context_tier}" "${current_scope}" \
-        "${repositories[@]}" <<'PY' || true
+        "${display_repositories[@]}" <<'PY' || true
 import json
 import pathlib
 import sys
@@ -853,7 +897,7 @@ review_begin() {
 review_print_header() {
     local sources='' repository
 
-    for repository in "${repositories[@]}"; do
+    for repository in "${display_repositories[@]}"; do
         sources+="${sources:+, }${repository}"
     done
     printf '\n%s\n' "${review_accent}Review running${review_reset}"
@@ -996,6 +1040,12 @@ while true; do
     for repository in "${repositories[@]}"; do
         runner_arguments+=(--repo "${repository}")
     done
+    if [[ -n "${local_repository}" ]]; then
+        runner_arguments+=(
+            --repo-path "${local_repository}"
+            --local-provider-consent "${local_consent_provider}"
+        )
+    fi
     if [[ -n "${commit}" ]]; then
         runner_arguments+=(--commit "${commit}")
     fi
@@ -1011,12 +1061,13 @@ while true; do
     if ! /usr/bin/bash "${runner}" \
         "${runner_arguments[@]}" \
         --plan-only > "${plan_path}" 2> "${plan_error}"; then
-        cat -- "${plan_error}" >&2
+        LC_ALL=C tr -d '\000-\010\013-\037\177' < "${plan_error}" >&2
         fail_controller plan
     fi
     chmod 600 -- "${plan_path}" "${plan_error}"
     approval_hash="$(
-        python3 -I - "${plan_path}" <<'PY'
+        python3 -I - "${plan_path}" \
+            "${local_repository}" "${local_consent_provider}" <<'PY'
 import json
 import re
 import sys
@@ -1026,6 +1077,22 @@ with open(sys.argv[1], encoding="utf-8") as stream:
 approval = value.get("ApprovalHash")
 if not isinstance(approval, str) or not re.fullmatch(r"[0-9a-f]{64}", approval):
     raise SystemExit(1)
+local_path, consent = sys.argv[2:]
+if local_path:
+    sources = value.get("Sources")
+    disclosure = value.get("LocalDisclosure")
+    provider = value.get("Provider")
+    if (not isinstance(sources, list) or len(sources) != 1 or
+            sources[0].get("Kind") != "LocalPath" or
+            sources[0].get("LocalPath") != local_path or
+            sources[0].get("RemoteUrl") is not None or
+            not isinstance(disclosure, dict) or
+            disclosure.get("Confirmed") is not True or
+            not isinstance(provider, dict) or
+            disclosure.get("ProviderId") != provider.get("Id") or
+            disclosure.get("ProviderHost") != provider.get("Host") or
+            f"{provider.get('Id')}@{provider.get('Host')}" != consent):
+        raise SystemExit(1)
 print(approval)
 PY
     )" || fail_controller plan-hash

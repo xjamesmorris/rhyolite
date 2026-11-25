@@ -4259,6 +4259,8 @@ def read_lines(path, limit=400):
 
 state = read_json(directory / "state.json")
 status = str(state.get("Status", "Unknown"))
+source = state.get("Source") if isinstance(state.get("Source"), dict) else {}
+source_kind = source.get("Kind", "RemoteUrl")
 errors = read_lines(directory / "errors.txt")
 recovery = state.get("WorkerRecovery") if isinstance(state.get("WorkerRecovery"), dict) else {}
 repair = state.get("ReportRepair") if isinstance(state.get("ReportRepair"), dict) else {}
@@ -4351,6 +4353,14 @@ def _():
 
 @rule("access")
 def _():
+    if source_kind == "LocalPath" and status in (
+            "LocalSourceChanged", "PreflightBlocked", "CloneFailed",
+            "CommitResolutionFailed", "SnapshotFailed"):
+        return ("The local source changed or its isolated import failed before review.",
+                f"Status {status}: the selected local Git metadata, committed HEAD, "
+                "isolated object copy, or read-only snapshot could not be verified.",
+                ["Recheck the local Git path and committed HEAD, then regenerate and approve the plan."],
+                ["Do not bypass source ownership, isolation, or provider-disclosure checks."])
     if status in ("AccessPreflightFailed", "PreflightBlocked", "CloneFailed",
                   "CommitResolutionFailed", "SnapshotFailed"):
         return ("The repository could not be accessed or snapshotted anonymously.",
@@ -4675,7 +4685,7 @@ name, summary, cause, actions, maintainer_actions = classification
 # so only the other scans and the consolidation run again.
 completed_scans = [scan for scan in security_scans.get("Scans", [])
                    if isinstance(scan, dict) and scan.get("Status") == "Completed"]
-if completed_scans and status != "Completed":
+if completed_scans and status != "Completed" and source_kind != "LocalPath":
     labels = ", ".join(str(scan.get("Label", "?")) for scan in completed_scans)
     actions = list(actions) + [
         f"To keep the validated reports of completed scan{'s' if len(completed_scans) != 1 else ''} {labels}, "
@@ -4882,6 +4892,8 @@ write_review_handoff() {
 
     if [[ -n "${session_id}" ]]; then
         continuation="The saved ${harness_display_name} session ID is \`${session_id}\`. ${resume_policy} Start the \`repository-review\` agent and provide this handoff path so a trusted runner can establish a restricted continuation."
+    elif [[ "${source_kind}" == LocalPath ]]; then
+        continuation="Setup did not reach a child ${harness_display_name} session. Start a new run with explicit \`--repo-path\` selection and provider-specific local disclosure approval. Do not analyze the original source or verification clone directly."
     else
         continuation="Setup did not reach a child ${harness_display_name} session. Rerun \`repository-review\` using the repository URL, requested commit, scope, and output choices recorded in \`state.json\`. Do not analyze the verification clone directly."
     fi

@@ -381,6 +381,7 @@ printf 'Rhyolite status: Type %s without a leading slash to see current selectio
     "${status_phrase}"
 printf 'Explain scopes: Type %s without a leading slash for scope 1/2/3 setup differences.\n' \
     "${explain_scopes_phrase}"
+printf 'Local Git: Use rhyolite --repo-path PATH; affirm model-provider disclosure.\n'
 printf '\n'
 if public_repository_urls_resolved; then
     printf 'Docs: %s\n' "${docs_url}"

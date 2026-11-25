@@ -593,6 +593,11 @@ build_launcher_setup_block() {
     local spec
 
     printf '%s\n' "${RHYOLITE_LAUNCHER_SETUP_MARKER}"
+    if [[ -n "${LAUNCHER_LOCAL_PATH}" ]]; then
+        printf 'LocalSource=%s\n' "${LAUNCHER_LOCAL_PATH}"
+        printf 'LocalProviderConsent=%s\n' \
+            "${LAUNCHER_LOCAL_CONSENT_PROVIDER}"
+    fi
     for repository in "$@"; do
         printf 'Source=%s\n' "${repository}"
     done
@@ -975,6 +980,9 @@ LAUNCHER_CONSOLIDATION_SPEC=''
 LAUNCHER_MIN_SUCCESSFUL_SCANS=''
 LAUNCHER_REUSE_SCANS=''
 LAUNCHER_COMMIT=''
+LAUNCHER_LOCAL_PATH=''
+LAUNCHER_LOCAL_CONSENT_PROVIDER=''
+LAUNCHER_LOCAL_CONSENT_RECORD=''
 LAUNCHER_AUTO_DEFAULTS=0
 # A harness that reads the snapshot only through the offline snapshot
 # transport keeps the integrated security pass of a single scan.
@@ -1200,7 +1208,7 @@ Rhyolite v${version} Beta
 Usage:
   rhyolite [--help]
   rhyolite [--version]
-  rhyolite [--repo URL]... [--harness ID] [--model MODEL]
+  rhyolite [--repo URL | --repo-path PATH] [--harness ID] [--model MODEL]
            [--allow-unlisted-model]
            [--reasoning-effort high|xhigh|max|default]
            [--context default|long_context]
@@ -1218,6 +1226,13 @@ Options:
                       public HTTPS URL on the command line, including URLs in
                       the initial review request, is reviewed; spellings that
                       differ only by a trailing .git are reviewed once.
+  --repo-path PATH    Select one absolute local Git repository; the physical
+                      path is shown for approval.
+                      A terminal prompt must separately affirm that its
+                      path and committed HEAD are non-sensitive and may be
+                      submitted to the displayed model provider. Scope 1
+                      only; no public research or scan reuse. A local
+                      source cannot be combined with URL sources.
   --harness ID        Select a registered review harness.
   --model MODEL       Select an exact ID from Copilot's offline model catalog
                       (default: gpt-5.6-sol; alternates: claude-opus-5.5,
@@ -1265,8 +1280,9 @@ Options:
                       repository.
   --auto-defaults     Use the remembered or default value for every setting
                       that is not on the command line, here and in guided
-                      setup (output, scope, cookies, and lookback), so the
-                      only remaining question is the final plan approval.
+                      setup (output, scope, cookies, and lookback). A local
+                      source still needs separate provider affirmation
+                      before the final plan approval.
   --yolo         Start Copilot in YOLO mode for this launch (Claude Code:
                  skip permission prompts; unavailable with Codex).
 
@@ -1313,6 +1329,17 @@ main() {
     local min_successful_scans_input=''
     local commit_input=''
     local reuse_scans_input=''
+    local local_path_input=''
+    local local_path_without_slash=''
+    local local_plan_json=''
+    local local_plan_fields=''
+    local local_plan_rest=''
+    local local_plan_error=''
+    local local_provider_id=''
+    local local_provider_host=''
+    local local_commit=''
+    local local_identity=''
+    local local_consent_answer=''
     local scan_index
     local scan_spec
     local scan_label
@@ -1357,6 +1384,7 @@ main() {
     local -a request_parts=()
     local -a repository_inputs=()
     local -a repositories=()
+    local -a preference_repositories=()
     local -a copilot_arguments=()
     local -a claude_arguments=()
     local -a codex_arguments=()
@@ -1469,6 +1497,17 @@ main() {
                         '--repo requires a public HTTPS Git repository URL.' \
                         'Pass --repo URL or omit it to use interactive launcher setup.' \
                         2
+                shift 2
+                ;;
+            --repo-path)
+                [ "$#" -ge 2 ] && [[ -n "$2" && -z "${local_path_input}" ]] ||
+                    fail \
+                        'launcher argument validation' \
+                        'Exactly one explicit local repository path is required.' \
+                        '--repo-path takes one canonical absolute directory.' \
+                        'Run separate reviews for separate local repositories.' \
+                        2
+                local_path_input="$2"
                 shift 2
                 ;;
             --fleet-mode)
@@ -1890,7 +1929,8 @@ main() {
     if [[ -t 0 && -t 1 ]]; then
         is_interactive=1
     fi
-    while [[ ${#repository_inputs[@]} -eq 0 ]]; do
+    while [[ ${#repository_inputs[@]} -eq 0 &&
+        -z "${local_path_input}" ]]; do
         if ((is_interactive == 0)); then
             fail \
                 'launcher guided setup' \
@@ -1906,44 +1946,97 @@ main() {
         done < <(split_repository_input "${repository_input}")
     done
 
-    for repository in "${repository_inputs[@]}"; do
-        if ! rhyolite_canonicalize_repository "${repository}"; then
-            invalid_repository="${repository}"
-            break
-        fi
-        repository="${RHYOLITE_CANONICAL_REPOSITORY}"
-        if github_account_without_repository "${repository}"; then
+    if [[ -n "${local_path_input}" ]]; then
+        local_path_without_slash="${local_path_input}"
+        while [[ "${local_path_without_slash}" == */ &&
+            "${local_path_without_slash}" != / ]]; do
+            local_path_without_slash="${local_path_without_slash%/}"
+        done
+        ((${#repository_inputs[@]} == 0)) ||
             fail \
                 'launcher source validation' \
-                'A GitHub URL names an account but no repository.' \
-                "The URL has no repository name: ${repository}" \
-                "Add the repository name, for example ${repository}/REPOSITORY, and retry." \
+                'Local and remote sources cannot share a review.' \
+                '--repo-path was combined with a URL argument or URL in the initial request.' \
+                'Run the local repository separately from public HTTPS URLs.' \
                 2
-        fi
-        repository_key="$(repository_selection_key "${repository}")"
-        duplicate=0
-        for existing_repository in "${repositories[@]}"; do
-            if [[ "$(repository_selection_key "${existing_repository}")" == \
-                "${repository_key}" ]]; then
-                duplicate=1
+        [[ "${local_path_input}" == /* &&
+            "${local_path_input}" =~ ^/[A-Za-z0-9._/@+=,:\ -]+$ &&
+            -d "${local_path_input}" &&
+            ! -L "${local_path_without_slash}" ]] &&
+            LAUNCHER_LOCAL_PATH="$(
+                CDPATH='' cd -P -- "${local_path_input}" 2>/dev/null &&
+                    pwd
+            )" &&
+            [[ "${LAUNCHER_LOCAL_PATH}" =~ ^/[A-Za-z0-9._/@+=,:\ -]+$ ]] ||
+            fail \
+                'launcher source validation' \
+                'The local source must resolve to a safe absolute directory, not a symbolic-link repository.' \
+                "Selected path: ${local_path_input}" \
+                'Pass an existing absolute path using letters, digits, spaces, and . _ / @ + = , : - characters; an ancestor alias is resolved before approval, but the repository itself must not be a symlink or linked Git worktree.' \
+                2
+        [[ -t 0 && -t 1 && -t 2 ]] ||
+            fail \
+                'launcher local disclosure' \
+                'Local review needs an interactive terminal for provider affirmation.' \
+                '--auto-defaults and piped input never affirm local content disclosure.' \
+                'Rerun from a terminal and answer the separate provider question, or use the direct runner with explicit --local-provider-consent.' \
+                2
+        ((yolo == 0)) ||
+            fail \
+                'launcher source validation' \
+                'Local review cannot run with --yolo.' \
+                'The outer orchestrator must not inherit broad permissions while handling a local source.' \
+                'Remove --yolo and retry.' \
+                2
+        [[ -z "${reuse_scans_input}" ]] ||
+            fail \
+                'launcher source validation' \
+                'Local review cannot reuse security scans from an earlier run.' \
+                '--reuse-scans has no local-source identity proof.' \
+                'Remove --reuse-scans and retry.' \
+                2
+        preference_repositories=("local:${LAUNCHER_LOCAL_PATH}")
+    else
+        for repository in "${repository_inputs[@]}"; do
+            if ! rhyolite_canonicalize_repository "${repository}"; then
+                invalid_repository="${repository}"
                 break
             fi
+            repository="${RHYOLITE_CANONICAL_REPOSITORY}"
+            if github_account_without_repository "${repository}"; then
+                fail \
+                    'launcher source validation' \
+                    'A GitHub URL names an account but no repository.' \
+                    "The URL has no repository name: ${repository}" \
+                    "Add the repository name, for example ${repository}/REPOSITORY, and retry." \
+                    2
+            fi
+            repository_key="$(repository_selection_key "${repository}")"
+            duplicate=0
+            for existing_repository in "${repositories[@]}"; do
+                if [[ "$(repository_selection_key "${existing_repository}")" == \
+                    "${repository_key}" ]]; then
+                    duplicate=1
+                    break
+                fi
+            done
+            ((duplicate == 0)) && repositories+=("${repository}")
         done
-        ((duplicate == 0)) && repositories+=("${repository}")
-    done
-    [[ -z "${invalid_repository}" && ${#repositories[@]} -gt 0 ]] ||
-        fail \
-            'launcher source validation' \
-            'The launcher rejected an unsafe repository source.' \
-            "Only anonymous public HTTPS Git repository URLs are supported: ${invalid_repository:-NONE}" \
-            'Correct the repository URL and retry.' \
-            2
+        [[ -z "${invalid_repository}" && ${#repositories[@]} -gt 0 ]] ||
+            fail \
+                'launcher source validation' \
+                'The launcher rejected an unsafe repository source.' \
+                "Only anonymous public HTTPS Git repository URLs are supported: ${invalid_repository:-NONE}" \
+                'Correct the repository URL and retry.' \
+                2
+        preference_repositories=("${repositories[@]}")
+    fi
     if [[ -n "${commit_input}" || -n "${reuse_scans_input}" ]] &&
-        ((${#repositories[@]} != 1)); then
+        ((${#preference_repositories[@]} != 1)); then
         fail \
             'launcher argument validation' \
             '--commit and --reuse-scans apply to exactly one repository.' \
-            "${#repositories[@]} repositories were requested." \
+            "${#preference_repositories[@]} repositories were requested." \
             'Review that repository on its own, or remove --commit and --reuse-scans.' \
             2
     fi
@@ -1964,7 +2057,7 @@ main() {
     fi
     LAUNCHER_COMMIT="${commit_input}"
 
-    for repository in "${repositories[@]}"; do
+    for repository in "${preference_repositories[@]}"; do
         if rhyolite_read_preference \
             "${repository}" "${harness}" "${launcher_home}"; then
             if [[ -z "${remembered_model}" ]]; then
@@ -1985,7 +2078,7 @@ main() {
             remembered_consistent=0
         fi
     done
-    for repository in "${repositories[@]}"; do
+    for repository in "${preference_repositories[@]}"; do
         if rhyolite_read_security_scan_preference \
             "${repository}" "${harness}" "${launcher_home}"; then
             if [[ -z "${remembered_scan_count}" ]]; then
@@ -2414,6 +2507,121 @@ main() {
         fi
     fi
 
+    if [[ -n "${LAUNCHER_LOCAL_PATH}" ]]; then
+        local -a local_plan_arguments=(
+            --harness "${harness}"
+            --repo-path "${LAUNCHER_LOCAL_PATH}"
+            --model "${model}"
+            --reasoning-effort "${reasoning_effort}"
+            --context "${context_tier}"
+            --scope 1
+            --security-scans 1
+            --non-interactive
+            --no-open-html
+            --plan-only
+        )
+        if ((allow_unlisted_model)); then
+            local_plan_arguments+=(--allow-unlisted-model)
+        fi
+        if [[ -n "${commit_input}" ]]; then
+            local_plan_arguments+=(--commit "${commit_input}")
+        fi
+        local_plan_error="${session_dir}/local-source-plan.stderr"
+        if ! local_plan_json="$(
+            bash "${plugin_root}/skills/readonly-repository-review/scripts/run-parallel-reviews.sh" \
+                "${local_plan_arguments[@]}" 2> "${local_plan_error}"
+        )"; then
+            fail \
+                'launcher local source planning' \
+                'The selected local Git source could not be verified.' \
+                "$(< "${local_plan_error}")" \
+                'Choose an owned, self-contained local Git repository with a committed HEAD, separate from the workspace and output roots.' \
+                2
+        fi
+        local_plan_fields="$(
+            python3 -I -c '
+import json
+import re
+import sys
+
+plan = json.load(sys.stdin)
+source, = plan["Sources"]
+provider = plan["Provider"]
+assert (plan["SchemaVersion"] == 6 and source["Kind"] == "LocalPath"
+        and source["LocalPath"] == sys.argv[1]
+        and source["RemoteUrl"] is None
+        and plan["LocalDisclosure"]["Confirmed"] is False
+        and plan["LocalDisclosure"]["ProviderId"] == provider["Id"]
+        and plan["LocalDisclosure"]["ProviderHost"] == provider["Host"])
+assert re.fullmatch(r"[0-9a-f]{40}", source["RequestedCommit"])
+assert re.fullmatch(r"[0-9]+:[0-9]+/[0-9]+:[0-9]+/[0-9]+:[0-9]+",
+                    source["LocalIdentity"])
+assert re.fullmatch(r"[a-z][a-z0-9-]{0,63}", provider["Id"])
+assert isinstance(provider["Host"], str) and provider["Host"]
+print(provider["Id"])
+print(provider["Host"])
+print(source["RequestedCommit"])
+print(source["LocalIdentity"])
+' "${LAUNCHER_LOCAL_PATH}" <<< "${local_plan_json}"
+        )" ||
+            fail \
+                'launcher local source planning' \
+                'The local source plan did not contain trustworthy disclosure details.' \
+                'Provider identity or committed HEAD could not be read from the runner plan.' \
+                'Restore the trusted runner and try again.' \
+                2
+        local_provider_id="${local_plan_fields%%$'\n'*}"
+        local_plan_rest="${local_plan_fields#*$'\n'}"
+        local_provider_host="${local_plan_rest%%$'\n'*}"
+        local_plan_rest="${local_plan_rest#*$'\n'}"
+        local_commit="${local_plan_rest%%$'\n'*}"
+        local_identity="${local_plan_rest#*$'\n'}"
+        rm -f -- "${local_plan_error}"
+        python3 -I -c \
+            'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)' \
+            2>/dev/null ||
+            fail \
+                'launcher local disclosure' \
+                'Pending terminal input could not be cleared.' \
+                'A fresh answer is required after the source and provider are displayed.' \
+                'Run the launcher again from an interactive terminal.' \
+                2
+        printf '\nLocal Git source: %s\nCommitted HEAD: %s\n' \
+            "${LAUNCHER_LOCAL_PATH}" "${local_commit}" >&2
+        printf 'Model provider: %s (%s)\n' \
+            "${local_provider_id}" "${local_provider_host}" >&2
+        printf '%s\n' \
+            'This is a provider-backed review, not an offline scan. The source path, committed files, and Git metadata can be sent to this provider. Uncommitted files are excluded.' \
+            'Only authorize if this path and committed content are non-sensitive and you may submit them to the displayed provider.' >&2
+        printf 'Type I AUTHORIZE to affirm local disclosure (no default): ' >&2
+        IFS= read -r local_consent_answer || local_consent_answer=''
+        if [[ "${local_consent_answer}" != 'I AUTHORIZE' ]]; then
+            printf '%s\n' \
+                'Rhyolite stopped without sending the local source to a model provider.' >&2
+            return 0
+        fi
+        LAUNCHER_LOCAL_CONSENT_PROVIDER="${local_provider_id}@${local_provider_host}"
+        LAUNCHER_COMMIT="${local_commit}"
+        # The runner executes a local review only with this private record
+        # of the terminal affirmation, which lasts as long as this launcher.
+        LAUNCHER_LOCAL_CONSENT_RECORD="$(
+            rhyolite_local_consent_record_path "${session_dir}"
+        )"
+        trap 'rm -f -- "${LAUNCHER_LOCAL_CONSENT_RECORD}" 2>/dev/null || true' EXIT
+        rhyolite_write_local_consent_record \
+            "${session_dir}" \
+            "${LAUNCHER_LOCAL_PATH}" \
+            "${local_identity}" \
+            "${local_commit}" \
+            "${LAUNCHER_LOCAL_CONSENT_PROVIDER}" ||
+            fail \
+                'launcher local disclosure' \
+                'The local disclosure affirmation could not be recorded.' \
+                "A private consent record could not be written in ${session_dir}." \
+                'Check permissions under the launcher state directory and retry.' \
+                2
+    fi
+
     initial_prompt="$(
         build_initial_prompt \
             "${initial_request}" \
@@ -2458,6 +2666,13 @@ main() {
         for repository in "${repositories[@]}"; do
             codex_arguments+=(--repo "${repository}")
         done
+        if [[ -n "${LAUNCHER_LOCAL_PATH}" ]]; then
+            codex_arguments+=(
+                --repo-path "${LAUNCHER_LOCAL_PATH}"
+                --local-provider-consent \
+                    "${LAUNCHER_LOCAL_CONSENT_PROVIDER}"
+            )
+        fi
         if [[ -n "${LAUNCHER_COMMIT}" ]]; then
             codex_arguments+=(--commit "${LAUNCHER_COMMIT}")
         fi

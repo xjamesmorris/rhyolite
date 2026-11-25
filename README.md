@@ -75,6 +75,18 @@ in [Use with OpenAI Codex CLI](#use-with-openai-codex-cli), export the
 provider's key, and run
 `./rhyolite --harness codex --repo https://github.com/owner/repository`.
 
+The development checkout can review a non-sensitive local Git copy
+when a public source cannot be fetched. Use
+`./rhyolite --repo-path "$HOME/src/approved-local-copy" --security-scans 1`
+from an interactive terminal. The launcher shows the exact committed HEAD
+and model provider, then requires a separate, non-default disclosure
+affirmation before starting the agent; you must still approve the effective
+plan. Only committed files are reviewed, with scope 1 and no public
+research. **Local does not mean offline:** the chosen model provider
+processes the committed snapshot. Do not select a path or content that
+you may not send to that provider. This works with `--harness copilot`,
+`claude`, or `codex`; local and URL sources cannot be mixed.
+
 ## What's included
 
 The current plugin combines:
@@ -88,7 +100,8 @@ The current plugin combines:
   are available.
 - Claude Code agents, commands, and display-only hooks registered by
   `plugins/rhyolite/.claude-plugin/plugin.json`.
-- A Linux Bash launcher that collects public sources and the review model
+- A Linux Bash launcher that collects public sources or one explicitly
+  affirmed local Git source and the review model
   before selecting the restricted
   agent from a clean non-Git orchestration directory.
 - The `readonly-repository-review` skill.
@@ -112,10 +125,12 @@ Rhyolite currently uses a temporary user-facing `Beta` suffix: a machine
 version `X.Y.Z` is displayed as `vX.Y.Z Beta`. GitHub Copilot plugins are
 currently public-preview features.
 
-The plugin supports anonymously readable public HTTPS Git repositories on
-GitHub and other public DNS hosts. It does not review authenticated,
-private, or internal repositories, execute target code, modify target
-repositories, or use shared service credentials. Scope 2/3 research uses only
+Remote sources must be anonymously readable public HTTPS Git repositories
+on public DNS hosts. The development checkout also accepts a separately
+affirmed, non-sensitive local committed Git source through `--repo-path`.
+It does not authenticate to targets, review confidential content, execute
+target code, modify target repositories, or use shared service
+credentials. Scope 2/3 research uses only
 the bundled local broker's public-HTTPS direct-fetch, anonymous GitHub, and
 fixed anonymous `duckduckgo-html-v1` general-web-search providers. Advanced
 direct-runner use may select explicit `none` to opt out; no other web-search
@@ -483,12 +498,13 @@ isolated child then verifies its actual authentication path when invoked;
 if that fails, run `copilot login` from a clean non-Git directory,
 complete sign-in, and retry.
 
-Launcher-guided setup collects one or more anonymously readable public
-HTTPS Git repository URLs and the model before Copilot starts.
-Manual in-session setup asks for the same source and model information.
-Rhyolite does not
-discover local repositories, inspect local origins, or offer filesystem
-paths as review sources. If the orchestration directory is inside a Git
+Launcher-guided setup collects public HTTPS URLs or one explicit
+`--repo-path` and the model before Copilot starts. For a local source,
+the launcher validates the path and committed HEAD, displays the selected
+provider, and asks for separate disclosure affirmation in its terminal
+before passing the path to any agent. Manual in-session setup asks only
+for public HTTPS URLs; it never discovers local repositories or inspects
+local origins. If the orchestration directory is inside a Git
 worktree, the runner stops and requires a clean restart before planning
 or review execution.
 
@@ -855,10 +871,21 @@ endpoint is internal transport state; it never replaces the selected source,
 including its `.git` endpoint, in the plan, approval, persisted state, or
 preferences. Git 2.41 or newer is required.
 
-Local repository paths are not supported input. The runners accept only
-anonymously readable public HTTPS Git repository URLs and reject local
-paths before any `.git` inspection, origin/`HEAD` resolution, DNS
-lookup, or network access.
+An accidental path passed to `--repo` or a non-URL repository-list entry
+is rejected before Git metadata or network access. `--repo-path` is an
+explicit, separate local mode: the runner resolves ancestor aliases
+to a physical path displayed for approval and accepts only an owned,
+self-contained Git worktree or bare repository at that canonical absolute
+path, binds its filesystem identity and HEAD to approval, copies its
+objects without hardlinks into a separate bare clone, and archives only
+the committed snapshot. Dirty working-tree files are not included.
+It rejects linked Git directories, symlinked metadata, alternates,
+executable hooks and filters, unsafe ownership, and source/output
+overlap; it never consults a local `origin` or fetches target code.
+Both the isolated clone and `.git`-free snapshot are read-only before
+workers start. Local review requires scope 1, a separate provider-specific
+affirmation, and normal plan approval. `--auto-defaults` never supplies
+that affirmation; `--reuse-scans` and public research are unavailable.
 
 For programmatic invocation, installed plugin agents are namespaced:
 
@@ -1039,9 +1066,22 @@ default to 240 minutes for every scope, so scope never shortens the review
 or its security pass; `--timeout-minutes` overrides the default up to 720
 minutes.
 
-Repository-list files must contain only public HTTPS URLs, one per line.
-Local paths are rejected explicitly. The global commit option is valid
-only for one remote URL.
+Repository-list files remain public-HTTPS-only, one URL per line.
+The global commit option applies to one source; for a local source,
+the SHA must match its committed HEAD. The direct runner accepts
+`--repo-path <absolute-path>` only with an explicit
+`--local-provider-consent <Provider.Id@Provider.Host>` for execution.
+First inspect the plan-only JSON for provider ID and host, path, and SHA; a plan
+without affirmation reports `LocalDisclosure.Confirmed=false`. Then
+generate a fresh plan with the affirmation flag and approve that plan's
+hash before execution. Execution then asks you to type `I AUTHORIZE` in
+an interactive terminal; with `--non-interactive`, without a terminal, or
+inside a Rhyolite launcher session it never asks and stops unless the
+launcher recorded that affirmation for the same path, filesystem
+identity, HEAD, and provider. Do not use this flag
+for sensitive material:
+it authorizes disclosure to the selected external provider, not an
+offline review.
 
 When an output root or scope is omitted in a terminal, the runner offers
 the safe default and scope guidance interactively. Use
@@ -1227,12 +1267,15 @@ which you approve again before anything runs. The analysis distinguishes a
 provider refusal (`provider-refusal`) from a genuine overflow of the approved
 model's prompt budget (`context-limit`).
 
-The runners anonymously clone every target into a separate workspace, pin
-the reviewed commit, and create a read-only `.git`-free source snapshot
-under a clean, non-Git session root. Before that clone, they perform a
+For public URLs, the runners anonymously clone each target into a
+separate workspace, pin the reviewed commit, and perform a
 real anonymous accessibility preflight with pinned public DNS and disabled
 credentials, helpers, proxies, and automatic redirects. Only the bounded
 explicit same-origin HTTP 301 discovery described above is allowed.
+For local sources, they verify path identity and committed HEAD, copy
+Git objects without sharing them with the source, and do not use the
+network for acquisition. Both modes create a read-only `.git`-free
+snapshot under a clean, non-Git session root.
 Repository hooks, custom instructions, and project skills cannot become
 executable child configuration. Child agents deny write and shell tools. The
 research worker receives only snapshot-contained reads/searches and the exact
@@ -1331,8 +1374,9 @@ Important defaults:
 - Repository files and web pages are untrusted input.
 - Target code is never built, installed, or executed.
 - Target repositories are never modified.
-- Local repository paths are rejected; supply only public HTTPS Git
-  repository URLs.
+- Local Git sources require explicit `--repo-path` selection and
+  separate provider disclosure affirmation. Ordinary `--repo` values
+  still require public HTTPS Git URLs.
 - The outer onboarding hooks are local and display-only. They perform no
   network access, Git commands, writes, prompt mutation, or
   environment/auth inspection.
@@ -1424,6 +1468,13 @@ wrapper on Fedora Linux 44:
 ./rhyolite --repo https://github.com/owner/repository
 ```
 
+For a non-sensitive, provider-authorized local Git source, use
+`./rhyolite --repo-path /absolute/path/to/repository` and answer its
+separate terminal disclosure question. The agent is not started until
+that affirmation. Only one local source is supported per launcher
+invocation; use the direct runner for multiple explicitly selected
+local sources.
+
 To review several repositories in one run, repeat `--repo`, separate URLs
 with commas or spaces, or list them after the options:
 
@@ -1500,7 +1551,10 @@ preserving any optional initial request after removing control
 characters. Before Copilot starts, they syntactically canonicalize the
 selected public HTTPS repository URLs without removing a terminal `.git`
 endpoint and confirm the
-validated review runtime. Known model choices are `gpt-5.6-sol`
+validated review runtime. An explicit `--repo-path` is separately
+checked by the runner and requires terminal disclosure affirmation
+before a local source enters the setup block. Known model choices are
+`gpt-5.6-sol`
 (recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
 list the model IDs in Copilot's offline catalog, as reported by
 `copilot help config`, including `gpt-6-sol` when available. That catalog is built into the CLI rather than fetched for
@@ -1593,7 +1647,8 @@ bash ./tests/validate-all.sh
 The fail-fast validation gate runs the focused harness contract checks
 before the legacy monolithic plugin validator. Together they cover
 manifests, launcher smoke tests, public-source rejection order,
-anonymous preflight and clone arguments, source-aware state, prompt
+local-source isolation and consent, anonymous preflight and clone
+arguments, source-aware state, prompt
 placeholders, split picker/TUI runtime validation, Bash syntax, line
 endings, and forbidden permission defaults. They do not execute code
 from a reviewed repository.

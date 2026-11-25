@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added
+
+- Rhyolite can now review an explicitly selected local Git repository when
+  a public source cannot be fetched. Run
+  `./rhyolite --repo-path /absolute/path/to/repository` from an interactive
+  terminal with `--harness copilot`, `claude`, or `codex`. The launcher
+  shows the exact committed HEAD and the model provider ID and host, and
+  starts no agent until you type `I AUTHORIZE` to affirm that the path and
+  committed content are non-sensitive and authorized for that provider; you
+  then approve the effective plan as usual. Plan approval,
+  `--auto-defaults`, and piped input never supply that affirmation. The
+  runner accepts only an owned, self-contained worktree or bare repository,
+  binds its physical path, filesystem identity, and HEAD to the approved
+  plan, checks them again before and after the import, copies the objects
+  without hardlinks and without network access into a separate bare clone,
+  and reviews only the read-only, `.git`-free committed snapshot, so
+  uncommitted files are never read. Linked or symlinked Git metadata,
+  alternates, unsafe Git settings, executable hooks, untrusted ownership,
+  and overlap with the output folder are rejected. Local reviews run scope 1
+  without public research or `--reuse-scans`, and one run cannot mix local
+  and URL sources. A local source does not make the review offline: the
+  selected model provider processes the snapshot. Local plans use plan
+  schema 6 and state schema 7 with `LocalIdentity`, `LocalDisclosure`, and a
+  null `RemoteUrl`; URL plans and states keep schemas 5 and 6. The launcher
+  keeps a private, digest-only record of the affirmation until it exits,
+  and the runner executes a local review only with that record or, outside
+  a launcher session, its own `I AUTHORIZE` prompt in a terminal, so a
+  `--local-provider-consent <Id@Host>` flag that an agent adds by itself
+  never starts one. `rhyolite-summary` lists local reviews by their path.
+  See [Quickstart](README.md#quickstart).
+
 ### Fixed
 
 - Copilot CLI 1.0.116 also writes the record of a worker's own `--agent`

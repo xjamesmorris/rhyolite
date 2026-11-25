@@ -12,8 +12,8 @@ hostile input.
 
 The supported runner path:
 
-- Accepts only anonymous public HTTPS repository URLs on public DNS
-  hosts.
+- Accepts anonymous public HTTPS repository URLs on public DNS hosts,
+  or an explicitly selected, separately affirmed local Git repository.
 - Rejects embedded credentials, HTTP/SSH transports, IP literals, local
   or reserved hostnames, query strings, fragments, unsafe encodings, and
   control/whitespace characters.
@@ -140,8 +140,24 @@ The supported runner path:
   cannot be verified.
 - Writes reports and state only from the trusted wrapper into the
   selected artifact workspace.
-- Accepts only anonymously readable public HTTPS Git repository URLs and
-  rejects local paths before any Git, DNS, or network access.
+- Rejects accidental local paths passed as URLs or repository-list entries
+  before any Git, DNS, or network access.
+- Resolves local `--repo-path` input to a canonical absolute path (including
+  symlinked ancestors) before approval, but rejects a symbolic-link
+  repository. It requires controlled ownership and permissions,
+  self-contained Git metadata without symlinks, alternates, external Git
+  directories, executable hooks, or executable filter settings, and no
+  overlap with workspace, output, or runtime roots. It binds path,
+  filesystem identity, and committed
+  HEAD to plan approval, rechecks them before and after importing, and
+  uses an isolated bare copy with no hardlinks or shared objects. It
+  archives only committed content and makes both copy and snapshot
+  read-only before workers start. Local imports never perform DNS,
+  network Git, submodule fetches, or public research.
+- Requires an additional explicit affirmation that a local path and
+  committed HEAD are non-sensitive and authorized for submission to
+  the selected model provider ID and host. Local review is provider-backed, not
+  offline; neither `--auto-defaults` nor normal plan approval is consent.
 - Escapes all untrusted report and metadata content before writing HTML.
 - Keeps canonical report bodies inert in Markdown and HTML. Only exact
   allowlisted report headings become trusted generated TOCs/anchors.

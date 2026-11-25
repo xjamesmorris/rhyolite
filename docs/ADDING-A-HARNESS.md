@@ -84,7 +84,8 @@ Harness work crosses a strict set of surfaces:
   publication checks when production support changes.
 
 Each contract version lands as one coordinated behavior change. Contract v5
-retained plan schema 5, state schema 6, provider identity, preferences, and
+retained remote plan schema 5, remote state schema 6, provider identity,
+preferences, and
 the Contract-v4 bounded-repair lifecycle, and moved the dedicated scope 2/3
 research worker behind adapter functions. Contract v6 keeps those schemas and
 makes the adapter translate its CLI's raw worker stdout into a readable
@@ -706,11 +707,13 @@ Requirements:
 Do not use a display name, executable path, environment value, account name,
 or runtime-home path as approval identity.
 
-## State schema 6, manifests, and handoffs
+## State schemas, manifests, and handoffs
 
 Repository state, run state, manifest entries, and generated handoffs move
-together to state schema 6. They must carry safe execution identity sufficient
-to explain how the approved review ran:
+together: public HTTPS sources use state schema 6; explicitly selected
+local Git sources use state schema 7 for `LocalIdentity` and nullable
+`RemoteUrl`. Both carry safe execution identity sufficient to explain
+how the approved review ran:
 
 ```json
 {
@@ -910,7 +913,8 @@ generic seam:
 1. Compare default and explicit Copilot selection.
 2. Preserve Copilot worker argv and relevant environment exactly unless the
    approved change intentionally updates the golden contract.
-3. Produce plan schema 5, state schema 6, and identical approved
+3. Produce remote plan schema 5, remote state schema 6 (local sources use
+   plan schema 6 and state schema 7), and identical approved
    harness/provider/model/effort/context values through plan, execution, repository
    state, manifest, run state, handoff, and summary output.
 4. Exercise the no-op fixture through a test-owned fixed registry from plan to
@@ -1021,7 +1025,8 @@ An implementation is not complete until the change supplies:
 - runtime-home and persisted-state file/permission inventories;
 - exact report-repair argv/env vectors, repair-home inventory, raw descriptor
   extraction cases, and cleanup/failure evidence;
-- plan schema 5 and state schema 6 examples;
+- remote plan schema 5 and state schema 6 examples, plus local
+  plan schema 6 and state schema 7 examples;
 - approval-hash tests showing every new field is bound;
 - default/explicit selection equivalence;
 - negative results for every failure class above;

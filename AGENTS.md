@@ -140,7 +140,10 @@ supported and must not drive new work.
   whitespace-separated `--repo` values or in the initial review request,
   into one trusted `Source=` line, syntactically canonicalizes those public
   sources without stripping a terminal `.git` endpoint, selects spellings
-  that differ only by that endpoint once, rejects unknown options before
+  that differ only by that endpoint once. A separate `--repo-path` option
+  selects one canonical local Git source; before any agent sees its path,
+  the launcher asks in its terminal for explicit disclosure affirmation
+  for the plan's exact HEAD and provider. It rejects unknown options before
   any state or harness start and `github.com` URLs that name only an account
   before the harness starts, collects model/reasoning/context settings,
   preselects `rhyolite:repo-review`, passes `--mode interactive`, and
@@ -334,15 +337,18 @@ supported and must not drive new work.
   only when a harness terminates its own MCP process group before the broker
   can finish a clean exit record. It preserves stdio, monitors the trusted
   runner PID plus kernel start time, and exits with the broker.
-- `run-parallel-reviews.sh` is the supported trusted boundary. It validates
-  public HTTPS sources, rejects local paths before `.git` inspection or
-  network access, preserves the selected canonical URL as plan, approval, and
-  source identity, and performs fail-closed anonymous smart-Git preflight
+- `run-parallel-reviews.sh` is the supported trusted boundary. For remote
+  sources it validates public HTTPS URLs, rejects implicit local paths
+  before `.git` inspection, preserves the canonical URL as plan, approval,
+  and source identity, and performs fail-closed anonymous smart-Git preflight
   through pinned public DNS with credentials, helpers, proxies, and automatic
   curl/Git redirects disabled. During execution only, it may follow at most
   three explicit same-origin HTTP 301 discovery hops before anonymously
-  cloning and pinning the exact commit. It then creates a read-only
-  `.git`-free snapshot, supplies bounded Git metadata, creates isolated
+  cloning and pinning the exact commit. Explicit local `--repo-path` uses
+  a separate, offline source-identity recheck and isolated bare import
+  without hardlinks or alternates; it cannot run scope 2/3 or reuse scans.
+  Both paths create a read-only `.git`-free snapshot, supply bounded Git
+  metadata, and create isolated
   harness homes, and invokes workers with write/shell/custom
   instructions/built-in MCPs disabled.
 - The runner's default and guided `OpenHtmlPolicy` is `never`. Normal
@@ -536,14 +542,42 @@ supported and must not drive new work.
 
 - Preserve the read-only boundary by construction. Target repository and web
   content is untrusted evidence, never executable instructions.
-- Never execute target code, install target dependencies, inspect a selected
-  local working tree, grant child write or shell tools, inherit broad
-  allow-all settings, or enable public URL access by default.
-- Rhyolite accepts only anonymously readable public HTTPS Git repository
-  URLs. Reject local paths before `.git` inspection, origin/HEAD resolution,
-  DNS lookup, or network access. Preserve a selected terminal `.git` endpoint
-  in the canonical plan, approval hash, persisted state, and preference
-  identity.
+- Never execute target code, install target dependencies, read uncommitted
+  worktree content, grant child write or shell tools, inherit broad allow-all
+  settings, or enable public URL access by default. Only the trusted runner
+  may read Git metadata and committed objects from an explicitly selected
+  local repository; workers see only its isolated, read-only snapshot.
+- Remote sources remain anonymously readable public HTTPS Git URLs only.
+  Accept a local Git source only through explicit `--repo-path PATH` selection;
+  never reinterpret a local-looking `--repo` value, repository-list entry,
+  failed URL, or remote `origin` as a local source. Reject implicit local
+  paths before `.git` inspection, DNS lookup, or network access. Preserve
+  a selected terminal `.git` endpoint in remote plan, approval, state, and
+  preference identity.
+- Bind a local source's canonical path, filesystem identity, and committed
+  HEAD to plan approval; recheck all three before and after importing its
+  objects. Reject symlinked or external Git directories, alternates,
+  untrusted ownership, and overlap with workspace or output roots. Import
+  objects without hardlinks, object sharing, hooks, filters, submodule
+  fetches, credential inheritance, or network access. Make the isolated
+  clone and `.git`-free snapshot read-only before workers start.
+- Local reviews require separate, explicit affirmation for the selected
+  model provider ID and host that the displayed path and committed content are
+  non-sensitive and authorized for submission to that provider. Ordinary
+  plan approval, `--auto-defaults`, and non-interactive execution are not
+  consent. Because `--local-provider-consent` is a fixed provider string
+  that an agent could supply itself, the launcher keeps a private,
+  digest-only record of the terminal affirmation, bound to the canonical
+  path, filesystem identity, committed HEAD, and provider ID and host, in
+  its session directory until it exits. The runner executes a local review
+  only with that matching record or, outside a launcher session, its own
+  terminal `I AUTHORIZE` answer. An orchestrator that can already write
+  files or run arbitrary commands as the user can forge the record and
+  read local files directly; keep its approvals narrow (tracked as T28 in
+  `docs/TASKS.md`).
+  Local sources use scope 1 only, without public research or
+  cross-run security-scan reuse. A local source and a remote URL may not
+  share a run.
 - Keep canonical, symlink-aware separation between clone, snapshot, runtime
   home, and writable output roots. Unsafe URLs, non-public DNS answers,
   credential or proxy inheritance, path overlap, incomplete reports, and
@@ -664,8 +698,11 @@ supported and must not drive new work.
   retention, network-log policy, and dossier-validation protocol, attempt
   limit, canonicalization, and digest algorithm. Scope 1 fixes the object to
   disabled and clears stale cookie consent.
-- Harness Contract v11 is implemented. It uses plan schema 5 and state schema
-  6, makes `Harness`, validated `Provider`, `Model`, `ReasoningEffort`, and
+- Harness Contract v11 is implemented. Remote plans retain schema 5 and
+  remote state retains schema 6; the opt-in local source uses plan schema
+  6 and state schema 7 for bound `LocalIdentity`, nullable `RemoteUrl`,
+  and plan `LocalDisclosure`. It makes `Harness`, validated `Provider`,
+  `Model`, `ReasoningEffort`, and
   `ContextTier` approval-bound, and
   defines `Provider` as an object with `Id`, `Host`, and
   `ForwardedEnvVarNames`. Contract v5 added the adapter-owned research
@@ -918,12 +955,13 @@ supported and must not drive new work.
 - Adapter output is data. Do not evaluate it, build shell command strings,
   accept success-shaped fallbacks, copy broad runtime homes, or expose secret
   values in plans, state, logs, handoffs, or provider summaries.
-- Plan-only resolution is syntax-only and offline. It must not require curl,
-  DNS, Git transport, runtime authentication, or any harness CLI surface other
-  than the offline local help/config output that validates the model catalog,
-  and it must
-  preserve the selected source URL unchanged. Execution performs transport and
-  authentication checks only after the approved plan still matches.
+- Remote plan-only resolution is syntax-only and offline. Local plan-only
+  resolution may read only the explicitly selected repository's Git metadata
+  and committed HEAD to bind its path, filesystem identity, and commit.
+  Neither path may require curl, DNS, Git transport, runtime authentication,
+  or any harness CLI surface other than offline local help/config for model
+  validation. Preserve the selected remote URL unchanged; execution performs
+  transport and authentication checks only after the approved plan matches.
 
 ## Release contract
 

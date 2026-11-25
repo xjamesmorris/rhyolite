@@ -63,9 +63,8 @@
 17. Git obtains repository credentials from helpers, `_netrc`/`.netrc`,
     inherited auth variables, a proxy, an automatic or cross-origin redirect,
     or a client certificate.
-18. A local path is accepted as a review source and triggers filesystem,
-    Git metadata, DNS, or network access before the public-source
-    contract rejects it.
+18. An accidental local-looking URL or repository-list entry triggers
+    filesystem, Git metadata, DNS, or network access before rejection.
 19. The onboarding hook inspects credentials, mutates local state, or
     hijacks unrelated sessions before the user invokes the review agent.
 20. A tampered or mismatched launcher preference silently changes the
@@ -131,11 +130,21 @@
     settings, a `.codex` folder above the working directory is loaded as a
     trusted project layer, or a newer Codex release adds an unverified
     configuration surface or tool.
+39. An explicit local source resolves through symlinks, external Git
+    directories, alternates, shared object hardlinks, executable hooks,
+    filters, or unsafe configuration and escapes the intended snapshot.
+40. A local repository is swapped, moved, or recommitted between planning,
+    import, and snapshot, or a dirty worktree file is mistaken for
+    committed content.
+41. An operator mistakes local-source review for offline analysis and
+    submits private code or an identifying path to a model provider
+    without a separate, provider-specific disclosure decision.
 
 ## Controls
 
-- Anonymous public HTTPS Git URLs on syntactically valid public DNS hosts
-  only.
+- Remote URLs are anonymous public HTTPS Git sources on syntactically
+  valid public DNS hosts only. A separate, explicitly selected local
+  source can contain only non-sensitive, provider-authorized content.
 - User-facing orchestration starts from a clean non-Git directory, never
   from inside the target checkout.
 - Launcher bootstrap performs syntax-only public-HTTPS canonicalization
@@ -160,10 +169,12 @@
   the source identity in the plan, approval, persisted state, and preferences.
   A final same-origin effective endpoint is internal execution transport state
   only.
-- Plan-only remains syntax-only and offline, with no curl, DNS, Git transport,
-  harness-runtime, or authentication dependency. curl is trusted-runner-only
-  Git preflight machinery and grants no child web permissions; scope 1 remains
-  research-off.
+- Remote plan-only remains syntax-only and offline. Local plan-only
+  reads only the selected Git metadata and committed HEAD to bind path,
+  filesystem identity, and SHA. Neither path uses curl, DNS, Git
+  transport, harness-runtime, or authentication. curl is remote
+  trusted-runner-only Git preflight machinery and grants no child web
+  permissions; local review remains scope 1 and research-off.
 - Git 2.41 or newer is required.
 - Hooks, submodules, LFS smudging, global Git config, and prompts
   disabled.
@@ -171,6 +182,43 @@
   Git environment is restored, preventing alternate objects or discovery
   bypasses.
 - Separate clone and artifact directory per repository.
+- Local mode resolves an input's ancestor symlinks once to a physical
+  plan-bound path and rejects a symlink at the repository itself, linked
+  Git directories, alternates, promisor/shallow stores, executable hooks,
+  filter configuration, and group/other-writable Git metadata. It copies
+  Git objects into an isolated bare clone without hardlinks, rechecks
+  path identity and HEAD before and after import, and makes the clone
+  and archive snapshot read-only before any worker. It never reads
+  uncommitted worktree content or consults `origin`.
+- Local disclosure must be explicitly affirmed in the launcher terminal
+  for the exact path, committed HEAD, and selected model provider before
+  an orchestrator sees a local path. The direct runner requires the
+  separate `--local-provider-consent` ID@HOST; the approval hash binds that
+  affirmation. `--auto-defaults` does not grant it.
+- An orchestrator agent could add the fixed `--local-provider-consent`
+  string itself, so the flag alone never starts a local review. After the
+  terminal affirmation, the launcher writes a mode-0600, digest-only
+  record of the exact path, filesystem identity, HEAD, and provider ID and
+  host in its mode-0700 session directory and deletes it when it exits.
+  The runner executes a local review only with a matching record, or after
+  its own `I AUTHORIZE` prompt in an interactive terminal outside a
+  launcher session; inside one it never prompts, so an orchestrator cannot
+  answer through a pseudo-terminal. It rejects symlinked, readable, or
+  misplaced records and never prints the flag value to a caller without a
+  terminal.
+- Residual risk: the record is not a secret, because `--plan-only`
+  returns every input to its digest. An orchestrator that can already
+  write files or run arbitrary commands as the user, for example after a
+  session-wide `bash` approval in Copilot CLI, in a URL session started
+  with `--yolo`, or in a Claude Code bypass or auto mode, can forge it.
+  Such an orchestrator can also read local files directly, so keep
+  orchestrator approvals narrow. Harness deny rules or a launcher-owned
+  Bash controller for local reviews are tracked as T28 in
+  [TASKS.md](TASKS.md).
+- Local inspection passes the validated Git directory explicitly and
+  requires Git to recognize it, so Git cannot fall back to a parent or
+  sibling repository. Rejected Git configuration names are printed with
+  terminal controls replaced.
 - Read-only `.git`-free source snapshots under clean, non-Git session
   roots.
 - Snapshot creation neutralizes archive-specific `export-ignore` and
@@ -359,11 +407,11 @@
   GitHub, Copilot, credential-manager, SSH-agent, netrc, and proxy
   inputs. Credential helpers, HTTP auth headers, and interactive auth
   are cleared; TLS verification remains enabled.
-- Guided setup accepts only public HTTPS repository URLs and does not
-  discover local repositories or inspect local origins.
-- Direct local-path flags and non-URL repository-list entries are
-  rejected before any `.git` inspection, origin/`HEAD` resolution, DNS
-  lookup, or network access.
+- Manual in-agent setup asks only for public HTTPS URLs and never
+  discovers local repositories or inspects local origins. The launcher
+  offers one explicit `--repo-path` source only after terminal disclosure
+  affirmation. Implicit local-looking URLs and non-URL repository-list
+  entries fail before `.git` inspection, DNS lookup, or network access.
 - Repository count, concurrency, and session duration are bounded.
 - Unpredictable run directories are created without reuse and physically
   revalidated before child sessions start.
@@ -627,7 +675,10 @@
 ## Residual risks
 
 - Copilot, Claude Code's model provider, the configured Codex provider, and
-  public search services process prompts and public source content.
+  public search services process prompts and public source content. For
+  an affirmed local source the selected model provider also processes
+  committed local content; incorrectly classifying it as non-sensitive
+  remains an operator-controlled disclosure risk.
 - Codex's session rollout and exec event formats are internal and
   version-dependent. Rhyolite pins Codex CLI 0.163.0, parses both
   defensively, and fails closed on unreadable records; another release needs
@@ -696,7 +747,7 @@
 
 ## Expansion requirements
 
-Private or non-public repository support requires a separate privacy,
+Sensitive or authenticated repository support requires a separate privacy,
 security, credential, network, and data-retention review. A centralized
 GitHub Actions or comparable service additionally requires an approved
 service identity, per-repository authorization, ephemeral runners, audit

@@ -1784,6 +1784,9 @@ harness_render_request() {
             'Repository URL: {{REPOSITORY_URL}}')
                 printf 'Repository URL: %s\n' "${repository}"
                 ;;
+            'Repository source: {{REPOSITORY_URL}}')
+                printf 'Repository source: %s\n' "${repository}"
+                ;;
             'Read-only source snapshot: {{REPOSITORY_PATH}}')
                 printf 'Read-only source snapshot: %s\n' "${review_path}"
                 ;;

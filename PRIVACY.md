@@ -2,12 +2,15 @@
 
 ## Release scope
 
-Version `0.11.0` reviews anonymously readable public HTTPS Git
-repositories.
+Tagged version `0.11.0` reviews anonymously readable public HTTPS Git
+repositories. The development checkout also supports explicitly selected
+local Git repositories containing only non-sensitive committed material
+that the operator may submit to the selected model provider.
 
 Do not use this version with:
 
-- Private or non-public repositories.
+- Confidential or private repository content that is not approved for
+  disclosure to the selected model provider.
 - Customer data.
 - Credentials or secrets.
 - Personal or sensitive data that is not already intentionally public.
@@ -135,10 +138,39 @@ already published by a server, copyrighted material, misleading
 content, or hostile bytes. They are local, inert, unindexed, not
 individually linked from HTML, and never exposed to a model by Rhyolite.
 
-Rhyolite currently accepts only anonymously readable public HTTPS Git
-repository URLs as review sources. Local repository paths are rejected
-before any `.git` inspection, origin/`HEAD` resolution, DNS lookup, or
-network access.
+Remote review sources must be anonymously readable public HTTPS Git URLs.
+Accidental local-looking `--repo` values and non-URL repository-list
+entries are rejected before inspecting `.git` or accessing the network.
+An explicitly selected `--repo-path` is different: the trusted runner
+resolves ancestor aliases to the physical path displayed for approval,
+rejects a symbolic-link repository, and reads only the local Git metadata
+and committed HEAD required to bind the plan. It then copies committed
+objects into an isolated, read-only bare
+Git clone and `.git`-free snapshot. It never reads dirty worktree files,
+uses the source's remote `origin`, or performs local-source research.
+Linked or external Git directories, alternates, symlinks in Git metadata,
+unsafe configuration or hooks, and unsafe ownership are rejected.
+
+Before the launcher passes a local path to a model-backed orchestrator,
+the terminal displays the selected path, exact committed HEAD, and
+provider ID and host. An explicit, non-default affirmation is required
+that the path and committed contents are non-sensitive and may be sent
+to that provider. `--auto-defaults`, ordinary plan approval, or
+non-interactive launcher input never supplies that affirmation. Direct
+runner use requires a separate
+`--local-provider-consent <Provider.Id@Provider.Host>` choice in addition to the
+approval-bound effective plan, and then either the launcher's private
+record of the terminal affirmation for the same path, filesystem
+identity, HEAD, and provider, or, outside a launcher session, an
+`I AUTHORIZE` answer to the runner's own terminal prompt. That record
+holds only a digest and is deleted when the launcher exits. An
+orchestrator that may already write files or run any command as you can
+read local files directly, so keep its approvals narrow. A local Git path
+does **not** make the
+review offline. The selected path is retained in the private plan, state,
+and handoff; worker prompts use a non-identifying local source label
+instead of the original path. Do not share output artifacts without
+checking their path and content disclosures.
 
 The per-repository `agent-state/` directory contains a sanitized Copilot
 home. It can contain allowlisted session-state and session-store files
@@ -205,7 +237,8 @@ untrusted text as inert code rather than active links or images.
 
 ## Model providers
 
-Review content, including source excerpts, Git metadata, research dossiers,
+Review content, including local committed files, source excerpts, Git
+metadata, research dossiers,
 and prompts, is processed by the selected harness's model provider: GitHub
 Copilot for `--harness copilot`, Anthropic or the provider configured for
 Claude Code for `--harness claude`, and the provider configured for Codex for

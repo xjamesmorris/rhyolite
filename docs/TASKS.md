@@ -7,7 +7,7 @@ and their priorities. It records work state only:
 still report bugs and request features through the routes in
 [SUPPORT.md](../SUPPORT.md).
 
-**Last updated:** 2026-10-29
+**Last updated:** 2026-11-24
 
 ## Priorities
 
@@ -31,6 +31,7 @@ Status values:
 | --- | --- | --- | --- |
 | T25 | P2 | Verify | Observe a reused-scan review and a scan report request live |
 | T26 | P2 | Needs triage | Check Claude Code's managed settings before a review |
+| T28 | P2 | Open | Keep orchestrators from forging local-review consent |
 | T20 | P3 | Open | Report security-relevant files that the security pass did not open |
 | T27 | P3 | Open | Check `/etc/codex` when a direct-runner Codex plan is made |
 | T11 | P3 | Deferred | Deferred review and platform features |
@@ -74,6 +75,30 @@ Status values:
   the threat model covers the case.
 - **Source:** Codex hostile-configuration isolation gate, 2026-10-29
   ([CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md)).
+
+### T28 (P2, Open): Keep orchestrators from forging local-review consent
+
+- **Problem:** The runner executes a local review only with the launcher's
+  private record of the operator's `I AUTHORIZE` answer. The record is not
+  a secret: `--plan-only` returns every input to its digest. An
+  orchestrator that can already write a file or run any command as the
+  user can therefore forge it. Copilot sessions get that ability when the
+  user approves `bash` for the session, URL sessions started with `--yolo`
+  have it, and so do Claude Code bypass, auto, and possibly acceptEdits
+  modes. Such an orchestrator can also read local files directly, so the
+  record cannot protect anything there.
+- **Next step:** verify live which command label Copilot CLI approves for
+  `bash '<runner>' ...` and whether that approval covers `bash -c`, and
+  whether Claude Code's disallowed Edit and Write tools also block shell
+  redirects. Then decide between harness deny rules with direct runner
+  invocation and a launcher-owned Bash controller for local reviews, as
+  Codex already uses.
+- **Done when:** no orchestrator in a launcher session can create a
+  matching record or start a local review without the operator's terminal
+  answer, verified live with Copilot CLI and Claude Code, with regression
+  tests and threat-model updates.
+- **Source:** independent security review of the local-source change,
+  2026-11-24.
 
 ### T20 (P3, Open): Report security-relevant files that the security pass did not open
 

@@ -963,8 +963,12 @@ their own instructions, which compaction keeps, and the runner asks the same
 scan session once for a conforming report. See
 [RUN-FAILURE-INCIDENT-2026-10-26.md](RUN-FAILURE-INCIDENT-2026-10-26.md).
 
-Contract v11 keeps the same statuses, outcome schema 3, plan schema 5, state
-schema 6, and registry. It adds the required functions
+Contract v11 keeps the same statuses, outcome schema 3, remote-source plan
+schema 5, remote-source state schema 6, and registry. The separately approved
+local-source extension uses plan schema 6 and state schema 7 to bind the
+physical Git path, filesystem identity, committed HEAD, and provider
+disclosure without changing the adapter seam. Contract v11 adds the required
+functions
 `harness_snapshot_transport` and `harness_configure_snapshot_transport`. The
 Copilot and Claude Code adapters report `native`, keep their existing worker
 tools and argv, and reject offline configuration. An adapter that reports

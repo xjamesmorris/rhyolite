@@ -2500,7 +2500,7 @@ harness_render_request \
     'RESEARCH TRANSPORT DISABLED' ||
     fail 'Copilot adapter could not render the worker request.'
 for expected_request_line in \
-    'Repository URL: https://github.com/octocat/Hello-World' \
+    'Repository source: https://github.com/octocat/Hello-World' \
     "Read-only source snapshot: ${worker_session_root}/source" \
     'Exact commit to review: 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d' \
     'Review date: 2026-10-01' \

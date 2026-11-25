@@ -1,6 +1,6 @@
 Use the /readonly-repository-review skill.
 
-Repository URL: {{REPOSITORY_URL}}
+Repository source: {{REPOSITORY_URL}}
 Read-only source snapshot: {{REPOSITORY_PATH}}
 Exact commit to review: {{COMMIT}}
 Review date: {{REVIEW_DATE}}
