@@ -4,6 +4,10 @@ COPILOT_AUTH_BRIDGE_INITIALIZED=0
 COPILOT_AUTH_BRIDGE_HAS_PLAINTEXT=0
 COPILOT_AUTH_BRIDGE_JSON='{}'
 COPILOT_RUNTIME_HOME=''
+# The custom agents that the review and research worker argv select with
+# --agent; report repair selects none.
+COPILOT_REVIEW_WORKER_AGENT='rhyolite:repo-review-worker'
+COPILOT_RESEARCH_WORKER_AGENT='rhyolite:repo-research-worker'
 
 copilot_require_array_destination() {
     if [[ ! "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
@@ -646,7 +650,7 @@ harness_worker_argv() {
         --plugin-dir "${plugin_root}"
         --name "${session_name}"
         --session-id "${session_id}"
-        --agent rhyolite:repo-review-worker
+        --agent "${COPILOT_REVIEW_WORKER_AGENT}"
         --model "${model}"
         --reasoning-effort "${reasoning_effort}"
         --context "${context_tier}"
@@ -867,7 +871,7 @@ harness_research_worker_argv() {
         --plugin-dir "${plugin_root}"
         --name "${session_name}"
         --session-id "${session_id}"
-        --agent rhyolite:repo-research-worker
+        --agent "${COPILOT_RESEARCH_WORKER_AGENT}"
         --model "${model}"
         --reasoning-effort "${reasoning_effort}"
         --context "${context_tier}"
@@ -904,6 +908,19 @@ harness_finalize_research_session() {
     return 0
 }
 
+# Copilot CLI records the custom agent that --agent selects for a worker's own
+# session as a `subagent.selected` event without an `agentId`. Every release
+# since at least 1.0.93 persists it in the session record, and 1.0.116 also
+# writes it to the --output-format json stream. Print the agent that the
+# phase's worker argv selects, or an empty line for report repair.
+copilot_phase_worker_agent() {
+    case "$1" in
+        review) printf '%s\n' "${COPILOT_REVIEW_WORKER_AGENT}" ;;
+        research) printf '%s\n' "${COPILOT_RESEARCH_WORKER_AGENT}" ;;
+        *) printf '\n' ;;
+    esac
+}
+
 # Copilot print mode renders text output as terminal Markdown: it wraps lines
 # at the terminal width, re-indents and renumbers lists, inserts blank lines,
 # and emits OSC 8 hyperlink escapes even with --no-color. Those bytes are not
@@ -916,16 +933,19 @@ harness_finalize_research_session() {
 #              the cursor file while the worker is still running.
 # Both modes verify that every recorded model call, tool call, usage
 # checkpoint, and subagent metric used the approved model and effort, and both
-# reject any subagent event because Rhyolite workers receive no subagent tool
-# and Copilot CLI lets a `task` argument override every configured subagent
-# model. Both also recognize a content refusal of the approved model: a usage
-# record for the approved model whose response the provider declined
-# (finishReason content_filter, which Copilot CLI also reports for an
-# Anthropic `refusal` stop), a `refusal_fallback` model change, or the CLI's
-# refusal notice. A refusal that precedes every unapproved model is reported
-# as `refused`, because Copilot CLI's automatic refusal fallback is what
-# brings in the other model. It prints one status token followed by one
-# sanitized detail line.
+# reject every subagent event because Rhyolite workers receive no subagent
+# tool and Copilot CLI lets a `task` argument override every configured
+# subagent model. The one exception is the record of the worker's own --agent
+# selection: a `subagent.selected` event without an `agentId` that names
+# exactly the phase's worker agent and carries no field other than the agent
+# name, display name, and tool list. Both modes also recognize a content
+# refusal of the approved model: a usage record for the approved model whose
+# response the provider declined (finishReason content_filter, which Copilot
+# CLI also reports for an Anthropic `refusal` stop), a `refusal_fallback`
+# model change, or the CLI's refusal notice. A refusal that precedes every
+# unapproved model is reported as `refused`, because Copilot CLI's automatic
+# refusal fallback is what brings in the other model. It prints one status
+# token followed by one sanitized detail line.
 copilot_scan_structured_output() {
     local mode="$1"
     local raw_output="$2"
@@ -934,6 +954,7 @@ copilot_scan_structured_output() {
     local normalized_output="${5:--}"
     local final_reply_output="${6:--}"
     local cursor_path="${7:--}"
+    local worker_agent="${8:--}"
 
     python3 - \
         "${mode}" \
@@ -942,7 +963,8 @@ copilot_scan_structured_output() {
         "${approved_effort}" \
         "${normalized_output}" \
         "${final_reply_output}" \
-        "${cursor_path}" <<'PY'
+        "${cursor_path}" \
+        "${worker_agent}" <<'PY'
 import json
 import pathlib
 import re
@@ -955,6 +977,7 @@ approved_effort = sys.argv[4]
 normalized_path = pathlib.Path(sys.argv[5]) if sys.argv[5] != "-" else None
 reply_path = pathlib.Path(sys.argv[6]) if sys.argv[6] != "-" else None
 cursor_path = pathlib.Path(sys.argv[7]) if sys.argv[7] != "-" else None
+worker_agent = sys.argv[8] if sys.argv[8] != "-" else None
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 SUBAGENT_EVENTS = (
     "subagent.started",
@@ -963,6 +986,7 @@ SUBAGENT_EVENTS = (
     "subagent.completed",
     "subagent.failed",
 )
+SELECTION_FIELDS = frozenset(("agentName", "agentDisplayName", "tools"))
 REFUSAL_NOTICE = re.compile(
     r"'([^'\s]{1,128})' declined the request (?:due to a content policy refusal|\(content refusal\))"
 )
@@ -1078,6 +1102,20 @@ def observe_subagent(data):
         subagent_seen = (safe_token(name), safe_token(model) if model else "")
 
 
+# The worker's own --agent selection is not a subagent: Copilot CLI records it
+# for the main session, without an agentId, and it names exactly the phase's
+# worker agent and carries no model, effort, or other field.
+def worker_agent_selection(event_type, event, data):
+    if (worker_agent is None or event_type != "subagent.selected"
+            or "agentId" in event or not set(data) <= SELECTION_FIELDS
+            or data.get("agentName") != worker_agent):
+        return False
+    tools = data.get("tools", [])
+    return (isinstance(data.get("agentDisplayName", ""), str)
+            and isinstance(tools, list)
+            and all(isinstance(tool, str) for tool in tools))
+
+
 consumed = 0
 lines = raw_bytes.split(b"\n")
 # In watch mode the split tail is either the empty string after a final
@@ -1121,7 +1159,8 @@ for raw_line in lines:
         # token is an attempt; it produced no output the worker could use.
         observe_model(data.get("model"))
     elif event_type in SUBAGENT_EVENTS:
-        observe_subagent(data)
+        if not worker_agent_selection(event_type, event, data):
+            observe_subagent(data)
     elif event_type == "assistant.usage":
         observe_usage(data)
     elif event_type == "session.usage_record":
@@ -1171,7 +1210,8 @@ if mode == "watch":
 
 if subagent_seen is not None:
     name, model = subagent_seen
-    finish("subagent", f"{name}:{model}" if model else name)
+    # Safe tokens contain no spaces, while agent names may contain colons.
+    finish("subagent", f"{name} {model}" if model else name)
 # Copilot CLI's automatic refusal fallback is the only recorded way a worker
 # leaves the approved model after the provider declines it, so a recorded
 # refusal explains any other model in the same output, whatever order the
@@ -1235,9 +1275,9 @@ copilot_set_scan_error() {
 
     case "${status}" in
         subagent)
-            subagent_name="${detail%%:*}"
+            subagent_name="${detail%% *}"
             subagent_model=''
-            [[ "${detail}" != *:* ]] || subagent_model="${detail#*:}"
+            [[ "${detail}" != *' '* ]] || subagent_model="${detail#* }"
             if [[ -n "${subagent_model}" ]]; then
                 rhyolite_harness_set_error \
                     "Copilot started subagent '${subagent_name}' with model '${subagent_model}' in the ${phase} phase although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent."
@@ -1296,7 +1336,9 @@ harness_normalize_worker_output() {
             "${approved_model}" \
             "${approved_effort}" \
             "${normalized_output}" \
-            "${final_reply_output}" 2>/dev/null
+            "${final_reply_output}" \
+            - \
+            "$(copilot_phase_worker_agent "${phase}")" 2>/dev/null
     )" || true
     status="${result%%$'\n'*}"
     detail=''
@@ -1336,7 +1378,8 @@ harness_detect_worker_violation() {
             "${approved_model}" \
             "${approved_effort}" \
             - - \
-            "${cursor_path}" 2>/dev/null
+            "${cursor_path}" \
+            "$(copilot_phase_worker_agent "${phase}")" 2>/dev/null
     )" || true
     status="${result%%$'\n'*}"
     detail=''
@@ -1386,6 +1429,7 @@ copilot_scan_worker_outcome() {
     local approved_model="$4"
     local approved_effort="$5"
     local outcome_output="$6"
+    local worker_agent="${7:--}"
 
     python3 - \
         "${phase}" \
@@ -1393,13 +1437,15 @@ copilot_scan_worker_outcome() {
         "${session_events}" \
         "${approved_model}" \
         "${approved_effort}" \
-        "${outcome_output}" <<'PY'
+        "${outcome_output}" \
+        "${worker_agent}" <<'PY'
 import json
 import pathlib
 import re
 import sys
 
-phase, raw_name, events_name, approved_model, approved_effort, output_name = sys.argv[1:7]
+phase, raw_name, events_name, approved_model, approved_effort, output_name, agent_name = sys.argv[1:8]
+worker_agent = agent_name if agent_name != "-" else None
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 TRANSIENT = re.compile(
     r"Failed to get response from the AI model|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|"
@@ -1423,6 +1469,7 @@ SUBAGENT_EVENTS = (
     "subagent.completed",
     "subagent.failed",
 )
+SELECTION_FIELDS = frozenset(("agentName", "agentDisplayName", "tools"))
 REFUSAL_NOTICE = re.compile(
     r"'([^'\s]{1,128})' declined the request (?:due to a content policy refusal|\(content refusal\))"
 )
@@ -1442,6 +1489,19 @@ def safe(value):
 
 def token_count(value):
     return value if type(value) is int and 0 < value <= TOKEN_LIMIT else None
+
+
+# The worker's own --agent selection is not a subagent; see the structured
+# output scanner for the exact record.
+def worker_agent_selection(event_type, event, data):
+    if (worker_agent is None or event_type != "subagent.selected"
+            or "agentId" in event or not set(data) <= SELECTION_FIELDS
+            or data.get("agentName") != worker_agent):
+        return False
+    tools = data.get("tools", [])
+    return (isinstance(data.get("agentDisplayName", ""), str)
+            and isinstance(tools, list)
+            and all(isinstance(tool, str) for tool in tools))
 
 
 exit_code = None
@@ -1551,7 +1611,8 @@ for raw_line in pathlib.Path(raw_name).read_bytes().split(b"\n"):
     elif kind in ("assistant.message", "tool.execution_start", "tool.execution_complete"):
         observe(data.get("model"), True)
     elif kind in SUBAGENT_EVENTS:
-        subagent = True
+        if not worker_agent_selection(kind, event, data):
+            subagent = True
     elif kind == "assistant.usage":
         approved_usage(data, f"stdout:{line_number}")
     elif kind == "session.usage_record":
@@ -1684,7 +1745,8 @@ harness_worker_outcome() {
             "${runtime_home}/session-state/${session_id}/events.jsonl" \
             "${approved_model}" \
             "${approved_effort}" \
-            "${outcome_output}" 2>/dev/null
+            "${outcome_output}" \
+            "$(copilot_phase_worker_agent "${phase}")" 2>/dev/null
     ); then
         rm -f -- "${outcome_output}"
         rhyolite_harness_set_error \

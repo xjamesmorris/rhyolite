@@ -470,7 +470,8 @@
   configured `subagents.agents.<name>.model` value, so a specialist could
   silently run on another model while the main session stayed on the
   approved one. The worker performs the dedicated security pass itself, the
-  structured-output normalizer rejects any recorded subagent event, and
+  structured-output normalizer rejects any recorded subagent event other
+  than Copilot CLI's record of the worker's own `--agent` selection, and
   worker prompts never invite the model to select, name, or request a model,
   effort, or context.
 - While a review, research, or report-repair child runs, the runner polls

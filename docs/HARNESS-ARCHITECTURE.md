@@ -246,7 +246,7 @@ Every mapped adapter must define all functions below.
 | `harness_research_worker_argv` | Build the ordered research-worker argv: the bundled research worker, the approved model/effort/context, snapshot read/search tools, and exactly the runner-supplied broker tools from the written MCP configuration. |
 | `harness_research_worker_env` | Build the ordered research-worker environment for the runtime home prepared with phase `research`. |
 | `harness_finalize_research_session` | After the research child exits and before its runtime home is removed, export the research transcript and fail when the session record shows substitution or isolation loss; a no-op must still return success explicitly. |
-| `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort and on any recorded subagent event, because no Rhyolite worker receives a subagent tool; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
+| `harness_normalize_worker_output` | For phase `review`, `research`, or `report-repair`, translate the raw worker stdout into a new mode-0600 readable narrative file and a new mode-0600 exact final-reply file, verifying that every recorded model call used the approved model and reasoning effort. Copilot parses its `--output-format json` event stream and fails closed on a substituted model or effort and on any recorded subagent event other than the record of the worker's own `--agent` selection, because no Rhyolite worker receives a subagent tool; Claude Code's print mode already writes the exact reply, so it copies the raw output to both files. Never reconstruct the reply from a rendered transcript or terminal-rendered text. |
 | `harness_detect_worker_violation` | For phase `review`, `research`, or `report-repair`, while the worker is still running: scan only the complete lines appended to the recorded output since the offset saved in the runner-owned cursor file, return 0 when nothing outside the approved plan is recorded yet, return `RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS` (4) with a sanitized detail on the first recorded model, reasoning effort, or subagent other than the approved plan, return `RHYOLITE_HARNESS_WORKER_REFUSAL_STATUS` (5) with a sanitized detail when the provider declined a request to the approved model (a recorded refusal outranks the fallback model it caused, but not a subagent), and return 1 for any other failure, which the runner records once as a warning while the post-exit normalization stays authoritative. Copilot scans its JSONL stdout; Claude Code scans its private session record under the isolated runtime home and reports nothing until that record exists. The runner polls every five seconds and terminates the worker's process tree on the first violation or refusal. |
 | `harness_worker_outcome` | After every worker invocation, write one schema-2 JSON outcome with exactly the documented keys: the outcome class (`completed`, `transient-failure`, `fallback-blocked`, `refused`, `substituted`, `failed`, or `unknown`), whether it is retryable, the CLI exit code when recorded, up to five sanitized session errors, model-call failure and retry counts, how many responses reached the per-response output token limit, the fallback model of a blocked automatic fallback or of a refusal, the number of approved-model calls the provider declined, the approved session's prompt budget, and its largest recorded prompt. The runner validates it before use; an adapter whose CLI records no structured evidence may call `rhyolite_harness_worker_outcome_unknown`. |
 | `harness_worker_continuation_argv` | Return the argv that resumes the same worker session with the exact approved model, effort, context, tools, and isolation, or fail when the adapter has not verified `worker_continuation`. |
@@ -317,6 +317,17 @@ overrides every configured `subagents.agents.<name>.model` value
 configuration. The review worker therefore receives no `task`,
 `list_agents`, or `read_agent` tool, performs the dedicated security pass
 itself, and any recorded subagent event fails the phase.
+
+Copilot CLI records the worker's own `--agent` selection as a
+`subagent.selected` event without an `agentId`. Every release since at least
+1.0.93 kept it only in the session record; 1.0.116 also writes it to the
+`--output-format json` stream right after `session.start`. That record is not
+a subagent, so live detection, normalization, and the worker outcome accept
+it only when it names exactly the phase's worker agent
+(`rhyolite:repo-review-worker` for review and security scans,
+`rhyolite:repo-research-worker` for research, and none for report repair)
+and carries no field other than the agent name, display name, and tool list.
+Every other subagent event still fails the phase.
 
 [CLAUDE-HARNESS-EVIDENCE.md](CLAUDE-HARNESS-EVIDENCE.md) and
 [CODEX-HARNESS-EVIDENCE.md](CODEX-HARNESS-EVIDENCE.md) record the probe and

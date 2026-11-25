@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- Copilot CLI 1.0.116 also writes the record of a worker's own `--agent`
+  selection, a `subagent.selected` event that earlier releases kept only in
+  the session record, to the JSON output stream that Rhyolite checks.
+  Rhyolite treated it as an unapproved subagent and stopped every security
+  scan, review, and research worker about five seconds after it started,
+  whatever its model. Rhyolite now accepts only that exact record: one
+  without an `agentId` that names the phase's own worker agent and carries
+  no model, effort, or other field. Every other subagent event still fails
+  the phase. The rejection message now keeps a namespaced agent name such as
+  `rhyolite:repo-review-worker` whole instead of reporting `rhyolite` as the
+  subagent and `repo-review-worker` as its model.
 - Copilot review, security-scan, research, and report-repair children now
   receive the login token that Copilot CLI 1.0.110 stores under `authTokens`
   in the ephemeral authentication bridge, alongside the older `copilotTokens`

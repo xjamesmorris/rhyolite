@@ -7959,7 +7959,8 @@ emit_structured_events() {
         "${MOCK_REPLY_MODEL:-${model}}" \
         "${MOCK_REPLY_EFFORT:-${reasoning_effort}}" \
         "${mock_emit_transient}" \
-        "${mock_compactions}" <<'EVENTS'
+        "${mock_compactions}" \
+        "${agent}" <<'EVENTS'
 import json
 import pathlib
 import sys
@@ -7974,6 +7975,14 @@ def event(kind, data):
     print(json.dumps({"type": kind, "data": data, "id": "mock"}))
 
 
+# Like Copilot CLI 1.0.116-2, the stream opens with the session start and the
+# record of the worker's own --agent selection.
+event("session.start", {"sessionId": "mock", "copilotVersion": "1.0.116-2"})
+if sys.argv[6]:
+    print(json.dumps({"type": "subagent.selected", "data": {
+        "agentName": sys.argv[6],
+        "agentDisplayName": sys.argv[6].rsplit(":", 1)[-1],
+        "tools": ["read", "search"]}, "id": "mock-selection", "parentId": "mock"}))
 event("model.call_start", {"turnId": "0", "model": model})
 # Automatic context compaction, as Copilot CLI 1.0.104-4 recorded it in run
 # 20261026-170519.

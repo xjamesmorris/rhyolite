@@ -805,7 +805,11 @@ supported and must not drive new work.
   context and must never invite the model to select, name, or request one.
   Codex workers run with agents and multi-agent features disabled, so no
   collab tool is offered. Any recorded subagent event, even on the approved
-  model, fails the phase.
+  model, fails the phase. Copilot CLI's record of the worker's own `--agent`
+  selection is not a subagent: a `subagent.selected` event without an
+  `agentId` that names exactly the phase's worker agent and carries only the
+  agent name, display name, and tool list. Copilot CLI 1.0.116 began
+  streaming that record, and the adapter accepts nothing else.
 - Harness print-mode text stdout is never the assistant reply. Copilot CLI
   renders text output as terminal Markdown: it wraps lines at the terminal
   width, re-indents and renumbers lists, inserts blank lines, and emits OSC 8
@@ -815,7 +819,8 @@ supported and must not drive new work.
   `assistant.message` content, failing closed when any recorded model call,
   tool call, usage checkpoint, subagent event, or subagent metric names a
   model or `reasoning_effort` other than the approved plan, or when any
-  subagent event appears at all. Claude Code print mode
+  subagent event other than that worker-agent selection appears. Claude Code
+  print mode
   writes the exact reply, so its normalizer is the identity copy and its
   session record supplies model/effort verification. Every Codex child runs
   `codex exec --json` and writes the exact final reply through

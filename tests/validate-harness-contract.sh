@@ -1764,6 +1764,100 @@ for copilot_v8_invalid in \
     fi
 done
 
+# Copilot CLI records the worker's own --agent selection as a main-session
+# `subagent.selected` event without an agentId. Releases since 1.0.93 kept it
+# in the session record only; 1.0.116-2 also streams it right after
+# `session.start`, so every security scan of run 20261125-012333 was stopped
+# within seconds. Live detection, normalization, and the outcome accept only
+# that exact record of the phase's own worker agent; any other selection is
+# still an unapproved subagent, and its diagnostic keeps the full agent name.
+copilot_selection_output="${copilot_v8_root}/selection.jsonl"
+copilot_selection_stream() {
+    node - "${copilot_selection_output}" "$1" <<'JS'
+const fs = require("fs");
+const [output, selection] = process.argv.slice(2);
+const model = "claude-opus-5.5";
+const event = (type, data) => JSON.stringify({type, data, id: "fixture"});
+fs.writeFileSync(output, [
+  event("session.start", {sessionId: "fixture", copilotVersion: "1.0.116-2",
+    selectedModel: model, reasoningEffort: "max", contextTier: "long_context"}),
+  JSON.stringify({type: "subagent.selected", ...JSON.parse(selection),
+    id: "fixture-selection", parentId: "fixture"}),
+  event("model.call_start", {turnId: "0", model}),
+  event("assistant.message", {model, content: "Report text.", toolRequests: []}),
+  event("model.call_final_result", {model, result: "success"}),
+  JSON.stringify({type: "result", exitCode: 0}),
+].join("\n") + "\n");
+JS
+}
+copilot_selection_check() {
+    local phase="$1"
+    local expected="$2"
+    local outcome="${copilot_v8_root}/selection-outcome.json"
+    local expected_outcome=substituted
+
+    rm -f -- "${copilot_normalized_output}" "${copilot_exact_reply}" \
+        "${copilot_watch_cursor}" "${outcome}"
+    if [[ "${expected}" == accepted ]]; then
+        expected_outcome=completed
+        rhyolite_harness_invoke harness_detect_worker_violation \
+            "${phase}" "${copilot_selection_output}" claude-opus-5.5 max \
+            "${copilot_watch_cursor}" ||
+            fail "Copilot live detection rejected the ${phase} worker's own agent selection: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+        rhyolite_harness_invoke harness_normalize_worker_output \
+            "${phase}" "${copilot_selection_output}" claude-opus-5.5 max \
+            "${copilot_normalized_output}" "${copilot_exact_reply}" ||
+            fail "Copilot normalization rejected the ${phase} worker's own agent selection: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+        assert_equal 'Report text.' "$(cat -- "${copilot_exact_reply}")" \
+            "Copilot ${phase} reply after the worker's own agent selection"
+    else
+        if rhyolite_harness_invoke harness_detect_worker_violation \
+            "${phase}" "${copilot_selection_output}" claude-opus-5.5 max \
+            "${copilot_watch_cursor}"; then
+            fail "Copilot live detection accepted an unapproved ${phase} agent selection."
+        fi
+        assert_equal "${RHYOLITE_HARNESS_WORKER_VIOLATION_STATUS}" \
+            "${RHYOLITE_HARNESS_LAST_STATUS}" \
+            "Copilot live ${phase} agent-selection violation status"
+        assert_equal "${expected}" "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            "Copilot live ${phase} agent-selection diagnostic"
+        if rhyolite_harness_invoke harness_normalize_worker_output \
+            "${phase}" "${copilot_selection_output}" claude-opus-5.5 max \
+            "${copilot_normalized_output}" "${copilot_exact_reply}"; then
+            fail "Copilot normalization accepted an unapproved ${phase} agent selection."
+        fi
+        assert_equal "${expected}" "${RHYOLITE_HARNESS_ERROR_DETAIL}" \
+            "Copilot ${phase} agent-selection diagnostic"
+    fi
+    rhyolite_harness_invoke harness_worker_outcome \
+        "${phase}" "${copilot_selection_output}" "${copilot_v8_home}" \
+        "${copilot_v8_session}" claude-opus-5.5 max "${outcome}" ||
+        fail "Copilot worker outcome failed: ${RHYOLITE_HARNESS_ERROR_DETAIL}"
+    assert_equal "${expected_outcome}" \
+        "$(rhyolite_harness_validate_outcome_json "${outcome}" "${phase}")" \
+        "Copilot ${phase} agent-selection outcome"
+}
+copilot_unapproved_selection() {
+    printf "Copilot started subagent '%s'%s in the %s phase although Rhyolite workers receive no subagent tool; Rhyolite does not accept output from an unapproved subagent." \
+        "$1" "${3:+ with model '$3'}" "$2"
+}
+copilot_review_selection='{"data":{"agentName":"rhyolite:repo-review-worker","agentDisplayName":"repo-review-worker","tools":["read","search"]}}'
+copilot_selection_stream "${copilot_review_selection}"
+copilot_selection_check review accepted
+copilot_selection_check report-repair \
+    "$(copilot_unapproved_selection rhyolite:repo-review-worker report-repair)"
+copilot_selection_stream '{"data":{"agentName":"rhyolite:repo-research-worker","agentDisplayName":"repo-research-worker","tools":["read","search","rhyolite-research-fetch_public_url"]}}'
+copilot_selection_check research accepted
+copilot_selection_check review \
+    "$(copilot_unapproved_selection rhyolite:repo-research-worker review)"
+copilot_selection_stream "{\"agentId\":\"ebd1736a-577c-491f-9702-518285585b7a\",${copilot_review_selection#\{}"
+copilot_selection_check review \
+    "$(copilot_unapproved_selection rhyolite:repo-review-worker review)"
+copilot_selection_stream '{"data":{"agentName":"rhyolite:repo-review-worker","agentDisplayName":"repo-review-worker","tools":["read","search"],"model":"gpt-5.5"}}'
+copilot_selection_check review \
+    "$(copilot_unapproved_selection rhyolite:repo-review-worker review gpt-5.5)"
+rm -f -- "${copilot_watch_cursor}"
+
 # Copilot resumes a session when invoked again with the same --session-id and
 # runtime home. --name only labels a brand-new session, and Copilot CLI
 # 1.0.98-2 rejects it when --session-id resolves to an existing session, so
@@ -3902,6 +3996,7 @@ mock_model=""
 mock_reasoning_effort=""
 mock_session_id=""
 mock_session_named=0
+mock_agent=""
 previous=""
 for argument in "$@"; do
     if [[ "${previous}" == "--share" ]]; then
@@ -3916,6 +4011,8 @@ for argument in "$@"; do
         mock_reasoning_effort="${argument}"
     elif [[ "${previous}" == "--session-id" ]]; then
         mock_session_id="${argument}"
+    elif [[ "${previous}" == "--agent" ]]; then
+        mock_agent="${argument}"
     fi
     case "${argument}" in
         -n|--name|--name=*) mock_session_named=1 ;;
@@ -3946,10 +4043,20 @@ fi
 # Real Copilot print mode renders text output as terminal Markdown, so the
 # mock emits the structured JSONL stream that the adapter normalizes. A
 # substituted model or effort can be injected to prove the runner rejects it.
+# Like Copilot CLI 1.0.116-2, every stream opens with the session start and
+# the record of the worker's own --agent selection.
+emit_session_start() {
+    printf '%s\n' \
+        '{"type":"session.start","data":{"sessionId":"mock","copilotVersion":"1.0.116-2"},"id":"mock-start"}'
+    [[ -z "${mock_agent}" ]] ||
+        printf '{"type":"subagent.selected","data":{"agentName":"%s","agentDisplayName":"%s","tools":["read","search"]},"id":"mock-selection","parentId":"mock-start"}\n' \
+            "${mock_agent}" "${mock_agent##*:}"
+}
 emit_structured_reply() {
     local reply_file
     reply_file="$(mktemp "${TMPDIR:-/tmp}/mock-copilot-reply.XXXXXXXX")"
     cat > "${reply_file}"
+    emit_session_start
     /usr/bin/python3 - \
         "${reply_file}" \
         "${RHYOLITE_MOCK_REPLY_MODEL:-${mock_model}}" \
@@ -4143,6 +4250,7 @@ if [[ -n "${RHYOLITE_MOCK_SUBAGENT_MODEL:-}" ]]; then
         exit 143
     }
     trap mock_subagent_exit INT TERM HUP
+    emit_session_start
     /usr/bin/python3 - "${mock_model}" "${RHYOLITE_MOCK_SUBAGENT_MODEL}" <<'MOCK_SUBAGENT'
 import json
 import sys

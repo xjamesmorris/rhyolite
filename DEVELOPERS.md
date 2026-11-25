@@ -249,8 +249,9 @@ can never byte-match what the model wrote. Every Copilot child runs with
 `--output-format json`, and `harness_normalize_worker_output` turns the JSONL
 event stream into a readable narrative plus the exact final
 `assistant.message` while rejecting any recorded model or `reasoning_effort`
-other than the approved plan and any recorded subagent event. The mocked
-validators emit the same event
+other than the approved plan and any recorded subagent event except the
+record of the worker's own `--agent` selection, which Copilot CLI 1.0.116
+began streaming. The mocked validators emit the same event
 shapes. Before changing an adapter's output assumptions, re-verify the
 real CLI with a cheap live probe, for example
 `copilot -p 'Reply with exactly: 1. one' --model gpt-5-mini --no-color
