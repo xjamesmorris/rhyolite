@@ -255,7 +255,12 @@ supported and must not drive new work.
   option and Claude Code's automatic free-text answer. Do not add an explicit
   `Other` choice. The launcher's and the Codex controller's numbered terminal
   prompts have no automatic answer, so they list an explicit entry choice,
-  such as `Enter another absolute path`.
+  such as `Enter another absolute path`. The full model catalog behind
+  `List available model IDs` is always numbered so that a bare number selects
+  a model: the launcher and Copilot CLI show it as a numbered picker, and
+  Claude Code, whose picker holds at most four choices, prints it as the one
+  permitted numbered list and treats a free-text answer that is only a number
+  N as the Nth listed ID.
 - `repo-review-worker.agent.md` is the non-user-invocable, write-disabled main
   child. It analyzes one isolated snapshot and consumes only a validated,
   sanitized research dossier/summary when research is enabled.

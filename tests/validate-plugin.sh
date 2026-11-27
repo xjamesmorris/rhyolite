@@ -909,6 +909,18 @@ grep -Fq '`RHYOLITE_LAUNCHER_SETUP_V1`' "${AGENT}" &&
     grep -Fq '`Remember settings for these repositories (Recommended)`' \
         "${AGENT}" ||
     fail 'Agent model preference setup contract is incomplete.'
+# The full model catalog is numbered, so a bare number selects a model.
+for numbered_catalog_surface in "${AGENT}" "${SKILL}"; do
+    grep -Fq '`Available model ID`' "${numbered_catalog_surface}" &&
+        grep -Fq 'that is only a number N selects the Nth listed' \
+            "${numbered_catalog_surface}" ||
+        fail "${numbered_catalog_surface}: the model catalog is not a numbered picker."
+done
+grep -Fq 'as a numbered list (`1.` through `N.`, in the returned order)' \
+    "${PLUGIN_ROOT}/claude/agents/repo-review.md" &&
+    grep -Fq 'that is only a number N selects the Nth listed' \
+        "${PLUGIN_ROOT}/claude/agents/repo-review.md" ||
+    fail 'Claude Code agent does not number the model catalog.'
 # Native fleet mode is retired: no orchestrator surface asks about it, shows
 # it, accepts it from the launcher block, or passes it to the runner.
 for retired_fleet_surface in \
@@ -1234,9 +1246,11 @@ elif [[ "${harness}" == codex ]]; then
     eval "$(sed -n "/^            LAUNCHER_MODEL_IDS=(/,/^            )/p; /^            LAUNCHER_MODEL_LABELS=(/,/^            )/p" <<< "${branch}")"
 fi
 eval "$(sed -n "/^prompt_for_model() {/,/^}/p" "${launcher}")"
+eval "$(sed -n "/^print_available_models() {/,/^}/p" "${launcher}")"
+eval "$(sed -n "/^prompt_for_catalog_model() {/,/^}/p" "${launcher}")"
 launcher_model_accepted() { return 0; }
 launcher_model_unlisted() { return 1; }
-print_available_models() { printf "%s\n" "LISTED MODELS" >&2; }
+harness_list_models() { printf "%s\n" catalog-model-a catalog-model-b; }
 LAUNCHER_HARNESS_DISPLAY=fixture
 exec 2>&1
 selected="$(prompt_for_model "${remembered}" 0)"
@@ -1274,10 +1288,25 @@ assert_launcher_menu copilot-opus copilot '' '2' claude-opus-5.5 \
     "${copilot_launcher_menu}"
 assert_launcher_menu copilot-fable copilot '' '3' claude-fable-5.1 \
     "${copilot_launcher_menu}"
-assert_launcher_menu copilot-list-then-default copilot '' $'4\n1' \
+assert_launcher_menu copilot-list-then-default copilot '' $'4\n\n1' \
     gpt-5.6-sol "${copilot_launcher_menu}"
-grep -Fq 'LISTED MODELS' <<< "${launcher_menu_output}" ||
-    fail 'Launcher model picker did not list available model IDs.'
+grep -Fq 'Available fixture model IDs' <<< "${launcher_menu_output}" &&
+    grep -Fq '  1. catalog-model-a' <<< "${launcher_menu_output}" &&
+    grep -Fq '  2. catalog-model-b' <<< "${launcher_menu_output}" &&
+    grep -Fq '  3. Enter another frontier model ID' <<< "${launcher_menu_output}" &&
+    grep -Fq '  4. Back to the previous menu' <<< "${launcher_menu_output}" ||
+    fail 'Launcher model picker did not number the available model IDs.'
+assert_launcher_menu copilot-list-number copilot '' $'4\n2' \
+    catalog-model-b "${copilot_launcher_menu}"
+assert_launcher_menu copilot-list-invalid-then-number copilot '' $'4\n7\n1' \
+    catalog-model-a "${copilot_launcher_menu}"
+grep -Fq 'Enter one of the displayed choice numbers.' <<< "${launcher_menu_output}" ||
+    fail 'Launcher catalog picker accepted an out-of-range choice.'
+assert_launcher_menu copilot-list-no-effort copilot '' $'4\n1:high\n2' \
+    catalog-model-b "${copilot_launcher_menu}"
+assert_launcher_menu copilot-list-other copilot '' \
+    $'4\n3\nexample-frontier-model' example-frontier-model \
+    "${copilot_launcher_menu}"
 assert_launcher_menu copilot-other copilot '' $'5\nexample-frontier-model' \
     example-frontier-model "${copilot_launcher_menu}"
 assert_launcher_menu copilot-invalid-then-default copilot '' $'9\n1' \
@@ -3951,12 +3980,16 @@ for selection in \
         "${selected_model}"
 done
 assert_launcher_model_selection \
-    launcher-model-catalog '' $'4\n5\ngpt-6-sol' gpt-6-sol
+    launcher-model-catalog '' $'4\n1' gpt-6-sol
 assert_launcher_model_selection \
-    launcher-remembered-model-catalog gpt-6-sol $'5\n6\ngpt-6-sol' gpt-6-sol
-for name in launcher-model-catalog launcher-remembered-model-catalog; do
-    grep -Fq 'Available Copilot model IDs' "${fixture_dir}/${name}.stderr" ||
-        fail "${name}: launcher did not display the catalog before custom entry."
+    launcher-remembered-model-catalog gpt-6-sol $'5\n3' claude-opus-5.5
+assert_launcher_model_selection \
+    launcher-model-catalog-entry '' $'4\n5\ngpt-6-sol' gpt-6-sol
+for name in launcher-model-catalog launcher-remembered-model-catalog \
+    launcher-model-catalog-entry; do
+    grep -Fq 'Available Copilot model IDs' "${fixture_dir}/${name}.stderr" &&
+        grep -Fq '  1. gpt-6-sol' "${fixture_dir}/${name}.stderr" ||
+        fail "${name}: launcher did not display the numbered catalog."
 done
 
 launcher_autopilot_stdout="${fixture_dir}/launcher-autopilot.stdout"

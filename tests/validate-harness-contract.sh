@@ -7689,6 +7689,13 @@ assert_scan_prompt launcher-scan-model-duplicate $'4\ngpt-5.6-sol\n2' \
 assert_contains "${fixture_root}/launcher-scan-model-duplicate.stderr" \
     'Model gpt-5.6-sol is already used by another scan; choose a different model.' \
     'Scan model picker duplicate rejection'
+assert_scan_prompt launcher-scan-model-catalog $'3\n1:high' gpt-6-sol:high \
+    prompt_for_scan_model 'Security scan B model' '' 0 1 gpt-5.6-sol
+assert_contains "${fixture_root}/launcher-scan-model-catalog.stderr" \
+    '  1. gpt-6-sol' 'Scan model picker numbered catalog'
+assert_contains "${fixture_root}/launcher-scan-model-catalog.stderr" \
+    'Select model number, or NUMBER:EFFORT [back]: ' \
+    'Scan model picker catalog prompt'
 if env PATH="${launcher_mock_bin}:/usr/bin:/bin" \
     bash "${launcher_prompt_library}" "${PLUGIN_ROOT}" \
         prompt_for_scan_model 'Security scan C model' '' 0 1 \

@@ -100,10 +100,12 @@ Claude Fable 5.1 - claude-fable-5.1
 List available model IDs
 ```
 
-The list choice must use the bundled runner's `--list-models` mode, display
-the returned newline-delimited IDs, and repeat the same picker. The automatic
-final custom-answer option accepts another exact catalog ID. Safe syntax alone
-is insufficient; every selected model must be validated by exact catalog
+The list choice must use the bundled runner's `--list-models` mode and present
+every returned ID as one `ask_user` choice in the returned order, so the user
+can select a model by its number. The automatic final custom-answer option
+accepts another exact catalog ID, and a custom answer that is only a number N
+selects the Nth listed ID. Safe syntax alone is
+insufficient; every selected model must be validated by exact catalog
 membership, except that a session whose trusted launcher block carried
 `AllowUnlistedModel=true` may keep an ID outside that offline catalog as an
 unlisted model for runner planning to accept or reject.

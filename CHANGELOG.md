@@ -33,6 +33,17 @@
   never starts one. `rhyolite-summary` lists local reviews by their path.
   See [Quickstart](README.md#quickstart).
 
+### Changed
+
+- Every model list now lets you pick a model by its number. In the
+  launcher, `List available model IDs` opens a numbered catalog: type a
+  model's number to select it (`NUMBER:EFFORT` in the security scan
+  pickers), choose the explicit entry to type another ID, or go back to the
+  model menu. The Copilot CLI agent shows the catalog as a numbered
+  `ask_user` picker, and the Claude Code agent, whose picker holds at most
+  four choices, prints it as a numbered list; in both, an answer that is
+  only a number selects that listed model.
+
 ### Fixed
 
 - Copilot CLI 1.0.116 also writes the record of a worker's own `--agent`

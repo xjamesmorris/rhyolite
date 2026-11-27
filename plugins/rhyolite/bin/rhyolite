@@ -446,8 +446,11 @@ prompt_for_model() {
             ((answer <= ${#choice_models[@]})); then
             candidate_model="${choice_models[answer - 1]}"
         elif [[ "${answer}" == "${list_choice}" ]]; then
-            print_available_models
-            continue
+            candidate_model="$(
+                prompt_for_catalog_model \
+                    'Enter another frontier model ID' \
+                    'Available model ID: ' 0
+            )" || continue
         elif [[ "${answer}" == "${other_choice}" ]]; then
             candidate_model=''
         else
@@ -455,7 +458,7 @@ prompt_for_model() {
             continue
         fi
 
-        if [[ -z "${candidate_model}" ]]; then
+        if [[ -z "${candidate_model}" && "${answer}" == "${other_choice}" ]]; then
             printf 'Available model ID: ' >&2
             IFS= read -r candidate_model
         fi
@@ -480,12 +483,65 @@ print_available_models() {
     if ! available_models="$(harness_list_models)"; then
         printf 'Could not list models: %s\n' \
             "${RHYOLITE_HARNESS_ERROR_DETAIL:-${LAUNCHER_HARNESS_DISPLAY} model catalog unavailable.}" >&2
-        return
+        return 1
     fi
     printf '\nAvailable %s model IDs\n' "${LAUNCHER_HARNESS_DISPLAY}" >&2
     while IFS= read -r model; do
-        [[ -n "${model}" ]] && printf '  %s\n' "${model}" >&2
+        [[ -n "${model}" ]] && printf '%s\n' "${model}"
     done <<< "${available_models}"
+}
+
+# Shows the offline catalog with numbers so a bare number selects a model.
+# Prints the chosen model, MODEL:EFFORT when accept_effort is 1, or the text
+# typed after the explicit entry choice. Returns 1 to go back to the menu.
+prompt_for_catalog_model() {
+    local entry_label="$1"
+    local entry_prompt="$2"
+    local accept_effort="$3"
+    local catalog answer model index entry_choice back_choice
+    local -a models=()
+
+    catalog="$(print_available_models)" || return 1
+    while IFS= read -r model; do
+        [[ -n "${model}" ]] && models+=("${model}")
+    done <<< "${catalog}"
+    if ((${#models[@]} == 0)); then
+        printf 'Could not list models: %s model catalog is empty.\n' \
+            "${LAUNCHER_HARNESS_DISPLAY}" >&2
+        return 1
+    fi
+    entry_choice=$((${#models[@]} + 1))
+    back_choice=$((entry_choice + 1))
+    while true; do
+        for index in "${!models[@]}"; do
+            printf '  %d. %s\n' "$((index + 1))" "${models[index]}" >&2
+        done
+        printf '  %d. %s\n' "${entry_choice}" "${entry_label}" >&2
+        printf '  %d. Back to the previous menu\n' "${back_choice}" >&2
+        if [[ "${accept_effort}" == 1 ]]; then
+            printf 'Select model number, or NUMBER:EFFORT [back]: ' >&2
+        else
+            printf 'Select model number [back]: ' >&2
+        fi
+        IFS= read -r answer || return 1
+        answer="${answer:-${back_choice}}"
+        if [[ "${answer}" =~ ^([1-9][0-9]{0,3})(:(high|xhigh|max))?$ ]] &&
+            ((BASH_REMATCH[1] <= ${#models[@]})) &&
+            [[ -z "${BASH_REMATCH[2]}" || "${accept_effort}" == 1 ]]; then
+            printf '%s%s\n' "${models[BASH_REMATCH[1] - 1]}" \
+                "${BASH_REMATCH[2]}"
+            return 0
+        elif [[ "${answer}" == "${entry_choice}" ]]; then
+            printf '%s' "${entry_prompt}" >&2
+            IFS= read -r answer || return 1
+            printf '%s\n' "${answer}"
+            return 0
+        elif [[ "${answer}" == "${back_choice}" ]]; then
+            return 1
+        fi
+        printf 'Enter one of the displayed choice numbers.\n' >&2
+        printf '\nAvailable %s model IDs\n' "${LAUNCHER_HARNESS_DISPLAY}" >&2
+    done
 }
 
 prompt_for_reasoning_effort() {
@@ -1130,8 +1186,11 @@ prompt_for_scan_model() {
             ((answer <= ${#choices[@]})); then
             candidate="${choices[answer - 1]}"
         elif [[ "${answer}" == "${list_choice}" ]]; then
-            print_available_models
-            continue
+            candidate="$(
+                prompt_for_catalog_model \
+                    'Enter another model ID (MODEL or MODEL:EFFORT)' \
+                    'Model ID: ' 1
+            )" || continue
         elif [[ "${answer}" == "${other_choice}" ]]; then
             printf 'Model ID: ' >&2
             IFS= read -r candidate

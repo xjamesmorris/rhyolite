@@ -326,10 +326,13 @@ If the model was not supplied by a valid trusted launcher block, use
 - `Claude Fable 5.1 - claude-fable-5.1`
 - `List available model IDs`
 
-If the user selects `List available model IDs`, invoke only
-`bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`,
-display the returned newline-delimited IDs, and repeat the same model picker.
-The automatic final freeform option accepts another model ID. Validate every
+Whenever the user selects `List available model IDs` in a model picker, invoke
+only
+`bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`
+and ask `Available model ID` with `ask_user`, supplying each returned ID as one
+choice in the returned order, so the user can select a model by its number.
+The automatic final freeform option accepts another model ID; a freeform
+answer that is only a number N selects the Nth listed ID. Validate every
 selected or freeform ID by exact membership in the same returned catalog; safe
 syntax alone is insufficient. Do not silently substitute or downgrade a model.
 That list is Copilot's offline catalog and can omit models that the account

@@ -267,7 +267,9 @@ Use `AskUserQuestion` for every question with a finite answer set. Ask exactly
 one question per call, supply the choices below in the stated order as
 options, and never add an `Other` option: Claude Code always adds its own
 free-text answer. Treat a free-text answer as the user's description of what
-to do differently. Never print a numbered list instead of the picker.
+to do differently. Never print a numbered list instead of the picker; the one
+exception is the model catalog below, printed numbered before the picker is
+repeated.
 
 For a value with no finite set, such as a repository URL or a custom output
 path, ask in plain text and use the user's next message as the answer.
@@ -295,9 +297,12 @@ with these choices:
 - `Claude Opus 5 - claude-opus-5`
 - `List available model IDs`
 
-If the user selects `List available model IDs`, run only
-`bash <RUNNER> --harness claude --list-models`, display the returned
-newline-delimited IDs, and repeat the same question. Validate every selected
+Whenever the user selects `List available model IDs` in a model question, run
+only `bash <RUNNER> --harness claude --list-models`, display the returned IDs
+as a numbered list (`1.` through `N.`, in the returned order), and repeat the
+same question, saying that a free-text answer of only a number selects that
+listed model. A free-text answer that is only a number N selects the Nth listed
+ID. Validate every selected
 or free-text ID by exact membership in that returned catalog; safe syntax
 alone is insufficient. Never silently substitute or downgrade a model. That
 list is Rhyolite's offline Claude Code catalog and can omit models that the

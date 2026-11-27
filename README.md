@@ -539,8 +539,9 @@ analysis.
 The agent asks one question at a time:
 
 1. Which source to review.
-2. Which available review model to use, with an option to list model IDs from
-   Copilot's offline catalog.
+2. Which available review model to use, with an option to list Copilot's
+   offline catalog as a numbered picker, so a model is selected by its
+   number.
 3. Which reasoning effort to use.
 4. Which context tier to use.
 5. Whether to confirm the validated harness/model/effort/context settings or
@@ -1557,7 +1558,9 @@ before a local source enters the setup block. Known model choices are
 `gpt-5.6-sol`
 (recommended), `claude-opus-5.5`, and `claude-fable-5.1`; the selector can
 list the model IDs in Copilot's offline catalog, as reported by
-`copilot help config`, including `gpt-6-sol` when available. That catalog is built into the CLI rather than fetched for
+`copilot help config`, including `gpt-6-sol` when available, as a numbered
+list: type a model's number to select it (`NUMBER:EFFORT` in the security
+scan pickers), or choose the explicit entry to type another ID. That catalog is built into the CLI rather than fetched for
 your account, so it can omit models that your account can use. Every model
 must match that catalog exactly unless you pass `--allow-unlisted-model`,
 which also accepts a safe model ID outside it (`auto` is always rejected).

@@ -656,8 +656,11 @@ Before invoking the runner:
    `Claude Opus 5.5 - claude-opus-5.5`,
    `Claude Fable 5.1 - claude-fable-5.1`, and `List available model IDs`.
    The list choice invokes only
-   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`,
-   displays the returned IDs, and repeats the picker. Validate every selected
+   `bash '<SKILL_DIR>/scripts/run-parallel-reviews.sh' --harness copilot --list-models`
+   and asks `Available model ID` with one `ask_user` choice per returned ID,
+   in the returned order, so the user can select a model by its number; a
+   freeform answer that is only a number N selects the Nth listed ID.
+   Validate every selected
    or freeform model by exact membership in that catalog; safe syntax alone is
    insufficient. Never silently substitute or downgrade a model. That list is
    Copilot's offline catalog and can omit models that the account can use.
